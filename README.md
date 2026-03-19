@@ -2,7 +2,7 @@
 
 A media library audit tool for qBittorrent + Sonarr/Radarr setups.
 
-auditorr scans your torrent and media directories, cross-references them against qBittorrent, and gives you a health score for your library. It scans hardlinks, surfaces orphaned files, unimported torrents, duplicates, and cross-seed effectiveness — all in a clean dark-mode dashboard.
+auditorr scans your torrent and media directories, cross-references them against qBittorrent, and gives you a health score for your library. It checks hardlinks, surfaces orphaned files, unimported torrents, duplicates, and determines your cross-seeding effectiveness.
 
 ![Dashboard](docs/dashboard.png)
 
@@ -11,8 +11,6 @@ auditorr scans your torrent and media directories, cross-references them against
 ## Who is this for?
 
 auditorr is built for people running a self-hosted media stack with hardlinks and an organised folder structure — particularly those following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/) setup. If you use TRaSH-recommended paths with qBittorrent, Sonarr, and Radarr, the hardlink-based health score will reflect exactly how well your library is connected and seeding.
-
-If you're not familiar with TRaSH Guides, they're the de facto standard for setting up *arr stacks correctly — worth reading before deploying auditorr.
 
 ---
 
