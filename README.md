@@ -32,12 +32,12 @@ auditorr is built for people running a self-hosted media stack with hardlinks an
 
 ## Quick Start
 
-### Docker Compose (recommended)
+### Docker Compose (recommended — no build required)
 
 ```yaml
 services:
   auditorr:
-    build: .
+    image: ghcr.io/thrill-burn/auditorr:latest
     container_name: auditorr
     restart: unless-stopped
     ports:
@@ -48,6 +48,8 @@ services:
       - /path/to/torrents:/data/torrents:ro
     environment:
       - AUDITORR_PORT=8677
+      # Uncomment to enable authentication:
+      # - AUDITORR_SECRET=your-secret-key
 ```
 
 Then open `http://your-server-ip:8677` and configure qBittorrent connection details in the Config tab.
