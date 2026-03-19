@@ -44,6 +44,8 @@ Docker tab -> Add Container button at the bottom
 - **Path 2:** `/mnt/user/data` → `/data`
 - **Port mapping:** `8677 → 8677`
 
+Press the Apply button, let the container install, then open `http://your-server-ip:8677` and configure qBittorrent connection details in the Config tab.
+
 ### Docker Compose
 
 ```yaml
@@ -66,8 +68,6 @@ services:
       # Uncomment to enable authentication:
       # - AUDITORR_SECRET=your-secret-key
 ```
-
-Then open `http://your-server-ip:8677` and configure qBittorrent connection details in the Config tab.
 
 ### Build from source
 
