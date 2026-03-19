@@ -43,9 +43,9 @@ services:
     ports:
       - "8677:8677"
     volumes:
-      - ./data:/app/data
-      - /path/to/media:/data/media:ro
-      - /path/to/torrents:/data/torrents:ro
+      - /path/to/appdata:/app/data
+      - /path/to/data:/data:ro
+      # Your media and torrent folders need to be subfolders of your data folder
     environment:
       - AUDITORR_PORT=8677
       # Uncomment to enable authentication:
@@ -64,8 +64,7 @@ docker run -d \
   --name auditorr \
   -p 8677:8677 \
   -v /path/to/appdata:/app/data \
-  -v /path/to/media:/data/media:ro \
-  -v /path/to/torrents:/data/torrents:ro \
+  -v /path/to/data:/data:ro \
   auditorr
 ```
 
