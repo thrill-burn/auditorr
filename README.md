@@ -32,7 +32,19 @@ auditorr is built for people running a self-hosted media stack with hardlinks an
 
 ## Quick Start
 
-### Docker Compose (recommended — no build required)
+### Unraid (Recommended)
+
+Docker tab -> Add Container button at the bottom
+
+- **Name:** `auditorr`
+- **Repository:** `ghcr.io/thrill-burn/auditorr:latest`
+- **Icon URL:** `https://raw.githubusercontent.com/thrill-burn/auditorr/refs/heads/main/docs/icon.png`
+- **WebUI:** `http://[IP]:[PORT:8677]/`
+- **Path 1:** `/mnt/user/appdata/auditorr/data` → `/app/data`
+- **Path 2:** `/mnt/user/data` → `/data`
+- **Port mapping:** `8677 → 8677`
+
+### Docker Compose
 
 ```yaml
 services:
@@ -109,16 +121,6 @@ All configuration is done through the **Config** tab in the UI.
 For the 10-point categories, points are lost linearly as problem data grows toward the configured threshold. At the threshold, all 10 points are gone.
 
 The Hardlinked Media score assumes you are using hardlinks between your torrent download folder and your media library — as recommended by the [TRaSH Guides folder structure](https://trash-guides.info/File-and-Folder-Structure/). Without hardlinks, this score will be 0 regardless of how healthy your library is.
-
----
-
-## Unraid
-
-- **Port mapping:** `8677 → 8677`
-- **Path 1:** `/mnt/user/appdata/auditorr/data` → `/app/data`
-- **Path 2:** `/mnt/user/data` → `/data`
-- **Icon URL:** `https://raw.githubusercontent.com/thrill-burn/auditorr/refs/heads/main/docs/icon.png`
-- **WebUI:** `http://[IP]:[PORT:8677]/`
 
 ---
 
