@@ -12,8 +12,6 @@ auditorr scans your torrent and media directories, cross-references them against
 
 auditorr is built for people running a self-hosted media stack with hardlinks and an organised folder structure — particularly those following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/) setup. If you use TRaSH-recommended paths with qBittorrent, Sonarr, and Radarr, the hardlink-based health score will reflect exactly how well your library is connected and seeding.
 
-If you're not familiar with TRaSH Guides, they're the de facto standard for setting up *arr stacks correctly — worth reading before deploying auditorr.
-
 ---
 
 ## Features
