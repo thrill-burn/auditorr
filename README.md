@@ -4,6 +4,8 @@ A media library audit tool for qBittorrent + Sonarr/Radarr setups.
 
 auditorr scans your torrent and media directories, cross-references them against qBittorrent, and gives you a health score for your library. It scans hardlinks, surfaces orphaned files, unimported torrents, duplicates, and cross-seed effectiveness — all in a clean dark-mode dashboard.
 
+![Dashboard](docs/dashboard.png)
+
 ---
 
 ## Who is this for?
