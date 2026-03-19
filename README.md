@@ -117,7 +117,7 @@ The Hardlinked Media score assumes you are using hardlinks between your torrent 
 - **Port mapping:** `8677 → 8677`
 - **Path 1:** `/mnt/user/appdata/auditorr/data` → `/app/data`
 - **Path 2:** `/mnt/user/data` → `/data`
-- **Icon URL:** `http://your-server-ip:8677/favicon.svg`
+- **Icon URL:** `https://raw.githubusercontent.com/thrill-burn/auditorr/refs/heads/main/docs/icon.png`
 - **WebUI:** `http://[IP]:[PORT:8677]/`
 
 ---
