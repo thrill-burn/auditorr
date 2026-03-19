@@ -32,7 +32,7 @@ auditorr is built for people running a self-hosted media stack with hardlinks an
 
 ## Quick Start
 
-### Unraid (Recommended)
+### unRaid (Recommended)
 
 Docker tab -> Add Container button at the bottom
 
