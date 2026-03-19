@@ -1,0 +1,16 @@
+services:
+  auditorr:
+    build: .                      # builds from source — remove this line if using a pre-built image
+    # image: auditorr:latest      # uncomment to use a pre-built image instead
+    container_name: auditorr
+    restart: unless-stopped
+    ports:
+      - "8677:8677"
+    volumes:
+      - ./data:/app/data          # config, history, SQLite db
+      - /path/to/media:/data/media:ro
+      - /path/to/torrents:/data/torrents:ro
+    environment:
+      - AUDITORR_PORT=8677
+      # Uncomment to enable API authentication:
+      # - AUDITORR_SECRET=your-secret-key-here

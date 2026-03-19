@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+.npm/
+
+# Data files (user-specific, never commit)
+data/
+*.db
+*.db-shm
+*.db-wal
+config.json
+results.json
+history.json
+*.json.tmp
+startup.lock
+
+# Logs
+*.log
+gunicorn*.log
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+.dockerignore

@@ -1,0 +1,85 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0a0a0a;
+  --surface:   #111111;
+  --surface2:  #1a1a1a;
+  --surface3:  #222222;
+  --border:    #1e1e1e;
+  --border2:   #2e2e2e;
+  --text:      #ebebeb;
+  --text-dim:  #666;
+  --text-faint:#2e2e2e;
+  --accent:    #f57c00;
+  --green:     #22c55e;
+  --yellow:    #eab308;
+  --red:       #ef4444;
+  --blue:      #38bdf8;
+  --purple:    #a78bfa;
+  --mono:      'IBM Plex Mono', monospace;
+  --sans:      'DM Sans', sans-serif;
+  --r:         6px;
+  --rl:        12px;
+}
+
+[data-theme="light"] {
+  --bg:        #f5f5f4;
+  --surface:   #ffffff;
+  --surface2:  #f0efed;
+  --surface3:  #e8e6e3;
+  --border:    #e2e0dc;
+  --border2:   #ceccC7;
+  --text:      #1c1917;
+  --text-dim:  #78716c;
+  --text-faint:#d6d3ce;
+  --accent:    #e06c00;
+  --green:     #16a34a;
+  --yellow:    #ca8a04;
+  --red:       #dc2626;
+  --blue:      #0284c7;
+  --purple:    #7c3aed;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+
+button { cursor: pointer; font-family: var(--sans); }
+input, select { font-family: var(--sans); }
+
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface2) 25%, var(--surface3) 50%, var(--surface2) 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--r);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fadeIn 0.25s ease both; }
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { transform: scaleX(0); transform-origin: left; }
+  to   { transform: scaleX(1); transform-origin: left; }
+}
