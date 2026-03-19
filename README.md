@@ -47,7 +47,7 @@ services:
       - /path/to/data:/data:ro
       # Your media and torrent folders need to be subfolders of your data folder
       # for unRaid with TRaSH folders this is:
-      # - /mnt/user/appdata/auditorr:/app/data
+      # - /mnt/user/appdata/auditorr/data:/app/data
       # - /mnt/user/data:/data:ro
     environment:
       - AUDITORR_PORT=8677
