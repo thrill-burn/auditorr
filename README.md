@@ -1,8 +1,8 @@
 # auditorr
 
-auditorr shows you exactly what’s happening inside your media library.
+auditorr shows you exactly what’s happening inside your media library
 
-It cross-references your torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculating cross-seeding efficiency.
+It cross-references your hardlinked torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculating cross-seeding efficiency.
 
 ![Dashboard](docs/dashboard.png)
 
@@ -35,20 +35,19 @@ docker run -d \
   ghcr.io/thrill-burn/auditorr:latest
 ```
 
-Then open:  
-http://localhost:8677
+Then open: `http://your-server-ip:8677` and configure qBitorrent.
 
 ### unRaid (Recommended)
 
-Docker tab -> Add Container button at the bottom
+Docker tab → Add Container button at the bottom and fill in the blanks:
 
 - **Name:** `auditorr`
 - **Repository:** `ghcr.io/thrill-burn/auditorr:latest`
 - **Icon URL:** `https://raw.githubusercontent.com/thrill-burn/auditorr/main/docs/icon.png`
 - **WebUI:** `http://[IP]:[PORT:8677]/`
-- **Path 1:** `/mnt/user/appdata/auditorr/data` → `/app/data`
-- **Path 2:** `/mnt/user/data` → `/data`
-- **Port mapping:** `8677 → 8677`
+- **App Path:** `/mnt/user/appdata/auditorr/data` → `/app/data`
+- **Data Path:** `/mnt/user/data` → `/data`
+- **Port Mapping:** `8677 → 8677`
 
 Press the Apply button, let the container install, then open `http://your-server-ip:8677` and configure qBittorrent connection details in the Config tab.
 
