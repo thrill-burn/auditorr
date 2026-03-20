@@ -62,12 +62,9 @@ services:
     ports:
       - "8677:8677"
     volumes:
-      - /path/to/appdata:/app/data
-      - /path/to/data:/data:ro
-      # Your media and torrent folders need to be subfolders of your data folder
-      # for unRaid with TRaSH folders this is:
-      # - /mnt/user/appdata/auditorr/data:/app/data
-      # - /mnt/user/data:/data:ro
+      - /mnt/user/appdata/auditorr/data:/app/data
+      - /mnt/user/data:/data:ro
+      # TRaSH folder defaults, change if required
     environment:
       - AUDITORR_PORT=8677
       # Uncomment to enable authentication:
@@ -83,8 +80,8 @@ docker build -t auditorr .
 docker run -d \
   --name auditorr \
   -p 8677:8677 \
-  -v /path/to/appdata/auditorr:/app/data \
-  -v /path/to/data:/data:ro \
+  -v /mnt/user/appdata/auditorr/data:/app/data \
+  -v /mnt/user/data:/data:ro \
   auditorr
 ```
 
