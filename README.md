@@ -1,36 +1,42 @@
 # auditorr
 
-A media library audit tool for qBittorrent + Sonarr/Radarr setups.
+auditorr shows you exactly what’s happening inside your media library.
 
-auditorr scans your torrent and media directories, cross-references them against qBittorrent, and gives you a health score for your library. It checks hardlinks, surfaces orphaned files, unimported torrents, duplicates, and determines your cross-seeding effectiveness.
+It cross-references your torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculating cross-seeding efficiency.
 
 ![Dashboard](docs/dashboard.png)
+
+- **Health score (0–100)** — see how clean and efficient your library is  
+- **Find wasted disk space** — duplicates, orphaned files, unlinked torrents  
+- **Cross-seeding insights** — understand how well your data is seeded  
+- **Tracker leaderboard** — see which trackers actually matter  
+- **Powerful file explorer** — filter by status, tracker, seed count, size 
 
 ---
 
 ## Who is this for?
 
-auditorr is built for people running a self-hosted media stack with hardlinks and an organised folder structure — particularly those following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/) setup. If you use TRaSH-recommended paths with qBittorrent, Sonarr, and Radarr, the hardlink-based health score will reflect exactly how well your library is connected and seeding.
+auditorr is built for self-hosted media setups using qBittorrent + Sonarr/Radarr with hardlinks, following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/).
+
+The health score reflects how well your library is actually connected and seeding.
 
 ---
 
-## Features
+## Installation
 
-- **Library health score** — 0–100 score with a color-coded arc dial, trending vs yesterday or last week
-- **Cross-seed effectiveness** — weighted multiplier showing how many trackers each byte of media is seeded on, with a segmented disk bar
-- **Tracker leaderboard** — top trackers by disk space, clickable to filter the torrent explorer
-- **File explorer** — browse media and torrent directories with filters for status, tracker, seed count, filename search, and file size range
-- **"What changed" panel** — diff between the last two scans: newly orphaned, newly imported, new duplicates, resolved duplicates
-- **Threshold alerts** — banners when a category significantly exceeds its configured threshold
-- **Audit history** — every scan logged to SQLite, survives container restarts
-- **Light/dark mode** — toggle in Config
-- **Auth** — optional shared secret via `AUDITORR_SECRET` env var
-- **Watchdog** — inotify-based filesystem watcher triggers audits automatically on file changes
-- **Scheduled fallback** — periodic audit catches missed watchdog events on NFS/bind mounts
+### Instant Quick Start
 
----
+```bash
+docker run -d \
+  --name auditorr \
+  -p 8677:8677 \
+  -v /mnt/user/appdata/auditorr/data:/app/data \
+  -v /mnt/user/data:/data:ro \
+  ghcr.io/thrill-burn/auditorr:latest
+```
 
-## Quick Start
+Then open:  
+http://localhost:8677
 
 ### unRaid (Recommended)
 
@@ -38,7 +44,7 @@ Docker tab -> Add Container button at the bottom
 
 - **Name:** `auditorr`
 - **Repository:** `ghcr.io/thrill-burn/auditorr:latest`
-- **Icon URL:** `https://raw.githubusercontent.com/thrill-burn/auditorr/refs/heads/main/docs/icon.png`
+- **Icon URL:** `https://raw.githubusercontent.com/thrill-burn/auditorr/main/docs/icon.png`
 - **WebUI:** `http://[IP]:[PORT:8677]/`
 - **Path 1:** `/mnt/user/appdata/auditorr/data` → `/app/data`
 - **Path 2:** `/mnt/user/data` → `/data`
@@ -84,6 +90,13 @@ docker run -d \
 ```
 
 ---
+## Important
+
+auditorr assumes a **hardlink-based setup**.
+
+If you are not using hardlinks, your health score will be low even if your library appears functional.
+
+--- 
 
 ## Configuration
 
