@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.1
+
+### New Features
+- **Exclusion patterns** — glob-based exclusions configurable in Config → Exclusion Patterns. One pattern per line. Matched files are excluded from all health scoring (orphaned, duplicate, not-imported) but remain visible in the file explorer with an "excluded" tag. Supports standard globs: `*.srt`, `@eaDir`, `Featurettes`.
+- **Rescan on config save** — saving settings now automatically triggers a background audit so changes take effect immediately without manually running a scan.
+
 ## v1.0.0 — Initial Release
 
 ### Features
