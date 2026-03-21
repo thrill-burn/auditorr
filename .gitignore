@@ -51,3 +51,6 @@ desktop.ini
 
 # Docker
 .dockerignore
+
+# Claude
+CLAUDE.md

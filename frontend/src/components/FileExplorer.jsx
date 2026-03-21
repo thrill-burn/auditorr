@@ -191,6 +191,7 @@ function FileRow({ name, node, depth, tab }) {
           borderBottom: tooltip ? '1px dotted var(--text-dim)' : 'none',
           cursor: tooltip ? 'help' : 'default',
         }}>{name}</span>
+        {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
@@ -285,6 +286,7 @@ const STATUS_FILTERS = [
   { id: 'Seeding',   label: 'Seeding',    color: 'var(--green)' },
   { id: 'Orphaned',  label: 'Orphaned',   color: 'var(--yellow)' },
   { id: 'Duplicate', label: 'Duplicates', color: 'var(--purple)' },
+  { id: 'Excluded',  label: 'Excluded',   color: 'var(--text-dim)' },
 ]
 
 export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount }) {
@@ -334,6 +336,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     if      (statusFilter === 'all')         sMatch = true
     else if (statusFilter === 'Duplicate')   sMatch = (f.duplicate_paths||[]).length > 0
     else if (statusFilter === 'NotImported') sMatch = !f.imported && f.status !== 'Orphaned'
+    else if (statusFilter === 'Excluded')    sMatch = f.excluded === true
     else                                     sMatch = f.status === statusFilter
 
     // Import

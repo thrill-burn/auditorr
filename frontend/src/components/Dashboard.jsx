@@ -373,7 +373,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.or_score} / 10 pts`,
       desc: 'Files in your torrent folder that qBittorrent has no knowledge of. Safe to delete unless you added them manually.',
       color: 'var(--yellow)',
-      actions: [{ label: 'View Orphaned', tab: 'torrents', status: 'Orphaned' }],
+      actions: [{ label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
     },
     {
       label: 'Not Imported', value: det.not_imported_count,

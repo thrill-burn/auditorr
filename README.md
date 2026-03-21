@@ -1,6 +1,6 @@
 # auditorr
 
-auditorr shows you exactly what’s happening inside your media library
+auditorr shows you exactly what’s happening inside your media library.
 
 It cross-references your hardlinked torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculating cross-seeding efficiency.
 
@@ -123,13 +123,11 @@ All configuration is done through the **Config** tab in the UI.
 | Component | Max Points | Description |
 |---|---|---|
 | Hardlinked Media | 70 | % of media library hardlinked back to a torrent file |
-| Orphaned Torrents | 10 | Files in torrent folder unknown to qBittorrent |
+| Orphaned Torrents | 10 | Files in media folder unknown to qBittorrent |
 | Not Imported | 10 | Seeding torrents with no matching media file |
 | Duplicate Files | 10 | Bit-for-bit identical files sharing no inode |
 
 For the 10-point categories, points are lost linearly as problem data grows toward the configured threshold. At the threshold, all 10 points are gone.
-
-The Hardlinked Media score assumes you are using hardlinks between your torrent download folder and your media library — as recommended by the [TRaSH Guides folder structure](https://trash-guides.info/File-and-Folder-Structure/). Without hardlinks, this score will be 0 regardless of how healthy your library is.
 
 ---
 

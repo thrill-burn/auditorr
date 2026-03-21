@@ -7,6 +7,7 @@ import hashlib
 import logging
 import secrets
 import functools
+import fnmatch
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, send_from_directory, g
 from flask_cors import CORS
@@ -94,6 +95,7 @@ DEFAULT_CONFIG = {
     'OR_RATIO':           0.01,
     'NI_RATIO':           0.01,
     'DUP_RATIO':          0.01,
+    'EXCLUSION_PATTERNS': [],
 }
 
 def load_config():
@@ -468,7 +470,25 @@ def _fetch_qbit_file_map(cfg):
     return qbit_file_map, sorted(trackers_set)
 
 
-def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files):
+def _is_excluded(rel_path, filename, patterns):
+    """Return True if the file matches any exclusion glob pattern."""
+    if not patterns:
+        return False
+    norm = rel_path.replace('\\', '/')
+    parts = norm.split('/')
+    for pat in patterns:
+        if fnmatch.fnmatch(filename, pat):
+            return True
+        if fnmatch.fnmatch(norm, pat):
+            return True
+        # Check each parent directory component
+        for part in parts[:-1]:
+            if fnmatch.fnmatch(part, pat):
+                return True
+    return False
+
+
+def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None):
     records = []
     scanned = scanned_so_far
     if not os.path.exists(base_path):
@@ -502,6 +522,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 records.append({
                     "full_path": full_path, "rel_path": rel_path,
                     "size": size, "inode": inode, "nlink": nlink, "source": source_label,
+                    "excluded": _is_excluded(rel_path, filename, exclusion_patterns),
                 })
             except Exception as e:
                 log.warning(f"Could not stat {full_path}: {e}")
@@ -551,6 +572,7 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['media_paths'],
             "duplicate_paths": duplicate_map.get(inode, []),
+            "excluded": item.get('excluded', False),
         })
     media_files_data = []
     for item in media_records:
@@ -562,6 +584,7 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['torrent_paths'],
             "duplicate_paths": duplicate_map.get(inode, []),
+            "excluded": item.get('excluded', False),
         })
     return torrent_files_data, media_files_data
 
@@ -581,11 +604,14 @@ def run_audit_process(trigger=None):
         total = count_files(cfg.get('MEDIA_PATH','')) + count_files(cfg.get('LOCAL_PATH',''))
         set_state(total_files=total, status_message="Scanning torrent directory...")
         inode_map = {}
+        exclusion_patterns = cfg.get('EXCLUSION_PATTERNS', [])
         torrent_records, scanned = _walk_directory(
-            cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, total)
+            cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, total,
+            exclusion_patterns=exclusion_patterns)
         set_state(status_message="Scanning media directory...")
         media_records, _ = _walk_directory(
-            cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, total)
+            cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, total,
+            exclusion_patterns=exclusion_patterns)
         set_state(status_message="Detecting duplicates...")
         duplicate_map = _build_duplicate_map(torrent_records + media_records)
         torrent_files_data, media_files_data = _assemble_records(
@@ -634,15 +660,18 @@ def process_health_metrics(media_files, torrent_files, cfg):
     or_ratio  = float(cfg.get('OR_RATIO',  0.01))
     ni_ratio  = float(cfg.get('NI_RATIO',  0.01))
     dup_ratio = float(cfg.get('DUP_RATIO', 0.01))
-    total_media_size      = sum(f['size'] for f in media_files)
-    hardlinked_media_size = sum(f['size'] for f in media_files if f.get('linked_paths'))
-    total_torrents_size   = sum(f['size'] for f in torrent_files)
-    orphaned_torrent_size = sum(f['size'] for f in torrent_files if f['status'] == 'Orphaned')
-    not_imported_size     = sum(f['size'] for f in torrent_files
+    # Exclude files marked as excluded from all scoring
+    scoring_media    = [f for f in media_files    if not f.get('excluded')]
+    scoring_torrents = [f for f in torrent_files  if not f.get('excluded')]
+    total_media_size      = sum(f['size'] for f in scoring_media)
+    hardlinked_media_size = sum(f['size'] for f in scoring_media if f.get('linked_paths'))
+    total_torrents_size   = sum(f['size'] for f in scoring_torrents)
+    orphaned_torrent_size = sum(f['size'] for f in scoring_torrents if f['status'] == 'Orphaned')
+    not_imported_size     = sum(f['size'] for f in scoring_torrents
                                 if not f['imported'] and f['status'] != 'Orphaned')
     seen_inodes = set()
     dup_size = dup_count = 0
-    for f in media_files + torrent_files:
+    for f in scoring_media + scoring_torrents:
         if f.get('duplicate_paths') and f.get('inode') not in seen_inodes:
             seen_inodes.add(f['inode']); dup_size += f['size']; dup_count += 1
     hl_ratio = (hardlinked_media_size / total_media_size) if total_media_size > 0 else 1.0
@@ -667,8 +696,8 @@ def process_health_metrics(media_files, torrent_files, cfg):
             "total_media_size": total_media_size, "hardlinked_media_size": hardlinked_media_size,
             "total_torrents_size": total_torrents_size, "orphaned_torrent_size": orphaned_torrent_size,
             "not_imported_size": not_imported_size, "duplicate_size": dup_size,
-            "orphaned_torrent_count": sum(1 for f in torrent_files if f['status'] == 'Orphaned'),
-            "not_imported_count": sum(1 for f in torrent_files if not f['imported'] and f['status'] != 'Orphaned'),
+            "orphaned_torrent_count": sum(1 for f in scoring_torrents if f['status'] == 'Orphaned'),
+            "not_imported_count": sum(1 for f in scoring_torrents if not f['imported'] and f['status'] != 'Orphaned'),
             "duplicate_count": dup_count, "or_limit": or_limit, "ni_limit": ni_limit,
             "dup_limit": dup_limit, "hl_score": round(hl_score,1), "or_score": round(or_score,1),
             "ni_score": round(ni_score,1), "dup_score": round(dup_score,1),
@@ -822,6 +851,7 @@ def handle_config():
                 'OR_RATIO':           float(data.get('OR_RATIO',  0.01)),
                 'NI_RATIO':           float(data.get('NI_RATIO',  0.01)),
                 'DUP_RATIO':          float(data.get('DUP_RATIO', 0.01)),
+                'EXCLUSION_PATTERNS': [p for p in data.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)],
             }
         except (ValueError, TypeError) as e:
             return jsonify({"status": "error", "message": f"Invalid value: {e}"}), 400

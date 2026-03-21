@@ -60,6 +60,8 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   const [orPct,  setOrPct]  = useState('')
   const [niPct,  setNiPct]  = useState('')
   const [dupPct, setDupPct] = useState('')
+  const [exclusionPatterns, setExclusionPatterns] = useState('')
+  const [exclusionFocused,  setExclusionFocused]  = useState(false)
 
   const loadConfig = () => {
     api.getConfig().then(data => {
@@ -68,6 +70,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       setOrPct( String(parseFloat((c.OR_RATIO  ?? 0.01) * 100)))
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
+      setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setPassChanged(false)
     })
   }
@@ -95,6 +98,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
       NI_RATIO:  parseFloat(niPct)  / 100 || 0.01,
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
+      EXCLUSION_PATTERNS: exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
     }
     if (!passChanged) delete payload.QB_PASS
     try {
@@ -205,6 +209,29 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
             )
           })}
         </div>
+      </Card>
+
+      <Card title="Exclusion Patterns">
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Patterns</label>
+        <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
+          One pattern per line. Supports globs: <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>*.srt</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>@eaDir</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>Featurettes</span>. Matching files are excluded from health scoring but still visible in the file explorer.
+        </span>
+        <textarea
+          value={exclusionPatterns}
+          onChange={e => setExclusionPatterns(e.target.value)}
+          onFocus={() => setExclusionFocused(true)}
+          onBlur={() => setExclusionFocused(false)}
+          placeholder={'@eaDir\n*.srt\nFeaturettes'}
+          style={{
+            width: '100%', height: 120, padding: '8px 11px',
+            borderRadius: 'var(--r)',
+            border: `1px solid ${exclusionFocused ? 'var(--accent)' : 'var(--border2)'}`,
+            background: 'var(--surface2)', color: 'var(--text)',
+            fontFamily: 'var(--mono)', fontSize: 12,
+            outline: 'none', resize: 'vertical',
+            transition: 'border 0.12s', boxSizing: 'border-box',
+          }}
+        />
       </Card>
 
       <Card title="Appearance">
