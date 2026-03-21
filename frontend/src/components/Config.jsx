@@ -113,6 +113,8 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       loadConfig()
       // Refresh dashboard so threshold changes are reflected immediately
       if (onConfigSaved) onConfigSaved()
+      // Trigger a background audit so the new config takes effect immediately
+      if (onScan) onScan()
     } catch (e) { setSaveStatus({ ok: false, msg: e.message }) }
   }
 
