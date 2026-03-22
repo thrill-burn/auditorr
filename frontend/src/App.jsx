@@ -8,6 +8,103 @@ import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
 import { api } from './api'
 
+// ── Script Modal ──────────────────────────────────────────────────────────────
+function _btnStyle(bg, color) {
+  return { padding: '7px 14px', borderRadius: 6, border: 'none', background: bg, color, fontSize: 12, fontWeight: 500, cursor: 'pointer' }
+}
+
+function ScriptModal({ scriptType, title, subtitle, onClose }) {
+  const [script, setScript] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    api.actionScript(scriptType)
+      .then(text => { setScript(text); setLoading(false) })
+      .catch(e => { setScript(`# Error loading script: ${e.message}`); setLoading(false) })
+  }, [scriptType])
+
+  const handleCopy = () => {
+    const ta = document.createElement('textarea')
+    ta.value = script
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    try { document.execCommand('copy') } catch (_) {}
+    document.body.removeChild(ta)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleDownload = () => {
+    const blob = new Blob([script], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = scriptType + '.sh'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        zIndex: 500,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 700,
+          maxHeight: '85vh',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--rl)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+        </div>
+        <div style={{ padding: '10px 16px', background: 'rgba(234,179,8,0.13)', borderLeft: '3px solid var(--yellow)', margin: '12px 16px 0', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>
+          ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+          {loading ? (
+            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
+          ) : (
+            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
+          )}
+        </div>
+        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
+          <button onClick={onClose} style={_btnStyle('var(--surface2)', 'var(--text-dim)')}>Close</button>
+          {!loading && script && (
+            <>
+              <button onClick={handleDownload} style={_btnStyle('var(--surface2)', 'var(--text)')}>Download .sh</button>
+              <button onClick={handleCopy} style={_btnStyle('var(--accent)', 'var(--bg)')}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Hash-based routing helpers
 function getHashTab() {
   const hash = window.location.hash.replace('#', '') || 'dashboard'
@@ -30,6 +127,7 @@ function AppInner() {
   const [pendingNav,    setPendingNav]    = useState(null)
   const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [theme, setTheme] = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
+  const [scriptModal,   setScriptModal]   = useState(null)
   const pollRef     = useRef(null)
   const prevScanRef = useRef(false)
   const toast       = useToast()
@@ -172,6 +270,7 @@ function AppInner() {
               changes={changes}
               onNavigate={handleNavigate}
               isRefreshing={isRefreshing}
+              onScript={setScriptModal}
             />
           )}
           {(tab === 'media' || tab === 'torrents') && (
@@ -198,6 +297,14 @@ function AppInner() {
           )}
         </div>
       </div>
+      {scriptModal && (
+        <ScriptModal
+          scriptType={scriptModal.scriptType}
+          title={scriptModal.title || scriptModal.label}
+          subtitle={scriptModal.subtitle}
+          onClose={() => setScriptModal(null)}
+        />
+      )}
     </div>
   )
 }

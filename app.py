@@ -13,6 +13,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, jsonify, request, send_from_directory, g
 from flask_cors import CORS
 import qbittorrentapi
@@ -450,14 +451,35 @@ def _fetch_qbit_file_map(cfg):
         password=cfg.get('QB_PASS'),
     )
     qbt.auth_log_in()
+    torrents = list(qbt.torrents_info())
+
+    # Fetch all tracker lists in parallel — eliminates N sequential API calls.
+    # 16 workers gives significant speedup without overwhelming qBittorrent.
+    # All trackers are fetched (not just primary) to preserve cross-seed stats.
+    def _fetch_trackers(torrent):
+        try:
+            raw = [t.url for t in qbt.torrents_trackers(torrent_hash=torrent.hash)
+                   if t.url.startswith('http') or t.url.startswith('udp')]
+            hosts = [t.split('/')[2] for t in raw if len(t.split('/')) > 2] or ['Unknown']
+        except Exception:
+            hosts = ['Unknown']
+        return torrent.hash, hosts
+
+    tracker_map = {}
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures = {executor.submit(_fetch_trackers, t): t for t in torrents}
+        for future in as_completed(futures):
+            torrent_hash, hosts = future.result()
+            tracker_map[torrent_hash] = hosts
+
+    # Build file map using pre-fetched tracker data
     qbit_file_map = {}
-    trackers_set  = set()
-    remote_path   = cfg.get('REMOTE_PATH', '')
-    local_path    = cfg.get('LOCAL_PATH', '')
-    for torrent in qbt.torrents_info():
-        raw = [t.url for t in qbt.torrents_trackers(torrent_hash=torrent.hash)
-               if t.url.startswith('http') or t.url.startswith('udp')]
-        hosts = [t.split('/')[2] for t in raw if len(t.split('/')) > 2] or ['Unknown']
+    trackers_set = set()
+    remote_path = cfg.get('REMOTE_PATH', '')
+    local_path = cfg.get('LOCAL_PATH', '')
+
+    for torrent in torrents:
+        hosts = tracker_map.get(torrent.hash, ['Unknown'])
         for h in hosts:
             trackers_set.add(h)
         save_path = torrent.save_path
@@ -477,6 +499,7 @@ def _fetch_qbit_file_map(cfg):
                 entry["status"] = 'Seeding'
             elif entry["status"] == 'Paused':
                 entry["status"] = status
+
     return qbit_file_map, sorted(trackers_set)
 
 
