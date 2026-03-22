@@ -99,7 +99,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   const handleTestSonarr = async () => {
     setSonarrTestStatus({ loading: true })
     try {
-      await api.testSonarr()
+      await api.testSonarr(conf.SONARR_URL, conf.SONARR_API_KEY)
       setSonarrTestStatus({ ok: true, msg: 'Connected!' })
     } catch (e) { setSonarrTestStatus({ ok: false, msg: e.message }) }
   }
@@ -107,7 +107,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   const handleTestRadarr = async () => {
     setRadarrTestStatus({ loading: true })
     try {
-      await api.testRadarr()
+      await api.testRadarr(conf.RADARR_URL, conf.RADARR_API_KEY)
       setRadarrTestStatus({ ok: true, msg: 'Connected!' })
     } catch (e) { setRadarrTestStatus({ ok: false, msg: e.message }) }
   }

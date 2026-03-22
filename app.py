@@ -920,9 +920,8 @@ def _test_arr_connection(url, api_key):
 @app.route('/api/test_sonarr', methods=['POST'])
 @require_auth
 def test_sonarr():
-    with _config_lock:
-        cfg = dict(config)
-    ok, msg = _test_arr_connection(cfg.get('SONARR_URL', ''), cfg.get('SONARR_API_KEY', ''))
+    data = request.json or {}
+    ok, msg = _test_arr_connection(data.get('url', ''), data.get('api_key', ''))
     if ok:
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": msg}), 400
@@ -930,9 +929,8 @@ def test_sonarr():
 @app.route('/api/test_radarr', methods=['POST'])
 @require_auth
 def test_radarr():
-    with _config_lock:
-        cfg = dict(config)
-    ok, msg = _test_arr_connection(cfg.get('RADARR_URL', ''), cfg.get('RADARR_API_KEY', ''))
+    data = request.json or {}
+    ok, msg = _test_arr_connection(data.get('url', ''), data.get('api_key', ''))
     if ok:
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": msg}), 400
