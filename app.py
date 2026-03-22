@@ -1045,8 +1045,10 @@ def get_action_script(script_type):
 
     elif script_type == 'dedupe':
         groups = _build_dup_groups(torrent_files, local_path)
-        total_recoverable = sum(g['recoverable_size'] for g in groups)
-        skipped_count     = sum(1 for g in groups if g['skipped'])
+        total_recoverable  = sum(g['recoverable_size'] for g in groups)
+        skipped_count      = sum(1 for g in groups if g['skipped'])
+        non_skipped_groups = [g for g in groups if not g['skipped']]
+        total_non_skipped  = len(non_skipped_groups)
         lines = [
             '#!/bin/bash',
             '# auditorr — Dedupe Script',
@@ -1062,6 +1064,11 @@ def get_action_script(script_type):
             '# All torrents will continue seeding normally.',
             '# Review each group carefully before running.',
             '',
+            f'TOTAL={total_non_skipped}',
+            'DONE=0',
+            'SKIPPED=0',
+            'RECLAIMED=0',
+            '',
         ]
         group_num = 0
         for g in groups:
@@ -1073,13 +1080,37 @@ def get_action_script(script_type):
                 lines.append('')
                 continue
             group_num += 1
+            canon_path = canonical['path']
             lines.append(f'# Group {group_num}: {filename} — {_human_size(g["recoverable_size"])} recoverable')
-            lines.append(f'# Canonical: {canonical["path"]}')
+            lines.append(f'# Canonical: {canon_path}')
             for nc in non_canonical:
-                lines.append(f'ln -f "{canonical["path"]}" \\')
-                lines.append(f'      "{nc["path"]}"')
+                nc_path    = nc['path']
+                size_human = _human_size(nc['size'])
+                size_bytes = nc['size']
+                lines.append(f'# Duplicate: {nc_path}')
+                lines.append(f'echo "[{group_num}/{total_non_skipped}] Verifying {filename}..."')
+                lines.append(f"HASH_A=$(md5sum \"{canon_path}\" | cut -d' ' -f1)")
+                lines.append(f"HASH_B=$(md5sum \"{nc_path}\" | cut -d' ' -f1)")
+                lines.append('if [ "$HASH_A" != "$HASH_B" ]; then')
+                lines.append('  echo "  SKIP: Hash mismatch — files differ, skipping this group"')
+                lines.append('  SKIPPED=$((SKIPPED+1))')
+                lines.append('else')
+                lines.append('  echo "  Hash verified. Creating hardlink..."')
+                lines.append(f'  ln -f "{canon_path}" "{nc_path}"')
+                lines.append(f'  echo "  Done. {size_human} reclaimed."')
+                lines.append(f'  RECLAIMED=$((RECLAIMED+{size_bytes}))')
+                lines.append('fi')
+                lines.append('echo ""')
+            lines.append('DONE=$((DONE+1))')
             lines.append('')
-        lines.append('echo "Dedupe complete. Verify with: df -h"')
+        lines.extend([
+            'echo "================================"',
+            'echo "Dedupe complete."',
+            'echo "Groups processed: $DONE / $TOTAL"',
+            'echo "Groups skipped (hash mismatch): $SKIPPED"',
+            'echo ""',
+            "echo \"Run 'df -h' to verify space reclaimed.\"",
+        ])
         script = '\n'.join(lines)
 
     else:
