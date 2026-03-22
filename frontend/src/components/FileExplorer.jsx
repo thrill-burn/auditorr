@@ -249,6 +249,8 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
           cursor: tooltip ? 'help' : 'default',
         }}>{name}</span>
         {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         {showSearchButtons && showSonarr && (
           <button
             title="Search in Sonarr"
@@ -295,11 +297,9 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
             {radarrState === 'loading' ? 'Opening…' : radarrState === 'success' ? '✓ Opened' : radarrState === 'error' ? '✗ Failed' : 'Open in Radarr'}
           </button>
         )}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
         {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
         {notImported && <Tag color="var(--red)">not imported</Tag>}
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
         <Tag color={isOrphan ? 'var(--yellow)' : node.status === 'Seeding' ? 'var(--green)' : 'var(--blue)'}>{(node.status||'').toLowerCase()}</Tag>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
           {(node.trackers||[]).join(' · ')}
