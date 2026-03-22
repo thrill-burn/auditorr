@@ -1194,6 +1194,14 @@ def _parse_title_from_filename(filename):
     return name
 
 
+def _normalize_title(title):
+    """Lowercase and strip punctuation for fuzzy title matching."""
+    t = title.lower()
+    t = re.sub(r'[^\w\s]', ' ', t)  # replace punctuation with space
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+
 def _arr_get(base_url, api_key, path):
     """GET from a *arr instance and return parsed JSON."""
     endpoint = base_url.rstrip('/') + path
@@ -1216,14 +1224,21 @@ def actions_sonarr_search():
     try:
         filename = os.path.basename(file_path)
         title = _parse_title_from_filename(filename)
-        title_lower = title.lower()
+        parsed_normalized = _normalize_title(title)
         series_list = _arr_get(url, key, '/api/v3/series')
-        best = next(
-            (s for s in series_list
-             if title_lower in s.get('title', '').lower()
-             or title_lower in s.get('cleanTitle', '').lower()),
-            None,
-        )
+        best = None
+        best_score = 0
+        for s in series_list:
+            candidate = _normalize_title(s.get('title', ''))
+            alt = _normalize_title(s.get('cleanTitle', ''))
+            if candidate == parsed_normalized or alt == parsed_normalized:
+                best = s
+                break
+            if parsed_normalized in candidate or candidate in parsed_normalized:
+                score = len(candidate)
+                if score > best_score:
+                    best = s
+                    best_score = score
         if best is None:
             return jsonify({"status": "error", "message": f"'{title}' not found in Sonarr library. Make sure it is added and monitored in Sonarr first."}), 400
         sonarr_url = url.rstrip('/') + '/series/' + best['titleSlug']
@@ -1250,14 +1265,21 @@ def actions_radarr_search():
     try:
         filename = os.path.basename(file_path)
         title = _parse_title_from_filename(filename)
-        title_lower = title.lower()
+        parsed_normalized = _normalize_title(title)
         movie_list = _arr_get(url, key, '/api/v3/movie')
-        best = next(
-            (m for m in movie_list
-             if title_lower in m.get('title', '').lower()
-             or title_lower in m.get('cleanTitle', '').lower()),
-            None,
-        )
+        best = None
+        best_score = 0
+        for m in movie_list:
+            candidate = _normalize_title(m.get('title', ''))
+            alt = _normalize_title(m.get('cleanTitle', ''))
+            if candidate == parsed_normalized or alt == parsed_normalized:
+                best = m
+                break
+            if parsed_normalized in candidate or candidate in parsed_normalized:
+                score = len(candidate)
+                if score > best_score:
+                    best = m
+                    best_score = score
         if best is None:
             return jsonify({"status": "error", "message": f"'{title}' not found in Radarr library. Make sure it is added and monitored in Radarr first."}), 400
         radarr_url = url.rstrip('/') + '/movie/' + best['titleSlug']
