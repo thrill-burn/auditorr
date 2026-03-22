@@ -1183,11 +1183,16 @@ def actions_sonarr_search():
     try:
         filename = os.path.basename(file_path)
         title = _parse_title_from_filename(filename)
-        series_list = _arr_get(url, key, f'/api/v3/series?term={urllib.parse.quote(title)}')
-        if not series_list:
-            return jsonify({"status": "error", "message": f"No match found for '{title}' in Sonarr"}), 400
         title_lower = title.lower()
-        best = next((s for s in series_list if s.get('title', '').lower() == title_lower), series_list[0])
+        series_list = _arr_get(url, key, '/api/v3/series')
+        best = next(
+            (s for s in series_list
+             if title_lower in s.get('title', '').lower()
+             or title_lower in s.get('cleanTitle', '').lower()),
+            None,
+        )
+        if best is None:
+            return jsonify({"status": "error", "message": f"'{title}' not found in Sonarr library. Make sure it is added and monitored in Sonarr first."}), 400
         endpoint = url.rstrip('/') + '/api/v3/command'
         body = json.dumps({"name": "InteractiveSearch", "seriesId": best['id']}).encode()
         http_req = urllib.request.Request(
@@ -1220,13 +1225,18 @@ def actions_radarr_search():
     try:
         filename = os.path.basename(file_path)
         title = _parse_title_from_filename(filename)
-        movie_list = _arr_get(url, key, f'/api/v3/movie?term={urllib.parse.quote(title)}')
-        if not movie_list:
-            return jsonify({"status": "error", "message": f"No match found for '{title}' in Radarr"}), 400
         title_lower = title.lower()
-        best = next((m for m in movie_list if m.get('title', '').lower() == title_lower), movie_list[0])
+        movie_list = _arr_get(url, key, '/api/v3/movie')
+        best = next(
+            (m for m in movie_list
+             if title_lower in m.get('title', '').lower()
+             or title_lower in m.get('cleanTitle', '').lower()),
+            None,
+        )
+        if best is None:
+            return jsonify({"status": "error", "message": f"'{title}' not found in Radarr library. Make sure it is added and monitored in Radarr first."}), 400
         endpoint = url.rstrip('/') + '/api/v3/command'
-        body = json.dumps({"name": "InteractiveSearch", "movieId": best['id']}).encode()
+        body = json.dumps({"name": "InteractiveSearch", "movieIds": [best['id']]}).encode()
         http_req = urllib.request.Request(
             endpoint, data=body,
             headers={"X-Api-Key": key, "Content-Type": "application/json"},
