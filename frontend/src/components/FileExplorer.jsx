@@ -213,25 +213,6 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
     }
   }
 
-  const sonarrPillStyle = (state) => ({
-    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
-    color: state === 'success' ? 'var(--green)' : state === 'error' ? 'var(--red)' : 'var(--blue)',
-    background: state === 'success' ? 'var(--green)18' : state === 'error' ? 'var(--red)18' : 'var(--blue)18',
-    border: '1px solid ' + (state === 'success' ? 'var(--green)44' : state === 'error' ? 'var(--red)44' : 'var(--blue)44'),
-    borderRadius: 99, padding: '1px 8px',
-    cursor: state === 'loading' ? 'default' : 'pointer',
-    outline: 'none', flexShrink: 0, transition: 'background 0.1s',
-  })
-
-  const radarrPillStyle = (state) => ({
-    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
-    color: state === 'success' ? 'var(--green)' : state === 'error' ? 'var(--red)' : 'var(--yellow)',
-    background: state === 'success' ? 'var(--green)18' : state === 'error' ? 'var(--red)18' : 'var(--yellow)18',
-    border: '1px solid ' + (state === 'success' ? 'var(--green)44' : state === 'error' ? 'var(--red)44' : 'var(--yellow)44'),
-    borderRadius: 99, padding: '1px 8px',
-    cursor: state === 'loading' ? 'default' : 'pointer',
-    outline: 'none', flexShrink: 0, transition: 'background 0.1s',
-  })
 
   return (
     <div style={{
@@ -265,24 +246,46 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
           <button
             title="Search in Sonarr"
             onClick={handleSonarrSearch}
-            disabled={sonarrState === 'loading'}
-            style={sonarrPillStyle(sonarrState)}
-            onMouseEnter={e => { if (sonarrState === 'idle') e.currentTarget.style.background = 'var(--blue)30' }}
-            onMouseLeave={e => { if (sonarrState === 'idle') e.currentTarget.style.background = 'var(--blue)18' }}
+            style={{
+              background: 'var(--blue)18',
+              border: '1px solid var(--blue)44',
+              borderRadius: 99,
+              color: 'var(--blue)',
+              fontFamily: 'var(--mono)',
+              fontSize: 10,
+              fontWeight: 600,
+              padding: '1px 8px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              transition: 'background 0.1s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--blue)18'}
           >
-            {sonarrState === 'loading' ? '…' : sonarrState === 'success' ? '✓ Sonarr' : sonarrState === 'error' ? '✗' : 'Sonarr'}
+            {sonarrState === 'loading' ? '…' : sonarrState === 'success' ? '✓ Sonarr' : sonarrState === 'error' ? '✗ Sonarr' : 'Sonarr'}
           </button>
         )}
         {showSearchButtons && radarrConfigured && (
           <button
             title="Search in Radarr"
             onClick={handleRadarrSearch}
-            disabled={radarrState === 'loading'}
-            style={radarrPillStyle(radarrState)}
-            onMouseEnter={e => { if (radarrState === 'idle') e.currentTarget.style.background = 'var(--yellow)30' }}
-            onMouseLeave={e => { if (radarrState === 'idle') e.currentTarget.style.background = 'var(--yellow)18' }}
+            style={{
+              background: 'var(--yellow)18',
+              border: '1px solid var(--yellow)44',
+              borderRadius: 99,
+              color: 'var(--yellow)',
+              fontFamily: 'var(--mono)',
+              fontSize: 10,
+              fontWeight: 600,
+              padding: '1px 8px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              transition: 'background 0.1s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)18'}
           >
-            {radarrState === 'loading' ? '…' : radarrState === 'success' ? '✓ Radarr' : radarrState === 'error' ? '✗' : 'Radarr'}
+            {radarrState === 'loading' ? '…' : radarrState === 'success' ? '✓ Radarr' : radarrState === 'error' ? '✗ Radarr' : 'Radarr'}
           </button>
         )}
         <button

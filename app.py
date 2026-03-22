@@ -1199,8 +1199,10 @@ def actions_sonarr_search():
             resp.read()
         return jsonify({"status": "success", "title": best.get('title', title)})
     except urllib.error.HTTPError as e:
+        log.exception("HTTP error in sonarr_search")
         return jsonify({"status": "error", "message": f"Sonarr returned HTTP {e.code}: {e.reason}"}), 400
     except Exception as e:
+        log.exception("Error in sonarr_search")
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
@@ -1234,8 +1236,10 @@ def actions_radarr_search():
             resp.read()
         return jsonify({"status": "success", "title": best.get('title', title)})
     except urllib.error.HTTPError as e:
+        log.exception("HTTP error in radarr_search")
         return jsonify({"status": "error", "message": f"Radarr returned HTTP {e.code}: {e.reason}"}), 400
     except Exception as e:
+        log.exception("Error in radarr_search")
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
