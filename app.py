@@ -8,6 +8,8 @@ import logging
 import secrets
 import functools
 import fnmatch
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, send_from_directory, g
 from flask_cors import CORS
@@ -96,6 +98,10 @@ DEFAULT_CONFIG = {
     'NI_RATIO':           0.01,
     'DUP_RATIO':          0.01,
     'EXCLUSION_PATTERNS': [],
+    'SONARR_URL':         '',
+    'SONARR_API_KEY':     '',
+    'RADARR_URL':         '',
+    'RADARR_API_KEY':     '',
 }
 
 def load_config():
@@ -852,6 +858,10 @@ def handle_config():
                 'NI_RATIO':           float(data.get('NI_RATIO',  0.01)),
                 'DUP_RATIO':          float(data.get('DUP_RATIO', 0.01)),
                 'EXCLUSION_PATTERNS': [p for p in data.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)],
+                'SONARR_URL':         str(data.get('SONARR_URL', '')),
+                'SONARR_API_KEY':     str(data.get('SONARR_API_KEY', '')),
+                'RADARR_URL':         str(data.get('RADARR_URL', '')),
+                'RADARR_API_KEY':     str(data.get('RADARR_API_KEY', '')),
             }
         except (ValueError, TypeError) as e:
             return jsonify({"status": "error", "message": f"Invalid value: {e}"}), 400
@@ -891,6 +901,41 @@ def test_connection():
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
+
+def _test_arr_connection(url, api_key):
+    """Probe an *arr /api/v3/system/status endpoint. Returns (ok, message)."""
+    if not url or not api_key:
+        return False, "URL and API key are required"
+    endpoint = url.rstrip('/') + '/api/v3/system/status'
+    try:
+        http_req = urllib.request.Request(endpoint, headers={"X-Api-Key": api_key})
+        with urllib.request.urlopen(http_req, timeout=10) as resp:
+            resp.read()
+        return True, None
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, str(e)
+
+@app.route('/api/test_sonarr', methods=['POST'])
+@require_auth
+def test_sonarr():
+    with _config_lock:
+        cfg = dict(config)
+    ok, msg = _test_arr_connection(cfg.get('SONARR_URL', ''), cfg.get('SONARR_API_KEY', ''))
+    if ok:
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": msg}), 400
+
+@app.route('/api/test_radarr', methods=['POST'])
+@require_auth
+def test_radarr():
+    with _config_lock:
+        cfg = dict(config)
+    ok, msg = _test_arr_connection(cfg.get('RADARR_URL', ''), cfg.get('RADARR_API_KEY', ''))
+    if ok:
+        return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": msg}), 400
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')

@@ -49,8 +49,10 @@ function Card({ title, children }) {
 
 export default function Config({ lastAuditTime, onScan, isScanning, onConfigSaved, theme, onThemeChange }) {
   const [conf,        setConf]        = useState(null)
-  const [testStatus,  setTestStatus]  = useState(null)
-  const [saveStatus,  setSaveStatus]  = useState(null)
+  const [testStatus,        setTestStatus]        = useState(null)
+  const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
+  const [radarrTestStatus,  setRadarrTestStatus]  = useState(null)
+  const [saveStatus,        setSaveStatus]        = useState(null)
   const [passChanged, setPassChanged] = useState(false)
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
@@ -72,6 +74,8 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setPassChanged(false)
+      setSonarrTestStatus(null)
+      setRadarrTestStatus(null)
     })
   }
 
@@ -90,6 +94,22 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       await api.testConnection({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
     } catch (e) { setTestStatus({ ok: false, msg: e.message }) }
+  }
+
+  const handleTestSonarr = async () => {
+    setSonarrTestStatus({ loading: true })
+    try {
+      await api.testSonarr()
+      setSonarrTestStatus({ ok: true, msg: 'Connected!' })
+    } catch (e) { setSonarrTestStatus({ ok: false, msg: e.message }) }
+  }
+
+  const handleTestRadarr = async () => {
+    setRadarrTestStatus({ loading: true })
+    try {
+      await api.testRadarr()
+      setRadarrTestStatus({ ok: true, msg: 'Connected!' })
+    } catch (e) { setRadarrTestStatus({ ok: false, msg: e.message }) }
   }
 
   const handleSave = async () => {
@@ -169,6 +189,42 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
           <Field label="Scheduled Interval (minutes)" type="number"
             hint="Fallback: run an audit every N minutes even if the watchdog fires no events. Catches missed changes on NFS/bind mounts. Default: 360 (6h)."
             placeholder="360" value={conf.SCHEDULED_INTERVAL} onChange={set('SCHEDULED_INTERVAL')} />
+        </div>
+      </Card>
+
+      <Card title="Integrations">
+        <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
+          Required for interactive search in the Media explorer. API keys found in each app under Settings → General.
+        </p>
+        <div style={g2}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Field label="Sonarr URL" placeholder="http://192.168.1.x:8989" value={conf.SONARR_URL} onChange={set('SONARR_URL')} />
+            <Field label="Sonarr API Key" type="password" placeholder="paste API key…" value={conf.SONARR_API_KEY} onChange={set('SONARR_API_KEY')} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {sonarrTestStatus && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: sonarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                  {sonarrTestStatus.loading ? 'Testing…' : (sonarrTestStatus.ok ? '✓ ' : '✗ ') + sonarrTestStatus.msg}
+                </span>
+              )}
+              <button onClick={handleTestSonarr} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+                Test Sonarr
+              </button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Field label="Radarr URL" placeholder="http://192.168.1.x:7878" value={conf.RADARR_URL} onChange={set('RADARR_URL')} />
+            <Field label="Radarr API Key" type="password" placeholder="paste API key…" value={conf.RADARR_API_KEY} onChange={set('RADARR_API_KEY')} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {radarrTestStatus && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: radarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                  {radarrTestStatus.loading ? 'Testing…' : (radarrTestStatus.ok ? '✓ ' : '✗ ') + radarrTestStatus.msg}
+                </span>
+              )}
+              <button onClick={handleTestRadarr} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+                Test Radarr
+              </button>
+            </div>
+          </div>
         </div>
       </Card>
 
