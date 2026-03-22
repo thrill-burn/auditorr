@@ -221,7 +221,6 @@ export default function Actions({ onNavigate }) {
   const [config, setConfig] = useState(null)
   const [error, setError] = useState(null)
   const [scriptModal, setScriptModal] = useState(null) // { scriptType, title, subtitle }
-  const [showMoreTorrents, setShowMoreTorrents] = useState(false)
   const [sonarrLoading, setSonarrLoading] = useState(false)
   const [radarrLoading, setRadarrLoading] = useState(false)
   const toast = useToast()
@@ -284,8 +283,6 @@ export default function Actions({ onNavigate }) {
   const radarrConfigured = !!config.RADARR_URL
 
   const orphanedTorrentFiles = orphanedTorrents.files || []
-  const visibleTorrents = showMoreTorrents ? orphanedTorrentFiles : orphanedTorrentFiles.slice(0, 5)
-  const hiddenCount = Math.max(0, orphanedTorrentFiles.length - 5)
 
   const nonSkippedGroups = (duplicates.groups || []).filter(g => !g.skipped)
   const dupCount   = nonSkippedGroups.length
@@ -324,50 +321,28 @@ export default function Actions({ onNavigate }) {
           isEmpty={orphanedTorrentFiles.length === 0}
           emptyMessage="No orphaned torrents"
         >
-          {qbHost && orphanedTorrentFiles.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {visibleTorrents.map((f, i) => {
-                const filename = (f.path || '').split('/').pop() || f.path
-                return f.hash ? (
-                  <a
-                    key={f.hash}
-                    href={`${qbHost}/torrents?hash=${f.hash.toLowerCase()}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      fontSize: 11, color: 'var(--accent)',
-                      textDecoration: 'none', fontFamily: 'var(--mono)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      display: 'block',
-                    }}
-                  >
-                    ↗ {filename}
-                  </a>
-                ) : (
-                  <span
-                    key={i}
-                    style={{
-                      fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      display: 'block',
-                    }}
-                  >
-                    {filename}
-                  </span>
-                )
-              })}
-              {hiddenCount > 0 && (
-                <button
-                  onClick={() => setShowMoreTorrents(v => !v)}
-                  style={{
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    padding: 0, fontSize: 11, color: 'var(--text-dim)', textAlign: 'left',
-                  }}
-                >
-                  {showMoreTorrents ? 'Show less' : `Show ${hiddenCount} more…`}
-                </button>
-              )}
-            </div>
+          {qbHost ? (
+            <button
+              onClick={() => window.open(qbHost, '_blank')}
+              style={{
+                border: '1px solid var(--yellow)35', background: 'var(--yellow)12',
+                color: 'var(--yellow)', borderRadius: 7, padding: 7,
+                cursor: 'pointer', fontSize: 12, fontWeight: 500,
+              }}
+            >
+              View Orphaned Torrents in qBittorrent →
+            </button>
+          ) : (
+            <button
+              onClick={() => onNavigate({ tab: 'config' })}
+              style={{
+                border: '1px solid var(--border2)', background: 'transparent',
+                color: 'var(--text-dim)', borderRadius: 7, padding: 7,
+                cursor: 'pointer', fontSize: 12, fontWeight: 500,
+              }}
+            >
+              Configure qBittorrent in Settings →
+            </button>
           )}
           <button
             onClick={() => setScriptModal({
@@ -375,7 +350,11 @@ export default function Actions({ onNavigate }) {
               title: 'Orphaned Torrent Delete Script',
               subtitle: `${orphanedTorrentFiles.length} files — ${formatBytes(orphanedTorrents.total_size)}`,
             })}
-            style={btnStyle('var(--yellow)22', 'var(--yellow)')}
+            style={{
+              border: '1px solid var(--yellow)35', background: 'var(--yellow)12',
+              color: 'var(--yellow)', borderRadius: 7, padding: 7,
+              cursor: 'pointer', fontSize: 12, fontWeight: 500,
+            }}
           >
             Generate Delete Script
           </button>
