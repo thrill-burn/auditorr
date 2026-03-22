@@ -273,7 +273,7 @@ function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigat
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto' }}>
         {enrichedRows.map((row, rowIdx) => {
           const visibleActions = row.filter(a => !a.hidden)
-          if (visibleActions.length === 0) return null
+          if (visibleActions.length === 0) return <div key={rowIdx} style={{ height: 31 }} />
           return (
             <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
               {visibleActions.map((a, i) => (
@@ -518,6 +518,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       color: 'var(--blue)',
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
+        [], // spacer row to match height of other cards
       ],
     },
     {
