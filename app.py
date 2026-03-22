@@ -469,7 +469,7 @@ def _fetch_qbit_file_map(cfg):
             status = 'Paused'
         for f in qbt.torrents_files(torrent_hash=torrent.hash):
             full_path = os.path.join(save_path, f.name)
-            entry = qbit_file_map.setdefault(full_path, {"status": status, "trackers": set()})
+            entry = qbit_file_map.setdefault(full_path, {"status": status, "trackers": set(), "hash": torrent.hash})
             entry["trackers"].update(hosts)
             if status == 'Seeding' or entry["status"] == 'Seeding':
                 entry["status"] = 'Seeding'
@@ -513,13 +513,14 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 rel_path = os.path.relpath(full_path, base_path)
                 inode_map.setdefault(inode, {
                     'trackers': set(), 'status': 'Orphaned',
-                    'torrent_paths': [], 'media_paths': [],
+                    'torrent_paths': [], 'media_paths': [], 'hash': '',
                 })
                 if source_label == 'Torrent':
                     inode_map[inode]['torrent_paths'].append(full_path)
                     qbit_info = qbit_file_map.get(full_path)
                     if qbit_info:
                         inode_map[inode]['trackers'].update(qbit_info['trackers'])
+                        inode_map[inode]['hash'] = qbit_info.get('hash', '')
                         cur = inode_map[inode]['status']
                         if qbit_info['status'] == 'Seeding' or cur == 'Seeding':
                             inode_map[inode]['status'] = 'Seeding'
@@ -581,6 +582,7 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
             "linked_paths": info['media_paths'],
             "duplicate_paths": duplicate_map.get(inode, []),
             "excluded": item.get('excluded', False),
+            "hash": info.get('hash', ''),
         })
     media_files_data = []
     for item in media_records:
@@ -991,7 +993,7 @@ def get_actions():
         for f in media_files if f.get('status') == 'Orphaned'
     ]
     orphaned_torrent_list = [
-        {"path": f['path'], "size": f['size'], "hash": ""}
+        {"path": f['path'], "size": f['size'], "hash": f.get('hash', '')}
         for f in torrent_files if f.get('status') == 'Orphaned'
     ]
     not_imported_list = [

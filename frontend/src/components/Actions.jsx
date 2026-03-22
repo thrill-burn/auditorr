@@ -326,25 +326,36 @@ export default function Actions({ onNavigate }) {
         >
           {qbHost && orphanedTorrentFiles.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 500, marginBottom: 2 }}>
-                Open in qBittorrent
-              </div>
-              {visibleTorrents.map((f, i) => (
-                <a
-                  key={f.hash || i}
-                  href={`${qbHost}/torrents?hash=${f.hash}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{
-                    fontSize: 11, color: 'var(--accent)',
-                    textDecoration: 'none', fontFamily: 'var(--mono)',
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    display: 'block',
-                  }}
-                >
-                  ↗ {(f.path || '').split('/').pop() || f.path}
-                </a>
-              ))}
+              {visibleTorrents.map((f, i) => {
+                const filename = (f.path || '').split('/').pop() || f.path
+                return f.hash ? (
+                  <a
+                    key={f.hash}
+                    href={`${qbHost}/torrents?hash=${f.hash.toLowerCase()}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      fontSize: 11, color: 'var(--accent)',
+                      textDecoration: 'none', fontFamily: 'var(--mono)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      display: 'block',
+                    }}
+                  >
+                    ↗ {filename}
+                  </a>
+                ) : (
+                  <span
+                    key={i}
+                    style={{
+                      fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      display: 'block',
+                    }}
+                  >
+                    {filename}
+                  </span>
+                )
+              })}
               {hiddenCount > 0 && (
                 <button
                   onClick={() => setShowMoreTorrents(v => !v)}
@@ -364,7 +375,7 @@ export default function Actions({ onNavigate }) {
               title: 'Orphaned Torrent Delete Script',
               subtitle: `${orphanedTorrentFiles.length} files — ${formatBytes(orphanedTorrents.total_size)}`,
             })}
-            style={btnStyle('var(--surface2)', 'var(--text)')}
+            style={btnStyle('var(--yellow)22', 'var(--yellow)')}
           >
             Generate Delete Script
           </button>
