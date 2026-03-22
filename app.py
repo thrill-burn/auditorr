@@ -7,9 +7,11 @@ import hashlib
 import logging
 import secrets
 import functools
+import re
 import fnmatch
 import urllib.request
 import urllib.error
+import urllib.parse
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, send_from_directory, g
 from flask_cors import CORS
@@ -1131,6 +1133,100 @@ def actions_radarr_rescan():
         for path in paths:
             _arr_command(url, key, "DownloadedMoviesScan", path)
         return jsonify({"status": "success", "count": len(paths)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+def _parse_title_from_filename(filename):
+    """Parse a clean title from a media filename for *arr search."""
+    name = os.path.splitext(filename)[0]
+    # Convert dots and underscores to spaces
+    name = name.replace('.', ' ').replace('_', ' ')
+    # Strip quality/encoding tags and everything after them (these mark end of title)
+    m = re.search(
+        r'\b(1080p|720p|2160p|4[Kk]|UHD|BluRay|BDRip|BRRip|WEBRip|WEB[ \-]DL|'
+        r'HDTV|DVDRip|x264|x265|HEVC|HDR|DTS|AAC|AC3|REMUX|REPACK|PROPER)\b',
+        name, re.IGNORECASE,
+    )
+    if m:
+        name = name[:m.start()]
+    # Strip year in parens/brackets
+    name = re.sub(r'[\(\[]\s*\d{4}\s*[\)\]]', ' ', name)
+    # Strip trailing bare year
+    name = re.sub(r'\s+\d{4}\s*$', '', name)
+    return name.strip()
+
+
+def _arr_get(base_url, api_key, path):
+    """GET from a *arr instance and return parsed JSON."""
+    endpoint = base_url.rstrip('/') + path
+    http_req = urllib.request.Request(endpoint, headers={"X-Api-Key": api_key})
+    with urllib.request.urlopen(http_req, timeout=10) as resp:
+        return json.loads(resp.read())
+
+
+@app.route('/api/actions/sonarr_search', methods=['POST'])
+@require_auth
+def actions_sonarr_search():
+    data = request.json or {}
+    file_path = data.get('path', '')
+    with _config_lock:
+        cfg = dict(config)
+    url = cfg.get('SONARR_URL', '').strip()
+    key = cfg.get('SONARR_API_KEY', '').strip()
+    if not url or not key:
+        return jsonify({"status": "error", "message": "Sonarr not configured"}), 400
+    try:
+        filename = os.path.basename(file_path)
+        title = _parse_title_from_filename(filename)
+        series_list = _arr_get(url, key, f'/api/v3/series?term={urllib.parse.quote(title)}')
+        if not series_list:
+            return jsonify({"status": "error", "message": f"No series found for '{title}'"}), 404
+        title_lower = title.lower()
+        best = next((s for s in series_list if s.get('title', '').lower() == title_lower), series_list[0])
+        endpoint = url.rstrip('/') + '/api/v3/command'
+        body = json.dumps({"name": "InteractiveSearch", "seriesId": best['id']}).encode()
+        http_req = urllib.request.Request(
+            endpoint, data=body,
+            headers={"X-Api-Key": key, "Content-Type": "application/json"},
+            method='POST',
+        )
+        with urllib.request.urlopen(http_req, timeout=10) as resp:
+            resp.read()
+        return jsonify({"status": "success", "title": best.get('title', title)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route('/api/actions/radarr_search', methods=['POST'])
+@require_auth
+def actions_radarr_search():
+    data = request.json or {}
+    file_path = data.get('path', '')
+    with _config_lock:
+        cfg = dict(config)
+    url = cfg.get('RADARR_URL', '').strip()
+    key = cfg.get('RADARR_API_KEY', '').strip()
+    if not url or not key:
+        return jsonify({"status": "error", "message": "Radarr not configured"}), 400
+    try:
+        filename = os.path.basename(file_path)
+        title = _parse_title_from_filename(filename)
+        movie_list = _arr_get(url, key, f'/api/v3/movie?term={urllib.parse.quote(title)}')
+        if not movie_list:
+            return jsonify({"status": "error", "message": f"No movie found for '{title}'"}), 404
+        title_lower = title.lower()
+        best = next((m for m in movie_list if m.get('title', '').lower() == title_lower), movie_list[0])
+        endpoint = url.rstrip('/') + '/api/v3/command'
+        body = json.dumps({"name": "InteractiveSearch", "movieId": best['id']}).encode()
+        http_req = urllib.request.Request(
+            endpoint, data=body,
+            headers={"X-Api-Key": key, "Content-Type": "application/json"},
+            method='POST',
+        )
+        with urllib.request.urlopen(http_req, timeout=10) as resp:
+            resp.read()
+        return jsonify({"status": "success", "title": best.get('title', title)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 

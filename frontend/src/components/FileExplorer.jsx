@@ -1,5 +1,7 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { formatBytes } from '../utils'
+import { api } from '../api'
+import { useToast } from './Toast'
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
@@ -129,7 +131,7 @@ function sortedKeys(children) {
   return [...dirs, ...files]
 }
 
-function FolderRow({ name, node, depth, tab, openRef, onToggle, path }) {
+function FolderRow({ name, node, depth, tab, openRef, onToggle, path, sonarrConfigured, radarrConfigured }) {
   const open = openRef.current.has(path)
   const indent = (depth * 20) + 14
   return (
@@ -156,23 +158,68 @@ function FolderRow({ name, node, depth, tab, openRef, onToggle, path }) {
       {open && sortedKeys(node.children).map(k =>
         node.children[k]._isDir
           ? <FolderRow key={k} name={k} node={node.children[k]} depth={depth+1} tab={tab}
-              openRef={openRef} onToggle={onToggle} path={path + '/' + k} />
-          : <FileRow   key={k} name={k} node={node.children[k]} depth={depth+1} tab={tab} />
+              openRef={openRef} onToggle={onToggle} path={path + '/' + k}
+              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+          : <FileRow   key={k} name={k} node={node.children[k]} depth={depth+1} tab={tab}
+              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
       )}
     </div>
   )
 }
 
-function FileRow({ name, node, depth, tab }) {
+function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured }) {
   const indent      = (depth * 20) + 14
   const isDupe      = node.duplicate_paths?.length > 0
   const isOrphan    = node.status === 'Orphaned'
   const notImported = !node.imported && tab === 'torrents'
+  const showSearchButtons = tab === 'media' && isOrphan
   const lines = [
     ...(node.linked_paths    || []).map(p => 'Hardlink: ' + p),
     ...(node.duplicate_paths || []).map(p => 'Duplicate: ' + p),
   ]
   const tooltip = lines.length ? lines.join('\n') : undefined
+
+  const toast = useToast()
+  const [sonarrState, setSonarrState] = useState('idle')
+  const [radarrState, setRadarrState] = useState('idle')
+
+  const handleSonarrSearch = async (e) => {
+    e.stopPropagation()
+    setSonarrState('loading')
+    try {
+      await api.sonarrSearch(node.path)
+      setSonarrState('success')
+      toast(`Interactive search opened in Sonarr for ${name} — check Sonarr UI`, 'success')
+      setTimeout(() => setSonarrState('idle'), 3000)
+    } catch (err) {
+      setSonarrState('error')
+      toast(err.message || 'Sonarr search failed', 'error')
+      setTimeout(() => setSonarrState('idle'), 3000)
+    }
+  }
+
+  const handleRadarrSearch = async (e) => {
+    e.stopPropagation()
+    setRadarrState('loading')
+    try {
+      await api.radarrSearch(node.path)
+      setRadarrState('success')
+      toast(`Interactive search opened in Radarr for ${name} — check Radarr UI`, 'success')
+      setTimeout(() => setRadarrState('idle'), 3000)
+    } catch (err) {
+      setRadarrState('error')
+      toast(err.message || 'Radarr search failed', 'error')
+      setTimeout(() => setRadarrState('idle'), 3000)
+    }
+  }
+
+  const arrBtnStyle = (state) => ({
+    background: 'none', border: 'none', cursor: state === 'loading' ? 'default' : 'pointer',
+    padding: '2px 4px', borderRadius: 3, transition: 'color 0.1s',
+    color: state === 'success' ? 'var(--green)' : state === 'error' ? 'var(--red)' : 'var(--text-faint)',
+    fontSize: 11, lineHeight: 1, flexShrink: 0,
+  })
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -201,6 +248,30 @@ function FileRow({ name, node, depth, tab }) {
         <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
           {(node.trackers||[]).join(' · ')}
         </span>
+        {showSearchButtons && sonarrConfigured && (
+          <button
+            title="Search in Sonarr"
+            onClick={handleSonarrSearch}
+            disabled={sonarrState === 'loading'}
+            style={arrBtnStyle(sonarrState)}
+            onMouseEnter={e => { if (sonarrState === 'idle') e.currentTarget.style.color = 'var(--blue)' }}
+            onMouseLeave={e => { if (sonarrState === 'idle') e.currentTarget.style.color = 'var(--text-faint)' }}
+          >
+            {sonarrState === 'loading' ? '…' : sonarrState === 'success' ? '✓' : sonarrState === 'error' ? '✗' : 'S'}
+          </button>
+        )}
+        {showSearchButtons && radarrConfigured && (
+          <button
+            title="Search in Radarr"
+            onClick={handleRadarrSearch}
+            disabled={radarrState === 'loading'}
+            style={arrBtnStyle(radarrState)}
+            onMouseEnter={e => { if (radarrState === 'idle') e.currentTarget.style.color = 'var(--yellow)' }}
+            onMouseLeave={e => { if (radarrState === 'idle') e.currentTarget.style.color = 'var(--text-faint)' }}
+          >
+            {radarrState === 'loading' ? '…' : radarrState === 'success' ? '✓' : radarrState === 'error' ? '✗' : 'R'}
+          </button>
+        )}
         <button
           title="Copy full path"
           onClick={e => {
@@ -291,6 +362,16 @@ const STATUS_FILTERS = [
 
 export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount }) {
   trackers = trackers || []
+
+  const [sonarrConfigured, setSonarrConfigured] = useState(false)
+  const [radarrConfigured, setRadarrConfigured] = useState(false)
+
+  useEffect(() => {
+    api.getConfig().then(c => {
+      setSonarrConfigured(!!c.SONARR_URL)
+      setRadarrConfigured(!!c.RADARR_URL)
+    }).catch(() => {})
+  }, [])
 
   const [statusFilter, setStatusFilter] = useState(initialStatus || 'all')
   const [importFilter, setImportFilter] = useState(initialImportFilter || 'all')
@@ -557,8 +638,10 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
         ) : rootKeys.map(k =>
           tree.children[k]._isDir
             ? <FolderRow key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
-                openRef={openRef} onToggle={onToggle} path={k} />
-            : <FileRow   key={k} name={k} node={tree.children[k]} depth={0} tab={tab} />
+                openRef={openRef} onToggle={onToggle} path={k}
+                sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+            : <FileRow   key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
+                sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
         )}
       </div>
 
