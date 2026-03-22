@@ -25,6 +25,29 @@ async function req(path, opts = {}) {
   return data
 }
 
+async function reqText(path, opts = {}) {
+  const secret = getSecret()
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
+  if (secret) headers['X-Auditorr-Secret'] = secret
+
+  const res = await fetch('/api' + path, { ...opts, headers })
+
+  if (res.status === 401) {
+    const s = window.prompt('auditorr requires an access key. Enter AUDITORR_SECRET:')
+    if (s) {
+      localStorage.setItem('auditorr_secret', s)
+      return reqText(path, opts)
+    }
+    throw new Error('Authentication required')
+  }
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.message || 'Request failed')
+  }
+  return res.text()
+}
+
 export const api = {
   results:        ()     => req('/results'),
   progress:       ()     => req('/progress'),
@@ -37,4 +60,8 @@ export const api = {
   testConnection: (conf) => req('/test_connection', { method: 'POST', body: JSON.stringify(conf) }),
   testSonarr: (url, apiKey) => req('/test_sonarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
   testRadarr: (url, apiKey) => req('/test_radarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
+  actions:      ()        => req('/actions'),
+  actionScript: (type)    => reqText('/actions/script/' + type),
+  sonarrRescan: (paths)   => req('/actions/sonarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
+  radarrRescan: (paths)   => req('/actions/radarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
 }

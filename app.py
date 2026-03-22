@@ -935,6 +935,206 @@ def test_radarr():
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": msg}), 400
 
+def _human_size(n):
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if n < 1024.0:
+            return f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} PB"
+
+
+def _build_dup_groups(torrent_files, local_path):
+    """Group torrent files with duplicate_paths into structured groups for the Actions page."""
+    groups = []
+    seen_inodes = set()
+    for f in torrent_files:
+        if not f.get('duplicate_paths'):
+            continue
+        inode = f['inode']
+        if inode in seen_inodes:
+            continue
+        seen_inodes.add(inode)
+        torrent_full = os.path.join(local_path, f['path']) if local_path else f['path']
+        try:
+            torrent_dev = os.stat(torrent_full).st_dev
+        except OSError:
+            torrent_dev = None
+        group_files = [{"path": torrent_full, "size": f['size'], "inode": inode, "canonical": True, "same_fs": True}]
+        is_cross_fs = False
+        for dup_path in f.get('duplicate_paths', []):
+            try:
+                same_fs = (torrent_dev is not None and os.stat(dup_path).st_dev == torrent_dev)
+            except OSError:
+                same_fs = False
+            if not same_fs:
+                is_cross_fs = True
+            group_files.append({"path": dup_path, "size": f['size'], "inode": 0, "canonical": False, "same_fs": same_fs})
+        recoverable = 0 if is_cross_fs else f['size'] * len(f.get('duplicate_paths', []))
+        groups.append({"files": group_files, "recoverable_size": recoverable, "skipped": is_cross_fs})
+    return groups
+
+
+@app.route('/api/actions')
+@require_auth
+def get_actions():
+    results = load_results()
+    with _config_lock:
+        cfg = dict(config)
+    media_files   = results.get('media_files', [])
+    torrent_files = results.get('torrent_files', [])
+    local_path    = cfg.get('LOCAL_PATH', '')
+
+    orphaned_media_list = [
+        {"path": f['path'], "size": f['size']}
+        for f in media_files if f.get('status') == 'Orphaned'
+    ]
+    orphaned_torrent_list = [
+        {"path": f['path'], "size": f['size'], "hash": ""}
+        for f in torrent_files if f.get('status') == 'Orphaned'
+    ]
+    not_imported_list = [
+        {"path": os.path.join(local_path, f['path']) if local_path else f['path'], "size": f['size']}
+        for f in torrent_files
+        if not f.get('imported') and f.get('status') != 'Orphaned'
+    ]
+    dup_groups = _build_dup_groups(torrent_files, local_path)
+    dup_recoverable = sum(g['recoverable_size'] for g in dup_groups)
+
+    return jsonify({
+        "orphaned_media":    {"files": orphaned_media_list,    "total_size": sum(f['size'] for f in orphaned_media_list)},
+        "orphaned_torrents": {"files": orphaned_torrent_list,  "total_size": sum(f['size'] for f in orphaned_torrent_list)},
+        "not_imported":      {"files": not_imported_list,      "total_size": sum(f['size'] for f in not_imported_list)},
+        "duplicates":        {"groups": dup_groups,            "total_recoverable": dup_recoverable},
+        "total_recoverable": sum(f['size'] for f in orphaned_torrent_list) + dup_recoverable,
+    })
+
+
+@app.route('/api/actions/script/<script_type>')
+@require_auth
+def get_action_script(script_type):
+    results = load_results()
+    with _config_lock:
+        cfg = dict(config)
+    torrent_files = results.get('torrent_files', [])
+    local_path    = cfg.get('LOCAL_PATH', '')
+    now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if script_type == 'orphaned_torrents_delete':
+        orphaned = [f for f in torrent_files if f.get('status') == 'Orphaned']
+        total_size = sum(f['size'] for f in orphaned)
+        lines = [
+            '#!/bin/bash',
+            '# auditorr — Orphaned Torrent Cleanup Script',
+            f'# Generated: {now_str}',
+            '# WARNING: Review carefully before running. This permanently deletes files.',
+            f'# {len(orphaned)} files — {_human_size(total_size)}',
+            '',
+        ]
+        for f in orphaned:
+            full_path = os.path.join(local_path, f['path']) if local_path else f['path']
+            filename  = os.path.basename(full_path)
+            lines.append(f'# {filename} — {_human_size(f["size"])}')
+            lines.append(f'rm "{full_path}"')
+            lines.append('')
+        lines.append(f'echo "Done. {_human_size(total_size)} freed."')
+        script = '\n'.join(lines)
+
+    elif script_type == 'dedupe':
+        groups = _build_dup_groups(torrent_files, local_path)
+        total_recoverable = sum(g['recoverable_size'] for g in groups)
+        skipped_count     = sum(1 for g in groups if g['skipped'])
+        lines = [
+            '#!/bin/bash',
+            '# auditorr — Dedupe Script',
+            f'# Generated: {now_str}',
+            '#',
+            '# SUMMARY',
+            f'# {len(groups)} duplicate groups found',
+            f'# {_human_size(total_recoverable)} recoverable',
+            f'# {skipped_count} groups skipped (cross-filesystem — cannot hardlink across mounts)',
+            '#',
+            '# This script replaces duplicate files with hardlinks.',
+            '# All file paths will continue to exist after running.',
+            '# All torrents will continue seeding normally.',
+            '# Review each group carefully before running.',
+            '',
+        ]
+        group_num = 0
+        for g in groups:
+            canonical     = next(f for f in g['files'] if f['canonical'])
+            non_canonical = [f for f in g['files'] if not f['canonical']]
+            filename      = os.path.basename(canonical['path'])
+            if g['skipped']:
+                lines.append(f'# SKIPPED Group: {filename} — cross-filesystem, cannot hardlink')
+                lines.append('')
+                continue
+            group_num += 1
+            lines.append(f'# Group {group_num}: {filename} — {_human_size(g["recoverable_size"])} recoverable')
+            lines.append(f'# Canonical: {canonical["path"]}')
+            for nc in non_canonical:
+                lines.append(f'ln -f "{canonical["path"]}" \\')
+                lines.append(f'      "{nc["path"]}"')
+            lines.append('')
+        lines.append('echo "Dedupe complete. Verify with: df -h"')
+        script = '\n'.join(lines)
+
+    else:
+        return jsonify({"status": "error", "message": "Unknown script type"}), 400
+
+    return app.response_class(script, mimetype='text/plain; charset=utf-8')
+
+
+def _arr_command(base_url, api_key, command_name, path):
+    """POST a command to a Sonarr/Radarr instance."""
+    endpoint = base_url.rstrip('/') + '/api/v3/command'
+    body = json.dumps({"name": command_name, "path": path}).encode()
+    http_req = urllib.request.Request(
+        endpoint, data=body,
+        headers={"X-Api-Key": api_key, "Content-Type": "application/json"},
+        method='POST',
+    )
+    with urllib.request.urlopen(http_req, timeout=10) as resp:
+        resp.read()
+
+
+@app.route('/api/actions/sonarr_rescan', methods=['POST'])
+@require_auth
+def actions_sonarr_rescan():
+    data = request.json or {}
+    paths = data.get('paths', [])
+    with _config_lock:
+        cfg = dict(config)
+    url = cfg.get('SONARR_URL', '').strip()
+    key = cfg.get('SONARR_API_KEY', '').strip()
+    if not url or not key:
+        return jsonify({"status": "error", "message": "Sonarr not configured"}), 400
+    try:
+        for path in paths:
+            _arr_command(url, key, "DownloadedEpisodesScan", path)
+        return jsonify({"status": "success", "count": len(paths)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
+@app.route('/api/actions/radarr_rescan', methods=['POST'])
+@require_auth
+def actions_radarr_rescan():
+    data = request.json or {}
+    paths = data.get('paths', [])
+    with _config_lock:
+        cfg = dict(config)
+    url = cfg.get('RADARR_URL', '').strip()
+    key = cfg.get('RADARR_API_KEY', '').strip()
+    if not url or not key:
+        return jsonify({"status": "error", "message": "Radarr not configured"}), 400
+    try:
+        for path in paths:
+            _arr_command(url, key, "DownloadedMoviesScan", path)
+        return jsonify({"status": "success", "count": len(paths)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_frontend(path):

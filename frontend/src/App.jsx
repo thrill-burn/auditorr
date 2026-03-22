@@ -3,6 +3,7 @@ import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
+import Actions      from './components/Actions'
 import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
@@ -11,7 +12,7 @@ import { api } from './api'
 // Hash-based routing helpers
 function getHashTab() {
   const hash = window.location.hash.replace('#', '') || 'dashboard'
-  const valid = ['dashboard', 'media', 'torrents', 'config']
+  const valid = ['dashboard', 'media', 'torrents', 'actions', 'config']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -185,6 +186,9 @@ function AppInner() {
               initialTracker={pendingNav?.tracker}
               initialSeedCount={pendingNav?.seedCount}
             />
+          )}
+          {tab === 'actions' && (
+            <Actions onNavigate={handleNavigate} />
           )}
           {tab === 'config' && (
             <Config
