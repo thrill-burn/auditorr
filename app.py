@@ -995,7 +995,7 @@ def get_actions():
         for f in torrent_files if f.get('status') == 'Orphaned'
     ]
     not_imported_list = [
-        {"path": os.path.join(local_path, f['path']) if local_path else f['path'], "size": f['size']}
+        {"path": f['path'] if os.path.isabs(f['path']) else (os.path.join(local_path, f['path']) if local_path else f['path']), "size": f['size']}
         for f in torrent_files
         if not f.get('imported') and f.get('status') != 'Orphaned'
     ]
@@ -1108,11 +1108,13 @@ def actions_sonarr_rescan():
         cfg = dict(config)
     url = cfg.get('SONARR_URL', '').strip()
     key = cfg.get('SONARR_API_KEY', '').strip()
+    local_path = cfg.get('LOCAL_PATH', '').strip()
     if not url or not key:
         return jsonify({"status": "error", "message": "Sonarr not configured"}), 400
     try:
         for path in paths:
-            _arr_command(url, key, "DownloadedEpisodesScan", path)
+            abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
+            _arr_command(url, key, "DownloadedEpisodesScan", abs_path)
         return jsonify({"status": "success", "count": len(paths)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -1127,11 +1129,13 @@ def actions_radarr_rescan():
         cfg = dict(config)
     url = cfg.get('RADARR_URL', '').strip()
     key = cfg.get('RADARR_API_KEY', '').strip()
+    local_path = cfg.get('LOCAL_PATH', '').strip()
     if not url or not key:
         return jsonify({"status": "error", "message": "Radarr not configured"}), 400
     try:
         for path in paths:
-            _arr_command(url, key, "DownloadedMoviesScan", path)
+            abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
+            _arr_command(url, key, "DownloadedMoviesScan", abs_path)
         return jsonify({"status": "success", "count": len(paths)})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
