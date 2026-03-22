@@ -200,6 +200,10 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Field label="Sonarr URL" placeholder="http://192.168.1.x:8989" value={conf.SONARR_URL} onChange={set('SONARR_URL')} />
             <Field label="Sonarr API Key" type="password" placeholder="paste API key…" value={conf.SONARR_API_KEY} onChange={set('SONARR_API_KEY')} />
+            <Field label="Sonarr Remote Path" type="text"
+              hint="The path to your downloads folder as Sonarr sees it inside its container. Leave blank if Sonarr and auditorr share the same paths."
+              placeholder="/downloads or /data/torrents"
+              value={conf.SONARR_REMOTE_PATH} onChange={set('SONARR_REMOTE_PATH')} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {sonarrTestStatus && (
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: sonarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
@@ -214,6 +218,10 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Field label="Radarr URL" placeholder="http://192.168.1.x:7878" value={conf.RADARR_URL} onChange={set('RADARR_URL')} />
             <Field label="Radarr API Key" type="password" placeholder="paste API key…" value={conf.RADARR_API_KEY} onChange={set('RADARR_API_KEY')} />
+            <Field label="Radarr Remote Path" type="text"
+              hint="The path to your downloads folder as Radarr sees it inside its container. Leave blank if Radarr and auditorr share the same paths."
+              placeholder="/downloads or /data/torrents"
+              value={conf.RADARR_REMOTE_PATH} onChange={set('RADARR_REMOTE_PATH')} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {radarrTestStatus && (
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: radarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>

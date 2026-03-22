@@ -104,6 +104,8 @@ DEFAULT_CONFIG = {
     'SONARR_API_KEY':     '',
     'RADARR_URL':         '',
     'RADARR_API_KEY':     '',
+    'SONARR_REMOTE_PATH': '',  # Path as Sonarr sees it (inside its container)
+    'RADARR_REMOTE_PATH': '',  # Path as Radarr sees it (inside its container)
 }
 
 def load_config():
@@ -866,6 +868,8 @@ def handle_config():
                 'SONARR_API_KEY':     str(data.get('SONARR_API_KEY', '')),
                 'RADARR_URL':         str(data.get('RADARR_URL', '')),
                 'RADARR_API_KEY':     str(data.get('RADARR_API_KEY', '')),
+                'SONARR_REMOTE_PATH': str(data.get('SONARR_REMOTE_PATH', '')),
+                'RADARR_REMOTE_PATH': str(data.get('RADARR_REMOTE_PATH', '')),
             }
         except (ValueError, TypeError) as e:
             return jsonify({"status": "error", "message": f"Invalid value: {e}"}), 400
@@ -1214,12 +1218,19 @@ def actions_sonarr_rescan():
     local_path = cfg.get('LOCAL_PATH', '').strip()
     if not url or not key:
         return jsonify({"status": "error", "message": "Sonarr not configured"}), 400
+    sonarr_remote = cfg.get('SONARR_REMOTE_PATH', '').strip()
     try:
         for path in paths:
             abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
-            _arr_command(url, key, "DownloadedEpisodesScan", abs_path)
+            if sonarr_remote and local_path and abs_path.startswith(local_path):
+                arr_path = abs_path.replace(local_path, sonarr_remote, 1)
+            else:
+                arr_path = abs_path
+            arr_path = os.path.dirname(arr_path)
+            _arr_command(url, key, "DownloadedEpisodesScan", arr_path)
         return jsonify({"status": "success", "count": len(paths)})
     except Exception as e:
+        log.exception("Error in sonarr_rescan")
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
@@ -1235,12 +1246,19 @@ def actions_radarr_rescan():
     local_path = cfg.get('LOCAL_PATH', '').strip()
     if not url or not key:
         return jsonify({"status": "error", "message": "Radarr not configured"}), 400
+    radarr_remote = cfg.get('RADARR_REMOTE_PATH', '').strip()
     try:
         for path in paths:
             abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
-            _arr_command(url, key, "DownloadedMoviesScan", abs_path)
+            if radarr_remote and local_path and abs_path.startswith(local_path):
+                arr_path = abs_path.replace(local_path, radarr_remote, 1)
+            else:
+                arr_path = abs_path
+            arr_path = os.path.dirname(arr_path)
+            _arr_command(url, key, "DownloadedMoviesScan", arr_path)
         return jsonify({"status": "success", "count": len(paths)})
     except Exception as e:
+        log.exception("Error in radarr_rescan")
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
