@@ -3,6 +3,17 @@ import { formatBytes } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function detectMediaType(filePath) {
+  const parts = filePath.toLowerCase().replace(/\\/g, '/').split('/')
+  for (const part of parts) {
+    if (/movie|film|radarr/.test(part)) return 'movie'
+    if (/tv|television|show|series|sonarr/.test(part)) return 'tv'
+  }
+  return 'unknown'
+}
+
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
 function Tag({ color, children }) {
@@ -173,6 +184,9 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
   const isOrphan    = node.status === 'Orphaned'
   const notImported = !node.imported && tab === 'torrents'
   const showSearchButtons = tab === 'media' && isOrphan
+  const mediaType  = detectMediaType(node.path)
+  const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
+  const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
   const lines = [
     ...(node.linked_paths    || []).map(p => 'Hardlink: ' + p),
     ...(node.duplicate_paths || []).map(p => 'Duplicate: ' + p),
@@ -244,7 +258,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
         <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
           {(node.trackers||[]).join(' · ')}
         </span>
-        {showSearchButtons && sonarrConfigured && (
+        {showSearchButtons && showSonarr && (
           <button
             title="Search in Sonarr"
             onClick={handleSonarrSearch}
@@ -264,10 +278,10 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
             onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
             onMouseLeave={e => e.currentTarget.style.background = 'var(--blue)18'}
           >
-            {sonarrState === 'loading' ? '…' : sonarrState === 'success' ? '✓ Sonarr' : sonarrState === 'error' ? '✗ Sonarr' : 'Sonarr'}
+            {sonarrState === 'loading' ? 'Opening…' : sonarrState === 'success' ? '✓ Opened' : sonarrState === 'error' ? '✗ Failed' : 'Open in Sonarr'}
           </button>
         )}
-        {showSearchButtons && radarrConfigured && (
+        {showSearchButtons && showRadarr && (
           <button
             title="Search in Radarr"
             onClick={handleRadarrSearch}
@@ -287,7 +301,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
             onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
             onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)18'}
           >
-            {radarrState === 'loading' ? '…' : radarrState === 'success' ? '✓ Radarr' : radarrState === 'error' ? '✗ Radarr' : 'Radarr'}
+            {radarrState === 'loading' ? 'Opening…' : radarrState === 'success' ? '✓ Opened' : radarrState === 'error' ? '✗ Failed' : 'Open in Radarr'}
           </button>
         )}
         <button
