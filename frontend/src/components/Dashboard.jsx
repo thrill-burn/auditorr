@@ -217,7 +217,7 @@ function GrafanaTooltip({ active, payload, label, color }) {
 }
 
 // ── Metric card ───────────────────────────────────────────────────────────────
-function MetricCard({ label, value, sub, pts, desc, color, actions, onNavigate, onScript, toast }) {
+function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
 
   const handleAction = async (a) => {
@@ -238,12 +238,9 @@ function MetricCard({ label, value, sub, pts, desc, color, actions, onNavigate, 
     }
   }
 
-  const visible = actions.filter(a => !a.hidden)
-  const cardBtnBase = { borderRadius: 7, border: `1px solid ${color}35`, background: color + '12', color, fontWeight: 500, cursor: 'pointer', transition: 'background 0.15s' }
-  const btnLabel = (a) => {
-    if (loadingKeys[a.label]) return a.loadingLabel || 'Loading…'
-    return a.type === 'navigate' ? a.label + ' →' : a.label
-  }
+  const enrichedRows = actionRows.map(row =>
+    row.map(a => ({ ...a, loading: !!loadingKeys[a.label] }))
+  )
 
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
@@ -255,34 +252,35 @@ function MetricCard({ label, value, sub, pts, desc, color, actions, onNavigate, 
       <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, marginTop: 10 }}>{value}</span>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
-      {visible.length === 1 ? (
-        <button
-          onClick={() => handleAction(visible[0])}
-          disabled={!!loadingKeys[visible[0].label]}
-          style={{ marginTop: 14, padding: '7px 10px', ...cardBtnBase, fontSize: 12, width: '100%', opacity: loadingKeys[visible[0].label] ? 0.6 : 1 }}
-          onMouseEnter={e => { if (!loadingKeys[visible[0].label]) e.currentTarget.style.background = color + '22' }}
-          onMouseLeave={e => e.currentTarget.style.background = color + '12'}
-        >
-          {btnLabel(visible[0])}
-        </button>
-      ) : (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 14 }}>
-          {visible.map(a => {
-            const isLoading = !!loadingKeys[a.label]
-            return (
-              <button key={a.label}
-                onClick={() => handleAction(a)}
-                disabled={isLoading}
-                style={{ flex: 1, minWidth: 'fit-content', padding: '7px 6px', ...cardBtnBase, fontSize: 11, opacity: isLoading ? 0.6 : 1 }}
-                onMouseEnter={e => { if (!isLoading) e.currentTarget.style.background = color + '22' }}
-                onMouseLeave={e => e.currentTarget.style.background = color + '12'}
-              >
-                {btnLabel(a)}
-              </button>
-            )
-          })}
-        </div>
-      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 14 }}>
+        {enrichedRows.map((row, rowIdx) => {
+          const visibleActions = row.filter(a => !a.hidden)
+          if (visibleActions.length === 0) return null
+          return (
+            <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
+              {visibleActions.map((a, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleAction(a)}
+                  disabled={a.loading}
+                  style={{
+                    flex: 1, padding: '7px 10px', borderRadius: 7,
+                    border: `1px solid ${color}35`,
+                    background: a.loading ? `${color}08` : `${color}12`,
+                    color: a.loading ? `${color}88` : color,
+                    fontSize: 12, fontWeight: 500, cursor: a.loading ? 'default' : 'pointer',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => { if (!a.loading) e.currentTarget.style.background = `${color}22` }}
+                  onMouseLeave={e => { if (!a.loading) e.currentTarget.style.background = `${color}12` }}
+                >
+                  {a.loading ? (a.loadingLabel || '…') : a.label}
+                </button>
+              ))}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -500,7 +498,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.hl_score} / 70 pts`,
       desc: 'Percentage of your media library that is hardlinked back to a torrent file. 100% means everything is connected.',
       color: 'var(--blue)',
-      actions: [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
+      actionRows: [
+        [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
+      ],
     },
     {
       label: 'Orphaned Torrents', value: det.orphaned_torrent_count,
@@ -508,9 +508,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.or_score} / 10 pts`,
       desc: 'Files in your torrent folder that qBittorrent has no knowledge of. Safe to delete unless you added them manually.',
       color: 'var(--yellow)',
-      actions: [
-        { type: 'navigate', label: 'View Orphaned', tab: 'torrents', status: 'Orphaned' },
-        { type: 'script', label: 'Generate Delete Script', scriptType: 'orphaned_torrents_delete', title: 'Orphaned Torrent Delete Script' },
+      actionRows: [
+        [{ type: 'navigate', label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
+        [{ type: 'script', label: 'Generate Delete Script', scriptType: 'orphaned_torrents_delete', title: 'Orphaned Torrent Delete Script' }],
       ],
     },
     {
@@ -519,16 +519,18 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.ni_score} / 10 pts`,
       desc: 'Seeding torrents with no matching file in your media folder. Sonarr/Radarr may have skipped or failed to import these.',
       color: 'var(--red)',
-      actions: [
-        { type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' },
-        { type: 'api', label: 'Trigger Sonarr Rescan', loadingLabel: 'Rescanning…',
-          apiCall: () => api.sonarrRescan(notImportedPaths),
-          successToast: 'Sonarr rescan triggered — check Sonarr for import results',
-          errorToast: true, hidden: !sonarrConfigured },
-        { type: 'api', label: 'Trigger Radarr Rescan', loadingLabel: 'Rescanning…',
-          apiCall: () => api.radarrRescan(notImportedPaths),
-          successToast: 'Radarr rescan triggered — check Radarr for import results',
-          errorToast: true, hidden: !radarrConfigured },
+      actionRows: [
+        [{ type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' }],
+        [
+          { type: 'api', label: 'Trigger Radarr Rescan', loadingLabel: 'Rescanning…',
+            apiCall: () => api.radarrRescan(notImportedPaths),
+            successToast: 'Radarr rescan triggered — check Radarr for import results',
+            errorToast: true, hidden: !radarrConfigured },
+          { type: 'api', label: 'Trigger Sonarr Rescan', loadingLabel: 'Rescanning…',
+            apiCall: () => api.sonarrRescan(notImportedPaths),
+            successToast: 'Sonarr rescan triggered — check Sonarr for import results',
+            errorToast: true, hidden: !sonarrConfigured },
+        ],
       ],
     },
     {
@@ -537,10 +539,12 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.dup_score} / 10 pts`,
       desc: 'Bit-for-bit identical files that share no inode — true copies wasting disk space.',
       color: 'var(--purple)',
-      actions: [
-        { type: 'navigate', label: 'Media', tab: 'media', status: 'Duplicate' },
-        { type: 'navigate', label: 'Torrents', tab: 'torrents', status: 'Duplicate' },
-        { type: 'script', label: 'Generate Dedupe Script', scriptType: 'dedupe', title: 'Dedupe Script' },
+      actionRows: [
+        [
+          { type: 'navigate', label: 'View Media Dupes', tab: 'media', status: 'Duplicate' },
+          { type: 'navigate', label: 'View Torrent Dupes', tab: 'torrents', status: 'Duplicate' },
+        ],
+        [{ type: 'script', label: 'Generate Dedupe Script', scriptType: 'dedupe', title: 'Dedupe Script' }],
       ],
     },
   ]
