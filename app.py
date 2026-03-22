@@ -982,41 +982,6 @@ def _build_dup_groups(torrent_files, local_path):
     return groups
 
 
-@app.route('/api/actions')
-@require_auth
-def get_actions():
-    results = load_results()
-    with _config_lock:
-        cfg = dict(config)
-    media_files   = results.get('media_files', [])
-    torrent_files = results.get('torrent_files', [])
-    local_path    = cfg.get('LOCAL_PATH', '')
-
-    orphaned_media_list = [
-        {"path": f['path'], "size": f['size']}
-        for f in media_files if f.get('status') == 'Orphaned'
-    ]
-    orphaned_torrent_list = [
-        {"path": f['path'], "size": f['size'], "hash": f.get('hash', '')}
-        for f in torrent_files if f.get('status') == 'Orphaned'
-    ]
-    not_imported_list = [
-        {"path": f['path'] if os.path.isabs(f['path']) else (os.path.join(local_path, f['path']) if local_path else f['path']), "size": f['size']}
-        for f in torrent_files
-        if not f.get('imported') and f.get('status') != 'Orphaned'
-    ]
-    dup_groups = _build_dup_groups(torrent_files, local_path)
-    dup_recoverable = sum(g['recoverable_size'] for g in dup_groups)
-
-    return jsonify({
-        "orphaned_media":    {"files": orphaned_media_list,    "total_size": sum(f['size'] for f in orphaned_media_list)},
-        "orphaned_torrents": {"files": orphaned_torrent_list,  "total_size": sum(f['size'] for f in orphaned_torrent_list)},
-        "not_imported":      {"files": not_imported_list,      "total_size": sum(f['size'] for f in not_imported_list)},
-        "duplicates":        {"groups": dup_groups,            "total_recoverable": dup_recoverable},
-        "total_recoverable": sum(f['size'] for f in orphaned_torrent_list) + dup_recoverable,
-    })
-
-
 @app.route('/api/actions/script/<script_type>')
 @require_auth
 def get_action_script(script_type):

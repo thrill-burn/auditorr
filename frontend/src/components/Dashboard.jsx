@@ -1,7 +1,88 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
+import { api } from '../api'
+import { useToast } from './Toast'
+
+// ── Script Modal ──────────────────────────────────────────────────────────────
+function _btnStyle(bg, color) {
+  return { padding: '7px 14px', borderRadius: 6, border: 'none', background: bg, color, fontSize: 12, fontWeight: 500, cursor: 'pointer' }
+}
+
+function ScriptModal({ scriptType, title, subtitle, onClose }) {
+  const [script, setScript] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    api.actionScript(scriptType)
+      .then(text => { setScript(text); setLoading(false) })
+      .catch(e => { setScript(`# Error loading script: ${e.message}`); setLoading(false) })
+  }, [scriptType])
+
+  const handleCopy = () => {
+    const ta = document.createElement('textarea')
+    ta.value = script
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    try { document.execCommand('copy') } catch (_) {}
+    document.body.removeChild(ta)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleDownload = () => {
+    const blob = new Blob([script], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = scriptType + '.sh'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ width: '90%', maxWidth: 700, maxHeight: '90vh', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+      >
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+        </div>
+        <div style={{ padding: '10px 16px', background: 'rgba(234,179,8,0.13)', borderLeft: '3px solid var(--yellow)', margin: '12px 16px 0', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>
+          ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: 16, margin: '0 16px' }}>
+          {loading ? (
+            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
+          ) : (
+            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5 }}>{script}</pre>
+          )}
+        </div>
+        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
+          <button onClick={onClose} style={_btnStyle('var(--surface2)', 'var(--text-dim)')}>Close</button>
+          {!loading && script && (
+            <>
+              <button onClick={handleDownload} style={_btnStyle('var(--surface2)', 'var(--text)')}>Download .sh</button>
+              <button onClick={handleCopy} style={_btnStyle('var(--accent)', 'var(--bg)')}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 function Skeleton({ w = '100%', h = 16, style = {} }) {
@@ -136,7 +217,34 @@ function GrafanaTooltip({ active, payload, label, color }) {
 }
 
 // ── Metric card ───────────────────────────────────────────────────────────────
-function MetricCard({ label, value, sub, pts, desc, color, actions, onNavigate }) {
+function MetricCard({ label, value, sub, pts, desc, color, actions, onNavigate, onScript, toast }) {
+  const [loadingKeys, setLoadingKeys] = useState({})
+
+  const handleAction = async (a) => {
+    if (a.type === 'script') {
+      onScript(a)
+    } else if (a.type === 'api') {
+      setLoadingKeys(k => ({ ...k, [a.label]: true }))
+      try {
+        await a.apiCall()
+        if (a.successToast) toast(a.successToast, 'success')
+      } catch (e) {
+        if (a.errorToast) toast(e.message || 'Request failed', 'error')
+      } finally {
+        setLoadingKeys(k => ({ ...k, [a.label]: false }))
+      }
+    } else {
+      onNavigate(a)
+    }
+  }
+
+  const visible = actions.filter(a => !a.hidden)
+  const cardBtnBase = { borderRadius: 7, border: `1px solid ${color}35`, background: color + '12', color, fontWeight: 500, cursor: 'pointer', transition: 'background 0.15s' }
+  const btnLabel = (a) => {
+    if (loadingKeys[a.label]) return a.loadingLabel || 'Loading…'
+    return a.type === 'navigate' ? a.label + ' →' : a.label
+  }
+
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color, borderRadius: '12px 12px 0 0' }} />
@@ -147,21 +255,32 @@ function MetricCard({ label, value, sub, pts, desc, color, actions, onNavigate }
       <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, marginTop: 10 }}>{value}</span>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
-      {actions.length === 1 ? (
-        <button onClick={() => onNavigate(actions[0])} style={{ marginTop: 14, padding: '7px 10px', borderRadius: 7, border: `1px solid ${color}35`, background: color + '12', color, fontSize: 12, fontWeight: 500, width: '100%', cursor: 'pointer', transition: 'background 0.15s' }}
-          onMouseEnter={e => e.currentTarget.style.background = color + '22'}
-          onMouseLeave={e => e.currentTarget.style.background = color + '12'}>
-          {actions[0].label} →
+      {visible.length === 1 ? (
+        <button
+          onClick={() => handleAction(visible[0])}
+          disabled={!!loadingKeys[visible[0].label]}
+          style={{ marginTop: 14, padding: '7px 10px', ...cardBtnBase, fontSize: 12, width: '100%', opacity: loadingKeys[visible[0].label] ? 0.6 : 1 }}
+          onMouseEnter={e => { if (!loadingKeys[visible[0].label]) e.currentTarget.style.background = color + '22' }}
+          onMouseLeave={e => e.currentTarget.style.background = color + '12'}
+        >
+          {btnLabel(visible[0])}
         </button>
       ) : (
-        <div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
-          {actions.map(a => (
-            <button key={a.label} onClick={() => onNavigate(a)} style={{ flex: 1, padding: '7px 6px', borderRadius: 7, border: `1px solid ${color}35`, background: color + '12', color, fontSize: 11, fontWeight: 500, cursor: 'pointer', transition: 'background 0.15s' }}
-              onMouseEnter={e => e.currentTarget.style.background = color + '22'}
-              onMouseLeave={e => e.currentTarget.style.background = color + '12'}>
-              {a.label} →
-            </button>
-          ))}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 14 }}>
+          {visible.map(a => {
+            const isLoading = !!loadingKeys[a.label]
+            return (
+              <button key={a.label}
+                onClick={() => handleAction(a)}
+                disabled={isLoading}
+                style={{ flex: 1, minWidth: 'fit-content', padding: '7px 6px', ...cardBtnBase, fontSize: 11, opacity: isLoading ? 0.6 : 1 }}
+                onMouseEnter={e => { if (!isLoading) e.currentTarget.style.background = color + '22' }}
+                onMouseLeave={e => e.currentTarget.style.background = color + '12'}
+              >
+                {btnLabel(a)}
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
@@ -347,6 +466,18 @@ function computeCrossSeedStats(mediaFiles) {
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
+  const toast = useToast()
+  const [sonarrConfigured, setSonarrConfigured] = useState(false)
+  const [radarrConfigured, setRadarrConfigured] = useState(false)
+  const [scriptModal, setScriptModal] = useState(null)
+
+  useEffect(() => {
+    api.getConfig().then(cfg => {
+      setSonarrConfigured(!!cfg.SONARR_URL)
+      setRadarrConfigured(!!cfg.RADARR_URL)
+    }).catch(() => {})
+  }, [])
+
   if (!data) return <DashboardSkeleton />
 
   const { score, status, trend, current, history_chart } = data
@@ -358,6 +489,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
   // Cross-seed calculations use media_files passed via data
   const cs = computeCrossSeedStats(data.media_files)
 
+  const notImportedPaths = (data.torrent_files || [])
+    .filter(f => !f.imported && f.status !== 'Orphaned')
+    .map(f => f.path)
+
   const metrics = [
     {
       label: 'Hardlinked Media', value: hlPct + '%',
@@ -365,7 +500,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.hl_score} / 70 pts`,
       desc: 'Percentage of your media library that is hardlinked back to a torrent file. 100% means everything is connected.',
       color: 'var(--blue)',
-      actions: [{ label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
+      actions: [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
     },
     {
       label: 'Orphaned Torrents', value: det.orphaned_torrent_count,
@@ -373,7 +508,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.or_score} / 10 pts`,
       desc: 'Files in your torrent folder that qBittorrent has no knowledge of. Safe to delete unless you added them manually.',
       color: 'var(--yellow)',
-      actions: [{ label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
+      actions: [
+        { type: 'navigate', label: 'View Orphaned', tab: 'torrents', status: 'Orphaned' },
+        { type: 'script', label: 'Generate Delete Script', scriptType: 'orphaned_torrents_delete', title: 'Orphaned Torrent Delete Script' },
+      ],
     },
     {
       label: 'Not Imported', value: det.not_imported_count,
@@ -381,7 +519,17 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       pts: `${det.ni_score} / 10 pts`,
       desc: 'Seeding torrents with no matching file in your media folder. Sonarr/Radarr may have skipped or failed to import these.',
       color: 'var(--red)',
-      actions: [{ label: 'View Not Imported', tab: 'torrents', status: 'NotImported', importFilter: 'notImported' }],
+      actions: [
+        { type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' },
+        { type: 'api', label: 'Trigger Sonarr Rescan', loadingLabel: 'Rescanning…',
+          apiCall: () => api.sonarrRescan(notImportedPaths),
+          successToast: 'Sonarr rescan triggered — check Sonarr for import results',
+          errorToast: true, hidden: !sonarrConfigured },
+        { type: 'api', label: 'Trigger Radarr Rescan', loadingLabel: 'Rescanning…',
+          apiCall: () => api.radarrRescan(notImportedPaths),
+          successToast: 'Radarr rescan triggered — check Radarr for import results',
+          errorToast: true, hidden: !radarrConfigured },
+      ],
     },
     {
       label: 'Duplicate Files', value: det.duplicate_count,
@@ -390,8 +538,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
       desc: 'Bit-for-bit identical files that share no inode — true copies wasting disk space.',
       color: 'var(--purple)',
       actions: [
-        { label: 'Media', tab: 'media', status: 'Duplicate' },
-        { label: 'Torrents', tab: 'torrents', status: 'Duplicate' },
+        { type: 'navigate', label: 'Media', tab: 'media', status: 'Duplicate' },
+        { type: 'navigate', label: 'Torrents', tab: 'torrents', status: 'Duplicate' },
+        { type: 'script', label: 'Generate Dedupe Script', scriptType: 'dedupe', title: 'Dedupe Script' },
       ],
     },
   ]
@@ -512,7 +661,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
 
       {/* Row 2: metric cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
-        {metrics.map(m => <MetricCard key={m.label} {...m} onNavigate={onNavigate} />)}
+        {metrics.map(m => <MetricCard key={m.label} {...m} onNavigate={onNavigate} onScript={a => setScriptModal(a)} toast={toast} />)}
       </div>
 
       {/* Row 3: cross-seed panels */}
@@ -593,6 +742,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing }) {
             )}
           </div>
         </div>
+      )}
+
+      {scriptModal && (
+        <ScriptModal
+          scriptType={scriptModal.scriptType}
+          title={scriptModal.title || scriptModal.label}
+          subtitle={null}
+          onClose={() => setScriptModal(null)}
+        />
       )}
     </div>
   )
