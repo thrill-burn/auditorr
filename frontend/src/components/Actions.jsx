@@ -288,7 +288,6 @@ export default function Actions({ onNavigate }) {
   const notImported      = data.not_imported      || { files: [], total_size: 0 }
   const duplicates       = data.duplicates        || { groups: [], total_recoverable: 0 }
 
-  const qbHost           = config.QB_HOST || ''
   const sonarrConfigured = !!config.SONARR_URL
   const radarrConfigured = !!config.RADARR_URL
 
@@ -346,28 +345,6 @@ export default function Actions({ onNavigate }) {
           }}>
             {formatBytes(orphanedTorrents.total_size)}
           </div>
-          <div style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.6, flexGrow: 1, marginBottom: 6 }}>
-            Files in your torrent folder that qBittorrent has no record of.
-          </div>
-          {qbHost ? (
-            <button
-              onClick={() => window.open(qbHost, '_blank')}
-              style={cardBtn('var(--yellow)')}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)22'}
-              onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)12'}
-            >
-              View Orphaned Torrents in qBittorrent →
-            </button>
-          ) : (
-            <button
-              onClick={() => onNavigate({ tab: 'config' })}
-              style={cardBtn('var(--text-dim)')}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--text-dim)22'}
-              onMouseLeave={e => e.currentTarget.style.background = 'var(--text-dim)12'}
-            >
-              Configure qBittorrent in Settings →
-            </button>
-          )}
           <button
             onClick={() => setScriptModal({
               scriptType: 'orphaned_torrents_delete',
