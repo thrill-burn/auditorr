@@ -141,6 +141,16 @@ function btnStyle(bg, color, extra = {}) {
   }
 }
 
+function cardBtn(color, extra = {}) {
+  return {
+    width: '100%', padding: '7px 10px', borderRadius: 7,
+    border: '1px solid ' + color + '35', background: color + '12',
+    color, fontSize: 12, fontWeight: 500,
+    cursor: 'pointer', transition: 'background 0.15s',
+    ...extra,
+  }
+}
+
 // ─── ActionCard ───────────────────────────────────────────────────────────────
 
 function ActionCard({ color, label, number, subtitle, description, emptyMessage, isEmpty, children }) {
@@ -305,7 +315,9 @@ export default function Actions({ onNavigate }) {
         >
           <button
             onClick={() => onNavigate({ tab: 'media', status: 'Orphaned' })}
-            style={btnStyle('var(--surface2)', 'var(--text)')}
+            style={cardBtn('var(--red)')}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--red)22'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--red)12'}
           >
             View Orphaned Media →
           </button>
@@ -324,22 +336,18 @@ export default function Actions({ onNavigate }) {
           {qbHost ? (
             <button
               onClick={() => window.open(qbHost, '_blank')}
-              style={{
-                border: '1px solid var(--yellow)35', background: 'var(--yellow)12',
-                color: 'var(--yellow)', borderRadius: 7, padding: 7,
-                cursor: 'pointer', fontSize: 12, fontWeight: 500,
-              }}
+              style={cardBtn('var(--yellow)')}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)22'}
+              onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)12'}
             >
               View Orphaned Torrents in qBittorrent →
             </button>
           ) : (
             <button
               onClick={() => onNavigate({ tab: 'config' })}
-              style={{
-                border: '1px solid var(--border2)', background: 'transparent',
-                color: 'var(--text-dim)', borderRadius: 7, padding: 7,
-                cursor: 'pointer', fontSize: 12, fontWeight: 500,
-              }}
+              style={cardBtn('var(--text-dim)')}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--text-dim)22'}
+              onMouseLeave={e => e.currentTarget.style.background = 'var(--text-dim)12'}
             >
               Configure qBittorrent in Settings →
             </button>
@@ -350,11 +358,9 @@ export default function Actions({ onNavigate }) {
               title: 'Orphaned Torrent Delete Script',
               subtitle: `${orphanedTorrentFiles.length} files — ${formatBytes(orphanedTorrents.total_size)}`,
             })}
-            style={{
-              border: '1px solid var(--yellow)35', background: 'var(--yellow)12',
-              color: 'var(--yellow)', borderRadius: 7, padding: 7,
-              cursor: 'pointer', fontSize: 12, fontWeight: 500,
-            }}
+            style={cardBtn('var(--yellow)')}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)22'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)12'}
           >
             Generate Delete Script
           </button>
@@ -374,14 +380,18 @@ export default function Actions({ onNavigate }) {
             <button
               onClick={handleSonarrRescan}
               disabled={sonarrLoading}
-              style={btnStyle('var(--surface2)', 'var(--text)', { opacity: sonarrLoading ? 0.6 : 1 })}
+              style={cardBtn('var(--red)', { opacity: sonarrLoading ? 0.6 : 1 })}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--red)22'}
+              onMouseLeave={e => e.currentTarget.style.background = 'var(--red)12'}
             >
               {sonarrLoading ? 'Triggering…' : 'Trigger Sonarr Rescan'}
             </button>
           ) : (
             <button
               onClick={() => onNavigate({ tab: 'config' })}
-              style={btnStyle('var(--surface2)', 'var(--text-dim)')}
+              style={cardBtn('var(--text-dim)')}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--text-dim)22'}
+              onMouseLeave={e => e.currentTarget.style.background = 'var(--text-dim)12'}
             >
               Configure Sonarr in Settings →
             </button>
@@ -390,21 +400,27 @@ export default function Actions({ onNavigate }) {
             <button
               onClick={handleRadarrRescan}
               disabled={radarrLoading}
-              style={btnStyle('var(--surface2)', 'var(--text)', { opacity: radarrLoading ? 0.6 : 1 })}
+              style={cardBtn('var(--red)', { opacity: radarrLoading ? 0.6 : 1 })}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--red)22'}
+              onMouseLeave={e => e.currentTarget.style.background = 'var(--red)12'}
             >
               {radarrLoading ? 'Triggering…' : 'Trigger Radarr Rescan'}
             </button>
           ) : (
             <button
               onClick={() => onNavigate({ tab: 'config' })}
-              style={btnStyle('var(--surface2)', 'var(--text-dim)')}
+              style={cardBtn('var(--text-dim)')}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--text-dim)22'}
+              onMouseLeave={e => e.currentTarget.style.background = 'var(--text-dim)12'}
             >
               Configure Radarr in Settings →
             </button>
           )}
           <button
             onClick={() => onNavigate({ tab: 'torrents', importFilter: 'notImported' })}
-            style={btnStyle('var(--surface2)', 'var(--text-dim)')}
+            style={cardBtn('var(--text-dim)')}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--text-dim)22'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--text-dim)12'}
           >
             View Not Imported →
           </button>
@@ -473,7 +489,9 @@ export default function Actions({ onNavigate }) {
                     title: 'Dedupe Script',
                     subtitle: `${dupCount} groups — ${formatBytes(duplicates.total_recoverable)} recoverable`,
                   })}
-                  style={btnStyle('var(--surface2)', 'var(--text)')}
+                  style={cardBtn('var(--purple)')}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--purple)22'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'var(--purple)12'}
                 >
                   Generate Dedupe Script
                 </button>
