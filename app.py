@@ -1193,16 +1193,8 @@ def actions_sonarr_search():
         )
         if best is None:
             return jsonify({"status": "error", "message": f"'{title}' not found in Sonarr library. Make sure it is added and monitored in Sonarr first."}), 400
-        endpoint = url.rstrip('/') + '/api/v3/command'
-        body = json.dumps({"name": "InteractiveSearch", "seriesId": best['id']}).encode()
-        http_req = urllib.request.Request(
-            endpoint, data=body,
-            headers={"X-Api-Key": key, "Content-Type": "application/json"},
-            method='POST',
-        )
-        with urllib.request.urlopen(http_req, timeout=10) as resp:
-            resp.read()
-        return jsonify({"status": "success", "title": best.get('title', title)})
+        sonarr_url = url.rstrip('/') + '/series/' + best['titleSlug']
+        return jsonify({"status": "success", "url": sonarr_url, "title": best.get('title', title)})
     except urllib.error.HTTPError as e:
         log.exception("HTTP error in sonarr_search")
         return jsonify({"status": "error", "message": f"Sonarr returned HTTP {e.code}: {e.reason}"}), 400
@@ -1235,16 +1227,8 @@ def actions_radarr_search():
         )
         if best is None:
             return jsonify({"status": "error", "message": f"'{title}' not found in Radarr library. Make sure it is added and monitored in Radarr first."}), 400
-        endpoint = url.rstrip('/') + '/api/v3/command'
-        body = json.dumps({"name": "InteractiveSearch", "movieIds": [best['id']]}).encode()
-        http_req = urllib.request.Request(
-            endpoint, data=body,
-            headers={"X-Api-Key": key, "Content-Type": "application/json"},
-            method='POST',
-        )
-        with urllib.request.urlopen(http_req, timeout=10) as resp:
-            resp.read()
-        return jsonify({"status": "success", "title": best.get('title', title)})
+        radarr_url = url.rstrip('/') + '/movie/' + best['titleSlug']
+        return jsonify({"status": "success", "url": radarr_url, "title": best.get('title', title)})
     except urllib.error.HTTPError as e:
         log.exception("HTTP error in radarr_search")
         return jsonify({"status": "error", "message": f"Radarr returned HTTP {e.code}: {e.reason}"}), 400
