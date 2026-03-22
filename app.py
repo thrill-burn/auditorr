@@ -1026,21 +1026,91 @@ def get_action_script(script_type):
     if script_type == 'orphaned_torrents_delete':
         orphaned = [f for f in torrent_files if f.get('status') == 'Orphaned']
         total_size = sum(f['size'] for f in orphaned)
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         lines = [
             '#!/bin/bash',
             '# auditorr — Orphaned Torrent Cleanup Script',
             f'# Generated: {now_str}',
             '# WARNING: Review carefully before running. This permanently deletes files.',
-            f'# {len(orphaned)} files — {_human_size(total_size)}',
+            f'# {len(orphaned)} files — {_human_size(total_size)} expected to be freed',
+            '#',
+            '# This script will:',
+            '#   1. Record free disk space before deletions',
+            '#   2. Delete each orphaned file with progress output',
+            '#   3. Record free disk space after deletions',
+            '#   4. Compare actual space freed vs expected',
             '',
+            'set -euo pipefail',
+            '',
+            f'TOTAL={len(orphaned)}',
+            'DONE=0',
+            'ERRORS=0',
+            f'EXPECTED_BYTES={total_size}',
+            '',
+            '# Get free space in bytes on the relevant filesystem',
+            'FREE_BEFORE=$(df --output=avail -B1 "$(dirname "$0")" 2>/dev/null | tail -1 || df -k . | awk \'NR==2{print $4*1024}\')',
+            '',
+            'echo "================================================"',
+            f'echo "auditorr Orphaned Torrent Cleanup"',
+            f'echo "Files to delete: {len(orphaned)}"',
+            f'echo "Expected to free: {_human_size(total_size)}"',
+            'echo "================================================"',
+            'echo ""',
         ]
-        for f in orphaned:
+
+        for i, f in enumerate(orphaned):
             full_path = os.path.join(local_path, f['path']) if local_path else f['path']
-            filename  = os.path.basename(full_path)
-            lines.append(f'# {filename} — {_human_size(f["size"])}')
-            lines.append(f'rm "{full_path}"')
-            lines.append('')
-        lines.append(f'echo "Done. {_human_size(total_size)} freed."')
+            filename = os.path.basename(full_path)
+            lines += [
+                f'# File {i+1}/{len(orphaned)}: {filename} — {_human_size(f["size"])}',
+                f'echo "[{i+1}/{len(orphaned)}] Deleting: {filename} ({_human_size(f["size"])})"',
+                f'if [ -f "{full_path}" ]; then',
+                f'  rm "{full_path}"',
+                f'  echo "  ✓ Deleted"',
+                '  DONE=$((DONE+1))',
+                'else',
+                f'  echo "  ⚠ Not found, skipping: {full_path}"',
+                '  ERRORS=$((ERRORS+1))',
+                'fi',
+                '',
+            ]
+
+        lines += [
+            'echo ""',
+            'echo "================================================"',
+            'echo "Cleanup complete."',
+            'echo "  Deleted:  $DONE / $TOTAL files"',
+            'if [ "$ERRORS" -gt 0 ]; then',
+            '  echo "  Warnings: $ERRORS file(s) not found (already deleted?)"',
+            'fi',
+            '',
+            '# Measure actual space freed',
+            'FREE_AFTER=$(df --output=avail -B1 "$(dirname "$0")" 2>/dev/null | tail -1 || df -k . | awk \'NR==2{print $4*1024}\')',
+            'FREED=$((FREE_AFTER - FREE_BEFORE))',
+            f'EXPECTED={total_size}',
+            '',
+            '# Format freed bytes for display',
+            'if [ "$FREED" -gt 1073741824 ]; then',
+            '  FREED_DISPLAY=$(echo "scale=1; $FREED/1073741824" | bc)GB',
+            'elif [ "$FREED" -gt 1048576 ]; then',
+            '  FREED_DISPLAY=$(echo "scale=1; $FREED/1048576" | bc)MB',
+            'else',
+            '  FREED_DISPLAY="${FREED}B"',
+            'fi',
+            '',
+            f'echo "  Expected: {_human_size(total_size)}"',
+            'echo "  Actual:   ${FREED_DISPLAY}"',
+            '',
+            '# Warn if actual differs significantly from expected (>10% variance)',
+            'if [ "$FREED" -gt 0 ]; then',
+            '  VARIANCE=$(( (FREED - EXPECTED) * 100 / EXPECTED ))',
+            '  if [ "${VARIANCE#-}" -gt 10 ]; then',
+            '    echo "  ⚠ Note: actual space freed differs from expected by ${VARIANCE}%"',
+            '    echo "    This is normal if files were hardlinked (inode still referenced elsewhere)"',
+            '  fi',
+            'fi',
+            'echo "================================================"',
+        ]
         script = '\n'.join(lines)
 
     elif script_type == 'dedupe':
