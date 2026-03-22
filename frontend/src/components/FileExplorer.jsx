@@ -213,11 +213,24 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
     }
   }
 
-  const arrBtnStyle = (state) => ({
-    background: 'none', border: 'none', cursor: state === 'loading' ? 'default' : 'pointer',
-    padding: '2px 4px', borderRadius: 3, transition: 'color 0.1s',
-    color: state === 'success' ? 'var(--green)' : state === 'error' ? 'var(--red)' : 'var(--text-faint)',
-    fontSize: 11, lineHeight: 1, flexShrink: 0,
+  const sonarrPillStyle = (state) => ({
+    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+    color: state === 'success' ? 'var(--green)' : state === 'error' ? 'var(--red)' : 'var(--blue)',
+    background: state === 'success' ? 'var(--green)18' : state === 'error' ? 'var(--red)18' : 'var(--blue)18',
+    border: '1px solid ' + (state === 'success' ? 'var(--green)44' : state === 'error' ? 'var(--red)44' : 'var(--blue)44'),
+    borderRadius: 99, padding: '1px 8px',
+    cursor: state === 'loading' ? 'default' : 'pointer',
+    outline: 'none', flexShrink: 0, transition: 'background 0.1s',
+  })
+
+  const radarrPillStyle = (state) => ({
+    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+    color: state === 'success' ? 'var(--green)' : state === 'error' ? 'var(--red)' : 'var(--yellow)',
+    background: state === 'success' ? 'var(--green)18' : state === 'error' ? 'var(--red)18' : 'var(--yellow)18',
+    border: '1px solid ' + (state === 'success' ? 'var(--green)44' : state === 'error' ? 'var(--red)44' : 'var(--yellow)44'),
+    borderRadius: 99, padding: '1px 8px',
+    cursor: state === 'loading' ? 'default' : 'pointer',
+    outline: 'none', flexShrink: 0, transition: 'background 0.1s',
   })
 
   return (
@@ -253,11 +266,11 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
             title="Search in Sonarr"
             onClick={handleSonarrSearch}
             disabled={sonarrState === 'loading'}
-            style={arrBtnStyle(sonarrState)}
-            onMouseEnter={e => { if (sonarrState === 'idle') e.currentTarget.style.color = 'var(--blue)' }}
-            onMouseLeave={e => { if (sonarrState === 'idle') e.currentTarget.style.color = 'var(--text-faint)' }}
+            style={sonarrPillStyle(sonarrState)}
+            onMouseEnter={e => { if (sonarrState === 'idle') e.currentTarget.style.background = 'var(--blue)30' }}
+            onMouseLeave={e => { if (sonarrState === 'idle') e.currentTarget.style.background = 'var(--blue)18' }}
           >
-            {sonarrState === 'loading' ? '…' : sonarrState === 'success' ? '✓' : sonarrState === 'error' ? '✗' : 'S'}
+            {sonarrState === 'loading' ? '…' : sonarrState === 'success' ? '✓ Sonarr' : sonarrState === 'error' ? '✗' : 'Sonarr'}
           </button>
         )}
         {showSearchButtons && radarrConfigured && (
@@ -265,11 +278,11 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
             title="Search in Radarr"
             onClick={handleRadarrSearch}
             disabled={radarrState === 'loading'}
-            style={arrBtnStyle(radarrState)}
-            onMouseEnter={e => { if (radarrState === 'idle') e.currentTarget.style.color = 'var(--yellow)' }}
-            onMouseLeave={e => { if (radarrState === 'idle') e.currentTarget.style.color = 'var(--text-faint)' }}
+            style={radarrPillStyle(radarrState)}
+            onMouseEnter={e => { if (radarrState === 'idle') e.currentTarget.style.background = 'var(--yellow)30' }}
+            onMouseLeave={e => { if (radarrState === 'idle') e.currentTarget.style.background = 'var(--yellow)18' }}
           >
-            {radarrState === 'loading' ? '…' : radarrState === 'success' ? '✓' : radarrState === 'error' ? '✗' : 'R'}
+            {radarrState === 'loading' ? '…' : radarrState === 'success' ? '✓ Radarr' : radarrState === 'error' ? '✗' : 'Radarr'}
           </button>
         )}
         <button

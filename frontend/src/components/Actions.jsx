@@ -302,7 +302,7 @@ export default function Actions({ onNavigate }) {
           label="Orphaned Media"
           number={orphanedMedia.files.length}
           subtitle={`${formatBytes(orphanedMedia.total_size)} unseeded`}
-          description="Use the Sonarr / Radarr interactive search buttons in the Media explorer to find seeding versions for these files."
+          description="Filter the Media explorer by "Orphaned", then click the orange Sonarr or yellow Radarr pill buttons on each file row to trigger an interactive search. Pick your preferred release in Sonarr/Radarr and the file will be replaced with a seeding version."
           isEmpty={orphanedMedia.files.length === 0}
           emptyMessage="All media files are seeding"
         >

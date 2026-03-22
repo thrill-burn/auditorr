@@ -1143,22 +1143,22 @@ def actions_radarr_rescan():
 
 def _parse_title_from_filename(filename):
     """Parse a clean title from a media filename for *arr search."""
-    name = os.path.splitext(filename)[0]
-    # Convert dots and underscores to spaces
-    name = name.replace('.', ' ').replace('_', ' ')
-    # Strip quality/encoding tags and everything after them (these mark end of title)
-    m = re.search(
-        r'\b(1080p|720p|2160p|4[Kk]|UHD|BluRay|BDRip|BRRip|WEBRip|WEB[ \-]DL|'
-        r'HDTV|DVDRip|x264|x265|HEVC|HDR|DTS|AAC|AC3|REMUX|REPACK|PROPER)\b',
-        name, re.IGNORECASE,
+    name = os.path.splitext(os.path.basename(filename))[0]
+    # For TV shows: strip everything from SxxExx onwards
+    name = re.split(r'[Ss]\d{1,2}[Ee]\d{1,2}', name)[0]
+    # For movies: strip year (4 digits) and everything after
+    name = re.split(r'\b(19|20)\d{2}\b', name)[0]
+    # Strip quality/format tags and everything after
+    name = re.sub(
+        r'\b(2160p|1080p|1080i|720p|480p|4K|BluRay|BDRip|BRRip|WEB-DL|WEBRip|HDTV|DVDRip|'
+        r'AMZN|DSNP|NF|HULU|HBO|x264|x265|HEVC|HDR|DV|AAC|DDP|DTS|MA|FLAC|REMUX|PROPER|REPACK|INTERNAL)\b.*',
+        '', name, flags=re.IGNORECASE,
     )
-    if m:
-        name = name[:m.start()]
-    # Strip year in parens/brackets
-    name = re.sub(r'[\(\[]\s*\d{4}\s*[\)\]]', ' ', name)
-    # Strip trailing bare year
-    name = re.sub(r'\s+\d{4}\s*$', '', name)
-    return name.strip()
+    # Replace dots, underscores, hyphens with spaces
+    name = re.sub(r'[._\-]', ' ', name)
+    # Collapse multiple spaces and strip
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
 
 
 def _arr_get(base_url, api_key, path):
@@ -1185,7 +1185,7 @@ def actions_sonarr_search():
         title = _parse_title_from_filename(filename)
         series_list = _arr_get(url, key, f'/api/v3/series?term={urllib.parse.quote(title)}')
         if not series_list:
-            return jsonify({"status": "error", "message": f"No series found for '{title}'"}), 404
+            return jsonify({"status": "error", "message": f"No match found for '{title}' in Sonarr"}), 400
         title_lower = title.lower()
         best = next((s for s in series_list if s.get('title', '').lower() == title_lower), series_list[0])
         endpoint = url.rstrip('/') + '/api/v3/command'
@@ -1198,6 +1198,8 @@ def actions_sonarr_search():
         with urllib.request.urlopen(http_req, timeout=10) as resp:
             resp.read()
         return jsonify({"status": "success", "title": best.get('title', title)})
+    except urllib.error.HTTPError as e:
+        return jsonify({"status": "error", "message": f"Sonarr returned HTTP {e.code}: {e.reason}"}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
@@ -1218,7 +1220,7 @@ def actions_radarr_search():
         title = _parse_title_from_filename(filename)
         movie_list = _arr_get(url, key, f'/api/v3/movie?term={urllib.parse.quote(title)}')
         if not movie_list:
-            return jsonify({"status": "error", "message": f"No movie found for '{title}'"}), 404
+            return jsonify({"status": "error", "message": f"No match found for '{title}' in Radarr"}), 400
         title_lower = title.lower()
         best = next((m for m in movie_list if m.get('title', '').lower() == title_lower), movie_list[0])
         endpoint = url.rstrip('/') + '/api/v3/command'
@@ -1231,6 +1233,8 @@ def actions_radarr_search():
         with urllib.request.urlopen(http_req, timeout=10) as resp:
             resp.read()
         return jsonify({"status": "success", "title": best.get('title', title)})
+    except urllib.error.HTTPError as e:
+        return jsonify({"status": "error", "message": f"Radarr returned HTTP {e.code}: {e.reason}"}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
