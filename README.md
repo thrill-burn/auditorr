@@ -35,7 +35,7 @@ docker run -d \
   ghcr.io/thrill-burn/auditorr:latest
 ```
 
-Then open: `http://your-server-ip:8677` and configure qBitorrent.
+Then open: `http://your-server-ip:8677` and configure qBittorrent.
 
 ### unRaid (Recommended)
 
