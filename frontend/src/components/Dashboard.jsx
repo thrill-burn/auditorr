@@ -47,11 +47,29 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
   return (
     <div
       onClick={onClose}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      style={{
+        position: 'fixed', inset: 0,
+        background: 'rgba(0,0,0,0.7)',
+        zIndex: 500,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+      }}
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{ width: '90%', maxWidth: 700, maxHeight: '90vh', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        style={{
+          width: '100%',
+          maxWidth: 700,
+          maxHeight: '85vh',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--rl)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
       >
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
           <div>
@@ -63,11 +81,11 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
         <div style={{ padding: '10px 16px', background: 'rgba(234,179,8,0.13)', borderLeft: '3px solid var(--yellow)', margin: '12px 16px 0', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>
           ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
         </div>
-        <div style={{ flex: 1, overflow: 'auto', padding: 16, margin: '0 16px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
           {loading ? (
             <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
           ) : (
-            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.5 }}>{script}</pre>
+            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
           )}
         </div>
         <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
@@ -252,7 +270,7 @@ function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigat
       <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, marginTop: 10 }}>{value}</span>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 14 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto' }}>
         {enrichedRows.map((row, rowIdx) => {
           const visibleActions = row.filter(a => !a.hidden)
           if (visibleActions.length === 0) return null
