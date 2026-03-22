@@ -329,10 +329,26 @@ export default function Actions({ onNavigate }) {
           label="Orphaned Torrents"
           number={orphanedTorrentFiles.length}
           subtitle={formatBytes(orphanedTorrents.total_size)}
-          description="Files in your torrent folder that qBittorrent has no record of."
+          description={null}
           isEmpty={orphanedTorrentFiles.length === 0}
           emptyMessage="No orphaned torrents"
         >
+          <div style={{
+            fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 600,
+            color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase',
+            marginBottom: 2,
+          }}>
+            Recoverable
+          </div>
+          <div style={{
+            fontFamily: 'var(--mono)', fontSize: 48, fontWeight: 700,
+            color: 'var(--yellow)', lineHeight: 1,
+          }}>
+            {formatBytes(orphanedTorrents.total_size)}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.6, flexGrow: 1, marginBottom: 6 }}>
+            Files in your torrent folder that qBittorrent has no record of.
+          </div>
           {qbHost ? (
             <button
               onClick={() => window.open(qbHost, '_blank')}
