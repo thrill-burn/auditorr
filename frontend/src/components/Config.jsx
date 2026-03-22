@@ -74,8 +74,6 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setPassChanged(false)
-      setSonarrTestStatus(null)
-      setRadarrTestStatus(null)
     })
   }
 
@@ -100,7 +98,8 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
     setSonarrTestStatus({ loading: true })
     try {
       await api.testSonarr(conf.SONARR_URL, conf.SONARR_API_KEY)
-      setSonarrTestStatus({ ok: true, msg: 'Connected!' })
+      await handleSave()
+      setSonarrTestStatus({ ok: true, msg: 'Connected and saved!' })
     } catch (e) { setSonarrTestStatus({ ok: false, msg: e.message }) }
   }
 
@@ -108,7 +107,8 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
     setRadarrTestStatus({ loading: true })
     try {
       await api.testRadarr(conf.RADARR_URL, conf.RADARR_API_KEY)
-      setRadarrTestStatus({ ok: true, msg: 'Connected!' })
+      await handleSave()
+      setRadarrTestStatus({ ok: true, msg: 'Connected and saved!' })
     } catch (e) { setRadarrTestStatus({ ok: false, msg: e.message }) }
   }
 
