@@ -6,11 +6,13 @@ It cross-references your hardlinked torrent and media directories with qBittorre
 
 ![Dashboard](docs/dashboard.png)
 
-- **Health score (0–100)** — see how clean and efficient your library is  
-- **Find wasted disk space** — duplicates, orphaned files, unlinked torrents  
-- **Cross-seeding insights** — understand how well your data is seeded  
-- **Tracker leaderboard** — see which trackers actually matter  
-- **Powerful file explorer** — filter by status, tracker, seed count, size 
+- **Health score (0–100)** — see how clean and efficient your library is
+- **Find wasted disk space** — duplicates, orphaned files, unlinked torrents
+- **Cross-seeding insights** — weighted average seed multiplier, segmented disk bar, tracker leaderboard
+- **Tracker leaderboard** — see which trackers actually matter by disk space
+- **Powerful file explorer** — filter by status, tracker, seed count, size, filename
+- **Sonarr/Radarr integration** — open orphaned media directly in Sonarr or Radarr for interactive search
+- **Inline action buttons** — generate delete and dedupe scripts, trigger Sonarr/Radarr rescans from the dashboard
 
 ---
 
@@ -107,6 +109,13 @@ All configuration is done through the **Config** tab in the UI.
 | **Watchdog Cooldown** | Seconds to wait after a filesystem change before running an audit (default: 60) |
 | **Scheduled Interval** | Fallback audit interval in minutes (default: 360) |
 | **Thresholds** | Percentage of library at which each category loses all its points |
+| **Sonarr URL** | URL of your Sonarr instance, e.g. `http://192.168.1.x:8989`. Must be browser-accessible (LAN IP). |
+| **Sonarr API Key** | Found in Sonarr → Settings → General |
+| **Radarr URL** | URL of your Radarr instance, e.g. `http://192.168.1.x:7878`. Must be browser-accessible (LAN IP). |
+| **Radarr API Key** | Found in Radarr → Settings → General |
+| **Sonarr Remote Path** | Path to downloads as Sonarr sees it inside its container. Leave blank if paths are the same. |
+| **Radarr Remote Path** | Same for Radarr. |
+| **Exclusion Patterns** | Glob patterns (one per line) to exclude files from health scoring. e.g. `*.srt`, `@eaDir` |
 
 ### Environment variables
 

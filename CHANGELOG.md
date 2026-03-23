@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.1.0
+
+### New Features
+- **Sonarr/Radarr integration** — configure URLs and API keys in Config. Orphaned media files in the Media explorer show "Open in Sonarr" or "Open in Radarr" pill buttons that deep-link directly to the correct series/movie page for interactive search. Button shown is determined automatically from the file path (tv/television folders → Sonarr, movie folders → Radarr).
+- **Dashboard action buttons** — each metric card now has inline action buttons. Orphaned Torrents: Generate Delete Script. Not Imported: Trigger Sonarr Rescan / Trigger Radarr Rescan. Duplicate Files: Generate Dedupe Script. Hardlinked Media: View Orphaned Media.
+- **Delete script** — generates a reviewed bash script for orphaned torrent cleanup with per-file progress output, pre/post disk space measurement, and actual vs expected space freed comparison.
+- **Dedupe script** — generates a bash script that replaces duplicate files with hardlinks. Runs full md5sum verification on each file pair before hardlinking. Includes progress output and skips cross-filesystem groups that cannot be hardlinked.
+- **Light mode** — toggle in Config, persisted in localStorage.
+- **Exclusion patterns** — glob-based patterns in Config exclude files from health scoring while keeping them visible in the explorer with an "excluded" tag.
+- **Rescan on config save** — saving settings triggers an immediate background audit.
+- **Sonarr/Radarr remote path config** — separate path translation for Sonarr and Radarr containers that may see torrent paths differently than auditorr.
+
+### Backend
+- **Parallelized tracker fetching** — tracker API calls now run concurrently with ThreadPoolExecutor (16 workers), eliminating sequential per-torrent qBittorrent API calls and significantly reducing scan time on large libraries.
+- **Torrent hash stored per file** — hash is now captured from qBittorrent and stored in results, enabling future deep-link and per-torrent features.
+- **Normalized title matching** — Sonarr/Radarr library search strips punctuation before comparing, fixing matches for titles with colons, dashes, and other special characters.
+- **Rescan path translation** — Sonarr/Radarr rescan commands translate auditorr-local paths to the correct path as seen inside the arr container.
+- **set -euo pipefail removed from delete script** — per-file existence checks handle errors gracefully without aborting the entire script on first failure.
+
+### Frontend
+- **Script modal** — full-screen overlay for reviewing generated bash scripts before running. Shows warning banner, scrollable monospace script, copy to clipboard, and download as .sh.
+- **Smart Sonarr/Radarr button visibility** — buttons only shown for relevant file types based on path detection, not on every orphaned file.
+- **Action button rows** — consistent two-row button layout across all dashboard cards, aligned left-to-right.
+- **Recoverable size** — orphaned torrents card shows total recoverable GB in the same style as duplicate files.
+
 ## v1.0.1
 
 ### New Features

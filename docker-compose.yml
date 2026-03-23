@@ -11,6 +11,8 @@ services:
       - /path/to/media:/data/media:ro
       - /path/to/torrents:/data/torrents:ro
     environment:
+      # Configure qBittorrent, Sonarr, Radarr, and thresholds via the Config tab in the UI.
+      # No environment variables needed for integration settings.
       - AUDITORR_PORT=8677
       # Uncomment to enable API authentication:
       # - AUDITORR_SECRET=your-secret-key-here
