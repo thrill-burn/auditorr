@@ -13,7 +13,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+COPY *.py ./
 COPY --from=frontend-build /build/dist ./frontend/dist
 
 RUN mkdir -p /app/data
