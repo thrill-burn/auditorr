@@ -959,17 +959,17 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         </div>
       )}
 
-    </div>
 
-    {trackerDetail && (
-      <TrackerDetailModal
-        trackerName={trackerDetail}
-        torrentFiles={data.torrent_files || []}
-        mediaFiles={data.media_files || []}
-        uploadStats={uploadStats}
-        onNavigate={(action) => { setTrackerDetail(null); onNavigate(action) }}
-        onClose={() => setTrackerDetail(null)}
-      />
-    )}
+      {trackerDetail && (
+        <TrackerDetailModal
+          trackerName={trackerDetail}
+          torrentFiles={data.torrent_files || []}
+          mediaFiles={data.media_files || []}
+          uploadStats={uploadStats}
+          onNavigate={(action) => { setTrackerDetail(null); onNavigate(action) }}
+          onClose={() => setTrackerDetail(null)}
+        />
+      )}
+    </div>
   )
 }
