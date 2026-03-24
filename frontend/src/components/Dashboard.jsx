@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
 import { api } from '../api'
@@ -133,6 +133,36 @@ function GrafanaTooltip({ active, payload, label, color }) {
         <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{payload[0].value}</span>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>/ 100</span>
       </div>
+    </div>
+  )
+}
+
+// ── Upload activity tooltip ───────────────────────────────────────────────────
+const TRACKER_COLORS = [
+  '#38bdf8', '#a78bfa', '#22c55e', '#f59e0b',
+  '#ef4444', '#ec4899', '#14b8a6', '#f97316',
+]
+
+function UploadActivityTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  const items = payload.filter(p => p.value > 0)
+  const total = payload.reduce((s, p) => s + (p.value || 0), 0)
+  return (
+    <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 160 }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
+      {items.map(p => (
+        <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
+          <div style={{ width: 8, height: 8, borderRadius: 2, background: p.fill, flexShrink: 0 }} />
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#ebebeb', flex: 1 }}>{p.name}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{formatBytes(p.value)}</span>
+        </div>
+      ))}
+      {items.length > 1 && (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Total</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -388,11 +418,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const toast = useToast()
   const [sonarrConfigured, setSonarrConfigured] = useState(false)
   const [radarrConfigured, setRadarrConfigured] = useState(false)
+  const [uploadStats, setUploadStats] = useState(null)
 
   useEffect(() => {
     api.getConfig().then(cfg => {
       setSonarrConfigured(!!cfg.SONARR_URL)
       setRadarrConfigured(!!cfg.RADARR_URL)
+    }).catch(() => {})
+    api.uploadStats(30).then(d => {
+      if (!d.status) setUploadStats(d)
     }).catch(() => {})
   }, [])
 
@@ -502,6 +536,24 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   })()
 
   const csMultDisplay = cs ? cs.crossSeedMultiplier.toFixed(2) : null
+
+  // Upload chart: derive active trackers and reshape daily data for Recharts
+  const uploadChartData = uploadStats ? (() => {
+    const activeTrackers = Object.keys(
+      (uploadStats.daily_uploads || []).reduce((acc, day) => {
+        Object.entries(day.by_tracker || {}).forEach(([h, v]) => { if (v > 0) acc[h] = true })
+        return acc
+      }, {})
+    )
+    const chartData = (uploadStats.daily_uploads || []).map(day => {
+      const row = { date: day.date.slice(5) }  // MM-DD
+      for (const h of activeTrackers) row[h] = day.by_tracker[h] || 0
+      return row
+    })
+    return { activeTrackers, data: chartData }
+  })() : null
+  const yieldRows = (uploadStats?.tracker_yields || [])
+    .filter(t => !(t.uploaded === 0 && (t.yield === null || t.yield === 0)))
 
   return (
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -664,6 +716,92 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Row 4: upload activity + library yield */}
+      {uploadStats && uploadChartData && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+
+          {/* Upload Activity */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Upload Activity</div>
+              <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                Total uploaded: {formatBytes(uploadStats.total_uploaded)} over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
+              </p>
+            </div>
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
+                  <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                  <YAxis
+                    tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                    tickLine={false} axisLine={false}
+                    tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                  />
+                  <Tooltip content={<UploadActivityTooltip />} cursor={{ fill: 'var(--surface2)' }} />
+                  {uploadChartData.activeTrackers.map((host, i) => (
+                    <Bar
+                      key={host} dataKey={host} stackId="uploads"
+                      fill={TRACKER_COLORS[i % TRACKER_COLORS.length]}
+                      radius={i === uploadChartData.activeTrackers.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Library Yield */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Library Yield</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                  {uploadStats.library_yield !== null ? (uploadStats.library_yield * 100).toFixed(2) + '%' : '—'}
+                </span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                  over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                Upload volume relative to seeding size. Higher yield = your disk space is earning more.
+              </p>
+            </div>
+            {yieldRows.length > 0 && (
+              <div style={{ flex: 1, overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                  <thead>
+                    <tr>
+                      {['Tracker', 'Uploaded', 'Seeding', 'Yield'].map(h => (
+                        <th key={h} style={{
+                          textAlign: h === 'Tracker' ? 'left' : 'right',
+                          padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
+                          letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                          borderBottom: '1px solid var(--border)',
+                        }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {yieldRows.map((t, i) => (
+                      <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
+                        <td style={{ padding: '5px 8px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>{t.tracker}</td>
+                        <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
+                        <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
+                        <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
+                          {t.yield !== null ? (t.yield * 100).toFixed(2) + '%' : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
         </div>
       )}
 
