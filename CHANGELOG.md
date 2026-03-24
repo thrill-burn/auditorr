@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.2.0 — 2026-03-24
+
+### Backend
+- **Modular refactor** — `app.py` split into `audit.py`, `arr.py`, `db.py`, `scripts.py`, `state.py`, and `watchdog_handler.py`. Routes remain in `app.py`. Strict module layering eliminates circular imports.
+- **SQLite persistence for all data** — `results.json` and `history.json` migrated to SQLite with automatic startup migration. Config migrated from `config.json` to a `config` table; all modules read config directly from the database with no in-memory cache or global lock.
+- **Config validation** — `validate_config()` in `db.py` enforces integer minimums, float ranges for health thresholds, and list constraints on exclusion patterns. Called before every config save.
+- **Per-tracker upload snapshots** — each successful audit snapshots cumulative uploaded bytes and seeding size per tracker. Stored in a new `upload_snapshots` table (capped at 1000 rows). Deltas between snapshots produce upload-per-day stats and yield metrics.
+- **Yield metrics** — `compute_upload_stats()` computes upload deltas and yield per tracker. Yield = total uploaded / seeding size over a rolling window. Counter resets (qBit restarts) are detected and skipped. A lightweight `yield_summary` key is appended to `/api/results` after each audit.
+- **TOCTOU fix on scan state** — `try_start_scanning(trigger)` atomically checks and sets `is_scanning` in a single lock acquisition, eliminating the race across all trigger paths (manual, watchdog, scheduled, startup).
+- **Shell injection fix** — all path interpolations in generated bash scripts now use `shlex.quote()`. `echo` with interpolated paths replaced with `printf '%s'`.
+- **WAL mode and foreign keys** — SQLite connections now enable WAL journal mode and foreign key enforcement on every connection.
+
+### Frontend
+- **Disk size as primary metric** — dashboard metric cards show total size as the headline value rather than file count.
+- **Aligned button rows** — action button rows in metric cards use consistent height so buttons align across all four cards regardless of how many are visible.
+
+### Scripts
+- **Relative paths in generated scripts** — delete and dedupe scripts now use paths relative to the torrent/data directory instead of absolute container paths. Both scripts include a usage header and a working-directory guard that verifies the first file exists before proceeding.
+
 ## v1.1.0
 
 ### New Features
