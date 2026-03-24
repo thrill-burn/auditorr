@@ -327,7 +327,7 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
 }
 
 // ── Tracker leaderboard ───────────────────────────────────────────────────────
-function TrackerLeaderboard({ trackerStats, onNavigate }) {
+function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
   if (!trackerStats || trackerStats.length === 0) return null
 
   const top3 = trackerStats.slice(0, 3)
@@ -343,7 +343,7 @@ function TrackerLeaderboard({ trackerStats, onNavigate }) {
         return (
           <button
             key={t.name}
-            onClick={() => onNavigate({ tab: 'torrents', tracker: t.name })}
+            onClick={() => onTrackerDetail(t.name)}
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '10px 12px', borderRadius: 8,
@@ -413,12 +413,160 @@ function computeCrossSeedStats(mediaFiles) {
   return { crossSeedMultiplier, segments, totalSize, trackerStats }
 }
 
+// ── Tracker detail modal ──────────────────────────────────────────────────────
+function TrackerDetailModal({ trackerName, torrentFiles, mediaFiles, uploadStats, onNavigate, onClose }) {
+  const trackerTorrents = torrentFiles.filter(f => (f.trackers || []).includes(trackerName))
+  const seeding     = trackerTorrents.filter(f => f.status === 'Seeding')
+  const orphaned    = trackerTorrents.filter(f => f.status === 'Orphaned')
+  const notImported = trackerTorrents.filter(f => !f.imported && f.status !== 'Orphaned')
+
+  const seedingSize     = seeding.reduce((a, f) => a + f.size, 0)
+  const orphanedSize    = orphaned.reduce((a, f) => a + f.size, 0)
+  const notImportedSize = notImported.reduce((a, f) => a + f.size, 0)
+
+  const yieldData = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
+  const yieldPct  = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(2) + '%' : '—'
+
+  const uploadTrendData = uploadStats?.daily_uploads?.map(day => ({
+    date: day.date.slice(5),
+    uploaded: day.by_tracker?.[trackerName] || 0,
+  }))
+  const hasUploadData = uploadTrendData?.some(d => d.uploaded > 0)
+
+  const statBoxes = [
+    { label: 'Seeding',      value: seeding.length,     sub: formatBytes(seedingSize),     color: 'var(--green)'  },
+    { label: 'Orphaned',     value: orphaned.length,    sub: formatBytes(orphanedSize),    color: 'var(--yellow)' },
+    { label: 'Not Imported', value: notImported.length, sub: formatBytes(notImportedSize), color: 'var(--red)'    },
+    { label: 'Yield',        value: yieldPct,           sub: uploadStats ? `${uploadStats.period_days} day window` : 'no data yet', color: 'var(--accent)' },
+  ]
+
+  const btnStyle = {
+    padding: '9px 14px', borderRadius: 8, border: '1px solid var(--accent)35',
+    background: 'var(--accent)12', color: 'var(--accent)',
+    fontSize: 13, fontWeight: 500, cursor: 'pointer', textAlign: 'left',
+    transition: 'background 0.15s', width: '100%',
+  }
+  const btnHover = e => e.currentTarget.style.background = 'var(--accent)22'
+  const btnLeave = e => e.currentTarget.style.background = 'var(--accent)12'
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ maxWidth: 680, width: '100%', maxHeight: '85vh', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
+          <button
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, padding: '2px 6px', lineHeight: 1 }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-dim)'}
+          >×</button>
+        </div>
+
+        {/* Scrollable content */}
+        <div style={{ overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+          {/* Stats row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+            {statBoxes.map(s => (
+              <div key={s.label} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px' }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Upload trend */}
+          {uploadStats && (
+            hasUploadData ? (
+              <div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>Upload Trend</div>
+                <div style={{ height: 160 }}>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <AreaChart data={uploadTrendData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="trackerUploadGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
+                          <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
+                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                      <YAxis
+                        tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                        tickLine={false} axisLine={false}
+                        tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                      />
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null
+                          return (
+                            <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(payload[0].value)}</div>
+                            </div>
+                          )
+                        }}
+                        cursor={{ stroke: 'var(--accent)', strokeWidth: 1, strokeOpacity: 0.4, strokeDasharray: '3 3' }}
+                      />
+                      <Area type="linear" dataKey="uploaded" stroke="var(--accent)" strokeWidth={1.5} fill="url(#trackerUploadGrad)" dot={false} activeDot={{ r: 4, fill: 'var(--accent)', stroke: 'var(--bg)', strokeWidth: 2 }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
+                Upload data will appear after a few audits
+              </div>
+            )
+          )}
+
+          {/* Navigation buttons */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {seeding.length > 0 && (
+              <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+                onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
+                View Seeding Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seeding.length} files · {formatBytes(seedingSize)})</span>
+              </button>
+            )}
+            {orphaned.length > 0 && (
+              <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+                onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
+                View Orphaned Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphaned.length} files · {formatBytes(orphanedSize)})</span>
+              </button>
+            )}
+            {notImported.length > 0 && (
+              <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+                onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
+                View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImported.length} files · {formatBytes(notImportedSize)})</span>
+              </button>
+            )}
+            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName })}>
+              View All Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({trackerTorrents.length} files)</span>
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript }) {
   const toast = useToast()
   const [sonarrConfigured, setSonarrConfigured] = useState(false)
   const [radarrConfigured, setRadarrConfigured] = useState(false)
   const [uploadStats, setUploadStats] = useState(null)
+  const [trackerDetail, setTrackerDetail] = useState(null)
 
   useEffect(() => {
     api.getConfig().then(cfg => {
@@ -690,9 +838,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Top Trackers by Disk Space</div>
-              <p style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker to view its files in the torrent explorer.</p>
+              <p style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
             </div>
-            <TrackerLeaderboard trackerStats={cs.trackerStats} onNavigate={onNavigate} />
+            <TrackerLeaderboard trackerStats={cs.trackerStats} onTrackerDetail={setTrackerDetail} />
 
             {/* All trackers summary */}
             {cs.trackerStats.length > 3 && (
@@ -700,7 +848,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 {cs.trackerStats.slice(3).map(t => (
                   <button
                     key={t.name}
-                    onClick={() => onNavigate({ tab: 'torrents', tracker: t.name })}
+                    onClick={() => setTrackerDetail(t.name)}
                     style={{
                       fontFamily: 'var(--mono)', fontSize: 10, padding: '3px 8px',
                       borderRadius: 99, border: '1px solid var(--border2)',
@@ -789,7 +937,12 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                   <tbody>
                     {yieldRows.map((t, i) => (
                       <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
-                        <td style={{ padding: '5px 8px', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>{t.tracker}</td>
+                        <td style={{ padding: '5px 8px', maxWidth: 120 }}>
+                          <button
+                            onClick={() => setTrackerDetail(t.tracker)}
+                            style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                          >{t.tracker}</button>
+                        </td>
                         <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
                         <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
                         <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
@@ -807,5 +960,16 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       )}
 
     </div>
+
+    {trackerDetail && (
+      <TrackerDetailModal
+        trackerName={trackerDetail}
+        torrentFiles={data.torrent_files || []}
+        mediaFiles={data.media_files || []}
+        uploadStats={uploadStats}
+        onNavigate={(action) => { setTrackerDetail(null); onNavigate(action) }}
+        onClose={() => setTrackerDetail(null)}
+      />
+    )}
   )
 }
