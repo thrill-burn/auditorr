@@ -731,9 +731,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 Total uploaded: {formatBytes(uploadStats.total_uploaded)} over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
               </p>
             </div>
-            <div style={{ height: 180 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
                   <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
                   <YAxis
@@ -747,6 +747,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                       key={host} dataKey={host} stackId="uploads"
                       fill={TRACKER_COLORS[i % TRACKER_COLORS.length]}
                       radius={i === uploadChartData.activeTrackers.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
+                      maxBarSize={80}
                     />
                   ))}
                 </BarChart>
