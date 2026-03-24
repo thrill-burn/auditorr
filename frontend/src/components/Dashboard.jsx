@@ -173,7 +173,7 @@ function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigat
       <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, marginTop: 10 }}>{value}</span>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto', paddingTop: 14 }}>
         {enrichedRows.map((row, rowIdx) => {
           const visibleActions = row.filter(a => !a.hidden)
           if (visibleActions.length === 0) return <div key={rowIdx} style={{ height: 31 }} />
