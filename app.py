@@ -193,9 +193,9 @@ def handle_config():
                 'DUP_RATIO':          float(data.get('DUP_RATIO', 0.01)),
                 'EXCLUSION_PATTERNS': [p for p in data.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)],
                 'SONARR_URL':         str(data.get('SONARR_URL', '')),
-                'SONARR_API_KEY':     str(data.get('SONARR_API_KEY', '')),
+                'SONARR_API_KEY':     str(data['SONARR_API_KEY']) if data.get('SONARR_API_KEY') else existing.get('SONARR_API_KEY', ''),
                 'RADARR_URL':         str(data.get('RADARR_URL', '')),
-                'RADARR_API_KEY':     str(data.get('RADARR_API_KEY', '')),
+                'RADARR_API_KEY':     str(data['RADARR_API_KEY']) if data.get('RADARR_API_KEY') else existing.get('RADARR_API_KEY', ''),
                 'SONARR_REMOTE_PATH': str(data.get('SONARR_REMOTE_PATH', '')),
                 'RADARR_REMOTE_PATH': str(data.get('RADARR_REMOTE_PATH', '')),
             }
@@ -221,6 +221,10 @@ def handle_config():
     cfg = db_load_config()
     if cfg.get('QB_PASS'):
         cfg['QB_PASS'] = '__stored__'
+    if cfg.get('SONARR_API_KEY'):
+        cfg['SONARR_API_KEY'] = '__stored__'
+    if cfg.get('RADARR_API_KEY'):
+        cfg['RADARR_API_KEY'] = '__stored__'
     return jsonify(cfg)
 
 
