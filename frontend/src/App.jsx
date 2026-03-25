@@ -3,6 +3,7 @@ import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
+import Trackers     from './components/Trackers'
 import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
@@ -108,7 +109,7 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
 // Hash-based routing helpers
 function getHashTab() {
   const hash = window.location.hash.replace('#', '') || 'dashboard'
-  const valid = ['dashboard', 'media', 'torrents', 'config']
+  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'config']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -283,6 +284,12 @@ function AppInner() {
               initialImportFilter={pendingNav?.importFilter}
               initialTracker={pendingNav?.tracker}
               initialSeedCount={pendingNav?.seedCount}
+            />
+          )}
+          {tab === 'trackers' && (
+            <Trackers
+              torrentFiles={results?.torrent_files || []}
+              onNavigate={handleNavigate}
             />
           )}
           {tab === 'config' && (

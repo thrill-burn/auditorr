@@ -167,6 +167,23 @@ function UploadActivityTooltip({ active, payload, label }) {
   )
 }
 
+function RoundedStackedBar({ x, y, width, height, fill, allTrackers, host, payload }) {
+  if (!height || height <= 0) return null
+  const r = 3
+  // Determine if this segment is the topmost non-zero segment for this day
+  const idx = allTrackers.indexOf(host)
+  const isTop = allTrackers.slice(idx + 1).every(t => !(payload[t] > 0))
+  if (isTop) {
+    return (
+      <path
+        d={`M${x},${y + r} a${r},${r} 0 0 1 ${r},-${r} h${width - 2 * r} a${r},${r} 0 0 1 ${r},${r} v${height - r} h-${width} Z`}
+        fill={fill}
+      />
+    )
+  }
+  return <rect x={x} y={y} width={width} height={height} fill={fill} />
+}
+
 // ── Metric card ───────────────────────────────────────────────────────────────
 function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
@@ -413,8 +430,8 @@ function computeCrossSeedStats(mediaFiles) {
   return { crossSeedMultiplier, segments, totalSize, trackerStats }
 }
 
-// ── Tracker detail modal ──────────────────────────────────────────────────────
-function TrackerDetailModal({ trackerName, torrentFiles, mediaFiles, uploadStats, onNavigate, onClose }) {
+// ── Tracker card (shared between modal and Trackers page) ─────────────────────
+export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate, onClose }) {
   const trackerTorrents = torrentFiles.filter(f => (f.trackers || []).includes(trackerName))
   const seeding     = trackerTorrents.filter(f => f.status === 'Seeding')
   const orphaned    = trackerTorrents.filter(f => f.status === 'Orphaned')
@@ -432,6 +449,7 @@ function TrackerDetailModal({ trackerName, torrentFiles, mediaFiles, uploadStats
     uploaded: day.by_tracker?.[trackerName] || 0,
   }))
   const hasUploadData = uploadTrendData?.some(d => d.uploaded > 0)
+  const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}`
 
   const statBoxes = [
     { label: 'Seeding',      value: formatBytes(seedingSize),     sub: `${seeding.length} files`,      color: 'var(--green)'  },
@@ -450,107 +468,124 @@ function TrackerDetailModal({ trackerName, torrentFiles, mediaFiles, uploadStats
   const btnLeave = e => e.currentTarget.style.background = 'var(--accent)12'
 
   return (
-    <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
-      onClick={onClose}
-    >
-      <div
-        style={{ maxWidth: 680, width: '100%', maxHeight: '85vh', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
+        {onClose && (
           <button
             onClick={onClose}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, padding: '2px 6px', lineHeight: 1 }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
             onMouseLeave={e => e.currentTarget.style.color = 'var(--text-dim)'}
           >×</button>
+        )}
+      </div>
+
+      {/* Content */}
+      <div style={{ overflowY: 'auto', flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Stats row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+          {statBoxes.map(s => (
+            <div key={s.label} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
+            </div>
+          ))}
         </div>
 
-        {/* Scrollable content */}
-        <div style={{ overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {/* Upload trend */}
+        {uploadStats && (
+          hasUploadData ? (
+            <div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>Upload Trend</div>
+              <div style={{ height: 160 }}>
+                <ResponsiveContainer width="100%" height={160}>
+                  <AreaChart data={uploadTrendData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
+                        <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
+                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                    <YAxis
+                      tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                      tickLine={false} axisLine={false}
+                      tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                    />
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null
+                        return (
+                          <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(payload[0].value)}</div>
+                          </div>
+                        )
+                      }}
+                      cursor={{ stroke: 'var(--accent)', strokeWidth: 1, strokeOpacity: 0.4, strokeDasharray: '3 3' }}
+                    />
+                    <Area type="linear" dataKey="uploaded" stroke="var(--accent)" strokeWidth={1.5} fill={`url(#${gradId})`} dot={false} activeDot={{ r: 4, fill: 'var(--accent)', stroke: 'var(--bg)', strokeWidth: 2 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
+              Upload data will appear after a few audits
+            </div>
+          )
+        )}
 
-          {/* Stats row */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-            {statBoxes.map(s => (
-              <div key={s.label} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px' }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Upload trend */}
-          {uploadStats && (
-            hasUploadData ? (
-              <div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>Upload Trend</div>
-                <div style={{ height: 160 }}>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <AreaChart data={uploadTrendData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="trackerUploadGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
-                          <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
-                      <YAxis
-                        tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
-                        tickLine={false} axisLine={false}
-                        tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
-                      />
-                      <Tooltip
-                        content={({ active, payload, label }) => {
-                          if (!active || !payload?.length) return null
-                          return (
-                            <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
-                              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
-                              <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(payload[0].value)}</div>
-                            </div>
-                          )
-                        }}
-                        cursor={{ stroke: 'var(--accent)', strokeWidth: 1, strokeOpacity: 0.4, strokeDasharray: '3 3' }}
-                      />
-                      <Area type="linear" dataKey="uploaded" stroke="var(--accent)" strokeWidth={1.5} fill="url(#trackerUploadGrad)" dot={false} activeDot={{ r: 4, fill: 'var(--accent)', stroke: 'var(--bg)', strokeWidth: 2 }} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            ) : (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
-                Upload data will appear after a few audits
-              </div>
-            )
+        {/* Navigation buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {seeding.length > 0 && (
+            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
+              View Seeding Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seeding.length} files · {formatBytes(seedingSize)})</span>
+            </button>
           )}
-
-          {/* Navigation buttons */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {seeding.length > 0 && (
-              <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
-                onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
-                View Seeding Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seeding.length} files · {formatBytes(seedingSize)})</span>
-              </button>
-            )}
-            {orphaned.length > 0 && (
-              <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
-                onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
-                View Orphaned Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphaned.length} files · {formatBytes(orphanedSize)})</span>
-              </button>
-            )}
-            {notImported.length > 0 && (
-              <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
-                onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
-                View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImported.length} files · {formatBytes(notImportedSize)})</span>
-              </button>
-            )}
-          </div>
-
+          {orphaned.length > 0 && (
+            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
+              View Orphaned Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphaned.length} files · {formatBytes(orphanedSize)})</span>
+            </button>
+          )}
+          {notImported.length > 0 && (
+            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
+              View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImported.length} files · {formatBytes(notImportedSize)})</span>
+            </button>
+          )}
         </div>
+
+      </div>
+    </div>
+  )
+}
+
+// ── Tracker detail modal (thin wrapper around TrackerCard) ────────────────────
+function TrackerDetailModal({ trackerName, torrentFiles, uploadStats, onNavigate, onClose }) {
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ maxWidth: 680, width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <TrackerCard
+          trackerName={trackerName}
+          torrentFiles={torrentFiles}
+          uploadStats={uploadStats}
+          onNavigate={onNavigate}
+          onClose={onClose}
+        />
       </div>
     </div>
   )
@@ -988,8 +1023,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                         <Bar
                           key={host} dataKey={host} stackId="uploads"
                           fill={TRACKER_COLORS[i % TRACKER_COLORS.length]}
-                          radius={i === uploadChartData.activeTrackers.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
                           maxBarSize={80}
+                          shape={props => <RoundedStackedBar {...props} allTrackers={uploadChartData.activeTrackers} host={host} />}
                         />
                       ))}
                     </BarChart>
