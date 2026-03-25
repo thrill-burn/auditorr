@@ -67,7 +67,12 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
 
   const loadConfig = () => {
     api.getConfig().then(data => {
-      const c = { ...data, QB_PASS: data.QB_PASS === '__stored__' ? '' : data.QB_PASS }
+      const c = {
+        ...data,
+        QB_PASS:        data.QB_PASS        === '__stored__' ? '' : data.QB_PASS,
+        SONARR_API_KEY: data.SONARR_API_KEY === '__stored__' ? '' : data.SONARR_API_KEY,
+        RADARR_API_KEY: data.RADARR_API_KEY === '__stored__' ? '' : data.RADARR_API_KEY,
+      }
       setConf(c)
       setOrPct( String(parseFloat((c.OR_RATIO  ?? 0.01) * 100)))
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))

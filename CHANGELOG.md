@@ -1,5 +1,10 @@
 # Changelog
 
+# v1.2.1 — 2026-03-25
+
+### Security
+- **Mask Sonarr/Radarr API keys** — `SONARR_API_KEY` and `RADARR_API_KEY` are now masked as `__stored__` in the `/api/config` GET response, consistent with existing `QB_PASS` behaviour. Keys are preserved on save when the masked placeholder is submitted.
+
 ## v1.2.0 — 2026-03-24
 
 ### Backend
