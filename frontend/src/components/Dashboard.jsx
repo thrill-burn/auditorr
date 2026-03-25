@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
@@ -564,16 +564,58 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const [uploadStats, setUploadStats] = useState(null)
   const [trackerDetail, setTrackerDetail] = useState(null)
   const [yieldPanelTab, setYieldPanelTab] = useState('upload')
+  const [chartDays, setChartDays] = useState(() => {
+    const s = localStorage.getItem('auditorr_chart_days')
+    return s ? Number(s) : 30
+  })
+  const [selectedTrackers, setSelectedTrackers] = useState(null)
+  const [trackerDropdownOpen, setTrackerDropdownOpen] = useState(false)
+  const trackerDropdownRef = useRef(null)
 
   useEffect(() => {
     api.getConfig().then(cfg => {
       setSonarrConfigured(!!cfg.SONARR_URL)
       setRadarrConfigured(!!cfg.RADARR_URL)
     }).catch(() => {})
-    api.uploadStats(30).then(d => {
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem('auditorr_chart_days', chartDays)
+    api.uploadStats(chartDays).then(d => {
       if (!d.status) setUploadStats(d)
     }).catch(() => {})
-  }, [])
+  }, [chartDays])
+
+  useEffect(() => {
+    if (!uploadStats) return
+    const all = (uploadStats.tracker_yields || []).map(t => t.tracker)
+    setSelectedTrackers(prev => {
+      if (prev !== null) return prev.filter(t => all.includes(t))
+      const stored = localStorage.getItem('auditorr_selected_trackers')
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored).filter(t => all.includes(t))
+          return parsed.length > 0 ? parsed : all
+        } catch { return all }
+      }
+      return all
+    })
+  }, [uploadStats])
+
+  useEffect(() => {
+    if (selectedTrackers !== null)
+      localStorage.setItem('auditorr_selected_trackers', JSON.stringify(selectedTrackers))
+  }, [selectedTrackers])
+
+  useEffect(() => {
+    if (!trackerDropdownOpen) return
+    const handler = e => {
+      if (trackerDropdownRef.current && !trackerDropdownRef.current.contains(e.target))
+        setTrackerDropdownOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [trackerDropdownOpen])
 
   if (!data) return <DashboardSkeleton />
 
@@ -683,13 +725,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const csMultDisplay = cs ? cs.crossSeedMultiplier.toFixed(2) : null
 
   // Upload chart: derive active trackers and reshape daily data for Recharts
+  const allTrackers = (uploadStats?.tracker_yields || []).map(t => t.tracker)
+  const effectiveTrackers = selectedTrackers !== null ? selectedTrackers : allTrackers
   const uploadChartData = uploadStats ? (() => {
     const activeTrackers = Object.keys(
       (uploadStats.daily_uploads || []).reduce((acc, day) => {
         Object.entries(day.by_tracker || {}).forEach(([h, v]) => { if (v > 0) acc[h] = true })
         return acc
       }, {})
-    )
+    ).filter(h => effectiveTrackers.includes(h))
     const chartData = (uploadStats.daily_uploads || []).map(day => {
       const row = { date: day.date.slice(5) }  // MM-DD
       for (const h of activeTrackers) row[h] = day.by_tracker[h] || 0
@@ -699,6 +743,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   })() : null
   const yieldRows = (uploadStats?.tracker_yields || [])
     .filter(t => !(t.uploaded === 0 && (t.yield === null || t.yield === 0)))
+    .filter(t => effectiveTrackers.includes(t.tracker))
 
   return (
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -864,6 +909,58 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         </div>
       )}
 
+      {/* Row 4 control bar */}
+      {uploadStats && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            {[7, 30, 90].map(d => (
+              <button key={d} onClick={() => setChartDays(d)} style={{
+                background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+                color: chartDays === d ? 'var(--accent)' : 'var(--text-dim)',
+                fontWeight: chartDays === d ? 700 : 400,
+              }}>{d}d</button>
+            ))}
+          </div>
+          <div ref={trackerDropdownRef} style={{ position: 'relative' }}>
+            <button onClick={() => setTrackerDropdownOpen(o => !o)} style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+              fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+              color: 'var(--text-dim)',
+            }}>
+              Trackers ({effectiveTrackers.length}/{allTrackers.length})
+            </button>
+            {trackerDropdownOpen && (
+              <div style={{
+                position: 'absolute', right: 0, top: '100%', marginTop: 6,
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                borderRadius: 8, padding: '8px 0', minWidth: 180, zIndex: 100,
+              }}>
+                <div style={{ display: 'flex', gap: 10, padding: '0 10px 6px', borderBottom: '1px solid var(--border)' }}>
+                  <button onClick={() => setSelectedTrackers(allTrackers)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--accent)' }}>Select All</button>
+                  <button onClick={() => setSelectedTrackers([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)' }}>Clear</button>
+                </div>
+                {allTrackers.map(tracker => (
+                  <label key={tracker} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text)' }}>
+                    <input
+                      type="checkbox"
+                      checked={effectiveTrackers.includes(tracker)}
+                      onChange={e => setSelectedTrackers(prev =>
+                        e.target.checked
+                          ? [...(prev ?? allTrackers), tracker]
+                          : (prev ?? allTrackers).filter(t => t !== tracker)
+                      )}
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                    {tracker}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Row 4: upload activity + library yield */}
       {uploadStats && uploadChartData && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -872,31 +969,33 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Upload Activity</div>
-              <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
-                Total uploaded: {formatBytes(uploadStats.total_uploaded)} over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
-              </p>
             </div>
             <div style={{ height: 220 }}>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
-                  <YAxis
-                    tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
-                    tickLine={false} axisLine={false}
-                    tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
-                  />
-                  <Tooltip content={<UploadActivityTooltip />} cursor={{ fill: 'var(--surface2)' }} />
-                  {uploadChartData.activeTrackers.map((host, i) => (
-                    <Bar
-                      key={host} dataKey={host} stackId="uploads"
-                      fill={TRACKER_COLORS[i % TRACKER_COLORS.length]}
-                      radius={i === uploadChartData.activeTrackers.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
-                      maxBarSize={80}
-                    />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
+              {effectiveTrackers.length === 0
+                ? <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No trackers selected</div>
+                : (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
+                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                      <YAxis
+                        tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                        tickLine={false} axisLine={false}
+                        tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                      />
+                      <Tooltip content={<UploadActivityTooltip />} cursor={{ fill: 'var(--surface2)' }} />
+                      {uploadChartData.activeTrackers.map((host, i) => (
+                        <Bar
+                          key={host} dataKey={host} stackId="uploads"
+                          fill={TRACKER_COLORS[i % TRACKER_COLORS.length]}
+                          radius={i === uploadChartData.activeTrackers.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]}
+                          maxBarSize={80}
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                )
+              }
             </div>
           </div>
 
@@ -945,72 +1044,76 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 </>
               )}
             </div>
-            {yieldPanelTab === 'yield' && yieldRows.length > 0 && (
-              <div style={{ flex: 1, overflow: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
-                  <thead>
-                    <tr>
-                      {['Tracker', 'Uploaded', 'Seeding', 'Yield'].map(h => (
-                        <th key={h} style={{
-                          textAlign: h === 'Tracker' ? 'left' : 'right',
-                          padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                          letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
-                          borderBottom: '1px solid var(--border)',
-                        }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {yieldRows.map((t, i) => (
-                      <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
-                        <td style={{ padding: '5px 8px', maxWidth: 120 }}>
-                          <button
-                            onClick={() => setTrackerDetail(t.tracker)}
-                            style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
-                          >{t.tracker}</button>
-                        </td>
-                        <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
-                        <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
-                        <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
-                          {t.yield !== null ? (t.yield * 100).toFixed(2) + '%' : '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {yieldPanelTab === 'upload' && yieldRows.length > 0 && (
-              <div style={{ flex: 1, overflow: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
-                  <thead>
-                    <tr>
-                      {['Tracker', 'Total Uploaded'].map(h => (
-                        <th key={h} style={{
-                          textAlign: h === 'Tracker' ? 'left' : 'right',
-                          padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                          letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
-                          borderBottom: '1px solid var(--border)',
-                        }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[...yieldRows].sort((a, b) => b.uploaded - a.uploaded).map((t, i) => (
-                      <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
-                        <td style={{ padding: '5px 8px', maxWidth: 120 }}>
-                          <button
-                            onClick={() => setTrackerDetail(t.tracker)}
-                            style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
-                          >{t.tracker}</button>
-                        </td>
-                        <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {effectiveTrackers.length === 0
+              ? <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>No trackers selected</div>
+              : yieldPanelTab === 'yield'
+                ? yieldRows.length > 0 && (
+                    <div style={{ flex: 1, overflow: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                        <thead>
+                          <tr>
+                            {['Tracker', 'Uploaded', 'Seeding', 'Yield'].map(h => (
+                              <th key={h} style={{
+                                textAlign: h === 'Tracker' ? 'left' : 'right',
+                                padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
+                                letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                                borderBottom: '1px solid var(--border)',
+                              }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {yieldRows.map((t, i) => (
+                            <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
+                              <td style={{ padding: '5px 8px', maxWidth: 120 }}>
+                                <button
+                                  onClick={() => setTrackerDetail(t.tracker)}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                >{t.tracker}</button>
+                              </td>
+                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
+                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
+                                {t.yield !== null ? (t.yield * 100).toFixed(2) + '%' : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                : yieldRows.length > 0 && (
+                    <div style={{ flex: 1, overflow: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                        <thead>
+                          <tr>
+                            {['Tracker', 'Total Uploaded'].map(h => (
+                              <th key={h} style={{
+                                textAlign: h === 'Tracker' ? 'left' : 'right',
+                                padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
+                                letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                                borderBottom: '1px solid var(--border)',
+                              }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...yieldRows].sort((a, b) => b.uploaded - a.uploaded).map((t, i) => (
+                            <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
+                              <td style={{ padding: '5px 8px', maxWidth: 120 }}>
+                                <button
+                                  onClick={() => setTrackerDetail(t.tracker)}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                >{t.tracker}</button>
+                              </td>
+                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+            }
           </div>
 
         </div>

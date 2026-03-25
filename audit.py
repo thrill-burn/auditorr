@@ -1,4 +1,5 @@
 import os
+import math
 import hashlib
 import logging
 import fnmatch
@@ -401,7 +402,7 @@ def compute_upload_stats(days=30):
     try:
         t_first = datetime.fromisoformat(rows[0]['taken_at'])
         t_last  = datetime.fromisoformat(rows[-1]['taken_at'])
-        period_days = max(1, (t_last - t_first).days) if t_last > t_first else 1
+        period_days = max(1, math.ceil((t_last - t_first).total_seconds() / 86400)) if t_last > t_first else 1
     except ValueError:
         period_days = days
 
