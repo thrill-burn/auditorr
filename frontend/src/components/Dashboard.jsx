@@ -434,9 +434,9 @@ function TrackerDetailModal({ trackerName, torrentFiles, mediaFiles, uploadStats
   const hasUploadData = uploadTrendData?.some(d => d.uploaded > 0)
 
   const statBoxes = [
-    { label: 'Seeding',      value: seeding.length,     sub: formatBytes(seedingSize),     color: 'var(--green)'  },
-    { label: 'Orphaned',     value: orphaned.length,    sub: formatBytes(orphanedSize),    color: 'var(--yellow)' },
-    { label: 'Not Imported', value: notImported.length, sub: formatBytes(notImportedSize), color: 'var(--red)'    },
+    { label: 'Seeding',      value: formatBytes(seedingSize),     sub: `${seeding.length} files`,      color: 'var(--green)'  },
+    { label: 'Orphaned',     value: formatBytes(orphanedSize),    sub: `${orphaned.length} files`,     color: 'var(--yellow)' },
+    { label: 'Not Imported', value: formatBytes(notImportedSize), sub: `${notImported.length} files`,  color: 'var(--red)'    },
     { label: 'Yield',        value: yieldPct,           sub: uploadStats ? `${uploadStats.period_days} day window` : 'no data yet', color: 'var(--accent)' },
   ]
 
@@ -548,10 +548,6 @@ function TrackerDetailModal({ trackerName, torrentFiles, mediaFiles, uploadStats
                 View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImported.length} files · {formatBytes(notImportedSize)})</span>
               </button>
             )}
-            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
-              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName })}>
-              View All Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({trackerTorrents.length} files)</span>
-            </button>
           </div>
 
         </div>
@@ -567,6 +563,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const [radarrConfigured, setRadarrConfigured] = useState(false)
   const [uploadStats, setUploadStats] = useState(null)
   const [trackerDetail, setTrackerDetail] = useState(null)
+  const [yieldPanelTab, setYieldPanelTab] = useState('upload')
 
   useEffect(() => {
     api.getConfig().then(cfg => {
@@ -906,20 +903,49 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           {/* Library Yield */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Library Yield</div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
-                  {uploadStats.library_yield !== null ? (uploadStats.library_yield * 100).toFixed(2) + '%' : '—'}
-                </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-                  over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
-                </span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
+                  {yieldPanelTab === 'upload' ? 'Upload by Tracker' : 'Library Yield'}
+                </div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {['upload', 'yield'].map(tab => (
+                    <button key={tab} onClick={() => setYieldPanelTab(tab)} style={{
+                      background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+                      color: yieldPanelTab === tab ? 'var(--accent)' : 'var(--text-dim)',
+                      fontWeight: yieldPanelTab === tab ? 700 : 400,
+                    }}>{tab}</button>
+                  ))}
+                </div>
               </div>
-              <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
-                Upload volume relative to seeding size. Higher yield = your disk space is earning more.
-              </p>
+              {yieldPanelTab === 'upload' ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                      {formatBytes(yieldRows.reduce((s, t) => s + t.uploaded, 0))}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                    total uploaded · {uploadStats.period_days} day window
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                      {uploadStats.library_yield !== null ? (uploadStats.library_yield * 100).toFixed(2) + '%' : '—'}
+                    </span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                      over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                    Upload volume relative to seeding size. Higher yield = your disk space is earning more.
+                  </p>
+                </>
+              )}
             </div>
-            {yieldRows.length > 0 && (
+            {yieldPanelTab === 'yield' && yieldRows.length > 0 && (
               <div style={{ flex: 1, overflow: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
                   <thead>
@@ -948,6 +974,37 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                         <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
                           {t.yield !== null ? (t.yield * 100).toFixed(2) + '%' : '—'}
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {yieldPanelTab === 'upload' && yieldRows.length > 0 && (
+              <div style={{ flex: 1, overflow: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                  <thead>
+                    <tr>
+                      {['Tracker', 'Total Uploaded'].map(h => (
+                        <th key={h} style={{
+                          textAlign: h === 'Tracker' ? 'left' : 'right',
+                          padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
+                          letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                          borderBottom: '1px solid var(--border)',
+                        }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...yieldRows].sort((a, b) => b.uploaded - a.uploaded).map((t, i) => (
+                      <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
+                        <td style={{ padding: '5px 8px', maxWidth: 120 }}>
+                          <button
+                            onClick={() => setTrackerDetail(t.tracker)}
+                            style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                          >{t.tracker}</button>
+                        </td>
+                        <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
                       </tr>
                     ))}
                   </tbody>
