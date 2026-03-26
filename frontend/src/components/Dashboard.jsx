@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
+import FilterBar from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
 
@@ -592,20 +593,13 @@ function TrackerDetailModal({ trackerName, torrentFiles, uploadStats, onNavigate
 }
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript }) {
+export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, selectedTrackers, setSelectedTrackers, allTrackers }) {
   const toast = useToast()
   const [sonarrConfigured, setSonarrConfigured] = useState(false)
   const [radarrConfigured, setRadarrConfigured] = useState(false)
   const [uploadStats, setUploadStats] = useState(null)
   const [trackerDetail, setTrackerDetail] = useState(null)
   const [yieldPanelTab, setYieldPanelTab] = useState('upload')
-  const [chartDays, setChartDays] = useState(() => {
-    const s = localStorage.getItem('auditorr_chart_days')
-    return s ? Number(s) : 30
-  })
-  const [selectedTrackers, setSelectedTrackers] = useState(null)
-  const [trackerDropdownOpen, setTrackerDropdownOpen] = useState(false)
-  const trackerDropdownRef = useRef(null)
 
   useEffect(() => {
     api.getConfig().then(cfg => {
@@ -615,42 +609,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   }, [])
 
   useEffect(() => {
-    localStorage.setItem('auditorr_chart_days', chartDays)
-    api.uploadStats(chartDays).then(d => {
+    api.uploadStats(timeRange).then(d => {
       if (!d.status) setUploadStats(d)
     }).catch(() => {})
-  }, [chartDays])
-
-  useEffect(() => {
-    if (!uploadStats) return
-    const all = (uploadStats.tracker_yields || []).map(t => t.tracker)
-    setSelectedTrackers(prev => {
-      if (prev !== null) return prev.filter(t => all.includes(t))
-      const stored = localStorage.getItem('auditorr_selected_trackers')
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored).filter(t => all.includes(t))
-          return parsed.length > 0 ? parsed : all
-        } catch { return all }
-      }
-      return all
-    })
-  }, [uploadStats])
-
-  useEffect(() => {
-    if (selectedTrackers !== null)
-      localStorage.setItem('auditorr_selected_trackers', JSON.stringify(selectedTrackers))
-  }, [selectedTrackers])
-
-  useEffect(() => {
-    if (!trackerDropdownOpen) return
-    const handler = e => {
-      if (trackerDropdownRef.current && !trackerDropdownRef.current.contains(e.target))
-        setTrackerDropdownOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [trackerDropdownOpen])
+  }, [timeRange])
 
   if (!data) return <DashboardSkeleton />
 
@@ -728,20 +690,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const minScore = scores.length ? Math.max(0, Math.min(...scores) - 5) : 0
   const maxScore = scores.length ? Math.min(100, Math.max(...scores) + 5) : 100
 
-  // Smart trend: delta vs yesterday or last week depending on history depth
+  // Smart trend: delta vs timeRange days ago (fallback to oldest entry)
   const smartTrend = (() => {
     if (!history_chart || history_chart.length < 2) return null
     const today = history_chart[history_chart.length - 1]
     const todayDate = new Date(today.date)
-    const hasWeek = history_chart.length >= 7
-
-    // Find the closest entry to 7 days ago (if we have it) or 1 day ago
-    const targetDaysAgo = hasWeek ? 7 : 1
     const targetDate = new Date(todayDate)
-    targetDate.setDate(targetDate.getDate() - targetDaysAgo)
-    const targetStr = targetDate.toISOString().slice(0, 10)
+    targetDate.setDate(targetDate.getDate() - timeRange)
 
-    // Find the entry closest to the target date
     let best = null
     let bestDiff = Infinity
     for (const entry of history_chart) {
@@ -749,18 +705,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       if (d < bestDiff) { bestDiff = d; best = entry }
     }
 
-    // Don't compare to itself
     if (!best || best.date === today.date) return null
 
     const delta = Math.round((today.avg_score - best.avg_score) * 10) / 10
-    const label = hasWeek ? 'vs last week' : 'vs yesterday'
-    return { delta, label }
+    return { delta, label: `vs ${timeRange}d ago` }
   })()
 
   const csMultDisplay = cs ? cs.crossSeedMultiplier.toFixed(2) : null
 
   // Upload chart: derive active trackers and reshape daily data for Recharts
-  const allTrackers = (uploadStats?.tracker_yields || []).map(t => t.tracker)
   const effectiveTrackers = selectedTrackers !== null ? selectedTrackers : allTrackers
   const uploadChartData = uploadStats ? (() => {
     const activeTrackers = Object.keys(
@@ -781,6 +734,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     .filter(t => effectiveTrackers.includes(t.tracker))
 
   return (
+    <>
+    <FilterBar
+      timeRange={timeRange}
+      onTimeRangeChange={setTimeRange}
+      selectedTrackers={selectedTrackers}
+      allTrackers={allTrackers}
+      onTrackersChange={setSelectedTrackers}
+    />
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
       {/* Changes since last scan */}
@@ -944,57 +905,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         </div>
       )}
 
-      {/* Row 4 control bar */}
-      {uploadStats && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', gap: 10 }}>
-            {[7, 30, 90].map(d => (
-              <button key={d} onClick={() => setChartDays(d)} style={{
-                background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
-                color: chartDays === d ? 'var(--accent)' : 'var(--text-dim)',
-                fontWeight: chartDays === d ? 700 : 400,
-              }}>{d}d</button>
-            ))}
-          </div>
-          <div ref={trackerDropdownRef} style={{ position: 'relative' }}>
-            <button onClick={() => setTrackerDropdownOpen(o => !o)} style={{
-              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-              fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
-              color: 'var(--text-dim)',
-            }}>
-              Trackers ({effectiveTrackers.length}/{allTrackers.length})
-            </button>
-            {trackerDropdownOpen && (
-              <div style={{
-                position: 'absolute', right: 0, top: '100%', marginTop: 6,
-                background: 'var(--surface2)', border: '1px solid var(--border)',
-                borderRadius: 8, padding: '8px 0', minWidth: 180, zIndex: 100,
-              }}>
-                <div style={{ display: 'flex', gap: 10, padding: '0 10px 6px', borderBottom: '1px solid var(--border)' }}>
-                  <button onClick={() => setSelectedTrackers(allTrackers)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--accent)' }}>Select All</button>
-                  <button onClick={() => setSelectedTrackers([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)' }}>Clear</button>
-                </div>
-                {allTrackers.map(tracker => (
-                  <label key={tracker} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text)' }}>
-                    <input
-                      type="checkbox"
-                      checked={effectiveTrackers.includes(tracker)}
-                      onChange={e => setSelectedTrackers(prev =>
-                        e.target.checked
-                          ? [...(prev ?? allTrackers), tracker]
-                          : (prev ?? allTrackers).filter(t => t !== tracker)
-                      )}
-                      style={{ accentColor: 'var(--accent)' }}
-                    />
-                    {tracker}
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Row 4: upload activity + library yield */}
       {uploadStats && uploadChartData && (
@@ -1166,5 +1076,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         />
       )}
     </div>
+    </>
   )
 }

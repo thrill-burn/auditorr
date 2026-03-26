@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
@@ -125,12 +125,22 @@ function AppInner() {
     trigger: 'idle', next_scan_in: null, status_message: '',
     last_scan_status: 'never',
   })
-  const [pendingNav,    setPendingNav]    = useState(null)
-  const [isRefreshing,  setIsRefreshing]  = useState(false)
-  const [theme, setTheme] = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
-  const [scriptModal,   setScriptModal]   = useState(null)
-  const pollRef     = useRef(null)
+  const [pendingNav,         setPendingNav]         = useState(null)
+  const [isRefreshing,       setIsRefreshing]       = useState(false)
+  const [theme,              setTheme]              = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
+  const [scriptModal,        setScriptModal]        = useState(null)
+  const [timeRange,          setTimeRange]          = useState(30)
+  const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const prevScanRef = useRef(false)
+
+  const allTrackers = useMemo(() => {
+    if (!results) return []
+    const set = new Set()
+    for (const f of results.media_files || []) {
+      for (const t of f.trackers || []) { if (t !== 'None') set.add(t) }
+    }
+    return [...set].sort()
+  }, [results])
   const toast       = useToast()
 
   // Apply theme to document root
@@ -163,15 +173,14 @@ function AppInner() {
     }
   }, [])
 
-  const startPolling = useCallback(() => {
-    if (pollRef.current) return
-    pollRef.current = setInterval(async () => {
+  useEffect(() => {
+    if (Notification.permission === 'default') Notification.requestPermission()
+    fetchResults()
+    const id = setInterval(async () => {
       try {
         const state = await api.progress()
         setScanState(state)
         if (prevScanRef.current && !state.is_scanning) {
-          clearInterval(pollRef.current)
-          pollRef.current = null
           await fetchResults()
           const msg = state.status_message?.startsWith('Audit error') ||
                       state.status_message?.startsWith('qBittorrent')
@@ -183,25 +192,14 @@ function AppInner() {
         }
         prevScanRef.current = state.is_scanning
       } catch (e) { console.error('Poll error:', e) }
-    }, 1000)
+    }, 5000)
+    return () => clearInterval(id)
   }, [fetchResults, toast])
-
-  useEffect(() => {
-    if (Notification.permission === 'default') Notification.requestPermission()
-    fetchResults()
-    api.progress().then(state => {
-      setScanState(state)
-      prevScanRef.current = state.is_scanning
-      if (state.is_scanning) startPolling()
-    })
-    return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [fetchResults, startPolling])
 
   const handleScan = async () => {
     await api.startScan()
     setScanState(s => ({ ...s, is_scanning: true, progress: 0 }))
     prevScanRef.current = true
-    startPolling()
     toast('Manual audit started', 'info')
   }
 
@@ -272,6 +270,11 @@ function AppInner() {
               onNavigate={handleNavigate}
               isRefreshing={isRefreshing}
               onScript={setScriptModal}
+              timeRange={timeRange}
+              setTimeRange={setTimeRange}
+              selectedTrackers={selectedTrackers}
+              setSelectedTrackers={setSelectedTrackers}
+              allTrackers={allTrackers}
             />
           )}
           {(tab === 'media' || tab === 'torrents') && (
@@ -290,6 +293,11 @@ function AppInner() {
             <Trackers
               torrentFiles={results?.torrent_files || []}
               onNavigate={handleNavigate}
+              timeRange={timeRange}
+              onTimeRangeChange={setTimeRange}
+              selectedTrackers={selectedTrackers}
+              allTrackers={allTrackers}
+              onTrackersChange={setSelectedTrackers}
             />
           )}
           {tab === 'config' && (
