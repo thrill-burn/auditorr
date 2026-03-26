@@ -80,27 +80,25 @@ export default function Trackers({ torrentFiles, onNavigate, timeRange, onTimeRa
       onTrackersChange={onTrackersChange}
       sortControls={sortControls}
     />
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-      {/* Grid */}
+      {/* Cards */}
       {sortedTrackers.length === 0 ? (
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '48px 0' }}>
+        <div className="fade-in" style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '48px 28px' }}>
           No trackers selected
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
+        <div className="fade-in" style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', padding: '20px 28px 48px' }}>
           {sortedTrackers.map(tracker => (
-            <TrackerCard
-              key={tracker}
-              trackerName={tracker}
-              torrentFiles={torrentFiles}
-              uploadStats={uploadStats}
-              onNavigate={onNavigate}
-            />
+            <div key={tracker} style={{ width: '860px', flexShrink: 0 }}>
+              <TrackerCard
+                trackerName={tracker}
+                torrentFiles={torrentFiles}
+                uploadStats={uploadStats}
+                onNavigate={onNavigate}
+              />
+            </div>
           ))}
         </div>
       )}
-    </div>
     </>
   )
 }

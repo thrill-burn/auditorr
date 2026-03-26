@@ -456,7 +456,7 @@ export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate
   const statBoxes = [
     { label: 'Seeding',      value: formatBytes(seedingSize),                                          sub: `${seeding.length} files`,                          color: 'var(--green)'  },
     { label: 'Uploaded',     value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—',         sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet', color: 'var(--blue)'   },
-    { label: 'Yield',        value: yieldPct,                                                          sub: 'uploaded ÷ seeding',                               color: 'var(--accent)' },
+    { label: 'Yield',        value: yieldPct,                                                          sub: 'uploaded / seeding',                               color: 'var(--accent)' },
     { label: 'Orphaned',     value: formatBytes(orphanedSize),                                         sub: `${orphaned.length} files`,                         color: 'var(--yellow)' },
     { label: 'Not Imported', value: formatBytes(notImportedSize),                                      sub: `${notImported.length} files`,                      color: 'var(--red)'    },
   ]
@@ -579,7 +579,7 @@ function TrackerDetailModal({ trackerName, torrentFiles, uploadStats, onNavigate
       onClick={onClose}
     >
       <div
-        style={{ maxWidth: 680, width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+        style={{ maxWidth: 860, width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
         onClick={e => e.stopPropagation()}
       >
         <TrackerCard
