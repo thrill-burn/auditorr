@@ -131,7 +131,12 @@ function AppInner() {
   const [scriptModal,        setScriptModal]        = useState(null)
   const [timeRange,          setTimeRange]          = useState(30)
   const [selectedTrackers,   setSelectedTrackers]   = useState(null)
+  const [revealPath,         setRevealPath]         = useState(null)
   const prevScanRef = useRef(false)
+
+  useEffect(() => {
+    if (tab !== 'media' && tab !== 'torrents') setRevealPath(null)
+  }, [tab])
 
   const allTrackers = useMemo(() => {
     if (!results) return []
@@ -275,6 +280,7 @@ function AppInner() {
               selectedTrackers={selectedTrackers}
               setSelectedTrackers={setSelectedTrackers}
               allTrackers={allTrackers}
+              onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
             />
           )}
           {(tab === 'media' || tab === 'torrents') && (
@@ -287,6 +293,7 @@ function AppInner() {
               initialImportFilter={pendingNav?.importFilter}
               initialTracker={pendingNav?.tracker}
               initialSeedCount={pendingNav?.seedCount}
+              revealPath={revealPath}
             />
           )}
           {tab === 'trackers' && (

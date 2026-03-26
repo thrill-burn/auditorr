@@ -595,7 +595,7 @@ function TrackerDetailModal({ trackerName, torrentFiles, uploadStats, onNavigate
 }
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, selectedTrackers, setSelectedTrackers, allTrackers }) {
+export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, selectedTrackers, setSelectedTrackers, allTrackers, onReveal }) {
   const toast = useToast()
   const [sonarrConfigured, setSonarrConfigured] = useState(false)
   const [radarrConfigured, setRadarrConfigured] = useState(false)
@@ -762,6 +762,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           prevRanAt={changes.prev_ran_at}
           currRanAt={changes.curr_ran_at}
           onNavigate={onNavigate}
+          onReveal={onReveal}
         />
       )}
 

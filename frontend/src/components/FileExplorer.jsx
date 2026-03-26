@@ -331,6 +331,144 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
   )
 }
 
+// ─── Flat file row (used in flat/search mode) ────────────────────────────────
+
+function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, isRevealed }) {
+  const basename    = node.path.replace(/\\/g, '/').split('/').pop()
+  const dirname     = node.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+  const isDupe      = node.duplicate_paths?.length > 0
+  const isOrphan    = node.status === 'Orphaned'
+  const notImported = !node.imported && tab === 'torrents'
+  const showSearchButtons = tab === 'media' && isOrphan
+  const mediaType  = detectMediaType(node.path)
+  const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
+  const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
+  const lines = [
+    ...(node.linked_paths    || []).map(p => 'Hardlink: ' + p),
+    ...(node.duplicate_paths || []).map(p => 'Duplicate: ' + p),
+  ]
+  const tooltip = lines.length ? lines.join('\n') : undefined
+
+  const toast = useToast()
+  const [sonarrState, setSonarrState] = useState('idle')
+  const [radarrState, setRadarrState] = useState('idle')
+
+  const handleSonarrSearch = async (e) => {
+    e.stopPropagation()
+    setSonarrState('loading')
+    try {
+      const data = await api.sonarrSearch(node.path)
+      window.open(data.url, '_blank')
+      setSonarrState('success')
+      toast(`Opened ${data.title} in Sonarr — run Interactive Search to find a seeding version`, 'success')
+      setTimeout(() => setSonarrState('idle'), 3000)
+    } catch (err) {
+      setSonarrState('error')
+      toast(err.message || 'Sonarr search failed', 'error')
+      setTimeout(() => setSonarrState('idle'), 3000)
+    }
+  }
+
+  const handleRadarrSearch = async (e) => {
+    e.stopPropagation()
+    setRadarrState('loading')
+    try {
+      const data = await api.radarrSearch(node.path)
+      window.open(data.url, '_blank')
+      setRadarrState('success')
+      toast(`Opened ${data.title} in Radarr — run Interactive Search to find a seeding version`, 'success')
+      setTimeout(() => setRadarrState('idle'), 3000)
+    } catch (err) {
+      setRadarrState('error')
+      toast(err.message || 'Radarr search failed', 'error')
+      setTimeout(() => setRadarrState('idle'), 3000)
+    }
+  }
+
+  return (
+    <div style={{
+      padding: '6px 16px',
+      borderBottom: '1px solid var(--border)',
+      background: isRevealed ? 'var(--accent)08' : 'var(--surface)',
+      borderLeft: isRevealed ? '2px solid var(--accent)' : 'none',
+    }}>
+      {/* Line 1 */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, flex: 1 }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="2" style={{ flexShrink: 0 }}>
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+          <span title={tooltip} style={{
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            borderBottom: tooltip ? '1px dotted var(--text-dim)' : 'none',
+            cursor: tooltip ? 'help' : 'default',
+          }}>{basename}</span>
+          {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {showSearchButtons && showSonarr && (
+            <button title="Search in Sonarr" onClick={handleSonarrSearch} style={{
+              background: 'var(--blue)18', border: '1px solid var(--blue)44', borderRadius: 99,
+              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--blue)18'}>
+              {sonarrState === 'loading' ? 'Opening…' : sonarrState === 'success' ? '✓ Opened' : sonarrState === 'error' ? '✗ Failed' : 'Open in Sonarr'}
+            </button>
+          )}
+          {showSearchButtons && showRadarr && (
+            <button title="Search in Radarr" onClick={handleRadarrSearch} style={{
+              background: 'var(--yellow)18', border: '1px solid var(--yellow)44', borderRadius: 99,
+              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)18'}>
+              {radarrState === 'loading' ? 'Opening…' : radarrState === 'success' ? '✓ Opened' : radarrState === 'error' ? '✗ Failed' : 'Open in Radarr'}
+            </button>
+          )}
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
+          {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
+          {notImported && <Tag color="var(--red)">not imported</Tag>}
+          <Tag color={isOrphan ? 'var(--yellow)' : node.status === 'Seeding' ? 'var(--green)' : 'var(--blue)'}>{(node.status||'').toLowerCase()}</Tag>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
+            {(node.trackers||[]).join(' · ')}
+          </span>
+          <button
+            title="Copy full path"
+            onClick={e => {
+              e.stopPropagation()
+              const ta = document.createElement('textarea')
+              ta.value = node.path || ''
+              ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+              document.body.appendChild(ta)
+              ta.focus(); ta.select()
+              try { document.execCommand('copy') } catch (_) {
+                navigator.clipboard?.writeText(node.path || '').catch(() => {})
+              }
+              document.body.removeChild(ta)
+            }}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
+              color: 'var(--text-faint)', fontSize: 11, lineHeight: 1, flexShrink: 0,
+              borderRadius: 3, transition: 'color 0.1s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--text-dim)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
+          >⎘</button>
+        </div>
+      </div>
+      {/* Line 2: directory */}
+      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>
+        {dirname}
+      </div>
+    </div>
+  )
+}
+
 // ─── Size unit helpers ────────────────────────────────────────────────────────
 
 const SIZE_UNITS = ['MB', 'GB', 'TB']
@@ -392,7 +530,7 @@ const STATUS_FILTERS = [
   { id: 'Excluded',  label: 'Excluded',   color: 'var(--text-dim)' },
 ]
 
-export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount }) {
+export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, revealPath }) {
   trackers = trackers || []
 
   const [sonarrConfigured, setSonarrConfigured] = useState(false)
@@ -414,6 +552,13 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   // Name search
   const [nameQuery, setNameQuery] = useState('')
+
+  useEffect(() => {
+    if (revealPath) {
+      const base = revealPath.replace(/\\/g, '/').split('/').pop()
+      setNameQuery(base)
+    }
+  }, [revealPath])
 
   // Size range
   const [sizeMinVal,  setSizeMinVal]  = useState('')
@@ -442,6 +587,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const sizeMinBytes = useMemo(() => toBytes(sizeMinVal, sizeMinUnit), [sizeMinVal, sizeMinUnit])
   const sizeMaxBytes = useMemo(() => toBytes(sizeMaxVal, sizeMaxUnit), [sizeMaxVal, sizeMaxUnit])
   const nameLower    = nameQuery.trim().toLowerCase()
+  const isFlat       = !!nameQuery.trim() || !!revealPath
 
   const filtered = useMemo(() => (files || []).filter(f => {
     // Status
@@ -657,23 +803,40 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
         </div>
       )}
 
-      {/* ── File tree ── */}
+      {/* ── File tree / flat list ── */}
       <div style={{
         background:'var(--surface)', border:'1px solid var(--border)',
         borderRadius:'var(--rl)', overflow:'hidden',
         minHeight: 'calc(100vh - 360px)',
       }}>
-        {rootKeys.length === 0 ? (
-          <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
-            No files match the current filters.
-          </div>
-        ) : rootKeys.map(k =>
-          tree.children[k]._isDir
-            ? <FolderRow key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
-                openRef={openRef} onToggle={onToggle} path={k}
-                sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
-            : <FileRow   key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
-                sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+        {isFlat ? (
+          filtered.length === 0 ? (
+            <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
+              No files match the current filters.
+            </div>
+          ) : filtered.map(node => (
+            <FlatFileRow
+              key={node.path}
+              node={node}
+              tab={tab}
+              sonarrConfigured={sonarrConfigured}
+              radarrConfigured={radarrConfigured}
+              isRevealed={!!revealPath && node.path === revealPath}
+            />
+          ))
+        ) : (
+          rootKeys.length === 0 ? (
+            <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
+              No files match the current filters.
+            </div>
+          ) : rootKeys.map(k =>
+            tree.children[k]._isDir
+              ? <FolderRow key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
+                  openRef={openRef} onToggle={onToggle} path={k}
+                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+              : <FileRow   key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
+                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+          )
         )}
       </div>
 
