@@ -444,6 +444,7 @@ export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate
 
   const yieldData = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
   const yieldPct  = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(2) + '%' : '—'
+  const uploadedBytes = yieldData?.uploaded ?? null
 
   const uploadTrendData = uploadStats?.daily_uploads?.map(day => ({
     date: day.date.slice(5),
@@ -453,10 +454,11 @@ export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate
   const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}`
 
   const statBoxes = [
-    { label: 'Seeding',      value: formatBytes(seedingSize),     sub: `${seeding.length} files`,      color: 'var(--green)'  },
-    { label: 'Orphaned',     value: formatBytes(orphanedSize),    sub: `${orphaned.length} files`,     color: 'var(--yellow)' },
-    { label: 'Not Imported', value: formatBytes(notImportedSize), sub: `${notImported.length} files`,  color: 'var(--red)'    },
-    { label: 'Yield',        value: yieldPct,           sub: uploadStats ? `${uploadStats.period_days} day window` : 'no data yet', color: 'var(--accent)' },
+    { label: 'Seeding',      value: formatBytes(seedingSize),                                          sub: `${seeding.length} files`,                          color: 'var(--green)'  },
+    { label: 'Uploaded',     value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—',         sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet', color: 'var(--blue)'   },
+    { label: 'Yield',        value: yieldPct,                                                          sub: 'uploaded ÷ seeding',                               color: 'var(--accent)' },
+    { label: 'Orphaned',     value: formatBytes(orphanedSize),                                         sub: `${orphaned.length} files`,                         color: 'var(--yellow)' },
+    { label: 'Not Imported', value: formatBytes(notImportedSize),                                      sub: `${notImported.length} files`,                      color: 'var(--red)'    },
   ]
 
   const btnStyle = {
@@ -487,7 +489,7 @@ export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate
       <div style={{ overflowY: 'auto', flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
         {/* Stats row */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
           {statBoxes.map(s => (
             <div key={s.label} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px' }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
