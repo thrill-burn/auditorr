@@ -686,7 +686,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     },
   ]
 
-  const scores = (history_chart || []).map(d => d.avg_score).filter(Boolean)
+  const filteredHistory = (() => {
+    if (!history_chart) return []
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - timeRange)
+    return history_chart.filter(d => new Date(d.date) >= cutoff)
+  })()
+
+  const scores = filteredHistory.map(d => d.avg_score).filter(Boolean)
   const minScore = scores.length ? Math.max(0, Math.min(...scores) - 5) : 0
   const maxScore = scores.length ? Math.min(100, Math.max(...scores) + 5) : 100
 
@@ -708,13 +715,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     if (!best || best.date === today.date) return null
 
     const delta = Math.round((today.avg_score - best.avg_score) * 10) / 10
-    return { delta, label: `vs ${timeRange}d ago` }
+    const actualDays = Math.round(Math.abs(new Date(today.date) - new Date(best.date)) / (1000 * 60 * 60 * 24))
+    return { delta, label: `vs ${actualDays}d ago` }
   })()
 
   const csMultDisplay = cs ? cs.crossSeedMultiplier.toFixed(2) : null
 
   // Upload chart: derive active trackers and reshape daily data for Recharts
   const effectiveTrackers = selectedTrackers !== null ? selectedTrackers : allTrackers
+  const filteredTrackerStats = cs ? cs.trackerStats.filter(t => effectiveTrackers.includes(t.name)) : []
   const uploadChartData = uploadStats ? (() => {
     const activeTrackers = Object.keys(
       (uploadStats.daily_uploads || []).reduce((acc, day) => {
@@ -802,7 +811,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={history_chart} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+            <AreaChart data={filteredHistory} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
               <defs>
                 <linearGradient id="grafanaGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={c} stopOpacity={0.25} />
@@ -878,12 +887,12 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Top Trackers by Disk Space</div>
               <p style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
             </div>
-            <TrackerLeaderboard trackerStats={cs.trackerStats} onTrackerDetail={setTrackerDetail} />
+            <TrackerLeaderboard trackerStats={filteredTrackerStats} onTrackerDetail={setTrackerDetail} />
 
             {/* All trackers summary */}
-            {cs.trackerStats.length > 3 && (
+            {filteredTrackerStats.length > 3 && (
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {cs.trackerStats.slice(3).map(t => (
+                {filteredTrackerStats.slice(3).map(t => (
                   <button
                     key={t.name}
                     onClick={() => setTrackerDetail(t.name)}
