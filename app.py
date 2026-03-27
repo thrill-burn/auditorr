@@ -241,6 +241,22 @@ def test_connection():
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
+@app.route('/api/test_paths', methods=['POST'])
+@require_auth
+def test_paths():
+    data = request.json or {}
+    results = {}
+    for key in ('MEDIA_PATH', 'LOCAL_PATH'):
+        path = data.get(key, '')
+        if not path:
+            results[key] = {'ok': False, 'message': 'Path is empty'}
+        elif os.path.exists(path):
+            results[key] = {'ok': True, 'message': 'Path exists'}
+        else:
+            results[key] = {'ok': False, 'message': f'{path} does not exist inside the container'}
+    return jsonify({'paths': results})
+
+
 @app.route('/api/test_sonarr', methods=['POST'])
 @require_auth
 def test_sonarr():

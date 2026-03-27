@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import SetupWizard  from './components/SetupWizard'
 import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
@@ -135,6 +136,7 @@ function AppInner() {
   })
   const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const [revealPath,         setRevealPath]         = useState(null)
+  const [showWizard,         setShowWizard]         = useState(false)
   const prevScanRef = useRef(false)
 
   useEffect(() => {
@@ -186,6 +188,14 @@ function AppInner() {
   }, [])
 
   useEffect(() => {
+    if (!localStorage.getItem('auditorr_setup_dismissed')) {
+      api.getConfig().then(cfg => {
+        if (!cfg.QB_HOST) setShowWizard(true)
+      }).catch(() => {})
+    }
+  }, [])
+
+  useEffect(() => {
     if (Notification.permission === 'default') Notification.requestPermission()
     fetchResults()
     const id = setInterval(async () => {
@@ -213,6 +223,18 @@ function AppInner() {
     setScanState(s => ({ ...s, is_scanning: true, progress: 0 }))
     prevScanRef.current = true
     toast('Manual audit started', 'info')
+  }
+
+  const handleWizardComplete = async (wizardData) => {
+    try { await api.saveConfig(wizardData) } catch (_) {}
+    localStorage.setItem('auditorr_setup_dismissed', '1')
+    setShowWizard(false)
+    handleScan()
+  }
+
+  const handleWizardSkip = () => {
+    localStorage.setItem('auditorr_setup_dismissed', '1')
+    setShowWizard(false)
   }
 
   const handleTabChange = t => {
@@ -251,6 +273,7 @@ function AppInner() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
+      {showWizard && <SetupWizard onComplete={handleWizardComplete} onSkip={handleWizardSkip} />}
       <Sidebar
         active={tab}
         onChange={handleTabChange}

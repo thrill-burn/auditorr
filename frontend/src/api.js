@@ -58,6 +58,7 @@ export const api = {
   getConfig:      ()     => req('/config'),
   saveConfig:     (conf) => req('/config', { method: 'POST', body: JSON.stringify(conf) }),
   testConnection: (conf) => req('/test_connection', { method: 'POST', body: JSON.stringify(conf) }),
+  testPaths:      (conf) => req('/test_paths',      { method: 'POST', body: JSON.stringify(conf) }),
   testSonarr: (url, apiKey) => req('/test_sonarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
   testRadarr: (url, apiKey) => req('/test_radarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
   actionScript: (type)    => reqText('/actions/script/' + type),
