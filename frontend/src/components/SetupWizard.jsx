@@ -125,7 +125,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
 }
 
 // ── Step 2: Data Paths ────────────────────────────────────────────────────────
-function Step2({ data, onChange, onNext, onBack, onSkip }) {
+function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
   const [pathStatus, setPathStatus] = useState(null)
 
   const handleTestPaths = async () => {
@@ -186,7 +186,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip }) {
             {pathStatus?.loading ? 'Testing…' : 'Test Paths'}
           </button>
         </div>
-        <button onClick={onNext} style={btnPrimary(false)}>Next →</button>
+        <button onClick={() => { onEarlyStart(data); onNext() }} style={btnPrimary(false)}>Next →</button>
       </div>
 
       <SkipLink onSkip={onSkip} />
@@ -275,7 +275,7 @@ function SkipLink({ onSkip }) {
 }
 
 // ── Wizard shell ──────────────────────────────────────────────────────────────
-export default function SetupWizard({ onComplete, onSkip }) {
+export default function SetupWizard({ onComplete, onSkip, onEarlyStart }) {
   const [step, setStep] = useState(1)
   const [wizardData, setWizardData] = useState({
     QB_HOST: '', QB_USER: '', QB_PASS: '',
@@ -322,6 +322,7 @@ export default function SetupWizard({ onComplete, onSkip }) {
             onNext={() => setStep(3)}
             onBack={() => setStep(1)}
             onSkip={onSkip}
+            onEarlyStart={onEarlyStart}
           />
         )}
         {step === 3 && (

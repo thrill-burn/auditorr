@@ -137,9 +137,7 @@ function AppInner() {
   const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const [revealPath,         setRevealPath]         = useState(null)
   const [showWizard,         setShowWizard]         = useState(false)
-  const prevScanRef      = useRef(false)
-  const suppressErrors   = useRef(false)
-  const [suppressErrorsState, setSuppressErrorsState] = useState(false)
+  const prevScanRef = useRef(false)
 
   useEffect(() => {
     if (tab !== 'media' && tab !== 'torrents') setRevealPath(null)
@@ -204,18 +202,13 @@ function AppInner() {
         setScanState(state)
         if (prevScanRef.current && !state.is_scanning) {
           await fetchResults()
-          if (suppressErrors.current) {
-            suppressErrors.current = false
-            setSuppressErrorsState(false)
-          } else {
-            const msg = state.status_message?.startsWith('Audit error') ||
-                        state.status_message?.startsWith('qBittorrent')
-              ? state.status_message : 'Audit complete'
-            const isError = msg !== 'Audit complete'
-            toast(msg, isError ? 'error' : 'success')
-            if (!isError && Notification.permission === 'granted')
-              new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
-          }
+          const msg = state.status_message?.startsWith('Audit error') ||
+                      state.status_message?.startsWith('qBittorrent')
+            ? state.status_message : 'Audit complete'
+          const isError = msg !== 'Audit complete'
+          toast(msg, isError ? 'error' : 'success')
+          if (!isError && Notification.permission === 'granted')
+            new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
         }
         prevScanRef.current = state.is_scanning
       } catch (e) { console.error('Poll error:', e) }
@@ -230,13 +223,17 @@ function AppInner() {
     toast('Manual audit started', 'info')
   }
 
+  const handleWizardEarlyStart = async (partialConfig) => {
+    try { await api.saveConfig(partialConfig) } catch (_) {}
+    try { await api.startScan() } catch (_) {}
+    setScanState(s => ({ ...s, is_scanning: true, progress: 0 }))
+    prevScanRef.current = true
+  }
+
   const handleWizardComplete = async (wizardData) => {
     try { await api.saveConfig(wizardData) } catch (_) {}
     localStorage.setItem('auditorr_setup_dismissed', '1')
-    suppressErrors.current = true
-    setSuppressErrorsState(true)
     setShowWizard(false)
-    handleScan()
   }
 
   const handleWizardSkip = () => {
@@ -280,7 +277,7 @@ function AppInner() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
-      {showWizard && <SetupWizard onComplete={handleWizardComplete} onSkip={handleWizardSkip} />}
+      {showWizard && <SetupWizard onComplete={handleWizardComplete} onSkip={handleWizardSkip} onEarlyStart={handleWizardEarlyStart} />}
       <Sidebar
         active={tab}
         onChange={handleTabChange}
@@ -295,7 +292,7 @@ function AppInner() {
         crossSeedMultiplier={crossSeedMultiplier}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <ErrorBanner message={suppressErrorsState ? null : results?.status} />
+        {!showWizard && <ErrorBanner message={results?.status} />}
         <div style={{ flex: 1, position: 'relative' }}>
           {/* Refresh shimmer overlay */}
           {isRefreshing && (
