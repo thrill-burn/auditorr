@@ -53,7 +53,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
   const [radarrTestStatus,  setRadarrTestStatus]  = useState(null)
   const [saveStatus,        setSaveStatus]        = useState(null)
-  const [saveWarnings,      setSaveWarnings]      = useState([])
+  const [saveWarnings,      setSaveWarnings]      = useState(() => JSON.parse(localStorage.getItem('auditorr_path_warnings') || '[]'))
   const [passChanged, setPassChanged] = useState(false)
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
@@ -92,6 +92,12 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
 
   const set = key => val => setConf(c => ({ ...c, [key]: val }))
 
+  const setPersistentWarnings = (warnings) => {
+    setSaveWarnings(warnings)
+    if (warnings.length) localStorage.setItem('auditorr_path_warnings', JSON.stringify(warnings))
+    else localStorage.removeItem('auditorr_path_warnings')
+  }
+
   const handleTest = async () => {
     setTestStatus({ loading: true })
     try {
@@ -119,7 +125,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   }
 
   const handleSave = async () => {
-    setSaveWarnings([])
+    setPersistentWarnings([])
     const payload = {
       ...conf,
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
@@ -130,7 +136,8 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
     if (!passChanged) delete payload.QB_PASS
     try {
       const result = await api.saveConfig(payload)
-      if (result.warnings?.length) setSaveWarnings(result.warnings)
+      if (result.warnings?.length) setPersistentWarnings(result.warnings)
+      else setPersistentWarnings([])
       setSaveStatus({ ok: true, msg: 'Saved!' })
       setTimeout(() => setSaveStatus(null), 5000)
       // Re-fetch config so form shows server-confirmed values
@@ -174,14 +181,14 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       <Card title="Path Mappings">
         <Field label="Media Path" style={{ marginBottom: 14 }}
           hint="Where your final media library lives inside this container — e.g. /data/media"
-          placeholder="/data/media" value={conf.MEDIA_PATH} onChange={set('MEDIA_PATH')} />
+          placeholder="/data/media" value={conf.MEDIA_PATH} onChange={v => { set('MEDIA_PATH')(v); setPersistentWarnings([]) }} />
         <div style={g2}>
           <Field label="qBit Save Path"
             hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
             placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
           <Field label="Local Torrent Path"
             hint="Where those same torrent files are on disk from this container's perspective."
-            placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={set('LOCAL_PATH')} />
+            placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={v => { set('LOCAL_PATH')(v); setPersistentWarnings([]) }} />
         </div>
       </Card>
 
