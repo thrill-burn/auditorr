@@ -137,7 +137,9 @@ function AppInner() {
   const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const [revealPath,         setRevealPath]         = useState(null)
   const [showWizard,         setShowWizard]         = useState(false)
-  const prevScanRef = useRef(false)
+  const prevScanRef      = useRef(false)
+  const suppressErrors   = useRef(false)
+  const [suppressErrorsState, setSuppressErrorsState] = useState(false)
 
   useEffect(() => {
     if (tab !== 'media' && tab !== 'torrents') setRevealPath(null)
@@ -202,13 +204,18 @@ function AppInner() {
         setScanState(state)
         if (prevScanRef.current && !state.is_scanning) {
           await fetchResults()
-          const msg = state.status_message?.startsWith('Audit error') ||
-                      state.status_message?.startsWith('qBittorrent')
-            ? state.status_message : 'Audit complete'
-          const isError = msg !== 'Audit complete'
-          toast(msg, isError ? 'error' : 'success')
-          if (!isError && Notification.permission === 'granted')
-            new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
+          if (suppressErrors.current) {
+            suppressErrors.current = false
+            setSuppressErrorsState(false)
+          } else {
+            const msg = state.status_message?.startsWith('Audit error') ||
+                        state.status_message?.startsWith('qBittorrent')
+              ? state.status_message : 'Audit complete'
+            const isError = msg !== 'Audit complete'
+            toast(msg, isError ? 'error' : 'success')
+            if (!isError && Notification.permission === 'granted')
+              new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
+          }
         }
         prevScanRef.current = state.is_scanning
       } catch (e) { console.error('Poll error:', e) }
@@ -226,6 +233,8 @@ function AppInner() {
   const handleWizardComplete = async (wizardData) => {
     try { await api.saveConfig(wizardData) } catch (_) {}
     localStorage.setItem('auditorr_setup_dismissed', '1')
+    suppressErrors.current = true
+    setSuppressErrorsState(true)
     setShowWizard(false)
     handleScan()
   }
@@ -286,7 +295,7 @@ function AppInner() {
         crossSeedMultiplier={crossSeedMultiplier}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <ErrorBanner message={results?.status} />
+        <ErrorBanner message={suppressErrorsState ? null : results?.status} />
         <div style={{ flex: 1, position: 'relative' }}>
           {/* Refresh shimmer overlay */}
           {isRefreshing && (
