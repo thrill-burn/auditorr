@@ -104,8 +104,9 @@ def _fetch_qbit_file_map(cfg):
             if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
                 tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + torrent.size
         save_path = torrent.save_path
-        if remote_path and save_path.startswith(remote_path):
-            save_path = os.path.join(local_path, os.path.relpath(save_path, remote_path))
+        if remote_path and save_path.startswith(remote_path) and \
+                save_path[len(remote_path):][:1] in ('/', ''):
+            save_path = local_path + save_path[len(remote_path):]
         if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
             status = 'Seeding'
         elif torrent.state in ('downloading', 'stalledDL'):

@@ -114,8 +114,9 @@ def arr_rescan(cfg, service, paths):
     remote_path = cfg.get(svc['remote_key'], '').strip()
     for path in paths:
         abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
-        if remote_path and local_path and abs_path.startswith(local_path):
-            arr_path = os.path.join(remote_path, os.path.relpath(abs_path, local_path))
+        if remote_path and local_path and abs_path.startswith(local_path) and \
+                abs_path[len(local_path):][:1] in ('/', ''):
+            arr_path = remote_path + abs_path[len(local_path):]
         else:
             arr_path = abs_path
         arr_path = os.path.dirname(arr_path)
