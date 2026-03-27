@@ -129,7 +129,10 @@ function AppInner() {
   const [isRefreshing,       setIsRefreshing]       = useState(false)
   const [theme,              setTheme]              = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
   const [scriptModal,        setScriptModal]        = useState(null)
-  const [timeRange,          setTimeRange]          = useState(30)
+  const [timeRange,          setTimeRange]          = useState(() => {
+    const stored = localStorage.getItem('auditorr_chart_days')
+    return stored !== null ? parseInt(stored) : 30
+  })
   const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const [revealPath,         setRevealPath]         = useState(null)
   const prevScanRef = useRef(false)
@@ -153,6 +156,10 @@ function AppInner() {
     document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : '')
     localStorage.setItem('auditorr_theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem('auditorr_chart_days', timeRange)
+  }, [timeRange])
 
   // Sync tab to hash
   useEffect(() => {

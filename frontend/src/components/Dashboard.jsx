@@ -690,6 +690,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
   const filteredHistory = (() => {
     if (!history_chart) return []
+    if (timeRange === 0) return history_chart
     const cutoff = new Date()
     cutoff.setDate(cutoff.getDate() - timeRange)
     return history_chart.filter(d => new Date(d.date) >= cutoff)
@@ -703,15 +704,20 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const smartTrend = (() => {
     if (!history_chart || history_chart.length < 2) return null
     const today = history_chart[history_chart.length - 1]
-    const todayDate = new Date(today.date)
-    const targetDate = new Date(todayDate)
-    targetDate.setDate(targetDate.getDate() - timeRange)
 
-    let best = null
-    let bestDiff = Infinity
-    for (const entry of history_chart) {
-      const d = Math.abs(new Date(entry.date) - targetDate)
-      if (d < bestDiff) { bestDiff = d; best = entry }
+    let best
+    if (timeRange === 0) {
+      best = history_chart[0]
+    } else {
+      const todayDate = new Date(today.date)
+      const targetDate = new Date(todayDate)
+      targetDate.setDate(targetDate.getDate() - timeRange)
+      best = null
+      let bestDiff = Infinity
+      for (const entry of history_chart) {
+        const d = Math.abs(new Date(entry.date) - targetDate)
+        if (d < bestDiff) { bestDiff = d; best = entry }
+      }
     }
 
     if (!best || best.date === today.date) return null
@@ -843,7 +849,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
           {/* Cross-seed effectiveness */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Cross-Seed Effectiveness</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
@@ -853,27 +859,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6, maxWidth: 340 }}>
                   Weighted average of how many trackers each byte of media is seeded on. 1.0× = all files seeded once. Higher is better.
                 </p>
-              </div>
-
-              {/* Rating badge instead of misleading /100 gauge */}
-              <div style={{ flexShrink: 0, textAlign: 'center' }}>
-                {(() => {
-                  const mult = cs.crossSeedMultiplier
-                  const { label, color } = mult >= 2.5 ? { label: 'Excellent', color: 'var(--green)' }
-                    : mult >= 1.8 ? { label: 'Good', color: 'var(--blue)' }
-                    : mult >= 1.2 ? { label: 'Fair', color: 'var(--yellow)' }
-                    : { label: 'Low', color: 'var(--red)' }
-                  return (
-                    <div style={{
-                      padding: '10px 14px', borderRadius: 10,
-                      background: color + '15', border: `1px solid ${color}35`,
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                    }}>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color, lineHeight: 1 }}>{label}</span>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>effectiveness</span>
-                    </div>
-                  )
-                })()}
               </div>
             </div>
 
@@ -989,7 +974,12 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 <>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
-                      {uploadStats.library_yield !== null ? (uploadStats.library_yield * 100).toFixed(2) + '%' : '—'}
+                      {(() => {
+                        const filteredUploaded = yieldRows.reduce((s, t) => s + t.uploaded, 0)
+                        const filteredSeeding  = yieldRows.reduce((s, t) => s + t.seeding_size, 0)
+                        const filteredYield    = filteredSeeding > 0 ? filteredUploaded / filteredSeeding : null
+                        return filteredYield !== null ? (filteredYield * 100).toFixed(2) + '%' : '—'
+                      })()}
                     </span>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
                       over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}

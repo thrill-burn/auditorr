@@ -105,7 +105,7 @@ def _fetch_qbit_file_map(cfg):
                 tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + torrent.size
         save_path = torrent.save_path
         if remote_path and save_path.startswith(remote_path):
-            save_path = save_path.replace(remote_path, local_path, 1)
+            save_path = os.path.join(local_path, os.path.relpath(save_path, remote_path))
         if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
             status = 'Seeding'
         elif torrent.state in ('downloading', 'stalledDL'):
@@ -404,7 +404,7 @@ def compute_upload_stats(days=30):
         t_last  = datetime.fromisoformat(rows[-1]['taken_at'])
         period_days = max(1, math.ceil((t_last - t_first).total_seconds() / 86400)) if t_last > t_first else 1
     except ValueError:
-        period_days = days
+        period_days = days if days > 0 else 1
 
     # Per-tracker totals across the full period
     tracker_totals = {}

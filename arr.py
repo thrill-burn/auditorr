@@ -54,18 +54,22 @@ def _arr_get(base_url, api_key, path):
 def _parse_title_from_filename(filename):
     """Parse a clean title from a media filename for *arr search."""
     name = os.path.splitext(os.path.basename(filename))[0]
+    # Replace dots, underscores, hyphens with spaces first so later regexes
+    # operate on space-separated tokens with consistent word boundaries
+    name = re.sub(r'[._\-]', ' ', name)
     # For TV shows: strip everything from SxxExx onwards
     name = re.split(r'[Ss]\d{1,2}[Ee]\d{1,2}', name)[0]
     # For movies: strip year (4 digits) and everything after
     name = re.split(r'\b(19|20)\d{2}\b', name)[0]
-    # Strip quality/format tags and everything after
+    # Strip quality/format tags and everything after — \s+ anchor ensures the
+    # tag is a standalone token, preventing mid-word matches (e.g. "Internal" in
+    # "Internal Affairs" or "4K" in "The 4K Experience")
     name = re.sub(
-        r'\b(2160p|1080p|1080i|720p|480p|4K|BluRay|BDRip|BRRip|WEB-DL|WEBRip|HDTV|DVDRip|'
-        r'AMZN|DSNP|NF|HULU|HBO|x264|x265|HEVC|HDR|DV|AAC|DDP|DTS|MA|FLAC|REMUX|PROPER|REPACK|INTERNAL)\b.*',
+        r'\s+(2160p|1080p|1080i|720p|480p|4K|BluRay|BDRip|BRRip|WEB-DL|WEBRip|HDTV|DVDRip|'
+        r'AMZN|DSNP|NF|HULU|HBO|x264|x265|HEVC|HDR|DV|AAC|DDP|DTS|MA|FLAC|REMUX|PROPER|REPACK|INTERNAL)'
+        r'.*$',
         '', name, flags=re.IGNORECASE,
     )
-    # Replace dots, underscores, hyphens with spaces
-    name = re.sub(r'[._\-]', ' ', name)
     # Collapse multiple spaces and strip
     name = re.sub(r'\s+', ' ', name).strip()
     return name
@@ -111,7 +115,7 @@ def arr_rescan(cfg, service, paths):
     for path in paths:
         abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
         if remote_path and local_path and abs_path.startswith(local_path):
-            arr_path = abs_path.replace(local_path, remote_path, 1)
+            arr_path = os.path.join(remote_path, os.path.relpath(abs_path, local_path))
         else:
             arr_path = abs_path
         arr_path = os.path.dirname(arr_path)

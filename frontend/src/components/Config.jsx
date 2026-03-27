@@ -53,6 +53,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
   const [radarrTestStatus,  setRadarrTestStatus]  = useState(null)
   const [saveStatus,        setSaveStatus]        = useState(null)
+  const [saveWarnings,      setSaveWarnings]      = useState([])
   const [passChanged, setPassChanged] = useState(false)
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
@@ -118,6 +119,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   }
 
   const handleSave = async () => {
+    setSaveWarnings([])
     const payload = {
       ...conf,
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
@@ -128,11 +130,8 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
     if (!passChanged) delete payload.QB_PASS
     try {
       const result = await api.saveConfig(payload)
-      if (result.warnings?.length) {
-        setSaveStatus({ ok: true, msg: 'Saved with warnings: ' + result.warnings.join('; ') })
-      } else {
-        setSaveStatus({ ok: true, msg: 'Saved!' })
-      }
+      if (result.warnings?.length) setSaveWarnings(result.warnings)
+      setSaveStatus({ ok: true, msg: 'Saved!' })
       setTimeout(() => setSaveStatus(null), 5000)
       // Re-fetch config so form shows server-confirmed values
       loadConfig()
@@ -185,6 +184,21 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
             placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={set('LOCAL_PATH')} />
         </div>
       </Card>
+
+      {saveWarnings.length > 0 && (
+        <div style={{
+          marginBottom: 16, padding: '12px 16px',
+          borderRadius: 'var(--rl)', border: '1px solid #f59e0b',
+          background: '#f59e0b12',
+        }}>
+          {saveWarnings.map((w, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontFamily: 'var(--mono)', fontSize: 12, color: '#f59e0b', lineHeight: 1.5 }}>
+              <span style={{ flexShrink: 0 }}>⚠</span>
+              <span>Path warning — {w}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <Card title="Watchdog & Scheduled Audits">
         <div style={g2}>

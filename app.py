@@ -3,7 +3,6 @@ import threading
 import logging
 import secrets
 import functools
-import urllib.parse
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -233,10 +232,6 @@ def handle_config():
 def test_connection():
     data = request.json or {}
     host = data.get('QB_HOST', '')
-    if host:
-        parsed = urllib.parse.urlparse(host)
-        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
-            return jsonify({"status": "error", "message": "QB_HOST must be a valid http:// or https:// URL"}), 400
     try:
         client = qbittorrentapi.Client(
             host=host, username=data.get('QB_USER'), password=data.get('QB_PASS'))
@@ -354,7 +349,8 @@ def actions_radarr_search():
 @require_auth
 def get_upload_stats():
     days  = request.args.get('days', 30, type=int)
-    days  = max(1, min(365, days))
+    if days != 0:
+        days = max(1, min(365, days))
     stats = compute_upload_stats(days)
     if stats is None:
         return jsonify({"status": "pending", "message": "Not enough data yet. Upload stats require at least 2 audits."})

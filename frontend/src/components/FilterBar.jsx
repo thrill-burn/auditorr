@@ -24,13 +24,13 @@ export default function FilterBar({ timeRange, onTimeRangeChange, selectedTracke
     }}>
       {/* Left: time range */}
       <div style={{ display: 'flex', gap: 10 }}>
-        {[7, 30, 90].map(d => (
+        {[7, 30, 90, 0].map(d => (
           <button key={d} onClick={() => onTimeRangeChange(d)} style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: 0,
             fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
             color: timeRange === d ? 'var(--accent)' : 'var(--text-dim)',
             fontWeight: timeRange === d ? 700 : 400,
-          }}>{d}d</button>
+          }}>{d === 0 ? 'All' : d + 'd'}</button>
         ))}
       </div>
 
