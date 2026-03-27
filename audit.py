@@ -55,7 +55,7 @@ def _fetch_qbit_file_map(cfg):
         host=cfg.get('QB_HOST'),
         username=cfg.get('QB_USER'),
         password=cfg.get('QB_PASS'),
-        REQUESTS_TIMEOUT=10,
+        requests_timeout=10,
     )
     qbt.auth_log_in()
     torrents = list(qbt.torrents_info())
@@ -71,7 +71,7 @@ def _fetch_qbit_file_map(cfg):
 
     def _fetch_trackers(torrent):
         try:
-            thread_qbt = qbittorrentapi.Client(host=_host, username=_user, password=_pass, REQUESTS_TIMEOUT=10)
+            thread_qbt = qbittorrentapi.Client(host=_host, username=_user, password=_pass, requests_timeout=10)
             thread_qbt.auth_log_in()
             raw   = [t.url for t in thread_qbt.torrents_trackers(torrent_hash=torrent.hash)
                      if t.url.startswith('http') or t.url.startswith('udp')]
