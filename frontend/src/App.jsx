@@ -188,11 +188,9 @@ function AppInner() {
   }, [])
 
   useEffect(() => {
-    if (!localStorage.getItem('auditorr_setup_dismissed')) {
-      api.getConfig().then(cfg => {
-        if (!cfg.QB_HOST) setShowWizard(true)
-      }).catch(() => {})
-    }
+    api.getConfig().then(cfg => {
+      if (!cfg.QB_HOST) setShowWizard(true)
+    }).catch(() => {})
   }, [])
 
   useEffect(() => {

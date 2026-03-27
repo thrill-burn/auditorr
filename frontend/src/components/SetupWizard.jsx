@@ -218,9 +218,9 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
   return (
     <>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>Step 3 of 3</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Sonarr & Radarr</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Optional: Sonarr & Radarr</div>
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
-        Optional. Required for interactive search in the Media explorer. API keys are in each app under Settings → General.
+        Can be set up later. Required only for interactive search in the Media explorer. API keys are in each app under Settings → General.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 8 }}>
