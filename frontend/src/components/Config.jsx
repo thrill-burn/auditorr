@@ -57,6 +57,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   const [passChanged, setPassChanged] = useState(false)
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
+  const [pathTestStatus, setPathTestStatus] = useState(null)
 
   // We display ratios as percentages in the UI (0.01 → "1")
   // and convert back on save
@@ -104,6 +105,14 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       await api.testConnection({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
     } catch (e) { setTestStatus({ ok: false, msg: e.message }) }
+  }
+
+  const handleTestPaths = async () => {
+    setPathTestStatus('loading')
+    try {
+      const result = await api.testPaths({ MEDIA_PATH: conf.MEDIA_PATH, LOCAL_PATH: conf.LOCAL_PATH })
+      setPathTestStatus(result)
+    } catch (e) { setPathTestStatus({ error: e.message }) }
   }
 
   const handleTestSonarr = async () => {
@@ -176,19 +185,57 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
           <Field label="Password" type="password" placeholder="(unchanged — leave blank to keep current)"
             value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v) }} />
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          {testStatus && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+              {testStatus.loading ? 'Testing…' : (testStatus.ok ? '✓ ' : '✗ ') + testStatus.msg}
+            </span>
+          )}
+          <button onClick={handleTest} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+            Test Connection
+          </button>
+        </div>
       </Card>
 
       <Card title="Path Mappings">
-        <Field label="Media Path" style={{ marginBottom: 14 }}
-          hint="Where your final media library lives inside this container — e.g. /data/media"
-          placeholder="/data/media" value={conf.MEDIA_PATH} onChange={v => { set('MEDIA_PATH')(v); setPersistentWarnings([]) }} />
+        <Field label="qBit Save Path" style={{ marginBottom: 14 }}
+          hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
+          placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
         <div style={g2}>
-          <Field label="qBit Save Path"
-            hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
-            placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
-          <Field label="Local Torrent Path"
-            hint="Where those same torrent files are on disk from this container's perspective."
-            placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={v => { set('LOCAL_PATH')(v); setPersistentWarnings([]) }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Field label="Media Path"
+              hint="Where your final media library lives inside this container — e.g. /data/media"
+              placeholder="/data/media" value={conf.MEDIA_PATH} onChange={v => { set('MEDIA_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
+            {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: pathTestStatus.media_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+                {pathTestStatus.media_path?.ok ? '✓ Found' : '✗ Not found inside container'}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Field label="Local Torrent Path"
+              hint="Where those same torrent files are on disk from this container's perspective."
+              placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={v => { set('LOCAL_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
+            {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: pathTestStatus.local_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+                {pathTestStatus.local_path?.ok ? '✓ Found' : '✗ Not found inside container'}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          {!pathTestStatus && (
+            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Click Test Paths to verify these are visible inside the container</span>
+          )}
+          {pathTestStatus === 'loading' && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Testing…</span>
+          )}
+          {pathTestStatus?.error && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ {pathTestStatus.error}</span>
+          )}
+          <button onClick={handleTestPaths} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+            Test Paths
+          </button>
         </div>
       </Card>
 
@@ -423,19 +470,11 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
           </span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, marginLeft: 20 }}>
-          {testStatus && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.ok ? 'var(--green)' : 'var(--red)' }}>
-              {testStatus.loading ? 'Testing…' : (testStatus.ok ? '✓ ' : '✗ ') + testStatus.msg}
-            </span>
-          )}
           {saveStatus && (
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: saveStatus.ok ? 'var(--green)' : 'var(--red)' }}>
               {saveStatus.ok ? '✓ ' : '✗ '}{saveStatus.msg}
             </span>
           )}
-          <button onClick={handleTest} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
-            Test Connection
-          </button>
           <button onClick={handleSave} style={{ padding: '7px 18px', borderRadius: 'var(--r)', border: 'none', background: 'var(--accent)', color: '#000', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
             Save Settings
           </button>
