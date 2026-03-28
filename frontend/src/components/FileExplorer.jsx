@@ -684,10 +684,14 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     return sMatch && iMatch && tMatch && scMatch && nMatch && szMin && szMax
   }), [files, statusFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
 
-  const sortedFiltered = useMemo(() =>
-    sortBy === 'size' ? [...filtered].sort((a, b) => b.size - a.size) : filtered,
-    [filtered, sortBy]
-  )
+  const sortedFiltered = useMemo(() => {
+    if (sortBy === 'size') return [...filtered].sort((a, b) => b.size - a.size)
+    return [...filtered].sort((a, b) => {
+      const nameA = a.path.replace(/\\/g, '/').split('/').pop()
+      const nameB = b.path.replace(/\\/g, '/').split('/').pop()
+      return nameA.localeCompare(nameB, undefined, { numeric: true })
+    })
+  }, [filtered, sortBy])
 
   const stats = useMemo(() => ({
     total:        filtered.length,
