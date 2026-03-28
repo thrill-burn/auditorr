@@ -235,21 +235,26 @@ def test_connection():
     user = data.get('QB_USER')
     password = data.get('QB_PASS')
 
-    def _connect():
-        client = qbittorrentapi.Client(host=host, username=user, password=password)
-        client.auth_log_in()
+    result = {}
 
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(_connect)
-    executor.shutdown(wait=False)
-    try:
-        future.result(timeout=10)
-        return jsonify({"status": "success"})
-    except FuturesTimeout:
+    def _connect():
+        try:
+            client = qbittorrentapi.Client(host=host, username=user, password=password)
+            client.auth_log_in()
+            result['ok'] = True
+        except Exception as e:
+            result['error'] = str(e)
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=10)
+
+    if t.is_alive():
         return jsonify({"status": "error", "message": "Connection timed out"}), 400
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
+    elif result.get('ok'):
+        return jsonify({"status": "success"})
+    else:
+        return jsonify({"status": "error", "message": result.get('error', 'Unknown error')}), 400
 
 
 @app.route('/api/test_paths', methods=['POST'])
