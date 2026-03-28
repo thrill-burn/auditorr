@@ -132,15 +132,11 @@ function Step1({ data, onChange, onNext, onSkip }) {
     try {
       await api.testConnection({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
-      api.qbitInfo().then(info => {
-        setQbitInfo(info)
-        if (info.save_path) onChange('QB_SAVE_PATH_HINT', info.save_path)
-      }).catch(() => {
-        // fallback: try qbitSavePath directly
-        api.qbitSavePath({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
-          .then(r => { if (r.save_path) onChange('QB_SAVE_PATH_HINT', r.save_path) })
-          .catch(() => {})
-      })
+      api.qbitSavePath({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
+        .then(r => {
+          setQbitInfo({ version: r.version, torrent_count: r.torrent_count, seeding_size: r.seeding_size })
+          if (r.save_path) onChange('QB_SAVE_PATH_HINT', r.save_path)
+        }).catch(() => {})
     } catch (e) {
       setTestStatus({ ok: false, msg: e.message })
     }
@@ -224,8 +220,8 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
 
   const clearStatus = () => setPathStatus(null)
 
-  const mediaOk  = pathStatus?.paths?.MEDIA_PATH?.ok
-  const localOk  = pathStatus?.paths?.LOCAL_PATH?.ok
+  const mediaOk  = pathStatus?.media_path?.ok
+  const localOk  = pathStatus?.local_path?.ok
 
   return (
     <>
@@ -261,7 +257,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
       />
       {pathStatus && !pathStatus.loading && pathStatus.paths && (
         <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: mediaOk ? 'var(--green)' : 'var(--red)' }}>
-          {mediaOk ? '✓ Path exists' : '✗ ' + (pathStatus.paths.MEDIA_PATH?.message || 'Path not found')}
+          {mediaOk ? '✓ Path exists' : '✗ ' + (pathStatus.media_path?.message || 'Path not found')}
         </div>
       )}
 
@@ -273,7 +269,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
       />
       {pathStatus && !pathStatus.loading && pathStatus.paths && (
         <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: localOk ? 'var(--green)' : 'var(--red)' }}>
-          {localOk ? '✓ Path exists' : '✗ ' + (pathStatus.paths.LOCAL_PATH?.message || 'Path not found')}
+          {localOk ? '✓ Path exists' : '✗ ' + (pathStatus.local_path?.message || 'Path not found')}
         </div>
       )}
 

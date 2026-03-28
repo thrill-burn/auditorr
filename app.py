@@ -305,6 +305,9 @@ def qbit_save_path():
                 host=data.get('QB_HOST'), username=data.get('QB_USER'), password=data.get('QB_PASS'))
             client.auth_log_in()
             torrents = list(client.torrents_info(limit=50))
+            result['version'] = client.app.version
+            result['torrent_count'] = len(torrents)
+            result['seeding_size'] = sum(t.size for t in torrents if t.state in ('uploading', 'stalledUP', 'forcedUP'))
             paths = [t.save_path.rstrip('/') for t in torrents if t.save_path]
             if not paths:
                 result['save_path'] = None
