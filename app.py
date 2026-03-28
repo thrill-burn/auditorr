@@ -1,5 +1,4 @@
 import os
-import socket
 import threading
 import logging
 import secrets
@@ -233,16 +232,24 @@ def handle_config():
 def test_connection():
     data = request.json or {}
     host = data.get('QB_HOST', '')
-    socket.setdefaulttimeout(10)
-    try:
-        client = qbittorrentapi.Client(
-            host=host, username=data.get('QB_USER'), password=data.get('QB_PASS'))
+    user = data.get('QB_USER')
+    password = data.get('QB_PASS')
+
+    def _connect():
+        client = qbittorrentapi.Client(host=host, username=user, password=password)
         client.auth_log_in()
+
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_connect)
+    executor.shutdown(wait=False)
+    try:
+        future.result(timeout=10)
         return jsonify({"status": "success"})
+    except FuturesTimeout:
+        return jsonify({"status": "error", "message": "Connection timed out"}), 400
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
-    finally:
-        socket.setdefaulttimeout(None)
 
 
 @app.route('/api/test_paths', methods=['POST'])

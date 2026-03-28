@@ -1,6 +1,5 @@
 import os
 import math
-import socket
 import hashlib
 import logging
 import fnmatch
@@ -52,14 +51,6 @@ def get_fast_hash(filepath, size, chunk_size=65536):
 # ---------------------------------------------------------------------------
 
 def _fetch_qbit_file_map(cfg):
-    socket.setdefaulttimeout(10)
-    try:
-        return _fetch_qbit_file_map_inner(cfg)
-    finally:
-        socket.setdefaulttimeout(None)
-
-
-def _fetch_qbit_file_map_inner(cfg):
     qbt = qbittorrentapi.Client(
         host=cfg.get('QB_HOST'),
         username=cfg.get('QB_USER'),
