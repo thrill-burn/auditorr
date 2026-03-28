@@ -257,6 +257,22 @@ def test_connection():
         return jsonify({"status": "error", "message": result.get('error', 'Unknown error')}), 400
 
 
+@app.route('/api/browse_data')
+@require_auth
+def browse_data():
+    base = '/data'
+    if not os.path.isdir(base):
+        return jsonify({'dirs': [], 'missing': True})
+    try:
+        dirs = sorted([
+            d for d in os.listdir(base)
+            if os.path.isdir(os.path.join(base, d))
+        ])
+        return jsonify({'dirs': dirs, 'missing': False})
+    except Exception as e:
+        return jsonify({'dirs': [], 'missing': True, 'error': str(e)})
+
+
 @app.route('/api/test_paths', methods=['POST'])
 @require_auth
 def test_paths():

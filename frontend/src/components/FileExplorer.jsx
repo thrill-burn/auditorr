@@ -89,8 +89,23 @@ function SizeInput({ value, onChange, placeholder }) {
 
 function LinkedPathsPopover({ name, linkedPaths, duplicatePaths }) {
   const [visible, setVisible] = useState(false)
+  const [clampedLeft, setClampedLeft] = useState(null)
   const anchorRef = useRef(null)
+  const popoverRef = useRef(null)
+
   const rect = visible && anchorRef.current ? anchorRef.current.getBoundingClientRect() : null
+  const left = clampedLeft !== null ? clampedLeft : (rect?.left ?? 0)
+
+  useEffect(() => {
+    if (!visible) { setClampedLeft(null); return }
+    const popoverWidth = popoverRef.current?.offsetWidth ?? 0
+    if (!popoverWidth) return
+    const r = anchorRef.current?.getBoundingClientRect()
+    if (!r) return
+    setClampedLeft(Math.min(r.left, window.innerWidth - popoverWidth - 16))
+  }, [visible])
+
+  const pathStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', wordBreak: 'break-all', whiteSpace: 'normal' }
 
   return (
     <>
@@ -103,9 +118,9 @@ function LinkedPathsPopover({ name, linkedPaths, duplicatePaths }) {
         {name}
       </span>
       {visible && rect && (
-        <div style={{
+        <div ref={popoverRef} style={{
           position: 'fixed',
-          left: rect.left,
+          left,
           top: rect.bottom + window.scrollY + 4,
           background: '#151515',
           border: '1px solid #2a2a2a',
@@ -113,14 +128,14 @@ function LinkedPathsPopover({ name, linkedPaths, duplicatePaths }) {
           padding: '10px 14px',
           boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
           zIndex: 9999,
-          maxWidth: 480,
+          maxWidth: 'min(600px, calc(100vw - 32px))',
           pointerEvents: 'none',
         }}>
           {linkedPaths?.length > 0 && (
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 4 }}>Hardlinks</div>
               {linkedPaths.slice(0, 3).map((p, i) => (
-                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</div>
+                <div key={i} style={pathStyle}>{p}</div>
               ))}
               {linkedPaths.length > 3 && (
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>+{linkedPaths.length - 3} more</div>
@@ -131,7 +146,7 @@ function LinkedPathsPopover({ name, linkedPaths, duplicatePaths }) {
             <div style={linkedPaths?.length > 0 ? { marginTop: 10 } : {}}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--purple)', marginBottom: 4 }}>Duplicates</div>
               {duplicatePaths.slice(0, 3).map((p, i) => (
-                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</div>
+                <div key={i} style={pathStyle}>{p}</div>
               ))}
               {duplicatePaths.length > 3 && (
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>+{duplicatePaths.length - 3} more</div>

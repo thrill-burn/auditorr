@@ -1,6 +1,52 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api'
 
+function DataBrowser({ onSelectMedia, onSelectTorrents }) {
+  const [result, setResult] = useState(null)
+
+  useEffect(() => {
+    api.browseData().then(setResult).catch(() => setResult({ dirs: [], missing: true }))
+  }, [])
+
+  const btnStyle = {
+    padding: '2px 8px', borderRadius: 'var(--r)', border: '1px solid var(--border2)',
+    background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)',
+    fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap',
+  }
+
+  if (!result) return (
+    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 10 }}>Browsing /data…</div>
+  )
+
+  if (result.missing || result.dirs.length === 0) return (
+    <div style={{ marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.55 }}>
+      {result.missing
+        ? <span style={{ color: '#f59e0b' }}>⚠ /data is not mounted or is empty. Check your Docker volume configuration — auditorr expects your data to be mounted at /data.</span>
+        : <span style={{ color: 'var(--text-dim)' }}>No subdirectories found in /data.</span>
+      }
+    </div>
+  )
+
+  return (
+    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {result.dirs.map(dir => (
+        <div key={dir} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" style={{ flexShrink: 0 }}>
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>/data/{dir}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <button style={btnStyle} onClick={() => onSelectMedia('/data/' + dir)}>→ Media</button>
+            <button style={btnStyle} onClick={() => onSelectTorrents('/data/' + dir)}>→ Torrents</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Field({ label, hint, type = 'text', value, onChange, placeholder, style = {}, prefix, suffix }) {
   const [focused, setFocused] = useState(false)
   return (
@@ -58,6 +104,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
   const [pathTestStatus, setPathTestStatus] = useState(null)
+  const [browserOpen, setBrowserOpen] = useState(false)
 
   // We display ratios as percentages in the UI (0.01 → "1")
   // and convert back on save
@@ -234,6 +281,17 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           <button onClick={handleTestPaths} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
             Test Paths
           </button>
+        </div>
+        <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <button onClick={() => setBrowserOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+            {browserOpen ? '▼' : '▶'} Browse container filesystem
+          </button>
+          {browserOpen && (
+            <DataBrowser
+              onSelectMedia={v => { set('MEDIA_PATH')(v); setPathTestStatus(null); setPersistentWarnings([]) }}
+              onSelectTorrents={v => { set('LOCAL_PATH')(v); setPathTestStatus(null); setPersistentWarnings([]) }}
+            />
+          )}
         </div>
       </Card>
 
