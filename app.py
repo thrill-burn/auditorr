@@ -1,4 +1,5 @@
 import os
+import socket
 import threading
 import logging
 import secrets
@@ -232,14 +233,16 @@ def handle_config():
 def test_connection():
     data = request.json or {}
     host = data.get('QB_HOST', '')
+    socket.setdefaulttimeout(10)
     try:
         client = qbittorrentapi.Client(
-            host=host, username=data.get('QB_USER'), password=data.get('QB_PASS'),
-            requests_args={'timeout': 10})
+            host=host, username=data.get('QB_USER'), password=data.get('QB_PASS'))
         client.auth_log_in()
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 400
+    finally:
+        socket.setdefaulttimeout(None)
 
 
 @app.route('/api/test_paths', methods=['POST'])
