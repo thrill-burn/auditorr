@@ -87,6 +87,64 @@ function SizeInput({ value, onChange, placeholder }) {
   )
 }
 
+function LinkedPathsPopover({ name, linkedPaths, duplicatePaths }) {
+  const [visible, setVisible] = useState(false)
+  const anchorRef = useRef(null)
+  const rect = visible && anchorRef.current ? anchorRef.current.getBoundingClientRect() : null
+
+  return (
+    <>
+      <span
+        ref={anchorRef}
+        onMouseEnter={() => setVisible(true)}
+        onMouseLeave={() => setVisible(false)}
+        style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      >
+        {name}
+      </span>
+      {visible && rect && (
+        <div style={{
+          position: 'fixed',
+          left: rect.left,
+          top: rect.top - 8,
+          transform: 'translateY(-100%)',
+          background: '#151515',
+          border: '1px solid #2a2a2a',
+          borderRadius: 6,
+          padding: '10px 14px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+          zIndex: 9999,
+          maxWidth: 480,
+          pointerEvents: 'none',
+        }}>
+          {linkedPaths?.length > 0 && (
+            <div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 4 }}>Hardlinks</div>
+              {linkedPaths.slice(0, 3).map((p, i) => (
+                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</div>
+              ))}
+              {linkedPaths.length > 3 && (
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>+{linkedPaths.length - 3} more</div>
+              )}
+            </div>
+          )}
+          {duplicatePaths?.length > 0 && (
+            <div style={linkedPaths?.length > 0 ? { marginTop: 10 } : {}}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--purple)', marginBottom: 4 }}>Duplicates</div>
+              {duplicatePaths.slice(0, 3).map((p, i) => (
+                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</div>
+              ))}
+              {duplicatePaths.length > 3 && (
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>+{duplicatePaths.length - 3} more</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
 // ─── Skeleton ────────────────────────────────────────────────────────────────
 
 function ExplorerSkeleton() {
@@ -187,11 +245,6 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
   const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
-  const lines = [
-    ...(node.linked_paths    || []).map(p => 'Hardlink: ' + p),
-    ...(node.duplicate_paths || []).map(p => 'Duplicate: ' + p),
-  ]
-  const tooltip = lines.length ? lines.join('\n') : undefined
 
   const toast = useToast()
   const [sonarrState, setSonarrState] = useState('idle')
@@ -242,12 +295,11 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
         </svg>
-        <span title={tooltip} style={{
-          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          borderBottom: tooltip ? '1px dotted var(--text-dim)' : 'none',
-          cursor: tooltip ? 'help' : 'default',
-        }}>{name}</span>
+        {(node.linked_paths?.length > 0 || node.duplicate_paths?.length > 0) ? (
+          <LinkedPathsPopover name={name} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} />
+        ) : (
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        )}
         {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
@@ -343,11 +395,6 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, isRevealed
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
   const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
-  const lines = [
-    ...(node.linked_paths    || []).map(p => 'Hardlink: ' + p),
-    ...(node.duplicate_paths || []).map(p => 'Duplicate: ' + p),
-  ]
-  const tooltip = lines.length ? lines.join('\n') : undefined
 
   const toast = useToast()
   const [sonarrState, setSonarrState] = useState('idle')
@@ -399,12 +446,11 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, isRevealed
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
             <polyline points="14 2 14 8 20 8"/>
           </svg>
-          <span title={tooltip} style={{
-            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            borderBottom: tooltip ? '1px dotted var(--text-dim)' : 'none',
-            cursor: tooltip ? 'help' : 'default',
-          }}>{basename}</span>
+          {(node.linked_paths?.length > 0 || node.duplicate_paths?.length > 0) ? (
+            <LinkedPathsPopover name={basename} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} />
+          ) : (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basename}</span>
+          )}
           {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
