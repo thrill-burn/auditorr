@@ -255,7 +255,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         onChange={v => { onChange('MEDIA_PATH', v); clearStatus() }}
         style={{ marginBottom: 6 }}
       />
-      {pathStatus && !pathStatus.loading && pathStatus.paths && (
+      {pathStatus && !pathStatus.loading && !pathStatus.error && (
         <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: mediaOk ? 'var(--green)' : 'var(--red)' }}>
           {mediaOk ? '✓ Path exists' : '✗ ' + (pathStatus.media_path?.message || 'Path not found')}
         </div>
@@ -267,7 +267,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         onChange={v => { onChange('LOCAL_PATH', v); clearStatus() }}
         style={{ marginBottom: 6 }}
       />
-      {pathStatus && !pathStatus.loading && pathStatus.paths && (
+      {pathStatus && !pathStatus.loading && !pathStatus.error && (
         <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: localOk ? 'var(--green)' : 'var(--red)' }}>
           {localOk ? '✓ Path exists' : '✗ ' + (pathStatus.local_path?.message || 'Path not found')}
         </div>
