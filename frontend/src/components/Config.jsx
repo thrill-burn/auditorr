@@ -105,6 +105,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [clearStatus, setClearStatus] = useState(null)
   const [pathTestStatus, setPathTestStatus] = useState(null)
   const [browserOpen, setBrowserOpen] = useState(false)
+  const [qbitInfo, setQbitInfo] = useState(null)
+  const [savePathStatus, setSavePathStatus] = useState(null)
 
   // We display ratios as percentages in the UI (0.01 → "1")
   // and convert back on save
@@ -148,10 +150,21 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   const handleTest = async () => {
     setTestStatus({ loading: true })
+    setQbitInfo(null)
     try {
       await api.testConnection({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
+      api.qbitInfo().then(setQbitInfo).catch(() => {})
     } catch (e) { setTestStatus({ ok: false, msg: e.message }) }
+  }
+
+  const handleFetchSavePath = async () => {
+    setSavePathStatus('loading')
+    try {
+      const res = await api.qbitSavePath({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
+      if (res.save_path) { set('REMOTE_PATH')(res.save_path); setSavePathStatus('ok') }
+      else setSavePathStatus('empty')
+    } catch (e) { setSavePathStatus('error') }
   }
 
   const handleTestPaths = async () => {
@@ -217,6 +230,13 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     } catch (e) { setClearStatus({ ok: false, msg: e.message }) }
   }
 
+  const fmtSize = b => {
+    if (!b) return '0 B'
+    if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB'
+    if (b >= 1e9)  return (b / 1e9).toFixed(1)  + ' GB'
+    return (b / 1e6).toFixed(0) + ' MB'
+  }
+
   const thresholdHint = (label) =>
     `All 10 pts lost when ${label} data reaches this % of your library. Points lost proportionally below that.`
 
@@ -224,11 +244,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     <div className="fade-in" style={{ padding: 24, maxWidth: 800 }}>
 
       <Card title="qBittorrent Connection">
-        <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={conf.QB_HOST} onChange={set('QB_HOST')} style={{ marginBottom: 14 }} />
+        <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={conf.QB_HOST} onChange={v => { set('QB_HOST')(v); setQbitInfo(null) }} style={{ marginBottom: 14 }} />
         <div style={g2}>
-          <Field label="Username" placeholder="admin" value={conf.QB_USER} onChange={set('QB_USER')} />
+          <Field label="Username" placeholder="admin" value={conf.QB_USER} onChange={v => { set('QB_USER')(v); setQbitInfo(null) }} />
           <Field label="Password" type="password" placeholder="(unchanged — leave blank to keep current)"
-            value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v) }} />
+            value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v); setQbitInfo(null) }} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
           {testStatus && (
@@ -240,12 +260,24 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             Test Connection
           </button>
         </div>
+        {qbitInfo && (
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginTop: 8 }}>
+            {`✓ Connected · qBittorrent ${qbitInfo.version} · ${qbitInfo.torrent_count} torrents · ${fmtSize(qbitInfo.seeding_size)} seeding`}
+          </div>
+        )}
       </Card>
 
       <Card title="Path Mappings">
-        <Field label="qBit Save Path" style={{ marginBottom: 14 }}
+        <Field label="qBit Save Path"
           hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
           placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 14 }}>
+          <button onClick={handleFetchSavePath} style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
+            {savePathStatus === 'loading' ? 'Fetching…' : 'Fetch from qBittorrent'}
+          </button>
+          {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
+          {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
+        </div>
         <div style={g2}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <Field label="Media Path"

@@ -70,4 +70,6 @@ export const api = {
   radarrSearch: (path)    => req('/actions/radarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
   uploadStats:  (days)    => req('/upload_stats?days=' + days),
   browseData:   ()        => req('/browse_data'),
+  qbitInfo:     ()        => req('/qbit_info'),
+  qbitSavePath: (creds)   => req('/qbit_save_path', { method: 'POST', body: JSON.stringify(creds) }),
 }

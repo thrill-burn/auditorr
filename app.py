@@ -1,4 +1,5 @@
 import os
+import socket
 import threading
 import logging
 import secrets
@@ -255,6 +256,59 @@ def test_connection():
         return jsonify({"status": "success"})
     else:
         return jsonify({"status": "error", "message": result.get('error', 'Unknown error')}), 400
+
+
+@app.route('/api/qbit_info')
+@require_auth
+def qbit_info():
+    cfg = db_load_config()
+    result = {}
+    def _fetch():
+        try:
+            socket.setdefaulttimeout(10)
+            client = qbittorrentapi.Client(
+                host=cfg.get('QB_HOST'), username=cfg.get('QB_USER'), password=cfg.get('QB_PASS'))
+            client.auth_log_in()
+            torrents = list(client.torrents_info())
+            result['version'] = client.app.version
+            result['torrent_count'] = len(torrents)
+            result['seeding_size'] = sum(t.size for t in torrents if t.state in ('uploading', 'stalledUP', 'forcedUP'))
+            result['save_path'] = torrents[0].save_path if torrents else None
+        except Exception as e:
+            result['error'] = str(e)
+        finally:
+            socket.setdefaulttimeout(None)
+    t = threading.Thread(target=_fetch); t.start(); t.join(timeout=12)
+    if t.is_alive():
+        return jsonify({'error': 'Connection timed out'}), 400
+    if 'error' in result:
+        return jsonify({'error': result['error']}), 400
+    return jsonify(result)
+
+
+@app.route('/api/qbit_save_path', methods=['POST'])
+@require_auth
+def qbit_save_path():
+    data = request.json or {}
+    result = {}
+    def _fetch():
+        try:
+            socket.setdefaulttimeout(10)
+            client = qbittorrentapi.Client(
+                host=data.get('QB_HOST'), username=data.get('QB_USER'), password=data.get('QB_PASS'))
+            client.auth_log_in()
+            torrents = list(client.torrents_info(limit=1))
+            result['save_path'] = torrents[0].save_path if torrents else None
+        except Exception as e:
+            result['error'] = str(e)
+        finally:
+            socket.setdefaulttimeout(None)
+    t = threading.Thread(target=_fetch); t.start(); t.join(timeout=12)
+    if t.is_alive():
+        return jsonify({'error': 'Connection timed out'}), 400
+    if 'error' in result:
+        return jsonify({'error': result['error']}), 400
+    return jsonify(result)
 
 
 @app.route('/api/browse_data')

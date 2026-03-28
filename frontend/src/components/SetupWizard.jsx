@@ -113,16 +113,34 @@ function btnSecondary() {
   }
 }
 
+const fmtSize = b => {
+  if (!b) return '0 B'
+  if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB'
+  if (b >= 1e9)  return (b / 1e9).toFixed(1)  + ' GB'
+  return (b / 1e6).toFixed(0) + ' MB'
+}
+
 // ── Step 1: qBittorrent ───────────────────────────────────────────────────────
 function Step1({ data, onChange, onNext, onSkip }) {
   const [testStatus, setTestStatus] = useState(null)
+  const [qbitInfo, setQbitInfo] = useState(null)
   const [advancing, setAdvancing] = useState(false)
 
   const handleTest = async () => {
     setTestStatus({ loading: true })
+    setQbitInfo(null)
     try {
       await api.testConnection({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
+      api.qbitInfo().then(info => {
+        setQbitInfo(info)
+        if (info.save_path) onChange('QB_SAVE_PATH_HINT', info.save_path)
+      }).catch(() => {
+        // fallback: try qbitSavePath directly
+        api.qbitSavePath({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
+          .then(r => { if (r.save_path) onChange('QB_SAVE_PATH_HINT', r.save_path) })
+          .catch(() => {})
+      })
     } catch (e) {
       setTestStatus({ ok: false, msg: e.message })
     }
@@ -164,6 +182,11 @@ function Step1({ data, onChange, onNext, onSkip }) {
         </div>
         <button onClick={handleNext} style={btnPrimary(false)}>Next →</button>
       </div>
+      {qbitInfo && (
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginTop: 10 }}>
+          {`✓ Connected · qBittorrent ${qbitInfo.version} · ${qbitInfo.torrent_count} torrents · ${fmtSize(qbitInfo.seeding_size)} seeding`}
+        </div>
+      )}
 
       <SkipLink onSkip={onSkip} />
     </>
@@ -173,6 +196,21 @@ function Step1({ data, onChange, onNext, onSkip }) {
 // ── Step 2: Data Paths ────────────────────────────────────────────────────────
 function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
   const [pathStatus, setPathStatus] = useState(null)
+  const [fetchSavePathStatus, setFetchSavePathStatus] = useState(null)
+
+  // Pre-fill qBit Save Path from hint fetched in Step 1
+  useEffect(() => {
+    if (data.QB_SAVE_PATH_HINT && !data.REMOTE_PATH) onChange('REMOTE_PATH', data.QB_SAVE_PATH_HINT)
+  }, [])
+
+  const handleFetchSavePath = async () => {
+    setFetchSavePathStatus('loading')
+    try {
+      const res = await api.qbitSavePath({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
+      if (res.save_path) { onChange('REMOTE_PATH', res.save_path); setFetchSavePathStatus('ok') }
+      else setFetchSavePathStatus('empty')
+    } catch (e) { setFetchSavePathStatus('error') }
+  }
 
   const handleTestPaths = async () => {
     setPathStatus({ loading: true })
@@ -196,6 +234,22 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
         Tell auditorr where your media library and torrent downloads live inside this container.
       </p>
+
+      <Field label="qBit Save Path"
+        hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
+        placeholder="/data/torrents" value={data.REMOTE_PATH}
+        onChange={v => { onChange('REMOTE_PATH', v) }}
+        style={{ marginBottom: 6 }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        {data.QB_HOST && (
+          <button onClick={handleFetchSavePath} style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
+            {fetchSavePathStatus === 'loading' ? 'Fetching…' : 'Fetch from qBittorrent'}
+          </button>
+        )}
+        {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
+        {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
+      </div>
 
       <Field label="Media Path"
         hint="Where your final media library lives inside this container — e.g. /data/media"
