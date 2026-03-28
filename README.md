@@ -37,7 +37,7 @@ docker run -d \
   ghcr.io/thrill-burn/auditorr:latest
 ```
 
-Then open: `http://your-server-ip:8677` and configure qBittorrent.
+Then open `http://your-server-ip:8677`. On first launch, a setup wizard will guide you through connecting qBittorrent and configuring your data paths.
 
 ### unRaid (Recommended)
 
@@ -51,7 +51,7 @@ Docker tab → Add Container button at the bottom and fill in the blanks:
 - **Data Path:** `/mnt/user/data` → `/data`
 - **Port Mapping:** `8677 → 8677`
 
-Press the Apply button, let the container install, then open `http://your-server-ip:8677` and configure qBittorrent connection details in the Config tab.
+Press the Apply button, let the container install, then open `http://your-server-ip:8677`. The setup wizard will guide you through the rest.
 
 ### Docker Compose
 
@@ -103,9 +103,12 @@ All configuration is done through the **Config** tab in the UI.
 | Setting | Description |
 |---|---|
 | **qBittorrent Host** | URL of your qBittorrent instance, e.g. `http://192.168.1.x:8080` |
-| **qBit Save Path** | The path qBittorrent reports via its API |
+| **Test Connection** | Verifies credentials and shows qBittorrent version, torrent count, and seeding size |
+| **qBit Save Path** | The path qBittorrent reports via its API. Use **Fetch from qBittorrent** to auto-populate. |
 | **Local Torrent Path** | Where those files actually live from auditorr's perspective (may differ if qBit runs in its own container) |
 | **Media Path** | Your final media library directory |
+| **Test Paths** | Verifies that Media Path and Local Torrent Path are visible inside the container, with per-path ✓/✗ feedback |
+| **Browse container filesystem** | Expandable `/data` directory browser — click any directory to fill Media Path or Local Torrent Path |
 | **Watchdog Cooldown** | Seconds to wait after a filesystem change before running an audit (default: 60) |
 | **Scheduled Interval** | Fallback audit interval in minutes (default: 360) |
 | **Thresholds** | Percentage of library at which each category loses all its points |

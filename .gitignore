@@ -57,3 +57,8 @@ CLAUDE.md
 prompts/
 .claude/
 CONTEXT.md
+
+# Testing
+tests/
+TESTING.md
+.pytest_cache/
