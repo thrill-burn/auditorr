@@ -47,7 +47,7 @@ function Card({ title, children }) {
   )
 }
 
-export default function Config({ lastAuditTime, onScan, isScanning, onConfigSaved, theme, onThemeChange }) {
+export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, onScan }) {
   const [conf,        setConf]        = useState(null)
   const [testStatus,        setTestStatus]        = useState(null)
   const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
@@ -153,8 +153,6 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       loadConfig()
       // Refresh dashboard so threshold changes are reflected immediately
       if (onConfigSaved) onConfigSaved()
-      // Trigger a background audit so the new config takes effect immediately
-      if (onScan) onScan()
     } catch (e) { setSaveStatus({ ok: false, msg: e.message }) }
   }
 

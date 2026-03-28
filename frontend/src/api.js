@@ -3,7 +3,7 @@ function getSecret() {
   return localStorage.getItem('auditorr_secret') || ''
 }
 
-async function req(path, opts = {}) {
+async function req(path, opts = {}, retried = false) {
   const secret = getSecret()
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
   if (secret) headers['X-Auditorr-Secret'] = secret
@@ -11,11 +11,12 @@ async function req(path, opts = {}) {
   const res = await fetch('/api' + path, { ...opts, headers })
 
   if (res.status === 401) {
+    if (retried) throw new Error('Authentication required')
     // Prompt for secret if auth fails
     const s = window.prompt('auditorr requires an access key. Enter AUDITORR_SECRET:')
     if (s) {
       localStorage.setItem('auditorr_secret', s)
-      return req(path, opts)   // retry once
+      return req(path, opts, true)
     }
     throw new Error('Authentication required')
   }
@@ -25,7 +26,7 @@ async function req(path, opts = {}) {
   return data
 }
 
-async function reqText(path, opts = {}) {
+async function reqText(path, opts = {}, retried = false) {
   const secret = getSecret()
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
   if (secret) headers['X-Auditorr-Secret'] = secret
@@ -33,10 +34,11 @@ async function reqText(path, opts = {}) {
   const res = await fetch('/api' + path, { ...opts, headers })
 
   if (res.status === 401) {
+    if (retried) throw new Error('Authentication required')
     const s = window.prompt('auditorr requires an access key. Enter AUDITORR_SECRET:')
     if (s) {
       localStorage.setItem('auditorr_secret', s)
-      return reqText(path, opts)
+      return reqText(path, opts, true)
     }
     throw new Error('Authentication required')
   }

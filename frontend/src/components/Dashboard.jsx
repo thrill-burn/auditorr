@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
@@ -625,7 +625,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const c = scoreColor(score)
 
   // Cross-seed calculations use media_files passed via data
-  const cs = computeCrossSeedStats(data.media_files)
+  const cs = useMemo(() => computeCrossSeedStats(data.media_files), [data.media_files])
 
   const notImportedPaths = (data.torrent_files || [])
     .filter(f => !f.imported && f.status !== 'Orphaned')

@@ -235,7 +235,7 @@ def test_connection():
     try:
         client = qbittorrentapi.Client(
             host=host, username=data.get('QB_USER'), password=data.get('QB_PASS'),
-            requests_timeout=10)
+            requests_args={'timeout': 10})
         client.auth_log_in()
         return jsonify({"status": "success"})
     except Exception as e:

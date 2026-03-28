@@ -194,7 +194,7 @@ function AppInner() {
   }, [])
 
   useEffect(() => {
-    if (Notification.permission === 'default') Notification.requestPermission()
+    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission()
     fetchResults()
     const id = setInterval(async () => {
       try {
@@ -207,7 +207,7 @@ function AppInner() {
             ? state.status_message : 'Audit complete'
           const isError = msg !== 'Audit complete'
           toast(msg, isError ? 'error' : 'success')
-          if (!isError && Notification.permission === 'granted')
+          if (!isError && 'Notification' in window && Notification.permission === 'granted')
             new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
         }
         prevScanRef.current = state.is_scanning
@@ -344,7 +344,6 @@ function AppInner() {
           {tab === 'config' && (
             <Config
               lastAuditTime={scanState.last_audit_time}
-              onScan={handleScan}
               isScanning={scanState.is_scanning}
               onConfigSaved={fetchResults}
               theme={theme}
