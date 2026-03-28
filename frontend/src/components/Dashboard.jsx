@@ -616,6 +616,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     }).catch(() => {})
   }, [timeRange])
 
+  // Cross-seed calculations use media_files passed via data
+  const cs = useMemo(() => data ? computeCrossSeedStats(data.media_files) : null, [data?.media_files])
+
   if (!data) return <DashboardSkeleton />
 
   const { score, status, trend, current, history_chart } = data
@@ -623,9 +626,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const hlPct = det.total_media_size > 0
     ? Math.round((det.hardlinked_media_size / det.total_media_size) * 100) : 100
   const c = scoreColor(score)
-
-  // Cross-seed calculations use media_files passed via data
-  const cs = useMemo(() => computeCrossSeedStats(data.media_files), [data.media_files])
 
   const notImportedPaths = (data.torrent_files || [])
     .filter(f => !f.imported && f.status !== 'Orphaned')
