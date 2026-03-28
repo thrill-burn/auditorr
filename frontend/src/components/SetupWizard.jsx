@@ -171,22 +171,22 @@ function Step1({ data, onChange, onNext, onSkip }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button onClick={handleTest} style={btnSecondary()}>Test Connection</button>
-          {testStatus && (testStatus.loading || !testStatus.ok) && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
-              {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
-            </span>
-          )}
-        </div>
-        <button onClick={handleNext} style={btnPrimary(false)}>Next →</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: qbitInfo ? 8 : 16 }}>
+        <button onClick={handleTest} style={btnSecondary()}>Test Connection</button>
+        {testStatus && (testStatus.loading || !testStatus.ok) && (
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+            {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
+          </span>
+        )}
       </div>
       {qbitInfo && (
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginTop: 10 }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginBottom: 16 }}>
           {`✓ Connected · qBittorrent ${qbitInfo.version} · ${qbitInfo.torrent_count} torrents · ${fmtSize(qbitInfo.seeding_size)} seeding`}
         </div>
       )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button onClick={handleNext} style={btnPrimary(false)}>Next →</button>
+      </div>
 
       <SkipLink onSkip={onSkip} />
     </>
@@ -277,10 +277,6 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         </div>
       )}
 
-      {pathStatus?.error && (
-        <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ {pathStatus.error}</div>
-      )}
-
       <div style={{ marginTop: 20, marginBottom: 8 }}>
         <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>Container Filesystem</div>
         <DataBrowser
@@ -289,13 +285,23 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         />
       </div>
 
-      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button onClick={onBack} style={btnSecondary()}>← Back</button>
-          <button onClick={handleTestPaths} style={btnSecondary()}>
-            {pathStatus?.loading ? 'Testing…' : 'Test Paths'}
-          </button>
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16, marginBottom: 12 }}>
+        <button onClick={handleTestPaths} style={btnSecondary()}>
+          {pathStatus?.loading ? 'Testing…' : 'Test Paths'}
+        </button>
+        {!pathStatus && (
+          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Verify these paths are visible inside the container</span>
+        )}
+        {pathStatus?.loading && (
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Testing…</span>
+        )}
+        {pathStatus?.error && (
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ {pathStatus.error}</span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <button onClick={onBack} style={btnSecondary()}>← Back</button>
         <button onClick={() => { onEarlyStart(data); onNext() }} style={btnPrimary(false)}>Next →</button>
       </div>
 
