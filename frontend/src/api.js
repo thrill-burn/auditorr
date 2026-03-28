@@ -3,7 +3,7 @@ function getSecret() {
   return localStorage.getItem('auditorr_secret') || ''
 }
 
-async function req(path, opts = {}) {
+async function req(path, opts = {}, retried = false) {
   const secret = getSecret()
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
   if (secret) headers['X-Auditorr-Secret'] = secret
@@ -11,11 +11,12 @@ async function req(path, opts = {}) {
   const res = await fetch('/api' + path, { ...opts, headers })
 
   if (res.status === 401) {
+    if (retried) throw new Error('Authentication required')
     // Prompt for secret if auth fails
     const s = window.prompt('auditorr requires an access key. Enter AUDITORR_SECRET:')
     if (s) {
       localStorage.setItem('auditorr_secret', s)
-      return req(path, opts)   // retry once
+      return req(path, opts, true)
     }
     throw new Error('Authentication required')
   }
@@ -25,7 +26,7 @@ async function req(path, opts = {}) {
   return data
 }
 
-async function reqText(path, opts = {}) {
+async function reqText(path, opts = {}, retried = false) {
   const secret = getSecret()
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
   if (secret) headers['X-Auditorr-Secret'] = secret
@@ -33,10 +34,11 @@ async function reqText(path, opts = {}) {
   const res = await fetch('/api' + path, { ...opts, headers })
 
   if (res.status === 401) {
+    if (retried) throw new Error('Authentication required')
     const s = window.prompt('auditorr requires an access key. Enter AUDITORR_SECRET:')
     if (s) {
       localStorage.setItem('auditorr_secret', s)
-      return reqText(path, opts)
+      return reqText(path, opts, true)
     }
     throw new Error('Authentication required')
   }
@@ -58,6 +60,7 @@ export const api = {
   getConfig:      ()     => req('/config'),
   saveConfig:     (conf) => req('/config', { method: 'POST', body: JSON.stringify(conf) }),
   testConnection: (conf) => req('/test_connection', { method: 'POST', body: JSON.stringify(conf) }),
+  testPaths:      (conf) => req('/test_paths',      { method: 'POST', body: JSON.stringify(conf) }),
   testSonarr: (url, apiKey) => req('/test_sonarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
   testRadarr: (url, apiKey) => req('/test_radarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
   actionScript: (type)    => reqText('/actions/script/' + type),
@@ -65,4 +68,8 @@ export const api = {
   radarrRescan: (paths)   => req('/actions/radarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
   sonarrSearch: (path)    => req('/actions/sonarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
   radarrSearch: (path)    => req('/actions/radarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
+  uploadStats:  (days)    => req('/upload_stats?days=' + days),
+  browseData:   ()        => req('/browse_data'),
+  qbitInfo:     ()        => req('/qbit_info'),
+  qbitSavePath: (creds)   => req('/qbit_save_path', { method: 'POST', body: JSON.stringify(creds) }),
 }

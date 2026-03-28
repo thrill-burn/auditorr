@@ -1,5 +1,43 @@
 # Changelog
 
+<<<<<<< HEAD
+=======
+## v1.3.0 — 2026-03-28
+
+### Setup & Onboarding
+- **Setup wizard** — 3-step wizard shown on first launch when no config exists. Step 1: qBittorrent connection with post-test info card. Step 2: data paths with container filesystem browser and "Fetch from qBittorrent" save-path button. Step 3: Sonarr/Radarr. An early-start button on Step 2 lets users trigger a first audit before completing optional integrations.
+
+### qBittorrent
+- **Connection info card** — after a successful test connection, shows qBittorrent version, torrent count, and total seeding size inline in the qBit card
+- **Save path auto-fetch** — "Fetch from qBittorrent" button computes the common prefix of the first 50 torrent save paths and fills the qBit Save Path field
+- **Thread-safe connection timeout** — `test_connection` route uses `threading.Thread` + `t.join(timeout=10)` so a hanging qBit instance cannot block the gunicorn worker indefinitely; `_fetch_qbit_file_map` wraps the full scan in `socket.setdefaulttimeout(30)` / `finally: socket.setdefaulttimeout(None)`
+- **`/api/qbit_save_path`** — POST endpoint now returns `version`, `torrent_count`, and `seeding_size` alongside `save_path`, enabling the wizard to populate the info card from a single credentials-in-body call
+
+### Config
+- **Inline test buttons** — Test Connection moved into the qBittorrent card; Media Path and Local Torrent Path each show per-field ✓/✗ feedback after Test Paths
+- **Unsaved changes indicator** — amber dot on the Save Settings button appears whenever a field has been modified since last save; clears on successful save
+- **Path warnings persistence** — path warnings from config save are stored in `localStorage` and survive page reload
+- **Container filesystem browser** — collapsible `/data` directory browser in the Path Mappings card with click-to-fill for Media Path and Local Torrent Path
+
+### Dashboard & Explorer
+- **Flat/tree view toggle** — ⊟ Tree / ⊞ Flat segmented control in the file explorer toolbar, persisted to `localStorage`; search and path-reveal force flat mode regardless of toggle state
+- **Size sort** — Sort: Name | Size inline toggle in flat mode; sorts by file size descending
+- **Hardlinks/dupes custom popover** — replaces native browser title tooltip with a styled `position: fixed` overlay below the filename, showing HARDLINKS and DUPLICATES sections with horizontal viewport clamping and word-break paths
+- **Changes panel collapse** — ▶/▼ toggle in the changes panel header collapses the category list; state persisted to `localStorage` as `auditorr_changes_collapsed`
+
+### Bug Fixes
+- **Title parser** — `\s+` anchor in `_parse_title_from_filename` prevents quality tags from matching mid-word (e.g. `Internal` in "Internal Affairs" is no longer stripped; `INTERNAL` only matches as a standalone token)
+- **Path boundary substitution** — `arr_rescan` boundary check `abs_path[len(local_path):][:1] in ('/', '')` prevents `/data/media-extra` from being treated as a sub-path of `/data/media`
+- **Infinite 401 retry loop** — `api.js` `req()`/`reqText()` now pass a `retried` flag to prevent prompting for the secret key on every request after a second failure
+- **Hook ordering violation** — `computeCrossSeedStats` `useMemo` in `Dashboard.jsx` moved before the `if (!data)` early return
+- **Notification API guard** — `'Notification' in window` check added in `App.jsx` before all `Notification` calls, fixing crashes in browsers that don't implement the API
+- **Delete script abort** — `set -euo pipefail` removed from the orphaned torrents delete script; per-file existence checks handle errors without aborting on first missing file
+
+### Tests
+- **pytest suite** — `tests/` directory with 71 tests covering `compute_diff`, `_parse_title_from_filename`, `process_health_metrics`, `validate_config`, `generate_script`, `_normalize_title`, and `arr_rescan` path boundary substitution. No external dependencies beyond `requirements.txt`; all qBittorrent and SQLite I/O mocked with `unittest.mock`.
+- **xfail tests** — 2 tests document the known `4K`-in-title regex bug (`strict=True` so they will automatically surface as passes once fixed)
+
+>>>>>>> experimental
 # v1.2.1 — 2026-03-25
 
 ### Security

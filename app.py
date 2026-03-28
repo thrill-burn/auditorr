@@ -1,9 +1,9 @@
 import os
+import socket
 import threading
 import logging
 import secrets
 import functools
-import urllib.parse
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -104,7 +104,7 @@ threading.Thread(target=startup, daemon=True).start()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "version": "3"}), 200
+    return jsonify({"status": "ok", "version": "1.3.0"}), 200
 
 
 @app.route('/api/results')
@@ -233,17 +233,134 @@ def handle_config():
 def test_connection():
     data = request.json or {}
     host = data.get('QB_HOST', '')
-    if host:
-        parsed = urllib.parse.urlparse(host)
-        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
-            return jsonify({"status": "error", "message": "QB_HOST must be a valid http:// or https:// URL"}), 400
-    try:
-        client = qbittorrentapi.Client(
-            host=host, username=data.get('QB_USER'), password=data.get('QB_PASS'))
-        client.auth_log_in()
+    user = data.get('QB_USER')
+    password = data.get('QB_PASS')
+
+    result = {}
+
+    def _connect():
+        try:
+            client = qbittorrentapi.Client(host=host, username=user, password=password)
+            client.auth_log_in()
+            result['ok'] = True
+        except Exception as e:
+            result['error'] = str(e)
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=10)
+
+    if t.is_alive():
+        return jsonify({"status": "error", "message": "Connection timed out"}), 400
+    elif result.get('ok'):
         return jsonify({"status": "success"})
+    else:
+        return jsonify({"status": "error", "message": result.get('error', 'Unknown error')}), 400
+
+
+@app.route('/api/qbit_info')
+@require_auth
+def qbit_info():
+    cfg = db_load_config()
+    result = {}
+    def _fetch():
+        try:
+            socket.setdefaulttimeout(10)
+            client = qbittorrentapi.Client(
+                host=cfg.get('QB_HOST'), username=cfg.get('QB_USER'), password=cfg.get('QB_PASS'))
+            client.auth_log_in()
+            torrents = list(client.torrents_info())
+            result['version'] = client.app.version
+            result['torrent_count'] = len(torrents)
+            result['seeding_size'] = sum(t.size for t in torrents if t.state in ('uploading', 'stalledUP', 'forcedUP'))
+            paths = [t.save_path.rstrip('/') for t in torrents if t.save_path]
+            if not paths:
+                result['save_path'] = None
+            else:
+                try:
+                    result['save_path'] = os.path.commonpath(paths) if len(paths) > 1 else paths[0]
+                except ValueError:
+                    result['save_path'] = paths[0]
+        except Exception as e:
+            result['error'] = str(e)
+        finally:
+            socket.setdefaulttimeout(None)
+    t = threading.Thread(target=_fetch); t.start(); t.join(timeout=12)
+    if t.is_alive():
+        return jsonify({'error': 'Connection timed out'}), 400
+    if 'error' in result:
+        return jsonify({'error': result['error']}), 400
+    return jsonify(result)
+
+
+@app.route('/api/qbit_save_path', methods=['POST'])
+@require_auth
+def qbit_save_path():
+    data = request.json or {}
+    result = {}
+    def _fetch():
+        try:
+            socket.setdefaulttimeout(10)
+            client = qbittorrentapi.Client(
+                host=data.get('QB_HOST'), username=data.get('QB_USER'), password=data.get('QB_PASS'))
+            client.auth_log_in()
+            torrents = list(client.torrents_info(limit=50))
+            result['version'] = client.app.version
+            result['torrent_count'] = len(torrents)
+            result['seeding_size'] = sum(t.size for t in torrents if t.state in ('uploading', 'stalledUP', 'forcedUP'))
+            paths = [t.save_path.rstrip('/') for t in torrents if t.save_path]
+            if not paths:
+                result['save_path'] = None
+            else:
+                try:
+                    result['save_path'] = os.path.commonpath(paths) if len(paths) > 1 else paths[0]
+                except ValueError:
+                    result['save_path'] = paths[0]
+        except Exception as e:
+            result['error'] = str(e)
+        finally:
+            socket.setdefaulttimeout(None)
+    t = threading.Thread(target=_fetch); t.start(); t.join(timeout=12)
+    if t.is_alive():
+        return jsonify({'error': 'Connection timed out'}), 400
+    if 'error' in result:
+        return jsonify({'error': result['error']}), 400
+    return jsonify(result)
+
+
+@app.route('/api/browse_data')
+@require_auth
+def browse_data():
+    base = '/data'
+    if not os.path.isdir(base):
+        return jsonify({'dirs': [], 'missing': True})
+    try:
+        dirs = sorted([
+            d for d in os.listdir(base)
+            if os.path.isdir(os.path.join(base, d))
+        ])
+        return jsonify({'dirs': dirs, 'missing': False})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
+        return jsonify({'dirs': [], 'missing': True, 'error': str(e)})
+
+
+@app.route('/api/test_paths', methods=['POST'])
+@require_auth
+def test_paths():
+    data = request.json or {}
+    results = {}
+    for key in ('MEDIA_PATH', 'LOCAL_PATH'):
+        path = data.get(key, '')
+        if not path:
+            results[key] = {'ok': False, 'message': 'Path is empty'}
+        elif os.path.exists(path):
+            results[key] = {'ok': True, 'message': 'Path exists'}
+        else:
+            results[key] = {'ok': False, 'message': f'{path} does not exist inside the container'}
+    return jsonify({
+        'media_path': results.get('MEDIA_PATH'),
+        'local_path':  results.get('LOCAL_PATH'),
+    })
 
 
 @app.route('/api/test_sonarr', methods=['POST'])
@@ -354,7 +471,8 @@ def actions_radarr_search():
 @require_auth
 def get_upload_stats():
     days  = request.args.get('days', 30, type=int)
-    days  = max(1, min(365, days))
+    if days != 0:
+        days = max(1, min(365, days))
     stats = compute_upload_stats(days)
     if stats is None:
         return jsonify({"status": "pending", "message": "Not enough data yet. Upload stats require at least 2 audits."})

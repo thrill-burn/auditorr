@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import SetupWizard  from './components/SetupWizard'
 import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
+import Trackers     from './components/Trackers'
 import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
@@ -108,7 +110,7 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
 // Hash-based routing helpers
 function getHashTab() {
   const hash = window.location.hash.replace('#', '') || 'dashboard'
-  const valid = ['dashboard', 'media', 'torrents', 'config']
+  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'config']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -124,12 +126,31 @@ function AppInner() {
     trigger: 'idle', next_scan_in: null, status_message: '',
     last_scan_status: 'never',
   })
-  const [pendingNav,    setPendingNav]    = useState(null)
-  const [isRefreshing,  setIsRefreshing]  = useState(false)
-  const [theme, setTheme] = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
-  const [scriptModal,   setScriptModal]   = useState(null)
-  const pollRef     = useRef(null)
+  const [pendingNav,         setPendingNav]         = useState(null)
+  const [isRefreshing,       setIsRefreshing]       = useState(false)
+  const [theme,              setTheme]              = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
+  const [scriptModal,        setScriptModal]        = useState(null)
+  const [timeRange,          setTimeRange]          = useState(() => {
+    const stored = localStorage.getItem('auditorr_chart_days')
+    return stored !== null ? parseInt(stored) : 30
+  })
+  const [selectedTrackers,   setSelectedTrackers]   = useState(null)
+  const [revealPath,         setRevealPath]         = useState(null)
+  const [showWizard,         setShowWizard]         = useState(false)
   const prevScanRef = useRef(false)
+
+  useEffect(() => {
+    if (tab !== 'media' && tab !== 'torrents') setRevealPath(null)
+  }, [tab])
+
+  const allTrackers = useMemo(() => {
+    if (!results) return []
+    const set = new Set()
+    for (const f of results.media_files || []) {
+      for (const t of f.trackers || []) { if (t !== 'None') set.add(t) }
+    }
+    return [...set].sort()
+  }, [results])
   const toast       = useToast()
 
   // Apply theme to document root
@@ -137,6 +158,10 @@ function AppInner() {
     document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : '')
     localStorage.setItem('auditorr_theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem('auditorr_chart_days', timeRange)
+  }, [timeRange])
 
   // Sync tab to hash
   useEffect(() => {
@@ -162,46 +187,58 @@ function AppInner() {
     }
   }, [])
 
-  const startPolling = useCallback(() => {
-    if (pollRef.current) return
-    pollRef.current = setInterval(async () => {
+  useEffect(() => {
+    api.getConfig().then(cfg => {
+      if (!cfg.QB_HOST) setShowWizard(true)
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission()
+    fetchResults()
+    const id = setInterval(async () => {
       try {
         const state = await api.progress()
         setScanState(state)
         if (prevScanRef.current && !state.is_scanning) {
-          clearInterval(pollRef.current)
-          pollRef.current = null
           await fetchResults()
           const msg = state.status_message?.startsWith('Audit error') ||
                       state.status_message?.startsWith('qBittorrent')
             ? state.status_message : 'Audit complete'
           const isError = msg !== 'Audit complete'
           toast(msg, isError ? 'error' : 'success')
-          if (!isError && Notification.permission === 'granted')
+          if (!isError && 'Notification' in window && Notification.permission === 'granted')
             new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
         }
         prevScanRef.current = state.is_scanning
       } catch (e) { console.error('Poll error:', e) }
-    }, 1000)
+    }, 5000)
+    return () => clearInterval(id)
   }, [fetchResults, toast])
-
-  useEffect(() => {
-    if (Notification.permission === 'default') Notification.requestPermission()
-    fetchResults()
-    api.progress().then(state => {
-      setScanState(state)
-      prevScanRef.current = state.is_scanning
-      if (state.is_scanning) startPolling()
-    })
-    return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [fetchResults, startPolling])
 
   const handleScan = async () => {
     await api.startScan()
     setScanState(s => ({ ...s, is_scanning: true, progress: 0 }))
     prevScanRef.current = true
-    startPolling()
     toast('Manual audit started', 'info')
+  }
+
+  const handleWizardEarlyStart = async (partialConfig) => {
+    try { await api.saveConfig(partialConfig) } catch (_) {}
+    try { await api.startScan() } catch (_) {}
+    setScanState(s => ({ ...s, is_scanning: true, progress: 0 }))
+    prevScanRef.current = true
+  }
+
+  const handleWizardComplete = async (wizardData) => {
+    try { await api.saveConfig(wizardData) } catch (_) {}
+    localStorage.setItem('auditorr_setup_dismissed', '1')
+    setShowWizard(false)
+  }
+
+  const handleWizardSkip = () => {
+    localStorage.setItem('auditorr_setup_dismissed', '1')
+    setShowWizard(false)
   }
 
   const handleTabChange = t => {
@@ -240,6 +277,7 @@ function AppInner() {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
+      {showWizard && <SetupWizard onComplete={handleWizardComplete} onSkip={handleWizardSkip} onEarlyStart={handleWizardEarlyStart} />}
       <Sidebar
         active={tab}
         onChange={handleTabChange}
@@ -254,7 +292,7 @@ function AppInner() {
         crossSeedMultiplier={crossSeedMultiplier}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <ErrorBanner message={results?.status} />
+        {!showWizard && <ErrorBanner message={results?.status} />}
         <div style={{ flex: 1, position: 'relative' }}>
           {/* Refresh shimmer overlay */}
           {isRefreshing && (
@@ -271,6 +309,12 @@ function AppInner() {
               onNavigate={handleNavigate}
               isRefreshing={isRefreshing}
               onScript={setScriptModal}
+              timeRange={timeRange}
+              setTimeRange={setTimeRange}
+              selectedTrackers={selectedTrackers}
+              setSelectedTrackers={setSelectedTrackers}
+              allTrackers={allTrackers}
+              onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
             />
           )}
           {(tab === 'media' || tab === 'torrents') && (
@@ -283,12 +327,23 @@ function AppInner() {
               initialImportFilter={pendingNav?.importFilter}
               initialTracker={pendingNav?.tracker}
               initialSeedCount={pendingNav?.seedCount}
+              revealPath={revealPath}
+            />
+          )}
+          {tab === 'trackers' && (
+            <Trackers
+              torrentFiles={results?.torrent_files || []}
+              onNavigate={handleNavigate}
+              timeRange={timeRange}
+              onTimeRangeChange={setTimeRange}
+              selectedTrackers={selectedTrackers}
+              allTrackers={allTrackers}
+              onTrackersChange={setSelectedTrackers}
             />
           )}
           {tab === 'config' && (
             <Config
               lastAuditTime={scanState.last_audit_time}
-              onScan={handleScan}
               isScanning={scanState.is_scanning}
               onConfigSaved={fetchResults}
               theme={theme}

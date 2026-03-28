@@ -89,8 +89,6 @@ def generate_script(script_type, results, cfg):
             '# All file paths are relative to your torrent directory.',
             '# Run this from wherever that directory is mounted with write access.',
             '',
-            'set -euo pipefail',
-            '',
         ]
 
         # Working-directory guard using the first orphaned file

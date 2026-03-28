@@ -349,11 +349,16 @@ def db_save_upload_snapshot(snapshot_dict):
 def db_get_upload_snapshots(since_days=90):
     conn = _db_conn()
     try:
-        cutoff = (datetime.now() - timedelta(days=since_days)).isoformat()
-        rows = conn.execute(
-            'SELECT taken_at, snapshot FROM upload_snapshots WHERE taken_at >= ? ORDER BY taken_at ASC',
-            (cutoff,)
-        ).fetchall()
+        if since_days == 0:
+            rows = conn.execute(
+                'SELECT taken_at, snapshot FROM upload_snapshots ORDER BY taken_at ASC'
+            ).fetchall()
+        else:
+            cutoff = (datetime.now() - timedelta(days=since_days)).isoformat()
+            rows = conn.execute(
+                'SELECT taken_at, snapshot FROM upload_snapshots WHERE taken_at >= ? ORDER BY taken_at ASC',
+                (cutoff,)
+            ).fetchall()
         return [{'taken_at': r['taken_at'], 'snapshot': json.loads(r['snapshot'])} for r in rows]
     finally:
         conn.close()

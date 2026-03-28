@@ -7,12 +7,12 @@ It cross-references your hardlinked torrent and media directories with qBittorre
 ![Dashboard](docs/dashboard.png)
 
 - **Health score (0–100)** — see how clean and efficient your library is
-- **Find wasted disk space** — duplicates, orphaned files, unlinked torrents
-- **Cross-seeding insights** — weighted average seed multiplier, segmented disk bar, tracker leaderboard
-- **Tracker leaderboard** — see which trackers actually matter by disk space
-- **Powerful file explorer** — filter by status, tracker, seed count, size, filename
+- **Find wasted disk space** — duplicates, orphaned files, unlinked torrents with one-click delete and dedupe scripts
+- **Upload analytics & library yield** — daily upload volume per tracker, yield % over time, tracker leaderboard
+- **Cross-seeding insights** — weighted average seed multiplier, segmented disk bar, per-tracker breakdown
+- **Powerful file explorer** — tree and flat views, filter by status, tracker, seed count, size, filename
 - **Sonarr/Radarr integration** — open orphaned media directly in Sonarr or Radarr for interactive search
-- **Inline action buttons** — generate delete and dedupe scripts, trigger Sonarr/Radarr rescans from the dashboard
+- **Guided setup** — first-run wizard connects qBittorrent, verifies your paths, and optionally sets up Sonarr/Radarr
 
 ---
 
@@ -37,7 +37,7 @@ docker run -d \
   ghcr.io/thrill-burn/auditorr:latest
 ```
 
-Then open: `http://your-server-ip:8677` and configure qBittorrent.
+Then open `http://your-server-ip:8677`. On first launch, a setup wizard will guide you through connecting qBittorrent and configuring your data paths.
 
 ### unRaid (Recommended)
 
@@ -51,7 +51,7 @@ Docker tab → Add Container button at the bottom and fill in the blanks:
 - **Data Path:** `/mnt/user/data` → `/data`
 - **Port Mapping:** `8677 → 8677`
 
-Press the Apply button, let the container install, then open `http://your-server-ip:8677` and configure qBittorrent connection details in the Config tab.
+Press the Apply button, let the container install, then open `http://your-server-ip:8677`. The setup wizard will guide you through the rest.
 
 ### Docker Compose
 
@@ -94,8 +94,21 @@ auditorr assumes a **hardlink-based setup**.
 
 If you are not using hardlinks, your health score will be low even if your library appears functional.
 
---- 
+---
 
+## Will this break my library?
+
+No. auditorr is designed from the ground up to be read-only and non-destructive.
+
+- **Your media is physically read-only** — the Docker volume mount uses the `:ro` flag. auditorr cannot write, move, or delete any file in your media or torrent directories at the OS level, regardless of what any code does.
+- **qBittorrent access is read-only** — auditorr only calls qBittorrent's read endpoints (torrent list, file list, tracker list). It never pauses, removes, or modifies any torrent or tracker.
+- **No direct tracker communication** — auditorr never connects to your trackers. All tracker information (names, stats, upload data) is pulled from qBittorrent's local API, which already has that data. Your tracker relationships stay between you and qBittorrent.
+- **Scripts are yours to review** — the delete and dedupe scripts are plain text bash files. auditorr never executes them — you download, read, and run them yourself.
+- **Your credentials stay local** — Sonarr, Radarr, and qBittorrent credentials are stored in a SQLite database on your server and masked in the UI. Never sent anywhere except your own LAN instances.
+- **No external connections** — auditorr makes no outbound requests to the internet. Every API call goes to your own qBittorrent, Sonarr, or Radarr on your LAN.
+- **LAN-only by default** — the web UI is accessible only from private network IP ranges. No telemetry, no analytics, no phone-home.
+
+---
 ## Configuration
 
 All configuration is done through the **Config** tab in the UI.
@@ -103,9 +116,12 @@ All configuration is done through the **Config** tab in the UI.
 | Setting | Description |
 |---|---|
 | **qBittorrent Host** | URL of your qBittorrent instance, e.g. `http://192.168.1.x:8080` |
-| **qBit Save Path** | The path qBittorrent reports via its API |
+| **Test Connection** | Verifies credentials and shows qBittorrent version, torrent count, and seeding size |
+| **qBit Save Path** | The path qBittorrent reports via its API. Use **Fetch from qBittorrent** to auto-populate. |
 | **Local Torrent Path** | Where those files actually live from auditorr's perspective (may differ if qBit runs in its own container) |
 | **Media Path** | Your final media library directory |
+| **Test Paths** | Verifies that Media Path and Local Torrent Path are visible inside the container, with per-path ✓/✗ feedback |
+| **Browse container filesystem** | Expandable `/data` directory browser — click any directory to fill Media Path or Local Torrent Path |
 | **Watchdog Cooldown** | Seconds to wait after a filesystem change before running an audit (default: 60) |
 | **Scheduled Interval** | Fallback audit interval in minutes (default: 360) |
 | **Thresholds** | Percentage of library at which each category loses all its points |

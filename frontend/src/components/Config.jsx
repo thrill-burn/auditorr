@@ -1,6 +1,52 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api'
 
+function DataBrowser({ onSelectMedia, onSelectTorrents }) {
+  const [result, setResult] = useState(null)
+
+  useEffect(() => {
+    api.browseData().then(setResult).catch(() => setResult({ dirs: [], missing: true }))
+  }, [])
+
+  const btnStyle = {
+    padding: '2px 8px', borderRadius: 'var(--r)', border: '1px solid var(--border2)',
+    background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)',
+    fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap',
+  }
+
+  if (!result) return (
+    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 10 }}>Browsing /data…</div>
+  )
+
+  if (result.missing || result.dirs.length === 0) return (
+    <div style={{ marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.55 }}>
+      {result.missing
+        ? <span style={{ color: '#f59e0b' }}>⚠ /data is not mounted or is empty. Check your Docker volume configuration — auditorr expects your data to be mounted at /data.</span>
+        : <span style={{ color: 'var(--text-dim)' }}>No subdirectories found in /data.</span>
+      }
+    </div>
+  )
+
+  return (
+    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {result.dirs.map(dir => (
+        <div key={dir} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" style={{ flexShrink: 0 }}>
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>/data/{dir}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <button style={btnStyle} onClick={() => onSelectMedia('/data/' + dir)}>→ Media</button>
+            <button style={btnStyle} onClick={() => onSelectTorrents('/data/' + dir)}>→ Torrents</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Field({ label, hint, type = 'text', value, onChange, placeholder, style = {}, prefix, suffix }) {
   const [focused, setFocused] = useState(false)
   return (
@@ -47,15 +93,21 @@ function Card({ title, children }) {
   )
 }
 
-export default function Config({ lastAuditTime, onScan, isScanning, onConfigSaved, theme, onThemeChange }) {
+export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, onScan }) {
   const [conf,        setConf]        = useState(null)
   const [testStatus,        setTestStatus]        = useState(null)
   const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
   const [radarrTestStatus,  setRadarrTestStatus]  = useState(null)
   const [saveStatus,        setSaveStatus]        = useState(null)
+  const [saveWarnings,      setSaveWarnings]      = useState(() => JSON.parse(localStorage.getItem('auditorr_path_warnings') || '[]'))
   const [passChanged, setPassChanged] = useState(false)
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
+  const [pathTestStatus, setPathTestStatus] = useState(null)
+  const [browserOpen, setBrowserOpen] = useState(false)
+  const [qbitInfo, setQbitInfo] = useState(null)
+  const [savePathStatus, setSavePathStatus] = useState(null)
+  const [isDirty, setIsDirty] = useState(false)
 
   // We display ratios as percentages in the UI (0.01 → "1")
   // and convert back on save
@@ -79,6 +131,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setPassChanged(false)
+      setIsDirty(false)
     })
   }
 
@@ -89,14 +142,39 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
 
   if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading…</div>
 
-  const set = key => val => setConf(c => ({ ...c, [key]: val }))
+  const set = key => val => { setConf(c => ({ ...c, [key]: val })); setIsDirty(true) }
+
+  const setPersistentWarnings = (warnings) => {
+    setSaveWarnings(warnings)
+    if (warnings.length) localStorage.setItem('auditorr_path_warnings', JSON.stringify(warnings))
+    else localStorage.removeItem('auditorr_path_warnings')
+  }
 
   const handleTest = async () => {
     setTestStatus({ loading: true })
+    setQbitInfo(null)
     try {
       await api.testConnection({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
+      api.qbitInfo().then(setQbitInfo).catch(() => {})
     } catch (e) { setTestStatus({ ok: false, msg: e.message }) }
+  }
+
+  const handleFetchSavePath = async () => {
+    setSavePathStatus('loading')
+    try {
+      const res = await api.qbitSavePath({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
+      if (res.save_path) { set('REMOTE_PATH')(res.save_path); setSavePathStatus('ok') }
+      else setSavePathStatus('empty')
+    } catch (e) { setSavePathStatus('error') }
+  }
+
+  const handleTestPaths = async () => {
+    setPathTestStatus('loading')
+    try {
+      const result = await api.testPaths({ MEDIA_PATH: conf.MEDIA_PATH, LOCAL_PATH: conf.LOCAL_PATH })
+      setPathTestStatus(result)
+    } catch (e) { setPathTestStatus({ error: e.message }) }
   }
 
   const handleTestSonarr = async () => {
@@ -118,6 +196,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
   }
 
   const handleSave = async () => {
+    setPersistentWarnings([])
     const payload = {
       ...conf,
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
@@ -128,18 +207,14 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
     if (!passChanged) delete payload.QB_PASS
     try {
       const result = await api.saveConfig(payload)
-      if (result.warnings?.length) {
-        setSaveStatus({ ok: true, msg: 'Saved with warnings: ' + result.warnings.join('; ') })
-      } else {
-        setSaveStatus({ ok: true, msg: 'Saved!' })
-      }
+      if (result.warnings?.length) setPersistentWarnings(result.warnings)
+      else setPersistentWarnings([])
+      setSaveStatus({ ok: true, msg: 'Saved!' })
       setTimeout(() => setSaveStatus(null), 5000)
       // Re-fetch config so form shows server-confirmed values
       loadConfig()
       // Refresh dashboard so threshold changes are reflected immediately
       if (onConfigSaved) onConfigSaved()
-      // Trigger a background audit so the new config takes effect immediately
-      if (onScan) onScan()
     } catch (e) { setSaveStatus({ ok: false, msg: e.message }) }
   }
 
@@ -157,6 +232,13 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
     } catch (e) { setClearStatus({ ok: false, msg: e.message }) }
   }
 
+  const fmtSize = b => {
+    if (!b) return '0 B'
+    if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB'
+    if (b >= 1e9)  return (b / 1e9).toFixed(1)  + ' GB'
+    return (b / 1e6).toFixed(0) + ' MB'
+  }
+
   const thresholdHint = (label) =>
     `All 10 pts lost when ${label} data reaches this % of your library. Points lost proportionally below that.`
 
@@ -164,27 +246,103 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
     <div className="fade-in" style={{ padding: 24, maxWidth: 800 }}>
 
       <Card title="qBittorrent Connection">
-        <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={conf.QB_HOST} onChange={set('QB_HOST')} style={{ marginBottom: 14 }} />
+        <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={conf.QB_HOST} onChange={v => { set('QB_HOST')(v); setQbitInfo(null) }} style={{ marginBottom: 14 }} />
         <div style={g2}>
-          <Field label="Username" placeholder="admin" value={conf.QB_USER} onChange={set('QB_USER')} />
+          <Field label="Username" placeholder="admin" value={conf.QB_USER} onChange={v => { set('QB_USER')(v); setQbitInfo(null) }} />
           <Field label="Password" type="password" placeholder="(unchanged — leave blank to keep current)"
-            value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v) }} />
+            value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v); setQbitInfo(null) }} />
         </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          {testStatus && (testStatus.loading || !testStatus.ok) && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+              {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
+            </span>
+          )}
+          <button onClick={handleTest} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+            Test Connection
+          </button>
+        </div>
+        {qbitInfo && (
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginTop: 8 }}>
+            {`✓ Connected · qBittorrent ${qbitInfo.version} · ${qbitInfo.torrent_count} torrents · ${fmtSize(qbitInfo.seeding_size)} seeding`}
+          </div>
+        )}
       </Card>
 
       <Card title="Path Mappings">
-        <Field label="Media Path" style={{ marginBottom: 14 }}
-          hint="Where your final media library lives inside this container — e.g. /data/media"
-          placeholder="/data/media" value={conf.MEDIA_PATH} onChange={set('MEDIA_PATH')} />
+        <Field label="qBit Save Path"
+          hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
+          placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 14 }}>
+          <button onClick={handleFetchSavePath} style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
+            {savePathStatus === 'loading' ? 'Fetching…' : 'Fetch from qBittorrent'}
+          </button>
+          {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
+          {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
+        </div>
         <div style={g2}>
-          <Field label="qBit Save Path"
-            hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
-            placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
-          <Field label="Local Torrent Path"
-            hint="Where those same torrent files are on disk from this container's perspective."
-            placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={set('LOCAL_PATH')} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Field label="Media Path"
+              hint="Where your final media library lives inside this container — e.g. /data/media"
+              placeholder="/data/media" value={conf.MEDIA_PATH} onChange={v => { set('MEDIA_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
+            {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: pathTestStatus.media_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+                {pathTestStatus.media_path?.ok ? '✓ Found' : '✗ Not found inside container'}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Field label="Local Torrent Path"
+              hint="Where those same torrent files are on disk from this container's perspective."
+              placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={v => { set('LOCAL_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
+            {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: pathTestStatus.local_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+                {pathTestStatus.local_path?.ok ? '✓ Found' : '✗ Not found inside container'}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          {!pathTestStatus && (
+            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Click Test Paths to verify these are visible inside the container</span>
+          )}
+          {pathTestStatus === 'loading' && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Testing…</span>
+          )}
+          {pathTestStatus?.error && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ {pathTestStatus.error}</span>
+          )}
+          <button onClick={handleTestPaths} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+            Test Paths
+          </button>
+        </div>
+        <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <button onClick={() => setBrowserOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+            {browserOpen ? '▼' : '▶'} Browse container filesystem
+          </button>
+          {browserOpen && (
+            <DataBrowser
+              onSelectMedia={v => { set('MEDIA_PATH')(v); setPathTestStatus(null); setPersistentWarnings([]) }}
+              onSelectTorrents={v => { set('LOCAL_PATH')(v); setPathTestStatus(null); setPersistentWarnings([]) }}
+            />
+          )}
         </div>
       </Card>
+
+      {saveWarnings.length > 0 && (
+        <div style={{
+          marginBottom: 16, padding: '12px 16px',
+          borderRadius: 'var(--rl)', border: '1px solid #f59e0b',
+          background: '#f59e0b12',
+        }}>
+          {saveWarnings.map((w, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontFamily: 'var(--mono)', fontSize: 12, color: '#f59e0b', lineHeight: 1.5 }}>
+              <span style={{ flexShrink: 0 }}>⚠</span>
+              <span>Path warning — {w}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       <Card title="Watchdog & Scheduled Audits">
         <div style={g2}>
@@ -253,15 +411,15 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
           <Field label="Orphaned Torrent Threshold" type="number"
             suffix="%"
             hint={thresholdHint('orphaned torrent')}
-            placeholder="1" value={orPct} onChange={setOrPct} />
+            placeholder="1" value={orPct} onChange={v => { setOrPct(v); setIsDirty(true) }} />
           <Field label="Not Imported Threshold" type="number"
             suffix="%"
             hint={thresholdHint('unlinked seeding')}
-            placeholder="1" value={niPct} onChange={setNiPct} />
+            placeholder="1" value={niPct} onChange={v => { setNiPct(v); setIsDirty(true) }} />
           <Field label="Duplicate Files Threshold" type="number"
             suffix="%"
             hint={thresholdHint('duplicate file')}
-            placeholder="1" value={dupPct} onChange={setDupPct} />
+            placeholder="1" value={dupPct} onChange={v => { setDupPct(v); setIsDirty(true) }} />
         </div>
 
         {/* Live score preview */}
@@ -289,7 +447,7 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
         </span>
         <textarea
           value={exclusionPatterns}
-          onChange={e => setExclusionPatterns(e.target.value)}
+          onChange={e => { setExclusionPatterns(e.target.value); setIsDirty(true) }}
           onFocus={() => setExclusionFocused(true)}
           onBlur={() => setExclusionFocused(false)}
           placeholder={'@eaDir\n*.srt\nFeaturettes'}
@@ -402,20 +560,13 @@ export default function Config({ lastAuditTime, onScan, isScanning, onConfigSave
           </span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, marginLeft: 20 }}>
-          {testStatus && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.ok ? 'var(--green)' : 'var(--red)' }}>
-              {testStatus.loading ? 'Testing…' : (testStatus.ok ? '✓ ' : '✗ ') + testStatus.msg}
-            </span>
-          )}
           {saveStatus && (
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: saveStatus.ok ? 'var(--green)' : 'var(--red)' }}>
               {saveStatus.ok ? '✓ ' : '✗ '}{saveStatus.msg}
             </span>
           )}
-          <button onClick={handleTest} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
-            Test Connection
-          </button>
-          <button onClick={handleSave} style={{ padding: '7px 18px', borderRadius: 'var(--r)', border: 'none', background: 'var(--accent)', color: '#000', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+          <button onClick={handleSave} style={{ position: 'relative', padding: '7px 18px', borderRadius: 'var(--r)', border: 'none', background: 'var(--accent)', color: '#000', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+            {isDirty && <span style={{ position: 'absolute', top: 4, right: 4, width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'block' }} />}
             Save Settings
           </button>
           {onScan && (

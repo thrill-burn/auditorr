@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import React, { useState, useEffect, useMemo } from 'react'
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
+import FilterBar from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
 
@@ -135,6 +136,53 @@ function GrafanaTooltip({ active, payload, label, color }) {
       </div>
     </div>
   )
+}
+
+// ── Upload activity tooltip ───────────────────────────────────────────────────
+const TRACKER_COLORS = [
+  '#38bdf8', '#a78bfa', '#22c55e', '#f59e0b',
+  '#ef4444', '#ec4899', '#14b8a6', '#f97316',
+]
+
+function UploadActivityTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  const items = payload.filter(p => p.value > 0)
+  const total = payload.reduce((s, p) => s + (p.value || 0), 0)
+  return (
+    <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 160 }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
+      {items.map(p => (
+        <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
+          <div style={{ width: 8, height: 8, borderRadius: 2, background: p.fill, flexShrink: 0 }} />
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#ebebeb', flex: 1 }}>{p.name}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{formatBytes(p.value)}</span>
+        </div>
+      ))}
+      {items.length > 1 && (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Total</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RoundedStackedBar({ x, y, width, height, fill, allTrackers, host, payload }) {
+  if (!height || height <= 0) return null
+  const r = 3
+  // Determine if this segment is the topmost non-zero segment for this day
+  const idx = allTrackers.indexOf(host)
+  const isTop = allTrackers.slice(idx + 1).every(t => !(payload[t] > 0))
+  if (isTop) {
+    return (
+      <path
+        d={`M${x},${y + r} a${r},${r} 0 0 1 ${r},-${r} h${width - 2 * r} a${r},${r} 0 0 1 ${r},${r} v${height - r} h-${width} Z`}
+        fill={fill}
+      />
+    )
+  }
+  return <rect x={x} y={y} width={width} height={height} fill={fill} />
 }
 
 // ── Metric card ───────────────────────────────────────────────────────────────
@@ -297,7 +345,7 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
 }
 
 // ── Tracker leaderboard ───────────────────────────────────────────────────────
-function TrackerLeaderboard({ trackerStats, onNavigate }) {
+function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
   if (!trackerStats || trackerStats.length === 0) return null
 
   const top3 = trackerStats.slice(0, 3)
@@ -313,7 +361,7 @@ function TrackerLeaderboard({ trackerStats, onNavigate }) {
         return (
           <button
             key={t.name}
-            onClick={() => onNavigate({ tab: 'torrents', tracker: t.name })}
+            onClick={() => onTrackerDetail(t.name)}
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '10px 12px', borderRadius: 8,
@@ -383,11 +431,177 @@ function computeCrossSeedStats(mediaFiles) {
   return { crossSeedMultiplier, segments, totalSize, trackerStats }
 }
 
+// ── Tracker card (shared between modal and Trackers page) ─────────────────────
+export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate, onClose }) {
+  const trackerTorrents = torrentFiles.filter(f => (f.trackers || []).includes(trackerName))
+  const seeding     = trackerTorrents.filter(f => f.status === 'Seeding')
+  const orphaned    = trackerTorrents.filter(f => f.status === 'Orphaned')
+  const notImported = trackerTorrents.filter(f => !f.imported && f.status !== 'Orphaned')
+
+  const seedingSize     = seeding.reduce((a, f) => a + f.size, 0)
+  const orphanedSize    = orphaned.reduce((a, f) => a + f.size, 0)
+  const notImportedSize = notImported.reduce((a, f) => a + f.size, 0)
+
+  const yieldData = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
+  const yieldPct  = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(2) + '%' : '—'
+  const uploadedBytes = yieldData?.uploaded ?? null
+
+  const uploadTrendData = uploadStats?.daily_uploads?.map(day => ({
+    date: day.date.slice(5),
+    uploaded: day.by_tracker?.[trackerName] || 0,
+  }))
+  const hasUploadData = uploadTrendData?.some(d => d.uploaded > 0)
+  const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}`
+
+  const statBoxes = [
+    { label: 'Seeding',      value: formatBytes(seedingSize),                                          sub: `${seeding.length} files`,                          color: 'var(--green)'  },
+    { label: 'Uploaded',     value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—',         sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet', color: 'var(--blue)'   },
+    { label: 'Yield',        value: yieldPct,                                                          sub: 'uploaded / seeding',                               color: 'var(--accent)' },
+    { label: 'Orphaned',     value: formatBytes(orphanedSize),                                         sub: `${orphaned.length} files`,                         color: 'var(--yellow)' },
+    { label: 'Not Imported', value: formatBytes(notImportedSize),                                      sub: `${notImported.length} files`,                      color: 'var(--red)'    },
+  ]
+
+  const btnStyle = {
+    padding: '9px 14px', borderRadius: 8, border: '1px solid var(--accent)35',
+    background: 'var(--accent)12', color: 'var(--accent)',
+    fontSize: 13, fontWeight: 500, cursor: 'pointer', textAlign: 'left',
+    transition: 'background 0.15s', width: '100%',
+  }
+  const btnHover = e => e.currentTarget.style.background = 'var(--accent)22'
+  const btnLeave = e => e.currentTarget.style.background = 'var(--accent)12'
+
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
+        {onClose && (
+          <button
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, padding: '2px 6px', lineHeight: 1 }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-dim)'}
+          >×</button>
+        )}
+      </div>
+
+      {/* Content */}
+      <div style={{ overflowY: 'auto', flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* Stats row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+          {statBoxes.map(s => (
+            <div key={s.label} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Upload trend */}
+        {uploadStats && (
+          hasUploadData ? (
+            <div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>Upload Trend</div>
+              <div style={{ height: 160 }}>
+                <ResponsiveContainer width="100%" height={160}>
+                  <AreaChart data={uploadTrendData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
+                        <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
+                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                    <YAxis
+                      tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                      tickLine={false} axisLine={false}
+                      tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                    />
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null
+                        return (
+                          <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(payload[0].value)}</div>
+                          </div>
+                        )
+                      }}
+                      cursor={{ stroke: 'var(--accent)', strokeWidth: 1, strokeOpacity: 0.4, strokeDasharray: '3 3' }}
+                    />
+                    <Area type="linear" dataKey="uploaded" stroke="var(--accent)" strokeWidth={1.5} fill={`url(#${gradId})`} dot={false} activeDot={{ r: 4, fill: 'var(--accent)', stroke: 'var(--bg)', strokeWidth: 2 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
+              Upload data will appear after a few audits
+            </div>
+          )
+        )}
+
+        {/* Navigation buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {seeding.length > 0 && (
+            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
+              View Seeding Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seeding.length} files · {formatBytes(seedingSize)})</span>
+            </button>
+          )}
+          {orphaned.length > 0 && (
+            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
+              View Orphaned Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphaned.length} files · {formatBytes(orphanedSize)})</span>
+            </button>
+          )}
+          {notImported.length > 0 && (
+            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
+              View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImported.length} files · {formatBytes(notImportedSize)})</span>
+            </button>
+          )}
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
+// ── Tracker detail modal (thin wrapper around TrackerCard) ────────────────────
+function TrackerDetailModal({ trackerName, torrentFiles, uploadStats, onNavigate, onClose }) {
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ maxWidth: 860, width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <TrackerCard
+          trackerName={trackerName}
+          torrentFiles={torrentFiles}
+          uploadStats={uploadStats}
+          onNavigate={onNavigate}
+          onClose={onClose}
+        />
+      </div>
+    </div>
+  )
+}
+
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript }) {
+export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, selectedTrackers, setSelectedTrackers, allTrackers, onReveal }) {
   const toast = useToast()
   const [sonarrConfigured, setSonarrConfigured] = useState(false)
   const [radarrConfigured, setRadarrConfigured] = useState(false)
+  const [uploadStats, setUploadStats] = useState(null)
+  const [trackerDetail, setTrackerDetail] = useState(null)
+  const [yieldPanelTab, setYieldPanelTab] = useState('upload')
 
   useEffect(() => {
     api.getConfig().then(cfg => {
@@ -396,6 +610,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    api.uploadStats(timeRange).then(d => {
+      if (!d.status) setUploadStats(d)
+    }).catch(() => {})
+  }, [timeRange])
+
+  // Cross-seed calculations use media_files passed via data
+  const cs = useMemo(() => data ? computeCrossSeedStats(data.media_files) : null, [data?.media_files])
+
   if (!data) return <DashboardSkeleton />
 
   const { score, status, trend, current, history_chart } = data
@@ -403,9 +626,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const hlPct = det.total_media_size > 0
     ? Math.round((det.hardlinked_media_size / det.total_media_size) * 100) : 100
   const c = scoreColor(score)
-
-  // Cross-seed calculations use media_files passed via data
-  const cs = computeCrossSeedStats(data.media_files)
 
   const notImportedPaths = (data.torrent_files || [])
     .filter(f => !f.imported && f.status !== 'Orphaned')
@@ -468,42 +688,77 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     },
   ]
 
-  const scores = (history_chart || []).map(d => d.avg_score).filter(Boolean)
+  const filteredHistory = (() => {
+    if (!history_chart) return []
+    if (timeRange === 0) return history_chart
+    const cutoff = new Date()
+    cutoff.setDate(cutoff.getDate() - timeRange)
+    return history_chart.filter(d => new Date(d.date) >= cutoff)
+  })()
+
+  const scores = filteredHistory.map(d => d.avg_score).filter(Boolean)
   const minScore = scores.length ? Math.max(0, Math.min(...scores) - 5) : 0
   const maxScore = scores.length ? Math.min(100, Math.max(...scores) + 5) : 100
 
-  // Smart trend: delta vs yesterday or last week depending on history depth
+  // Smart trend: delta vs timeRange days ago (fallback to oldest entry)
   const smartTrend = (() => {
     if (!history_chart || history_chart.length < 2) return null
     const today = history_chart[history_chart.length - 1]
-    const todayDate = new Date(today.date)
-    const hasWeek = history_chart.length >= 7
 
-    // Find the closest entry to 7 days ago (if we have it) or 1 day ago
-    const targetDaysAgo = hasWeek ? 7 : 1
-    const targetDate = new Date(todayDate)
-    targetDate.setDate(targetDate.getDate() - targetDaysAgo)
-    const targetStr = targetDate.toISOString().slice(0, 10)
-
-    // Find the entry closest to the target date
-    let best = null
-    let bestDiff = Infinity
-    for (const entry of history_chart) {
-      const d = Math.abs(new Date(entry.date) - targetDate)
-      if (d < bestDiff) { bestDiff = d; best = entry }
+    let best
+    if (timeRange === 0) {
+      best = history_chart[0]
+    } else {
+      const todayDate = new Date(today.date)
+      const targetDate = new Date(todayDate)
+      targetDate.setDate(targetDate.getDate() - timeRange)
+      best = null
+      let bestDiff = Infinity
+      for (const entry of history_chart) {
+        const d = Math.abs(new Date(entry.date) - targetDate)
+        if (d < bestDiff) { bestDiff = d; best = entry }
+      }
     }
 
-    // Don't compare to itself
     if (!best || best.date === today.date) return null
 
     const delta = Math.round((today.avg_score - best.avg_score) * 10) / 10
-    const label = hasWeek ? 'vs last week' : 'vs yesterday'
-    return { delta, label }
+    const actualDays = Math.round(Math.abs(new Date(today.date) - new Date(best.date)) / (1000 * 60 * 60 * 24))
+    return { delta, label: `vs ${actualDays}d ago` }
   })()
 
   const csMultDisplay = cs ? cs.crossSeedMultiplier.toFixed(2) : null
 
+  // Upload chart: derive active trackers and reshape daily data for Recharts
+  const effectiveTrackers = selectedTrackers !== null ? selectedTrackers : allTrackers
+  const filteredTrackerStats = cs ? cs.trackerStats.filter(t => effectiveTrackers.includes(t.name)) : []
+  const uploadChartData = uploadStats ? (() => {
+    const activeTrackers = Object.keys(
+      (uploadStats.daily_uploads || []).reduce((acc, day) => {
+        Object.entries(day.by_tracker || {}).forEach(([h, v]) => { if (v > 0) acc[h] = true })
+        return acc
+      }, {})
+    ).filter(h => effectiveTrackers.includes(h))
+    const chartData = (uploadStats.daily_uploads || []).map(day => {
+      const row = { date: day.date.slice(5) }  // MM-DD
+      for (const h of activeTrackers) row[h] = day.by_tracker[h] || 0
+      return row
+    })
+    return { activeTrackers, data: chartData }
+  })() : null
+  const yieldRows = (uploadStats?.tracker_yields || [])
+    .filter(t => !(t.uploaded === 0 && (t.yield === null || t.yield === 0)))
+    .filter(t => effectiveTrackers.includes(t.tracker))
+
   return (
+    <>
+    <FilterBar
+      timeRange={timeRange}
+      onTimeRangeChange={setTimeRange}
+      selectedTrackers={selectedTrackers}
+      allTrackers={allTrackers}
+      onTrackersChange={setSelectedTrackers}
+    />
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
       {/* Changes since last scan */}
@@ -513,6 +768,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           prevRanAt={changes.prev_ran_at}
           currRanAt={changes.curr_ran_at}
           onNavigate={onNavigate}
+          onReveal={onReveal}
         />
       )}
 
@@ -564,7 +820,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={history_chart} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+            <AreaChart data={filteredHistory} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
               <defs>
                 <linearGradient id="grafanaGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={c} stopOpacity={0.25} />
@@ -593,7 +849,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
           {/* Cross-seed effectiveness */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Cross-Seed Effectiveness</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
@@ -603,27 +859,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6, maxWidth: 340 }}>
                   Weighted average of how many trackers each byte of media is seeded on. 1.0× = all files seeded once. Higher is better.
                 </p>
-              </div>
-
-              {/* Rating badge instead of misleading /100 gauge */}
-              <div style={{ flexShrink: 0, textAlign: 'center' }}>
-                {(() => {
-                  const mult = cs.crossSeedMultiplier
-                  const { label, color } = mult >= 2.5 ? { label: 'Excellent', color: 'var(--green)' }
-                    : mult >= 1.8 ? { label: 'Good', color: 'var(--blue)' }
-                    : mult >= 1.2 ? { label: 'Fair', color: 'var(--yellow)' }
-                    : { label: 'Low', color: 'var(--red)' }
-                  return (
-                    <div style={{
-                      padding: '10px 14px', borderRadius: 10,
-                      background: color + '15', border: `1px solid ${color}35`,
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                    }}>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color, lineHeight: 1 }}>{label}</span>
-                      <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>effectiveness</span>
-                    </div>
-                  )
-                })()}
               </div>
             </div>
 
@@ -638,17 +873,17 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Top Trackers by Disk Space</div>
-              <p style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker to view its files in the torrent explorer.</p>
+              <p style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
             </div>
-            <TrackerLeaderboard trackerStats={cs.trackerStats} onNavigate={onNavigate} />
+            <TrackerLeaderboard trackerStats={filteredTrackerStats} onTrackerDetail={setTrackerDetail} />
 
             {/* All trackers summary */}
-            {cs.trackerStats.length > 3 && (
+            {filteredTrackerStats.length > 3 && (
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {cs.trackerStats.slice(3).map(t => (
+                {filteredTrackerStats.slice(3).map(t => (
                   <button
                     key={t.name}
-                    onClick={() => onNavigate({ tab: 'torrents', tracker: t.name })}
+                    onClick={() => setTrackerDetail(t.name)}
                     style={{
                       fontFamily: 'var(--mono)', fontSize: 10, padding: '3px 8px',
                       borderRadius: 99, border: '1px solid var(--border2)',
@@ -667,6 +902,182 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         </div>
       )}
 
+
+      {/* Row 4: upload activity + library yield */}
+      {uploadStats && uploadChartData && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+
+          {/* Upload Activity */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Upload Activity</div>
+            </div>
+            <div style={{ height: 220 }}>
+              {effectiveTrackers.length === 0
+                ? <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No trackers selected</div>
+                : (
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
+                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                      <YAxis
+                        tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                        tickLine={false} axisLine={false}
+                        tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                      />
+                      <Tooltip content={<UploadActivityTooltip />} cursor={{ fill: 'var(--surface2)' }} />
+                      {uploadChartData.activeTrackers.map((host, i) => (
+                        <Bar
+                          key={host} dataKey={host} stackId="uploads"
+                          fill={TRACKER_COLORS[i % TRACKER_COLORS.length]}
+                          maxBarSize={80}
+                          shape={props => <RoundedStackedBar {...props} allTrackers={uploadChartData.activeTrackers} host={host} />}
+                        />
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                )
+              }
+            </div>
+          </div>
+
+          {/* Library Yield */}
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
+                  {yieldPanelTab === 'upload' ? 'Upload by Tracker' : 'Library Yield'}
+                </div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {['upload', 'yield'].map(tab => (
+                    <button key={tab} onClick={() => setYieldPanelTab(tab)} style={{
+                      background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+                      color: yieldPanelTab === tab ? 'var(--accent)' : 'var(--text-dim)',
+                      fontWeight: yieldPanelTab === tab ? 700 : 400,
+                    }}>{tab}</button>
+                  ))}
+                </div>
+              </div>
+              {yieldPanelTab === 'upload' ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                      {formatBytes(yieldRows.reduce((s, t) => s + t.uploaded, 0))}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                    total uploaded · {uploadStats.period_days} day window
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                      {(() => {
+                        const filteredUploaded = yieldRows.reduce((s, t) => s + t.uploaded, 0)
+                        const filteredSeeding  = yieldRows.reduce((s, t) => s + t.seeding_size, 0)
+                        const filteredYield    = filteredSeeding > 0 ? filteredUploaded / filteredSeeding : null
+                        return filteredYield !== null ? (filteredYield * 100).toFixed(2) + '%' : '—'
+                      })()}
+                    </span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                      over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                    Upload volume relative to seeding size. Higher yield = your disk space is earning more.
+                  </p>
+                </>
+              )}
+            </div>
+            {effectiveTrackers.length === 0
+              ? <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>No trackers selected</div>
+              : yieldPanelTab === 'yield'
+                ? yieldRows.length > 0 && (
+                    <div style={{ flex: 1, overflow: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                        <thead>
+                          <tr>
+                            {['Tracker', 'Uploaded', 'Seeding', 'Yield'].map(h => (
+                              <th key={h} style={{
+                                textAlign: h === 'Tracker' ? 'left' : 'right',
+                                padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
+                                letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                                borderBottom: '1px solid var(--border)',
+                              }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {yieldRows.map((t, i) => (
+                            <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
+                              <td style={{ padding: '5px 8px', maxWidth: 120 }}>
+                                <button
+                                  onClick={() => setTrackerDetail(t.tracker)}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                >{t.tracker}</button>
+                              </td>
+                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
+                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
+                                {t.yield !== null ? (t.yield * 100).toFixed(2) + '%' : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                : yieldRows.length > 0 && (
+                    <div style={{ flex: 1, overflow: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                        <thead>
+                          <tr>
+                            {['Tracker', 'Total Uploaded'].map(h => (
+                              <th key={h} style={{
+                                textAlign: h === 'Tracker' ? 'left' : 'right',
+                                padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
+                                letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                                borderBottom: '1px solid var(--border)',
+                              }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...yieldRows].sort((a, b) => b.uploaded - a.uploaded).map((t, i) => (
+                            <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
+                              <td style={{ padding: '5px 8px', maxWidth: 120 }}>
+                                <button
+                                  onClick={() => setTrackerDetail(t.tracker)}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                >{t.tracker}</button>
+                              </td>
+                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+            }
+          </div>
+
+        </div>
+      )}
+
+
+      {trackerDetail && (
+        <TrackerDetailModal
+          trackerName={trackerDetail}
+          torrentFiles={data.torrent_files || []}
+          mediaFiles={data.media_files || []}
+          uploadStats={uploadStats}
+          onNavigate={(action) => { setTrackerDetail(null); onNavigate(action) }}
+          onClose={() => setTrackerDetail(null)}
+        />
+      )}
     </div>
+    </>
   )
 }

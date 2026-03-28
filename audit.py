@@ -1,7 +1,9 @@
 import os
+import math
 import hashlib
 import logging
 import fnmatch
+import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -50,6 +52,14 @@ def get_fast_hash(filepath, size, chunk_size=65536):
 # ---------------------------------------------------------------------------
 
 def _fetch_qbit_file_map(cfg):
+    socket.setdefaulttimeout(30)
+    try:
+        return _fetch_qbit_file_map_inner(cfg)
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+def _fetch_qbit_file_map_inner(cfg):
     qbt = qbittorrentapi.Client(
         host=cfg.get('QB_HOST'),
         username=cfg.get('QB_USER'),
@@ -67,25 +77,31 @@ def _fetch_qbit_file_map(cfg):
     _user = cfg.get('QB_USER')
     _pass = cfg.get('QB_PASS')
 
-    def _fetch_trackers(torrent):
+    # Fetch trackers and file lists in a single parallel pass — one login and
+    # two API calls per worker instead of two separate executor pools.
+    def _fetch_torrent_data(torrent):
         try:
             thread_qbt = qbittorrentapi.Client(host=_host, username=_user, password=_pass)
             thread_qbt.auth_log_in()
             raw   = [t.url for t in thread_qbt.torrents_trackers(torrent_hash=torrent.hash)
                      if t.url.startswith('http') or t.url.startswith('udp')]
             hosts = [t.split('/')[2] for t in raw if len(t.split('/')) > 2] or ['Unknown']
+            files = list(thread_qbt.torrents_files(torrent_hash=torrent.hash))
         except Exception:
             hosts = ['Unknown']
-        return torrent.hash, hosts
+            files = []
+        return torrent.hash, hosts, files
 
     tracker_map = {}
+    files_map   = {}
     with ThreadPoolExecutor(max_workers=16) as executor:
-        futures = {executor.submit(_fetch_trackers, t): t for t in torrents}
+        futures = {executor.submit(_fetch_torrent_data, t): t for t in torrents}
         for future in as_completed(futures):
-            torrent_hash, hosts = future.result()
+            torrent_hash, hosts, files = future.result()
             tracker_map[torrent_hash] = hosts
+            files_map[torrent_hash]   = files
 
-    # Build file map using pre-fetched tracker data
+    # Build file map using pre-fetched tracker and file data
     qbit_file_map        = {}
     trackers_set         = set()
     tracker_upload       = {}  # {host: cumulative uploaded bytes}
@@ -103,15 +119,16 @@ def _fetch_qbit_file_map(cfg):
             if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
                 tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + torrent.size
         save_path = torrent.save_path
-        if remote_path and save_path.startswith(remote_path):
-            save_path = save_path.replace(remote_path, local_path, 1)
+        if remote_path and save_path.startswith(remote_path) and \
+                save_path[len(remote_path):][:1] in ('/', ''):
+            save_path = local_path + save_path[len(remote_path):]
         if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
             status = 'Seeding'
         elif torrent.state in ('downloading', 'stalledDL'):
             status = 'Downloading'
         else:
             status = 'Paused'
-        for f in qbt.torrents_files(torrent_hash=torrent.hash):
+        for f in files_map.get(torrent.hash, []):
             full_path = os.path.join(save_path, f.name)
             entry = qbit_file_map.setdefault(full_path, {"status": status, "trackers": set(), "hash": torrent.hash})
             entry["trackers"].update(hosts)
@@ -401,9 +418,9 @@ def compute_upload_stats(days=30):
     try:
         t_first = datetime.fromisoformat(rows[0]['taken_at'])
         t_last  = datetime.fromisoformat(rows[-1]['taken_at'])
-        period_days = max(1, (t_last - t_first).days) if t_last > t_first else 1
+        period_days = max(1, math.ceil((t_last - t_first).total_seconds() / 86400)) if t_last > t_first else 1
     except ValueError:
-        period_days = days
+        period_days = days if days > 0 else 1
 
     # Per-tracker totals across the full period
     tracker_totals = {}
