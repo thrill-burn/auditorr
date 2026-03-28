@@ -242,11 +242,13 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         style={{ marginBottom: 6 }}
       />
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        {data.QB_HOST && (
-          <button onClick={handleFetchSavePath} style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
-            {fetchSavePathStatus === 'loading' ? 'Fetching…' : 'Fetch from qBittorrent'}
-          </button>
-        )}
+        <button
+          onClick={data.QB_HOST ? handleFetchSavePath : undefined}
+          disabled={!data.QB_HOST}
+          style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: data.QB_HOST ? 'pointer' : 'default', opacity: data.QB_HOST ? 1 : 0.4 }}
+        >
+          {fetchSavePathStatus === 'loading' ? 'Fetching…' : 'Fetch from qBittorrent'}
+        </button>
         {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
         {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
       </div>
