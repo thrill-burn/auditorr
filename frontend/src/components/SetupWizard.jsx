@@ -174,9 +174,9 @@ function Step1({ data, onChange, onNext, onSkip }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button onClick={handleTest} style={btnSecondary()}>Test Connection</button>
-          {testStatus && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : testStatus.ok ? 'var(--green)' : 'var(--red)' }}>
-              {testStatus.loading ? 'Testing…' : (testStatus.ok ? '✓ ' : '✗ ') + testStatus.msg}
+          {testStatus && (testStatus.loading || !testStatus.ok) && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+              {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
             </span>
           )}
         </div>

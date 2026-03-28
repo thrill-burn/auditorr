@@ -251,9 +251,9 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v); setQbitInfo(null) }} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
-          {testStatus && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.ok ? 'var(--green)' : 'var(--red)' }}>
-              {testStatus.loading ? 'Testing…' : (testStatus.ok ? '✓ ' : '✗ ') + testStatus.msg}
+          {testStatus && (testStatus.loading || !testStatus.ok) && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+              {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
             </span>
           )}
           <button onClick={handleTest} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
