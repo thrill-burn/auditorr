@@ -1,5 +1,5 @@
 flask
 flask-cors
-qbittorrent-api
+qbittorrent-api>=2022.1.27
 watchdog
 gunicorn
