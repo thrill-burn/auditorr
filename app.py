@@ -270,7 +270,10 @@ def test_paths():
             results[key] = {'ok': True, 'message': 'Path exists'}
         else:
             results[key] = {'ok': False, 'message': f'{path} does not exist inside the container'}
-    return jsonify({'paths': results})
+    return jsonify({
+        'media_path': results.get('MEDIA_PATH'),
+        'local_path':  results.get('LOCAL_PATH'),
+    })
 
 
 @app.route('/api/test_sonarr', methods=['POST'])

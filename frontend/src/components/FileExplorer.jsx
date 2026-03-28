@@ -106,8 +106,7 @@ function LinkedPathsPopover({ name, linkedPaths, duplicatePaths }) {
         <div style={{
           position: 'fixed',
           left: rect.left,
-          top: rect.top - 8,
-          transform: 'translateY(-100%)',
+          top: rect.bottom + window.scrollY + 4,
           background: '#151515',
           border: '1px solid #2a2a2a',
           borderRadius: 6,
