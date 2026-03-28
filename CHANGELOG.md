@@ -1,7 +1,4 @@
 # Changelog
-
-<<<<<<< HEAD
-=======
 ## v1.3.0 — 2026-03-28
 
 ### Setup & Onboarding
@@ -37,7 +34,6 @@
 - **pytest suite** — `tests/` directory with 71 tests covering `compute_diff`, `_parse_title_from_filename`, `process_health_metrics`, `validate_config`, `generate_script`, `_normalize_title`, and `arr_rescan` path boundary substitution. No external dependencies beyond `requirements.txt`; all qBittorrent and SQLite I/O mocked with `unittest.mock`.
 - **xfail tests** — 2 tests document the known `4K`-in-title regex bug (`strict=True` so they will automatically surface as passes once fixed)
 
->>>>>>> experimental
 # v1.2.1 — 2026-03-25
 
 ### Security

@@ -56,13 +56,9 @@ desktop.ini
 CLAUDE.md
 prompts/
 .claude/
-<<<<<<< HEAD
-CONTEXT.md
-=======
 CONTEXT.md
 
 # Testing
 tests/
 TESTING.md
 .pytest_cache/
->>>>>>> experimental
