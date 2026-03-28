@@ -107,6 +107,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [browserOpen, setBrowserOpen] = useState(false)
   const [qbitInfo, setQbitInfo] = useState(null)
   const [savePathStatus, setSavePathStatus] = useState(null)
+  const [isDirty, setIsDirty] = useState(false)
 
   // We display ratios as percentages in the UI (0.01 → "1")
   // and convert back on save
@@ -130,6 +131,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setPassChanged(false)
+      setIsDirty(false)
     })
   }
 
@@ -140,7 +142,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading…</div>
 
-  const set = key => val => setConf(c => ({ ...c, [key]: val }))
+  const set = key => val => { setConf(c => ({ ...c, [key]: val })); setIsDirty(true) }
 
   const setPersistentWarnings = (warnings) => {
     setSaveWarnings(warnings)
@@ -409,15 +411,15 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           <Field label="Orphaned Torrent Threshold" type="number"
             suffix="%"
             hint={thresholdHint('orphaned torrent')}
-            placeholder="1" value={orPct} onChange={setOrPct} />
+            placeholder="1" value={orPct} onChange={v => { setOrPct(v); setIsDirty(true) }} />
           <Field label="Not Imported Threshold" type="number"
             suffix="%"
             hint={thresholdHint('unlinked seeding')}
-            placeholder="1" value={niPct} onChange={setNiPct} />
+            placeholder="1" value={niPct} onChange={v => { setNiPct(v); setIsDirty(true) }} />
           <Field label="Duplicate Files Threshold" type="number"
             suffix="%"
             hint={thresholdHint('duplicate file')}
-            placeholder="1" value={dupPct} onChange={setDupPct} />
+            placeholder="1" value={dupPct} onChange={v => { setDupPct(v); setIsDirty(true) }} />
         </div>
 
         {/* Live score preview */}
@@ -445,7 +447,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </span>
         <textarea
           value={exclusionPatterns}
-          onChange={e => setExclusionPatterns(e.target.value)}
+          onChange={e => { setExclusionPatterns(e.target.value); setIsDirty(true) }}
           onFocus={() => setExclusionFocused(true)}
           onBlur={() => setExclusionFocused(false)}
           placeholder={'@eaDir\n*.srt\nFeaturettes'}
@@ -563,7 +565,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               {saveStatus.ok ? '✓ ' : '✗ '}{saveStatus.msg}
             </span>
           )}
-          <button onClick={handleSave} style={{ padding: '7px 18px', borderRadius: 'var(--r)', border: 'none', background: 'var(--accent)', color: '#000', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+          <button onClick={handleSave} style={{ position: 'relative', padding: '7px 18px', borderRadius: 'var(--r)', border: 'none', background: 'var(--accent)', color: '#000', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+            {isDirty && <span style={{ position: 'absolute', top: 4, right: 4, width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'block' }} />}
             Save Settings
           </button>
           {onScan && (

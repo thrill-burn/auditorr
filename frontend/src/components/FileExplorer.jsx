@@ -609,6 +609,8 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const [trackerExc,   setTrackerExc]   = useState([])
   const [showTrackers, setShowTrackers] = useState(!!initialTracker)
   const [seedCount,    setSeedCount]    = useState(initialSeedCount != null ? initialSeedCount : null)
+  const [userFlat, setUserFlat] = useState(() => localStorage.getItem('auditorr_view_flat') === '1')
+  const [sortBy, setSortBy] = useState('name')
 
   // Name search
   const [nameQuery, setNameQuery] = useState('')
@@ -647,7 +649,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const sizeMinBytes = useMemo(() => toBytes(sizeMinVal, sizeMinUnit), [sizeMinVal, sizeMinUnit])
   const sizeMaxBytes = useMemo(() => toBytes(sizeMaxVal, sizeMaxUnit), [sizeMaxVal, sizeMaxUnit])
   const nameLower    = nameQuery.trim().toLowerCase()
-  const isFlat       = !!nameQuery.trim() || !!revealPath
+  const isFlat       = !!nameQuery.trim() || !!revealPath || userFlat
 
   const filtered = useMemo(() => (files || []).filter(f => {
     // Status
@@ -681,6 +683,11 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
     return sMatch && iMatch && tMatch && scMatch && nMatch && szMin && szMax
   }), [files, statusFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
+
+  const sortedFiltered = useMemo(() =>
+    sortBy === 'size' ? [...filtered].sort((a, b) => b.size - a.size) : filtered,
+    [filtered, sortBy]
+  )
 
   const stats = useMemo(() => ({
     total:        filtered.length,
@@ -781,6 +788,66 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             </Chip>
           )}
 
+          {/* View toggle */}
+          {(() => {
+            const forced = !!nameQuery.trim() || !!revealPath
+            return (
+              <div style={{ display: 'flex', flexShrink: 0 }}>
+                <button
+                  onClick={() => { if (!forced) { setUserFlat(false); localStorage.setItem('auditorr_view_flat', '0') } }}
+                  style={{
+                    padding: '4px 10px', borderRadius: '99px 0 0 99px', fontSize: 11,
+                    border: `1px solid ${!isFlat ? 'var(--accent)' : 'var(--border2)'}`,
+                    borderRight: 'none',
+                    background: !isFlat ? 'var(--accent)22' : 'transparent',
+                    color: !isFlat ? 'var(--accent)' : 'var(--text-dim)',
+                    cursor: forced ? 'default' : 'pointer',
+                    opacity: forced ? 0.45 : 1,
+                  }}
+                >⊟ Tree</button>
+                <button
+                  onClick={() => { if (!forced) { setUserFlat(true); localStorage.setItem('auditorr_view_flat', '1') } }}
+                  style={{
+                    padding: '4px 10px', borderRadius: '0 99px 99px 0', fontSize: 11,
+                    border: `1px solid ${isFlat ? 'var(--accent)' : 'var(--border2)'}`,
+                    background: isFlat ? 'var(--accent)22' : 'transparent',
+                    color: isFlat ? 'var(--accent)' : 'var(--text-dim)',
+                    cursor: forced ? 'default' : 'pointer',
+                    opacity: forced ? 0.45 : 1,
+                  }}
+                >⊞ Flat</button>
+              </div>
+            )
+          })()}
+
+          {/* Sort toggle (flat mode only) */}
+          {isFlat && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Sort:</span>
+              <button
+                onClick={() => setSortBy('name')}
+                style={{
+                  padding: '4px 8px', borderRadius: '99px 0 0 99px', fontSize: 11,
+                  border: `1px solid ${sortBy === 'name' ? 'var(--accent)' : 'var(--border2)'}`,
+                  borderRight: 'none',
+                  background: sortBy === 'name' ? 'var(--accent)22' : 'transparent',
+                  color: sortBy === 'name' ? 'var(--accent)' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                }}
+              >Name</button>
+              <button
+                onClick={() => setSortBy('size')}
+                style={{
+                  padding: '4px 8px', borderRadius: '0 99px 99px 0', fontSize: 11,
+                  border: `1px solid ${sortBy === 'size' ? 'var(--accent)' : 'var(--border2)'}`,
+                  background: sortBy === 'size' ? 'var(--accent)22' : 'transparent',
+                  color: sortBy === 'size' ? 'var(--accent)' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                }}
+              >Size</button>
+            </div>
+          )}
+
           {/* Copy paths button */}
           <button onClick={copyPaths} title={`Copy ${filtered.length} paths to clipboard`} style={{
             padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
@@ -874,7 +941,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
               No files match the current filters.
             </div>
-          ) : filtered.map(node => (
+          ) : sortedFiltered.map(node => (
             <FlatFileRow
               key={node.path}
               node={node}

@@ -12,6 +12,7 @@ const CATEGORIES = [
 
 export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate, onReveal }) {
   const [expanded, setExpanded] = useState(null)
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('auditorr_changes_collapsed') === '1')
   // Persist dismissed state keyed to the scan timestamp so it reappears after a new scan
   const dismissKey = currRanAt ? 'auditorr_changes_dismissed_' + currRanAt : null
   const [dismissed, setDismissed] = useState(() =>
@@ -21,6 +22,12 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
   const handleDismiss = () => {
     setDismissed(true)
     if (dismissKey) sessionStorage.setItem(dismissKey, '1')
+  }
+
+  const handleCollapse = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    localStorage.setItem('auditorr_changes_collapsed', next ? '1' : '0')
   }
 
   if (!changes || dismissed) return null
@@ -41,7 +48,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
       overflow: 'hidden',
     }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: hasItems ? '1px solid var(--border)' : 'none' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: (hasItems && !collapsed) ? '1px solid var(--border)' : 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
             Changes since last scan
@@ -61,14 +68,20 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
             </span>
           )}
         </div>
-        <button onClick={handleDismiss} style={{
-          background: 'none', border: 'none', color: 'var(--text-dim)',
-          fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: '0 4px',
-        }}>×</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button onClick={handleCollapse} style={{
+            background: 'none', border: 'none', color: 'var(--text-dim)',
+            fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer', lineHeight: 1, padding: '2px 5px',
+          }}>{collapsed ? '▶' : '▼'}</button>
+          <button onClick={handleDismiss} style={{
+            background: 'none', border: 'none', color: 'var(--text-dim)',
+            fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: '0 4px',
+          }}>×</button>
+        </div>
       </div>
 
       {/* Category rows */}
-      {hasItems && (
+      {hasItems && !collapsed && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0 }}>
           {CATEGORIES.map(cat => {
             const items = changes[cat.key] || []
