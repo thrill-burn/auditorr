@@ -55,7 +55,7 @@ def _fetch_qbit_file_map(cfg):
         host=cfg.get('QB_HOST'),
         username=cfg.get('QB_USER'),
         password=cfg.get('QB_PASS'),
-        requests_args={'timeout': 10},
+        requests_timeout=10,
     )
     qbt.auth_log_in()
     torrents = list(qbt.torrents_info())
@@ -69,39 +69,29 @@ def _fetch_qbit_file_map(cfg):
     _user = cfg.get('QB_USER')
     _pass = cfg.get('QB_PASS')
 
-    def _fetch_trackers(torrent):
+    # Fetch trackers and file lists in a single parallel pass — one login and
+    # two API calls per worker instead of two separate executor pools.
+    def _fetch_torrent_data(torrent):
         try:
-            thread_qbt = qbittorrentapi.Client(host=_host, username=_user, password=_pass, requests_args={'timeout': 10})
+            thread_qbt = qbittorrentapi.Client(host=_host, username=_user, password=_pass, requests_timeout=10)
             thread_qbt.auth_log_in()
             raw   = [t.url for t in thread_qbt.torrents_trackers(torrent_hash=torrent.hash)
                      if t.url.startswith('http') or t.url.startswith('udp')]
             hosts = [t.split('/')[2] for t in raw if len(t.split('/')) > 2] or ['Unknown']
+            files = list(thread_qbt.torrents_files(torrent_hash=torrent.hash))
         except Exception:
             hosts = ['Unknown']
-        return torrent.hash, hosts
+            files = []
+        return torrent.hash, hosts, files
 
     tracker_map = {}
+    files_map   = {}
     with ThreadPoolExecutor(max_workers=16) as executor:
-        futures = {executor.submit(_fetch_trackers, t): t for t in torrents}
+        futures = {executor.submit(_fetch_torrent_data, t): t for t in torrents}
         for future in as_completed(futures):
-            torrent_hash, hosts = future.result()
+            torrent_hash, hosts, files = future.result()
             tracker_map[torrent_hash] = hosts
-
-    # Fetch all torrent file lists in parallel — same pattern as tracker fetching.
-    def _fetch_files(torrent):
-        try:
-            thread_qbt = qbittorrentapi.Client(host=_host, username=_user, password=_pass, requests_args={'timeout': 10})
-            thread_qbt.auth_log_in()
-            return torrent.hash, list(thread_qbt.torrents_files(torrent_hash=torrent.hash))
-        except Exception:
-            return torrent.hash, []
-
-    files_map = {}
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        futures = {executor.submit(_fetch_files, t): t for t in torrents}
-        for future in as_completed(futures):
-            torrent_hash, files = future.result()
-            files_map[torrent_hash] = files
+            files_map[torrent_hash]   = files
 
     # Build file map using pre-fetched tracker and file data
     qbit_file_map        = {}
