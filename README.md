@@ -2,7 +2,7 @@
 
 auditorr shows you exactly what’s happening inside your media library.
 
-It cross-references your hardlinked torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculating cross-seeding efficiency.
+It cross-references your hardlinked torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculates tracker statistics.
 
 ![Dashboard](docs/dashboard.png)
 
