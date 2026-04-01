@@ -269,12 +269,7 @@ def qbit_info():
             client = qbittorrentapi.Client(
                 host=cfg.get('QB_HOST'), username=cfg.get('QB_USER'), password=cfg.get('QB_PASS'))
             client.auth_log_in()
-            client.torrents_info(limit=1)
             result['version'] = client.app.version
-            try:
-                result['torrent_count'] = client.torrents_count()
-            except Exception:
-                result['torrent_count'] = len(client.torrents_info())
         except Exception as e:
             result['error'] = str(e)
         finally:

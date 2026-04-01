@@ -157,7 +157,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       await api.testConnection({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
       api.qbitSavePath({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
-        .then(r => setQbitInfo({ version: r.version, torrent_count: r.torrent_count }))
+        .then(r => setQbitInfo({ version: r.version }))
         .catch(() => {})
     } catch (e) { setTestStatus({ ok: false, msg: e.message }) }
   }
@@ -266,7 +266,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
         {qbitInfo && (
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginTop: 8 }}>
-            {`✓ Connected · qBittorrent ${qbitInfo.version} · ${qbitInfo.torrent_count} torrents`}
+            {`✓ Connected · qBittorrent ${qbitInfo.version}`}
           </div>
         )}
       </Card>

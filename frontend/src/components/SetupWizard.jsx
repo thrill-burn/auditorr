@@ -134,7 +134,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
       setTestStatus({ ok: true, msg: 'Connected!' })
       api.qbitSavePath({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
         .then(r => {
-          setQbitInfo({ version: r.version, torrent_count: r.torrent_count })
+          setQbitInfo({ version: r.version })
           if (r.save_path) onChange('QB_SAVE_PATH_HINT', r.save_path)
         }).catch(() => {})
     } catch (e) {
@@ -177,7 +177,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
       </div>
       {qbitInfo && (
         <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginBottom: 16 }}>
-          {`✓ Connected · qBittorrent ${qbitInfo.version} · ${qbitInfo.torrent_count} torrents`}
+          {`✓ Connected · qBittorrent ${qbitInfo.version}`}
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
