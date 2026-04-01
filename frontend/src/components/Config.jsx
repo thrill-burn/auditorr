@@ -156,7 +156,9 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     try {
       await api.testConnection({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
       setTestStatus({ ok: true, msg: 'Connected!' })
-      api.qbitInfo().then(setQbitInfo).catch(() => {})
+      api.qbitSavePath({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
+        .then(r => setQbitInfo({ version: r.version, torrent_count: r.torrent_count, seeding_size: r.seeding_size }))
+        .catch(() => {})
     } catch (e) { setTestStatus({ ok: false, msg: e.message }) }
   }
 

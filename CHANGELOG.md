@@ -1,4 +1,9 @@
 # Changelog
+## v1.3.1 — 2026-03-31
+
+### Bug Fixes
+- **Config test connection** — fixed `InvalidURL: No host supplied` error shown on page reload or first setup before saving config.
+
 ## v1.3.0 — 2026-03-28
 
 ### Setup & Onboarding
