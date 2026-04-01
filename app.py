@@ -269,18 +269,12 @@ def qbit_info():
             client = qbittorrentapi.Client(
                 host=cfg.get('QB_HOST'), username=cfg.get('QB_USER'), password=cfg.get('QB_PASS'))
             client.auth_log_in()
-            torrents = list(client.torrents_info())
+            client.torrents_info(limit=1)
             result['version'] = client.app.version
-            result['torrent_count'] = len(torrents)
-            result['seeding_size'] = sum(t.size for t in torrents if t.state in ('uploading', 'stalledUP', 'forcedUP'))
-            paths = [t.save_path.rstrip('/') for t in torrents if t.save_path]
-            if not paths:
-                result['save_path'] = None
-            else:
-                try:
-                    result['save_path'] = os.path.commonpath(paths) if len(paths) > 1 else paths[0]
-                except ValueError:
-                    result['save_path'] = paths[0]
+            try:
+                result['torrent_count'] = client.torrents_count()
+            except Exception:
+                result['torrent_count'] = len(client.torrents_info())
         except Exception as e:
             result['error'] = str(e)
         finally:
@@ -307,7 +301,6 @@ def qbit_save_path():
             torrents = list(client.torrents_info(limit=50))
             result['version'] = client.app.version
             result['torrent_count'] = len(torrents)
-            result['seeding_size'] = sum(t.size for t in torrents if t.state in ('uploading', 'stalledUP', 'forcedUP'))
             paths = [t.save_path.rstrip('/') for t in torrents if t.save_path]
             if not paths:
                 result['save_path'] = None

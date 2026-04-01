@@ -346,6 +346,7 @@ function AppInner() {
               lastAuditTime={scanState.last_audit_time}
               isScanning={scanState.is_scanning}
               onConfigSaved={fetchResults}
+              onScan={handleScan}
               theme={theme}
               onThemeChange={setTheme}
             />
