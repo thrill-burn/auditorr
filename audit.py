@@ -65,8 +65,8 @@ def _fetch_qbit_file_map_inner(cfg):
     # Fetch all tracker lists in parallel — eliminates N sequential API calls.
     # 16 workers gives significant speedup without overwhelming qBittorrent.
     # All trackers are fetched (not just primary) to preserve cross-seed stats.
-    # Each worker creates its own Client to avoid sharing a requests.Session
-    # across threads (Session is not documented as thread-safe).
+    # threading.local() gives each worker thread its own authenticated Client,
+    # logging in once per thread rather than once per torrent.
     _host = cfg.get('QB_HOST')
     _user = cfg.get('QB_USER')
     _pass = cfg.get('QB_PASS')
