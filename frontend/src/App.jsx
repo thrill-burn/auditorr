@@ -138,6 +138,7 @@ function AppInner() {
   const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const [revealPath,         setRevealPath]         = useState(null)
   const [showWizard,         setShowWizard]         = useState(false)
+  const [isLoadingResults,   setIsLoadingResults]   = useState(false)
   const prevScanRef  = useRef(false)
   const intervalRef  = useRef(null)
 
@@ -172,8 +173,9 @@ function AppInner() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
-  const fetchResults = useCallback(async () => {
+  const fetchResults = useCallback(async (fromScan = false) => {
     setIsRefreshing(true)
+    if (fromScan) setIsLoadingResults(true)
     try {
       const data = await api.results()
       setResults(data)
@@ -186,6 +188,7 @@ function AppInner() {
       console.error('Failed to fetch results:', e)
     } finally {
       setIsRefreshing(false)
+      if (fromScan) setIsLoadingResults(false)
     }
   }, [])
 
@@ -200,7 +203,7 @@ function AppInner() {
       const state = await api.progress()
       setScanState(state)
       if (prevScanRef.current && !state.is_scanning) {
-        await fetchResults()
+        await fetchResults(true)
         const msg = state.status_message?.startsWith('Audit error') ||
                     state.status_message?.startsWith('qBittorrent')
           ? state.status_message : 'Audit complete'
@@ -379,6 +382,7 @@ function AppInner() {
         statusMessage={scanState.status_message}
         scannedFiles={scanState.scanned_files}
         totalFiles={scanState.total_files}
+        isLoadingResults={isLoadingResults}
       />
     </div>
   )

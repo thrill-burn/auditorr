@@ -23,13 +23,6 @@ log = logging.getLogger(__name__)
 # Utilities
 # ---------------------------------------------------------------------------
 
-def count_files(directory):
-    count = 0
-    if os.path.exists(directory):
-        for _, _, files in os.walk(directory):
-            count += len(files)
-    return count
-
 
 def get_fast_hash(filepath, size, chunk_size=65536):
     try:
@@ -168,7 +161,7 @@ def _is_excluded(rel_path, filename, patterns):
     return False
 
 
-def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None):
+def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None):
     records     = []
     scanned     = scanned_so_far
     stat_errors = 0
@@ -210,7 +203,11 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 log.warning(f"Could not stat {full_path}: {e}")
                 stat_errors += 1
             scanned += 1
-            update_progress(scanned, total_files)
+            if total_ref is not None:
+                total_ref[0] += 1
+                if total_ref[0] % 500 == 0:
+                    set_state(total_files=total_ref[0])
+            update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
     return records, scanned, stat_errors
 
 
@@ -547,18 +544,17 @@ def run_audit_process(trigger=None):
               status_message="Connecting to qBittorrent...", last_scan_status="running", phase="connecting")
     try:
         qbit_file_map, trackers, tracker_snapshot = _fetch_qbit_file_map(cfg)
-        set_state(status_message="Counting files...", phase="torrents")
-        total = count_files(cfg.get('MEDIA_PATH','')) + count_files(cfg.get('LOCAL_PATH',''))
-        set_state(total_files=total, status_message="Scanning torrent directory...", phase="disk")
+        total_ref = [0]
+        set_state(total_files=0, status_message="Scanning torrent directory...", phase="disk")
         inode_map          = {}
         exclusion_patterns = cfg.get('EXCLUSION_PATTERNS', [])
         torrent_records, scanned, torrent_errors = _walk_directory(
-            cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, total,
-            exclusion_patterns=exclusion_patterns)
+            cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
+            exclusion_patterns=exclusion_patterns, total_ref=total_ref)
         set_state(status_message="Scanning media directory...", phase="disk")
         media_records, _, media_errors = _walk_directory(
-            cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, total,
-            exclusion_patterns=exclusion_patterns)
+            cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
+            exclusion_patterns=exclusion_patterns, total_ref=total_ref)
         stat_errors = torrent_errors + media_errors
         set_state(status_message="Detecting duplicates...", phase="post")
         duplicate_map = _build_duplicate_map(torrent_records + media_records)

@@ -23,4 +23,4 @@ LABEL org.opencontainers.image.description="Media library audit tool for qBittor
 
 EXPOSE ${AUDITORR_PORT:-8677}
 
-CMD ["sh", "-c", "gunicorn app:app --workers 1 --bind 0.0.0.0:${AUDITORR_PORT:-8677} --timeout 120 --access-logfile - --error-logfile -"]
+CMD ["sh", "-c", "gunicorn app:app --workers 1 --bind 0.0.0.0:${AUDITORR_PORT:-8677} --timeout 300 --access-logfile - --error-logfile -"]
