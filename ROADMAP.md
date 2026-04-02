@@ -25,6 +25,14 @@ Surface upload analytics that qBittorrent has but doesn't present in a useful wa
 ### Philosophy
 Reduce time-to-first-scan for new users and surface qBittorrent metadata that was already available but not shown. Improve daily-driver UX with smarter view persistence and better inline feedback.
 
+### Shipped in v1.3.2 ✅
+- Scan progress card (floating, phase-aware two-bar layout, auto-dismisses)
+- Results loading state (card stays visible post-scan during fetchResults, indeterminate bar)
+- 500ms active poll rate (drops from 5s while is_scanning is true)
+- Eliminated count_files pre-pass (file total accumulated incrementally during walk)
+- Phase tracking (`phase` field in audit state: connecting / torrents / disk / post / idle)
+- Gunicorn timeout bump (120s → 300s)
+
 ### Shipped in v1.3.0 ✅
 - **Setup wizard** — 3-step first-run wizard (qBittorrent connection → data paths → Sonarr/Radarr); early-start button on Step 2 to trigger a first audit before optional integrations are complete
 - **qBittorrent connection info card** — post-test display of qBittorrent version, torrent count, and seeding size in both Config and wizard Step 1

@@ -1,4 +1,14 @@
 # Changelog
+## v1.3.2 — 2026-04-01
+
+### Performance & Large Library Improvements
+- **Scan progress card** — floating card (max-width 860px, bottom-right) replaces the small sidebar progress bar during active scans. Shows two phase bars (Torrents / Disk) with live status labels, a file counter, and a status message line. Automatically dismisses when results finish loading.
+- **Results loading state** — card stays visible after the scan completes while results are being fetched, showing an animated indeterminate bar with an ease-out fill that approaches 85% over ~8 seconds then snaps to 100% on completion.
+- **Faster progress polling** — poll rate drops to 500ms while a scan is active, returning to 5s at idle.
+- **Eliminated count_files pre-pass** — file total is now accumulated incrementally during the directory walk rather than via a separate full `os.walk` pre-pass. Removes a redundant full directory traversal on every scan, improving startup time on large libraries.
+- **Phase tracking** — audit state now includes a `phase` field (`connecting` / `torrents` / `disk` / `post` / `idle`) exposed via `/api/progress`, driving the two-phase card UI.
+- **Gunicorn worker timeout** — bumped from 120s to 300s to accommodate large result payload serialization on libraries with many files.
+
 ## v1.3.1 — 2026-03-31
 
 ### Bug Fixes
