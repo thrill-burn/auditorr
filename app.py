@@ -240,11 +240,19 @@ def test_connection():
 
     def _connect():
         try:
+            socket.setdefaulttimeout(8)
             client = qbittorrentapi.Client(host=host, username=user, password=password)
             client.auth_log_in()
+            result['version'] = client.app.version
             result['ok'] = True
+        except qbittorrentapi.LoginFailed:
+            result['error'] = "Login failed — check your username and password."
+        except (qbittorrentapi.APIConnectionError, ConnectionRefusedError, socket.gaierror, OSError) as e:
+            result['error'] = f"Could not reach qBittorrent at '{host}' — check the host URL and ensure qBittorrent is running."
         except Exception as e:
-            result['error'] = str(e)
+            result['error'] = f"Unexpected error: {e}"
+        finally:
+            socket.setdefaulttimeout(None)
 
     t = threading.Thread(target=_connect, daemon=True)
     t.start()
@@ -253,7 +261,10 @@ def test_connection():
     if t.is_alive():
         return jsonify({"status": "error", "message": "Connection timed out"}), 400
     elif result.get('ok'):
-        return jsonify({"status": "success"})
+        resp = {"status": "success"}
+        if result.get('version'):
+            resp['version'] = result['version']
+        return jsonify(resp)
     else:
         return jsonify({"status": "error", "message": result.get('error', 'Unknown error')}), 400
 

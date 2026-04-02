@@ -4,6 +4,7 @@ import hashlib
 import logging
 import fnmatch
 import socket
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -69,13 +70,20 @@ def _fetch_qbit_file_map_inner(cfg):
     _host = cfg.get('QB_HOST')
     _user = cfg.get('QB_USER')
     _pass = cfg.get('QB_PASS')
+    _thread_local = threading.local()
+
+    def _get_thread_client():
+        if not hasattr(_thread_local, 'client'):
+            client = qbittorrentapi.Client(host=_host, username=_user, password=_pass)
+            client.auth_log_in()
+            _thread_local.client = client
+        return _thread_local.client
 
     # Fetch trackers and file lists in a single parallel pass — one login and
     # two API calls per worker instead of two separate executor pools.
     def _fetch_torrent_data(torrent):
         try:
-            thread_qbt = qbittorrentapi.Client(host=_host, username=_user, password=_pass)
-            thread_qbt.auth_log_in()
+            thread_qbt = _get_thread_client()
             raw   = [t.url for t in thread_qbt.torrents_trackers(torrent_hash=torrent.hash)
                      if t.url.startswith('http') or t.url.startswith('udp')]
             hosts = [t.split('/')[2] for t in raw if len(t.split('/')) > 2] or ['Unknown']
