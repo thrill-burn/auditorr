@@ -544,27 +544,27 @@ def run_audit_process(trigger=None):
     if trigger is None:
         trigger = get_state().get('trigger', 'manual')
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
-              status_message="Connecting to qBittorrent...", last_scan_status="running")
+              status_message="Connecting to qBittorrent...", last_scan_status="running", phase="connecting")
     try:
         qbit_file_map, trackers, tracker_snapshot = _fetch_qbit_file_map(cfg)
-        set_state(status_message="Counting files...")
+        set_state(status_message="Counting files...", phase="torrents")
         total = count_files(cfg.get('MEDIA_PATH','')) + count_files(cfg.get('LOCAL_PATH',''))
-        set_state(total_files=total, status_message="Scanning torrent directory...")
+        set_state(total_files=total, status_message="Scanning torrent directory...", phase="disk")
         inode_map          = {}
         exclusion_patterns = cfg.get('EXCLUSION_PATTERNS', [])
         torrent_records, scanned, torrent_errors = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, total,
             exclusion_patterns=exclusion_patterns)
-        set_state(status_message="Scanning media directory...")
+        set_state(status_message="Scanning media directory...", phase="disk")
         media_records, _, media_errors = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, total,
             exclusion_patterns=exclusion_patterns)
         stat_errors = torrent_errors + media_errors
-        set_state(status_message="Detecting duplicates...")
+        set_state(status_message="Detecting duplicates...", phase="post")
         duplicate_map = _build_duplicate_map(torrent_records + media_records)
         torrent_files_data, media_files_data = _assemble_records(
             torrent_records, media_records, inode_map, duplicate_map)
-        set_state(status_message="Computing health metrics...")
+        set_state(status_message="Computing health metrics...", phase="post")
         dashboard_stats = process_health_metrics(media_files_data, torrent_files_data, cfg)
         result = {
             "media_files": media_files_data, "torrent_files": torrent_files_data,
@@ -607,4 +607,4 @@ def run_audit_process(trigger=None):
     finally:
         set_state(progress=100, is_scanning=False,
                   last_audit_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                  trigger="idle")
+                  trigger="idle", phase="idle")

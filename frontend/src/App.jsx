@@ -5,6 +5,7 @@ import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
 import Trackers     from './components/Trackers'
+import ScanProgress from './components/ScanProgress'
 import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
@@ -137,7 +138,8 @@ function AppInner() {
   const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const [revealPath,         setRevealPath]         = useState(null)
   const [showWizard,         setShowWizard]         = useState(false)
-  const prevScanRef = useRef(false)
+  const prevScanRef  = useRef(false)
+  const intervalRef  = useRef(null)
 
   useEffect(() => {
     if (tab !== 'media' && tab !== 'torrents') setRevealPath(null)
@@ -193,28 +195,37 @@ function AppInner() {
     }).catch(() => {})
   }, [])
 
+  const pollOnce = useCallback(async () => {
+    try {
+      const state = await api.progress()
+      setScanState(state)
+      if (prevScanRef.current && !state.is_scanning) {
+        await fetchResults()
+        const msg = state.status_message?.startsWith('Audit error') ||
+                    state.status_message?.startsWith('qBittorrent')
+          ? state.status_message : 'Audit complete'
+        const isError = msg !== 'Audit complete'
+        toast(msg, isError ? 'error' : 'success')
+        if (!isError && 'Notification' in window && Notification.permission === 'granted')
+          new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
+      }
+      prevScanRef.current = state.is_scanning
+    } catch (e) { console.error('Poll error:', e) }
+  }, [fetchResults, toast])
+
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission()
     fetchResults()
-    const id = setInterval(async () => {
-      try {
-        const state = await api.progress()
-        setScanState(state)
-        if (prevScanRef.current && !state.is_scanning) {
-          await fetchResults()
-          const msg = state.status_message?.startsWith('Audit error') ||
-                      state.status_message?.startsWith('qBittorrent')
-            ? state.status_message : 'Audit complete'
-          const isError = msg !== 'Audit complete'
-          toast(msg, isError ? 'error' : 'success')
-          if (!isError && 'Notification' in window && Notification.permission === 'granted')
-            new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
-        }
-        prevScanRef.current = state.is_scanning
-      } catch (e) { console.error('Poll error:', e) }
-    }, 5000)
-    return () => clearInterval(id)
-  }, [fetchResults, toast])
+    intervalRef.current = setInterval(pollOnce, 5000)
+    return () => clearInterval(intervalRef.current)
+  }, [fetchResults, pollOnce])
+
+  useEffect(() => {
+    const rate = scanState.is_scanning ? 500 : 5000
+    clearInterval(intervalRef.current)
+    intervalRef.current = setInterval(pollOnce, rate)
+    return () => clearInterval(intervalRef.current)
+  }, [scanState.is_scanning, pollOnce])
 
   const handleScan = async () => {
     await api.startScan()
@@ -361,6 +372,14 @@ function AppInner() {
           onClose={() => setScriptModal(null)}
         />
       )}
+      <ScanProgress
+        isScanning={scanState.is_scanning}
+        progress={scanState.progress}
+        phase={scanState.phase}
+        statusMessage={scanState.status_message}
+        scannedFiles={scanState.scanned_files}
+        totalFiles={scanState.total_files}
+      />
     </div>
   )
 }

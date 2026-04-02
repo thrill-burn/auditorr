@@ -12,6 +12,7 @@ audit_state = {
     "last_scan_status": "never",   # "ok" | "error" | "never"
     "trigger":          "startup",
     "next_scan_in":     None,
+    "phase":            "idle",
 }
 
 
