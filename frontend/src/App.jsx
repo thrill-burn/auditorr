@@ -56,7 +56,7 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
       style={{
         position: 'fixed', inset: 0,
         background: 'rgba(0,0,0,0.7)',
-        zIndex: 500,
+        zIndex: 700,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

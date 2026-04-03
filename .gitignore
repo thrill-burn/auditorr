@@ -57,6 +57,7 @@ CLAUDE.md
 prompts/
 .claude/
 CONTEXT.md
+RELEASING.md
 
 # Testing
 tests/

@@ -247,6 +247,7 @@ def generate_script(script_type, results, cfg):
             canon_path = canonical['path']
             lines.append(f'# Group {group_num}: {filename} — {_human_size(g["recoverable_size"])} recoverable')
             lines.append(f'# Canonical: {canon_path}')
+            lines.append('GROUP_LINKED=0')
             for nc in non_canonical:
                 nc_path    = nc['path']
                 size_human = _human_size(nc['size'])
@@ -266,9 +267,10 @@ def generate_script(script_type, results, cfg):
                 lines.append(f'  ln -f {qcanon} {qnc}')
                 lines.append(f'  echo "  Done. {size_human} reclaimed."')
                 lines.append(f'  RECLAIMED=$((RECLAIMED+{size_bytes}))')
+                lines.append('  GROUP_LINKED=1')
                 lines.append('fi')
                 lines.append('echo ""')
-            lines.append('DONE=$((DONE+1))')
+            lines.append('if [ "$GROUP_LINKED" -gt 0 ]; then DONE=$((DONE+1)); fi')
             lines.append('')
         lines.extend([
             'echo "================================"',
