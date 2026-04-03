@@ -25,7 +25,9 @@ Surface upload analytics that qBittorrent has but doesn't present in a useful wa
 ### Philosophy
 Reduce time-to-first-scan for new users and surface qBittorrent metadata that was already available but not shown. Improve daily-driver UX with smarter view persistence and better inline feedback.
 
-### Shipped in v1.3.2 ✅
+### Shipped in v1.3.3 ✅
+- Per-thread qBittorrent login via `threading.local()` — 16 logins max regardless of library size
+- Informative test connection errors (distinct messages for bad credentials, unreachable host, and timeout)
 - Scan progress card (floating, phase-aware two-bar layout, auto-dismisses)
 - Results loading state (card stays visible post-scan during fetchResults, indeterminate bar)
 - 500ms active poll rate (drops from 5s while is_scanning is true)

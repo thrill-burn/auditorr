@@ -1,4 +1,12 @@
 # Changelog
+## v1.3.3 — 2026-04-02
+
+### Performance
+- **Per-thread qBittorrent login** — worker threads now log in once per thread via `threading.local()` instead of once per torrent. On large libraries with thousands of torrents this was causing 10–16 minute scan startup times; logins are now capped at 16 (one per worker) regardless of library size.
+
+### Bug Fixes
+- **Informative test connection errors** — `/api/test_connection` now returns distinct messages for the three real failure modes: wrong credentials (login failed), unreachable host (connection refused / DNS failure), and timeout. Previously all failures returned a raw library exception string. Successful connections now also return the qBittorrent version.
+
 ## v1.3.2 — 2026-04-01
 
 ### Performance & Large Library Improvements
