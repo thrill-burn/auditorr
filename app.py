@@ -261,6 +261,13 @@ def test_connection():
     if t.is_alive():
         return jsonify({"status": "error", "message": "Connection timed out"}), 400
     elif result.get('ok'):
+        try:
+            curr = db_load_results()
+            if curr.get('status', '').startswith('qBittorrent error'):
+                curr['status'] = 'ok'
+                db_save_results(curr)
+        except Exception:
+            pass
         resp = {"status": "success"}
         if result.get('version'):
             resp['version'] = result['version']
