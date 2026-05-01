@@ -1,4 +1,11 @@
 # Changelog
+## v1.3.4 — 2026-04-30
+
+### Bug Fixes
+- **Clear stale qBittorrent error on successful test connection** — after a successful test connection, the persisted results status is reset to `ok` if it was a `qBittorrent error`. Previously, a qBit error from a prior run would persist in the ErrorBanner until the next full audit completed, even after fixing the connection.
+- **Script modal z-index** — fixed script output modal being obscured by other UI elements.
+- **Dedupe DONE counter accuracy** — dedupe script progress counter now correctly reflects completed operations.
+
 ## v1.3.3 — 2026-04-02
 
 ### Performance
