@@ -1,4 +1,9 @@
 # Changelog
+## v1.3.5 — 2026-05-07
+
+### Bug Fixes
+- **Dedupe script path root** — the generated dedupe script now computes the common ancestor of `LOCAL_PATH` and `MEDIA_PATH` (e.g. `/data` when torrents are under `/data/torrents` and media under `/data/media`) and makes every path in the script relative to that root. Previously, canonical paths were relative to `LOCAL_PATH` and duplicate paths were relative to either `LOCAL_PATH` or `MEDIA_PATH`, so no single `cd` could resolve both — causing the working-directory guard and all `ln -f` commands to fail. The USAGE comment now names the in-container root so users know which host directory to `cd` into before running the script.
+
 ## v1.3.4 — 2026-04-30
 
 ### Bug Fixes
