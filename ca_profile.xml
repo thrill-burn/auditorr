@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Maintainer>
+  <Icon>https://raw.githubusercontent.com/thrill-burn/auditorr/main/docs/icon.png</Icon>
+  <Profile>auditorr is a self-hosted media library audit tool for qBittorrent + Sonarr/Radarr setups using hardlinks. It generates a real-time health score, finds duplicates and orphaned files, and surfaces tracker upload analytics. Read-only and non-destructive by design. Maintained at github.com/thrill-burn/auditorr.</Profile>
+  <WebPage>https://github.com/thrill-burn/auditorr</WebPage>
+</Maintainer>
