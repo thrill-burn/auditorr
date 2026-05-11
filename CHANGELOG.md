@@ -1,4 +1,18 @@
 # Changelog
+## v1.3.6 — 2026-05-11
+
+### Bug Fixes
+- **Delete script: fix `df` fallback never running** — `FREE_BEFORE`/`FREE_AFTER` were captured via `df --output=avail -B1 | tail -1 || fallback`. Because `tail` exits 0 even on empty input, the `||` fallback never fired when `df --output=avail` wasn't supported, leaving both variables empty and reporting `Actual: 0B`. Fixed by capturing the primary output first and checking emptiness before falling back.
+- **Delete script: tighten variance threshold** — acceptable variance between expected and actual space freed tightened from 10% to 2%.
+
+### Improvements
+- **Delete script: hardlink-aware space accounting** — the script now checks each file's inode link count before deletion (`stat -c '%h'` / `stat -f '%l'`). Hardlinked files (inode still referenced by the media directory) are tracked separately and excluded from the expected-vs-actual comparison, since deleting one link doesn't free space until the last reference is gone. The summary shows a breakdown of hardlinked vs standalone files and the correct `✓` confirmation when 0 bytes freed is expected.
+
+## v1.3.5 — 2026-05-04
+
+### Bug Fixes
+- **Dedupe script: use common ancestor as working directory root** — the dedupe script now derives its working directory from the common ancestor of the local and media paths, so relative paths in the script are correct when the two directories share a parent (the typical TRaSH Guides layout). Previously the script root defaulted to the torrent path alone, causing path resolution failures for media-side duplicates.
+
 ## v1.3.4 — 2026-04-30
 
 ### Bug Fixes
