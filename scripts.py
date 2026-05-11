@@ -1,4 +1,5 @@
 import os
+import posixpath
 import shlex
 import logging
 from datetime import datetime
@@ -14,19 +15,22 @@ def _human_size(n):
     return f"{n:.1f} PB"
 
 
-def _make_relative(path, *prefixes):
-    """Strip the first matching prefix from path to make it relative.
-    Falls back to the original path if no prefix matches."""
-    for prefix in prefixes:
-        if prefix and path.startswith(prefix):
-            rel = os.path.relpath(path, prefix)
-            if not rel.startswith('..'):
-                return rel
-    return path
+def _compute_script_root(local_path, media_path):
+    """Return the directory all script paths should be relative to."""
+    if not media_path or local_path == media_path:
+        return local_path
+    try:
+        common = posixpath.commonpath([local_path, media_path])
+    except ValueError:
+        return local_path
+    if common in ('', '/'):
+        return local_path
+    return common
 
 
 def _build_dup_groups(torrent_files, local_path, media_path=''):
     """Group torrent files with duplicate_paths into structured groups for the Actions page."""
+    script_root = _compute_script_root(local_path, media_path)
     groups      = []
     seen_inodes = set()
     for f in torrent_files:
@@ -36,9 +40,8 @@ def _build_dup_groups(torrent_files, local_path, media_path=''):
         if inode in seen_inodes:
             continue
         seen_inodes.add(inode)
-        # Absolute path for filesystem stat; relative path for the script
-        torrent_full = os.path.join(local_path, f['path']) if local_path else f['path']
-        torrent_rel  = f['path']  # already relative to local_path
+        torrent_full = posixpath.join(local_path, f['path']) if local_path else f['path']
+        torrent_rel  = posixpath.relpath(torrent_full, script_root)
         try:
             torrent_dev = os.stat(torrent_full).st_dev
         except OSError:
@@ -52,11 +55,11 @@ def _build_dup_groups(torrent_files, local_path, media_path=''):
                 same_fs = False
             if not same_fs:
                 is_cross_fs = True
-            dup_rel = _make_relative(dup_path, local_path, media_path)
+            dup_rel = posixpath.relpath(dup_path, script_root)
             group_files.append({"path": dup_rel, "size": f['size'], "inode": 0, "canonical": False, "same_fs": same_fs})
         recoverable = 0 if is_cross_fs else f['size'] * len(f.get('duplicate_paths', []))
         groups.append({"files": group_files, "recoverable_size": recoverable, "skipped": is_cross_fs})
-    return groups
+    return {"groups": groups, "script_root": script_root}
 
 
 def generate_script(script_type, results, cfg):
@@ -227,7 +230,9 @@ def generate_script(script_type, results, cfg):
         return '\n'.join(lines)
 
     elif script_type == 'dedupe':
-        groups             = _build_dup_groups(torrent_files, local_path, media_path)
+        dup_result         = _build_dup_groups(torrent_files, local_path, media_path)
+        groups             = dup_result['groups']
+        script_root        = dup_result['script_root']
         total_recoverable  = sum(g['recoverable_size'] for g in groups)
         skipped_count      = sum(1 for g in groups if g['skipped'])
         non_skipped_groups = [g for g in groups if not g['skipped']]
@@ -248,12 +253,10 @@ def generate_script(script_type, results, cfg):
             '# Review each group carefully before running.',
             '#',
             '# USAGE:',
-            '#   cd /path/to/your/parent/data/directory',
+            f'#   cd <directory on your host that maps to {script_root}>',
             '#   bash dedupe.sh',
             '#',
-            '# All file paths are relative to your data root directory.',
-            '# This should be the common parent of your torrent and media directories.',
-            '# Run this from wherever that directory is mounted with write access.',
+            f'# All paths are relative to {script_root} (auditorr\'s view).',
             '',
             f'TOTAL={total_non_skipped}',
             'DONE=0',

@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>auditorr</Name>
+  <Repository>ghcr.io/thrill-burn/auditorr:latest</Repository>
+  <Registry>https://github.com/thrill-burn/auditorr/pkgs/container/auditorr</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/thrill-burn/auditorr/issues</Support>
+  <Project>https://github.com/thrill-burn/auditorr</Project>
+  <Overview>auditorr shows you exactly what's happening inside your media library.&#xD;
+&#xD;
+It cross-references your hardlinked torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, and missing links, and calculates tracker statistics.&#xD;
+&#xD;
+- Health score (0-100) showing how clean and efficient your library is&#xD;
+- Find wasted disk space: duplicates, orphaned files, unlinked torrents, with guided cleanup recommendations&#xD;
+- Upload analytics and library yield: daily upload volume per tracker, yield % over time, tracker leaderboard&#xD;
+- Cross-seeding insights: weighted average seed multiplier, segmented disk bar, per-tracker breakdown&#xD;
+- Powerful file explorer with tree and flat views, filterable by status, tracker, seed count, size, filename&#xD;
+- Sonarr/Radarr integration: open orphaned media directly for interactive search&#xD;
+- Guided first-run setup wizard&#xD;
+&#xD;
+Built for self-hosted setups using qBittorrent + Sonarr/Radarr with hardlinks, following the TRaSH Guides folder structure. Read-only and non-destructive by default.</Overview>
+  <Category>Tools:Utilities MediaApp:Other Status:Stable</Category>
+  <WebUI>http://[IP]:[PORT:8677]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/thrill-burn/auditorr/main/auditorr.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/thrill-burn/auditorr/main/docs/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI" Target="8677" Default="8677" Mode="tcp" Description="Container Port: 8677 — auditorr web interface" Type="Port" Display="always" Required="true" Mask="false">8677</Config>
+  <Config Name="App Data" Target="/app/data" Default="/mnt/user/appdata/auditorr/data" Mode="rw" Description="Container Path: /app/data — config, audit history, SQLite database. Persistent app state lives here." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/auditorr/data</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/data" Mode="ro" Description="Container Path: /data — your unified TRaSH-style media + torrents share (the parent of /data/media and /data/torrents). auditorr is read-only design." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data</Config>
+  <Config Name="AUDITORR_PORT" Target="AUDITORR_PORT" Default="8677" Mode="" Description="Container Variable: AUDITORR_PORT — port the app listens on inside the container. Must match the WebUI Container Port above." Type="Variable" Display="advanced" Required="false" Mask="false">8677</Config>
+  <Config Name="AUDITORR_SECRET" Target="AUDITORR_SECRET" Default="" Mode="" Description="Container Variable: AUDITORR_SECRET — optional secret to require an X-Auditorr-Secret header on API calls. Leave blank to disable auth." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+</Container>

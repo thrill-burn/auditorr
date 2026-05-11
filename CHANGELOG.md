@@ -8,10 +8,10 @@
 ### Improvements
 - **Delete script: hardlink-aware space accounting** — the script now checks each file's inode link count before deletion (`stat -c '%h'` / `stat -f '%l'`). Hardlinked files (inode still referenced by the media directory) are tracked separately and excluded from the expected-vs-actual comparison, since deleting one link doesn't free space until the last reference is gone. The summary shows a breakdown of hardlinked vs standalone files and the correct `✓` confirmation when 0 bytes freed is expected.
 
-## v1.3.5 — 2026-05-04
+## v1.3.5 — 2026-05-07
 
 ### Bug Fixes
-- **Dedupe script: use common ancestor as working directory root** — the dedupe script now derives its working directory from the common ancestor of the local and media paths, so relative paths in the script are correct when the two directories share a parent (the typical TRaSH Guides layout). Previously the script root defaulted to the torrent path alone, causing path resolution failures for media-side duplicates.
+- **Dedupe script path root** — the generated dedupe script now computes the common ancestor of `LOCAL_PATH` and `MEDIA_PATH` (e.g. `/data` when torrents are under `/data/torrents` and media under `/data/media`) and makes every path in the script relative to that root. Previously, canonical paths were relative to `LOCAL_PATH` and duplicate paths were relative to either `LOCAL_PATH` or `MEDIA_PATH`, so no single `cd` could resolve both — causing the working-directory guard and all `ln -f` commands to fail. The USAGE comment now names the in-container root so users know which host directory to `cd` into before running the script.
 
 ## v1.3.4 — 2026-04-30
 
