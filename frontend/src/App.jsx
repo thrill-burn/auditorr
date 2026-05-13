@@ -193,8 +193,11 @@ function AppInner() {
   }, [])
 
   useEffect(() => {
+    if (localStorage.getItem('auditorr_setup_dismissed')) return
     api.getConfig().then(cfg => {
-      if (!cfg.QB_HOST) setShowWizard(true)
+      const isQui = cfg.TORRENT_SOURCE === 'qui'
+      const unconfigured = isQui ? !cfg.QUI_HOST : !cfg.QB_HOST
+      if (unconfigured) setShowWizard(true)
     }).catch(() => {})
   }, [])
 

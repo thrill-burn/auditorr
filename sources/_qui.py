@@ -62,16 +62,13 @@ def _eligible(instance):
     return (
         instance.get('connected')
         and instance.get('hasLocalFilesystemAccess')
-        and (instance.get('useHardlinks') or instance.get('useReflinks'))
     )
 
 
 def _skip_reason(instance):
     if not instance.get('connected'):
         return 'disconnected'
-    if not instance.get('hasLocalFilesystemAccess'):
-        return 'no local filesystem access'
-    return 'hardlinks and reflinks both disabled'
+    return 'no local filesystem access'
 
 
 def _norm_torrent(t):
