@@ -214,7 +214,7 @@ function sortedKeys(children) {
   return [...dirs, ...files]
 }
 
-function FolderRow({ name, node, depth, tab, openRef, onToggle, path, sonarrConfigured, radarrConfigured }) {
+function FolderRow({ name, node, depth, tab, openRef, onToggle, path, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost }) {
   const open = openRef.current.has(path)
   const indent = (depth * 20) + 14
   return (
@@ -242,15 +242,17 @@ function FolderRow({ name, node, depth, tab, openRef, onToggle, path, sonarrConf
         node.children[k]._isDir
           ? <FolderRow key={k} name={k} node={node.children[k]} depth={depth+1} tab={tab}
               openRef={openRef} onToggle={onToggle} path={path + '/' + k}
-              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
+              torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
           : <FileRow   key={k} name={k} node={node.children[k]} depth={depth+1} tab={tab}
-              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
+              torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
       )}
     </div>
   )
 }
 
-function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured }) {
+function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost }) {
   const indent      = (depth * 20) + 14
   const isDupe      = node.duplicate_paths?.length > 0
   const isOrphan    = node.status === 'Orphaned'
@@ -259,6 +261,8 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
   const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
+  const sourceHost = torrentSource === 'qui' ? quiHost : qbHost
+  const showSourceLink = tab === 'torrents' && !!sourceHost
 
   const toast = useToast()
   const [sonarrState, setSonarrState] = useState('idle')
@@ -370,6 +374,25 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
         <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
           {(node.trackers||[]).join(' · ')}
         </span>
+        {showSourceLink && (
+          <button
+            title={torrentSource === 'qui' ? 'Open in qui' : 'Open in qBittorrent'}
+            onClick={e => {
+              e.stopPropagation()
+              const url = torrentSource === 'qui'
+                ? (node.instance_id ? `${quiHost}/instances/${node.instance_id}` : quiHost)
+                : qbHost
+              window.open(url, '_blank')
+            }}
+            style={{
+              background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,
+              color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10,
+              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'border-color 0.1s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border2)'}
+          >{torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}</button>
+        )}
         <button
           title="Copy full path"
           onClick={e => {
@@ -399,7 +422,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured })
 
 // ─── Flat file row (used in flat/search mode) ────────────────────────────────
 
-function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, isRevealed }) {
+function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, isRevealed }) {
   const basename    = node.path.replace(/\\/g, '/').split('/').pop()
   const dirname     = node.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
   const isDupe      = node.duplicate_paths?.length > 0
@@ -409,6 +432,8 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, isRevealed
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
   const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
+  const sourceHost = torrentSource === 'qui' ? quiHost : qbHost
+  const showSourceLink = tab === 'torrents' && !!sourceHost
 
   const toast = useToast()
   const [sonarrState, setSonarrState] = useState('idle')
@@ -497,6 +522,25 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, isRevealed
           <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
             {(node.trackers||[]).join(' · ')}
           </span>
+          {showSourceLink && (
+            <button
+              title={torrentSource === 'qui' ? 'Open in qui' : 'Open in qBittorrent'}
+              onClick={e => {
+                e.stopPropagation()
+                const url = torrentSource === 'qui'
+                  ? (node.instance_id ? `${quiHost}/instances/${node.instance_id}` : quiHost)
+                  : qbHost
+                window.open(url, '_blank')
+              }}
+              style={{
+                background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,
+                color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10,
+                padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'border-color 0.1s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+              onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border2)'}
+            >{torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}</button>
+          )}
           <button
             title="Copy full path"
             onClick={e => {
@@ -595,11 +639,17 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   const [sonarrConfigured, setSonarrConfigured] = useState(false)
   const [radarrConfigured, setRadarrConfigured] = useState(false)
+  const [torrentSource,    setTorrentSource]    = useState('qbit')
+  const [qbHost,           setQbHost]           = useState('')
+  const [quiHost,          setQuiHost]          = useState('')
 
   useEffect(() => {
     api.getConfig().then(c => {
       setSonarrConfigured(!!c.SONARR_URL)
       setRadarrConfigured(!!c.RADARR_URL)
+      setTorrentSource(c.TORRENT_SOURCE || 'qbit')
+      setQbHost(c.QB_HOST || '')
+      setQuiHost(c.QUI_HOST || '')
     }).catch(() => {})
   }, [])
 
@@ -952,6 +1002,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
               tab={tab}
               sonarrConfigured={sonarrConfigured}
               radarrConfigured={radarrConfigured}
+              torrentSource={torrentSource}
+              qbHost={qbHost}
+              quiHost={quiHost}
               isRevealed={!!revealPath && node.path === revealPath}
             />
           ))
@@ -964,9 +1017,11 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             tree.children[k]._isDir
               ? <FolderRow key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
                   openRef={openRef} onToggle={onToggle} path={k}
-                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
+                  torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
               : <FileRow   key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
-                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured} />
+                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
+                  torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
           )
         )}
       </div>

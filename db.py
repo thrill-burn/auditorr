@@ -10,9 +10,12 @@ DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
 DB_FILE  = os.path.join(DATA_DIR, 'auditorr.db')
 
 DEFAULT_CONFIG = {
+    'TORRENT_SOURCE':     'qbit',   # 'qbit' | 'qui'
     'QB_HOST':            '',
     'QB_USER':            '',
     'QB_PASS':            '',
+    'QUI_HOST':           '',
+    'QUI_API_KEY':        '',
     'MEDIA_PATH':         '/data/media',
     'REMOTE_PATH':        '/data/torrents',
     'LOCAL_PATH':         '/data/torrents',
@@ -277,6 +280,10 @@ def db_save_config(conf):
 def validate_config(data):
     """Validate config POST data. Returns a list of error strings (empty = valid)."""
     errors = []
+
+    ts = data.get('TORRENT_SOURCE')
+    if ts is not None and ts not in ('qbit', 'qui'):
+        errors.append("TORRENT_SOURCE must be 'qbit' or 'qui'")
 
     wd = data.get('WATCHDOG_COOLDOWN')
     if wd is not None:

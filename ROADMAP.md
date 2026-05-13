@@ -55,7 +55,13 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 
 ---
 
-## v1.4 — Future Ideas
+## v1.4 — Shipped ✅
+
+- **qui torrent source** — connect to [qui](https://github.com/autobrr/qui) instead of a direct qBittorrent instance for multi-instance / mergerfs setups
+
+---
+
+## v1.5 — Future Ideas
 
 - **Webhook / notification support** — alert when health score drops below threshold (Discord, ntfy.sh, Gotify)
 - **Per-tracker import success rate** — of files downloaded from each tracker, what % got imported by Sonarr/Radarr
@@ -65,6 +71,5 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 - **Title parser 4K fix** — `4K` token in the quality-tag regex strips mid-title occurrences (e.g. "The 4K Experience"); needs a lookahead or post-tag word boundary (2 xfail tests already cover this)
 - **Export to arr** — bulk-add orphaned media files to Sonarr/Radarr monitored list from the file explorer
 - **Torrent re-announce** — trigger a re-announce via qBittorrent API for all seeding torrents on a selected tracker directly from the Trackers page
-- **Multi-instance qBittorrent** — support scanning from more than one qBittorrent instance and merging results
 - **Score history export** — download the full score history as CSV from the Config → Audit History section
 - **Dark/light mode system preference** — auto-detect `prefers-color-scheme` and default to it instead of always starting on dark

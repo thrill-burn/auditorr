@@ -120,23 +120,37 @@ const fmtSize = b => {
   return (b / 1e6).toFixed(0) + ' MB'
 }
 
-// ── Step 1: qBittorrent ───────────────────────────────────────────────────────
+// ── Step 1: Torrent Source ────────────────────────────────────────────────────
 function Step1({ data, onChange, onNext, onSkip }) {
   const [testStatus, setTestStatus] = useState(null)
-  const [qbitInfo, setQbitInfo] = useState(null)
+  const [sourceInfo, setSourceInfo] = useState(null)
   const [advancing, setAdvancing] = useState(false)
+  const [quiSkippedOpen, setQuiSkippedOpen] = useState(false)
+
+  const isQui = data.TORRENT_SOURCE === 'qui'
 
   const handleTest = async () => {
     setTestStatus({ loading: true })
-    setQbitInfo(null)
+    setSourceInfo(null)
+    setQuiSkippedOpen(false)
     try {
-      await api.testConnection({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
-      setTestStatus({ ok: true, msg: 'Connected!' })
-      api.qbitSavePath({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
-        .then(r => {
-          setQbitInfo({ version: r.version })
-          if (r.save_path) onChange('QB_SAVE_PATH_HINT', r.save_path)
-        }).catch(() => {})
+      const payload = isQui
+        ? { TORRENT_SOURCE: 'qui', QUI_HOST: data.QUI_HOST, QUI_API_KEY: data.QUI_API_KEY }
+        : { TORRENT_SOURCE: 'qbit', QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS }
+      const r = await api.testConnection(payload)
+      setTestStatus({ ok: true })
+      if (isQui) {
+        const n = (r.instances || []).length
+        const e = r.eligible_count ?? 0
+        const s = (r.skipped || []).length
+        setSourceInfo({ version: r.version, summary: `${n} instance${n !== 1 ? 's' : ''} (${e} scannable, ${s} skipped)`, skipped: r.skipped || [] })
+      } else {
+        setSourceInfo({ version: r.version })
+        api.fetchSavePath({ TORRENT_SOURCE: 'qbit', QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
+          .then(r2 => {
+            if (r2.save_path) onChange('QB_SAVE_PATH_HINT', r2.save_path)
+          }).catch(() => {})
+      }
     } catch (e) {
       setTestStatus({ ok: false, msg: e.message })
     }
@@ -151,23 +165,53 @@ function Step1({ data, onChange, onNext, onSkip }) {
   return (
     <>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>Step 1 of 3</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>qBittorrent Connection</div>
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
-        Connect auditorr to your qBittorrent instance. You'll need the host URL and your login credentials.
+      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Torrent Source</div>
+      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16, lineHeight: 1.55 }}>
+        Connect auditorr to your torrent client. Choose qBittorrent for a single instance, or qui for multi-instance setups.
       </p>
-      <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={data.QB_HOST} onChange={v => { onChange('QB_HOST', v); setTestStatus(null) }} style={{ marginBottom: 14 }} />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
-        <Field label="Username" placeholder="admin" value={data.QB_USER} onChange={v => { onChange('QB_USER', v); setTestStatus(null) }} />
-        <Field label="Password" type="password" placeholder="password" value={data.QB_PASS} onChange={v => { onChange('QB_PASS', v); setTestStatus(null) }} />
+
+      {/* Source toggle */}
+      <div style={{ display: 'flex', marginBottom: 20 }}>
+        {['qbit', 'qui'].map((src, i) => (
+          <button key={src} onClick={() => { onChange('TORRENT_SOURCE', src); setTestStatus(null); setSourceInfo(null) }} style={{
+            padding: '6px 18px',
+            borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
+            border: `1px solid ${data.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--border2)'}`,
+            borderRight: i === 0 ? 'none' : undefined,
+            background: data.TORRENT_SOURCE === src ? 'var(--accent)22' : 'transparent',
+            color: data.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--text-dim)',
+            fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+          }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
+        ))}
       </div>
+
+      {!isQui ? (
+        <>
+          <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={data.QB_HOST} onChange={v => { onChange('QB_HOST', v); setTestStatus(null) }} style={{ marginBottom: 14 }} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+            <Field label="Username" placeholder="admin" value={data.QB_USER} onChange={v => { onChange('QB_USER', v); setTestStatus(null) }} />
+            <Field label="Password" type="password" placeholder="password" value={data.QB_PASS} onChange={v => { onChange('QB_PASS', v); setTestStatus(null) }} />
+          </div>
+        </>
+      ) : (
+        <>
+          <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 14 }}>
+            qui aggregates multiple qBittorrent instances behind one API endpoint — ideal for multi-instance setups sharing a common filesystem (e.g. mergerfs).
+          </p>
+          <Field label="Host URL" placeholder="http://192.168.1.x:7476" value={data.QUI_HOST || ''} onChange={v => { onChange('QUI_HOST', v); setTestStatus(null) }} style={{ marginBottom: 14 }} />
+          <Field label="API Key" type="password"
+            hint="Create a full-access key in qui under Settings → API Keys."
+            placeholder="api key…" value={data.QUI_API_KEY || ''} onChange={v => { onChange('QUI_API_KEY', v); setTestStatus(null) }} style={{ marginBottom: 20 }} />
+        </>
+      )}
 
       {advancing && (
         <div style={{ marginBottom: 14, padding: '10px 14px', borderRadius: 'var(--r)', border: '1px solid #f59e0b', background: '#f59e0b12', fontSize: 12, color: '#f59e0b' }}>
-          ⚠ qBittorrent is required for auditorr to function. You can finish configuring it later in Settings.
+          ⚠ A torrent source is required for auditorr to function. You can finish configuring it later in Settings.
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: qbitInfo ? 8 : 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: sourceInfo ? 8 : 16 }}>
         <button onClick={handleTest} style={btnSecondary()}>Test Connection</button>
         {testStatus && (testStatus.loading || !testStatus.ok) && (
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
@@ -175,9 +219,25 @@ function Step1({ data, onChange, onNext, onSkip }) {
           </span>
         )}
       </div>
-      {qbitInfo && (
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginBottom: 16 }}>
-          {`✓ Connected · qBittorrent ${qbitInfo.version}`}
+      {sourceInfo && testStatus?.ok && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)' }}>
+            {isQui
+              ? `✓ Connected · qui${sourceInfo.version ? ` v${sourceInfo.version}` : ''} · ${sourceInfo.summary}`
+              : `✓ Connected · qBittorrent ${sourceInfo.version || ''}`}
+          </div>
+          {isQui && sourceInfo.skipped?.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <button onClick={() => setQuiSkippedOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+                {quiSkippedOpen ? '▼' : '▶'} {sourceInfo.skipped.length} skipped
+              </button>
+              {quiSkippedOpen && sourceInfo.skipped.map((inst, i) => (
+                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', paddingLeft: 10, lineHeight: 1.6 }}>
+                  {inst.name || inst.id}: {inst._skip_reason}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -199,10 +259,15 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
     if (data.QB_SAVE_PATH_HINT && !data.REMOTE_PATH) onChange('REMOTE_PATH', data.QB_SAVE_PATH_HINT)
   }, [])
 
+  const isQui = data.TORRENT_SOURCE === 'qui'
+
   const handleFetchSavePath = async () => {
     setFetchSavePathStatus('loading')
     try {
-      const res = await api.qbitSavePath({ QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS })
+      const payload = isQui
+        ? { TORRENT_SOURCE: 'qui', QUI_HOST: data.QUI_HOST, QUI_API_KEY: data.QUI_API_KEY }
+        : { TORRENT_SOURCE: 'qbit', QB_HOST: data.QB_HOST, QB_USER: data.QB_USER, QB_PASS: data.QB_PASS }
+      const res = await api.fetchSavePath(payload)
       if (res.save_path) { onChange('REMOTE_PATH', res.save_path); setFetchSavePathStatus('ok') }
       else setFetchSavePathStatus('empty')
     } catch (e) { setFetchSavePathStatus('error') }
@@ -231,22 +296,30 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         Tell auditorr where your media library and torrent downloads live inside this container.
       </p>
 
-      <Field label="qBit Save Path"
-        hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
+      <Field label={isQui ? 'qui Save Path' : 'qBit Save Path'}
+        hint={isQui ? 'The path qui reports via its API. May differ if qui/qBittorrent run in their own containers.' : 'The path qBittorrent reports via its API. May differ if qBit runs in its own container.'}
         placeholder="/data/torrents" value={data.REMOTE_PATH}
         onChange={v => { onChange('REMOTE_PATH', v) }}
         style={{ marginBottom: 6 }}
       />
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-        <button
-          onClick={data.QB_HOST ? handleFetchSavePath : undefined}
-          disabled={!data.QB_HOST}
-          style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: data.QB_HOST ? 'pointer' : 'default', opacity: data.QB_HOST ? 1 : 0.4 }}
-        >
-          {fetchSavePathStatus === 'loading' ? 'Fetching…' : 'Fetch from qBittorrent'}
-        </button>
-        {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
-        {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
+        {(() => {
+          const hasHost = isQui ? !!data.QUI_HOST : !!data.QB_HOST
+          const srcLabel = isQui ? 'qui' : 'qBittorrent'
+          return (
+            <>
+              <button
+                onClick={hasHost ? handleFetchSavePath : undefined}
+                disabled={!hasHost}
+                style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: hasHost ? 'pointer' : 'default', opacity: hasHost ? 1 : 0.4 }}
+              >
+                {fetchSavePathStatus === 'loading' ? 'Fetching…' : `Fetch from ${srcLabel}`}
+              </button>
+              {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in {srcLabel}</span>}
+              {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
+            </>
+          )
+        })()}
       </div>
 
       <Field label="Media Path"
@@ -390,7 +463,9 @@ function SkipLink({ onSkip }) {
 export default function SetupWizard({ onComplete, onSkip, onEarlyStart }) {
   const [step, setStep] = useState(1)
   const [wizardData, setWizardData] = useState({
+    TORRENT_SOURCE: 'qbit',
     QB_HOST: '', QB_USER: '', QB_PASS: '',
+    QUI_HOST: '', QUI_API_KEY: '',
     MEDIA_PATH: '/data/media', LOCAL_PATH: '/data/torrents', REMOTE_PATH: '/data/torrents',
     SONARR_URL: '', SONARR_API_KEY: '',
     RADARR_URL: '', RADARR_API_KEY: '',

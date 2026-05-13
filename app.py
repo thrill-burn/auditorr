@@ -7,8 +7,8 @@ import functools
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import qbittorrentapi
 
+import sources
 from db import (
     DATA_DIR,
     init_db,
@@ -180,9 +180,12 @@ def handle_config():
         try:
             existing = db_load_config()
             new_conf = {
+                'TORRENT_SOURCE':     str(data.get('TORRENT_SOURCE', existing.get('TORRENT_SOURCE', 'qbit'))),
                 'QB_HOST':            str(data.get('QB_HOST', '')),
                 'QB_USER':            str(data.get('QB_USER', '')),
                 'QB_PASS':            str(data['QB_PASS']) if data.get('QB_PASS') else existing.get('QB_PASS',''),
+                'QUI_HOST':           str(data.get('QUI_HOST', '')),
+                'QUI_API_KEY':        str(data['QUI_API_KEY']) if data.get('QUI_API_KEY') else existing.get('QUI_API_KEY', ''),
                 'MEDIA_PATH':         str(data.get('MEDIA_PATH', '')),
                 'REMOTE_PATH':        str(data.get('REMOTE_PATH', '')),
                 'LOCAL_PATH':         str(data.get('LOCAL_PATH', '')),
@@ -221,6 +224,8 @@ def handle_config():
     cfg = db_load_config()
     if cfg.get('QB_PASS'):
         cfg['QB_PASS'] = '__stored__'
+    if cfg.get('QUI_API_KEY'):
+        cfg['QUI_API_KEY'] = '__stored__'
     if cfg.get('SONARR_API_KEY'):
         cfg['SONARR_API_KEY'] = '__stored__'
     if cfg.get('RADARR_API_KEY'):
@@ -232,27 +237,17 @@ def handle_config():
 @require_auth
 def test_connection():
     data = request.json or {}
-    host = data.get('QB_HOST', '')
-    user = data.get('QB_USER')
-    password = data.get('QB_PASS')
+    # If password fields are blank, fall back to stored values for live testing
+    existing = db_load_config()
+    if not data.get('QB_PASS') and data.get('TORRENT_SOURCE', 'qbit') == 'qbit':
+        data = {**data, 'QB_PASS': existing.get('QB_PASS', '')}
+    if not data.get('QUI_API_KEY') and data.get('TORRENT_SOURCE') == 'qui':
+        data = {**data, 'QUI_API_KEY': existing.get('QUI_API_KEY', '')}
 
     result = {}
 
     def _connect():
-        try:
-            socket.setdefaulttimeout(8)
-            client = qbittorrentapi.Client(host=host, username=user, password=password)
-            client.auth_log_in()
-            result['version'] = client.app.version
-            result['ok'] = True
-        except qbittorrentapi.LoginFailed:
-            result['error'] = "Login failed — check your username and password."
-        except (qbittorrentapi.APIConnectionError, ConnectionRefusedError, socket.gaierror, OSError) as e:
-            result['error'] = f"Could not reach qBittorrent at '{host}' — check the host URL and ensure qBittorrent is running."
-        except Exception as e:
-            result['error'] = f"Unexpected error: {e}"
-        finally:
-            socket.setdefaulttimeout(None)
+        result.update(sources.test_connection(data))
 
     t = threading.Thread(target=_connect, daemon=True)
     t.start()
@@ -263,7 +258,8 @@ def test_connection():
     elif result.get('ok'):
         try:
             curr = db_load_results()
-            if curr.get('status', '').startswith('qBittorrent error'):
+            if curr.get('status', '').startswith('qBittorrent error') or \
+                    curr.get('status', '').startswith('qui error'):
                 curr['status'] = 'ok'
                 db_save_results(curr)
         except Exception:
@@ -271,28 +267,28 @@ def test_connection():
         resp = {"status": "success"}
         if result.get('version'):
             resp['version'] = result['version']
+        if result.get('instances') is not None:
+            resp['instances'] = result['instances']
+        if result.get('eligible_count') is not None:
+            resp['eligible_count'] = result['eligible_count']
+        if result.get('skipped') is not None:
+            resp['skipped'] = result['skipped']
         return jsonify(resp)
     else:
         return jsonify({"status": "error", "message": result.get('error', 'Unknown error')}), 400
 
 
-@app.route('/api/qbit_info')
+@app.route('/api/source_info')
 @require_auth
-def qbit_info():
+def source_info():
     cfg = db_load_config()
     result = {}
     def _fetch():
         try:
-            socket.setdefaulttimeout(10)
-            client = qbittorrentapi.Client(
-                host=cfg.get('QB_HOST'), username=cfg.get('QB_USER'), password=cfg.get('QB_PASS'))
-            client.auth_log_in()
-            result['version'] = client.app.version
+            result.update(sources.connection_info(cfg))
         except Exception as e:
             result['error'] = str(e)
-        finally:
-            socket.setdefaulttimeout(None)
-    t = threading.Thread(target=_fetch); t.start(); t.join(timeout=12)
+    t = threading.Thread(target=_fetch, daemon=True); t.start(); t.join(timeout=12)
     if t.is_alive():
         return jsonify({'error': 'Connection timed out'}), 400
     if 'error' in result:
@@ -300,33 +296,23 @@ def qbit_info():
     return jsonify(result)
 
 
-@app.route('/api/qbit_save_path', methods=['POST'])
+@app.route('/api/source_save_path', methods=['POST'])
 @require_auth
-def qbit_save_path():
+def source_save_path():
     data = request.json or {}
+    existing = db_load_config()
+    # Fall back to stored credentials when the caller sends a blank password
+    if not data.get('QB_PASS') and data.get('TORRENT_SOURCE', 'qbit') == 'qbit':
+        data = {**data, 'QB_PASS': existing.get('QB_PASS', '')}
+    if not data.get('QUI_API_KEY') and data.get('TORRENT_SOURCE') == 'qui':
+        data = {**data, 'QUI_API_KEY': existing.get('QUI_API_KEY', '')}
     result = {}
     def _fetch():
         try:
-            socket.setdefaulttimeout(10)
-            client = qbittorrentapi.Client(
-                host=data.get('QB_HOST'), username=data.get('QB_USER'), password=data.get('QB_PASS'))
-            client.auth_log_in()
-            torrents = list(client.torrents_info(limit=50))
-            result['version'] = client.app.version
-            result['torrent_count'] = len(torrents)
-            paths = [t.save_path.rstrip('/') for t in torrents if t.save_path]
-            if not paths:
-                result['save_path'] = None
-            else:
-                try:
-                    result['save_path'] = os.path.commonpath(paths) if len(paths) > 1 else paths[0]
-                except ValueError:
-                    result['save_path'] = paths[0]
+            result.update(sources.fetch_save_path_hint(data))
         except Exception as e:
             result['error'] = str(e)
-        finally:
-            socket.setdefaulttimeout(None)
-    t = threading.Thread(target=_fetch); t.start(); t.join(timeout=12)
+    t = threading.Thread(target=_fetch, daemon=True); t.start(); t.join(timeout=12)
     if t.is_alive():
         return jsonify({'error': 'Connection timed out'}), 400
     if 'error' in result:

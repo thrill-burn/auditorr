@@ -2,7 +2,7 @@
 
 auditorr shows you exactly what’s happening inside your media library.
 
-It cross-references your hardlinked torrent and media directories with qBittorrent to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculates tracker statistics.
+It cross-references your hardlinked torrent and media directories with qBittorrent (or [qui](https://github.com/autobrr/qui) for multi-instance setups) to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculates tracker statistics.
 
 ![Dashboard](docs/dashboard.png)
 
@@ -112,6 +112,17 @@ No. auditorr is designed from the ground up to be read-only and non-destructive.
 ## Configuration
 
 All configuration is done through the **Config** tab in the UI.
+
+### Torrent source
+
+auditorr supports two torrent sources — select one in the **Torrent Source** card:
+
+| Source | When to use |
+|---|---|
+| **qBittorrent** | Single qBittorrent instance — the default. Enter the host URL, username, and password. |
+| **qui** | [qui](https://github.com/autobrr/qui) aggregates multiple qBittorrent instances behind one API endpoint. Ideal for multi-instance setups sharing a common filesystem (e.g. mergerfs). Enter the qui host URL and a full-access API key from qui Settings → API Keys. |
+
+Only one source is active at a time. Switching sources and saving will take effect on the next audit.
 
 | Setting | Description |
 |---|---|

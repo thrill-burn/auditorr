@@ -100,14 +100,16 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [radarrTestStatus,  setRadarrTestStatus]  = useState(null)
   const [saveStatus,        setSaveStatus]        = useState(null)
   const [saveWarnings,      setSaveWarnings]      = useState(() => JSON.parse(localStorage.getItem('auditorr_path_warnings') || '[]'))
-  const [passChanged, setPassChanged] = useState(false)
+  const [passChanged,    setPassChanged]    = useState(false)
+  const [apiKeyChanged,  setApiKeyChanged]  = useState(false)
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
   const [pathTestStatus, setPathTestStatus] = useState(null)
   const [browserOpen, setBrowserOpen] = useState(false)
-  const [qbitInfo, setQbitInfo] = useState(null)
+  const [sourceInfo, setSourceInfo] = useState(null)
   const [savePathStatus, setSavePathStatus] = useState(null)
   const [isDirty, setIsDirty] = useState(false)
+  const [quiSkippedOpen, setQuiSkippedOpen] = useState(false)
 
   // We display ratios as percentages in the UI (0.01 → "1")
   // and convert back on save
@@ -122,6 +124,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       const c = {
         ...data,
         QB_PASS:        data.QB_PASS        === '__stored__' ? '' : data.QB_PASS,
+        QUI_API_KEY:    data.QUI_API_KEY    === '__stored__' ? '' : data.QUI_API_KEY,
         SONARR_API_KEY: data.SONARR_API_KEY === '__stored__' ? '' : data.SONARR_API_KEY,
         RADARR_API_KEY: data.RADARR_API_KEY === '__stored__' ? '' : data.RADARR_API_KEY,
       }
@@ -131,6 +134,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setPassChanged(false)
+      setApiKeyChanged(false)
       setIsDirty(false)
     })
   }
@@ -150,22 +154,43 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     else localStorage.removeItem('auditorr_path_warnings')
   }
 
+  const isQui = conf?.TORRENT_SOURCE === 'qui'
+
   const handleTest = async () => {
     setTestStatus({ loading: true })
-    setQbitInfo(null)
+    setSourceInfo(null)
+    setQuiSkippedOpen(false)
     try {
-      await api.testConnection({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
-      setTestStatus({ ok: true, msg: 'Connected!' })
-      api.qbitSavePath({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
-        .then(r => setQbitInfo({ version: r.version }))
-        .catch(() => {})
+      const payload = isQui
+        ? { TORRENT_SOURCE: 'qui', QUI_HOST: conf.QUI_HOST, QUI_API_KEY: conf.QUI_API_KEY }
+        : { TORRENT_SOURCE: 'qbit', QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS }
+      const r = await api.testConnection(payload)
+      setTestStatus({ ok: true })
+      if (isQui) {
+        const n = (r.instances || []).length
+        const e = r.eligible_count ?? 0
+        const s = (r.skipped || []).length
+        setSourceInfo({
+          version: r.version,
+          summary: `${n} instance${n !== 1 ? 's' : ''} (${e} scannable, ${s} skipped)`,
+          skipped: r.skipped || [],
+        })
+      } else {
+        setSourceInfo({ version: r.version })
+        api.fetchSavePath({ TORRENT_SOURCE: 'qbit', QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
+          .then(r2 => setSourceInfo(prev => ({ ...prev, version: r2.version || prev?.version })))
+          .catch(() => {})
+      }
     } catch (e) { setTestStatus({ ok: false, msg: e.message }) }
   }
 
   const handleFetchSavePath = async () => {
     setSavePathStatus('loading')
     try {
-      const res = await api.qbitSavePath({ QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS })
+      const payload = isQui
+        ? { TORRENT_SOURCE: 'qui', QUI_HOST: conf.QUI_HOST, QUI_API_KEY: conf.QUI_API_KEY }
+        : { TORRENT_SOURCE: 'qbit', QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS }
+      const res = await api.fetchSavePath(payload)
       if (res.save_path) { set('REMOTE_PATH')(res.save_path); setSavePathStatus('ok') }
       else setSavePathStatus('empty')
     } catch (e) { setSavePathStatus('error') }
@@ -206,7 +231,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
       EXCLUSION_PATTERNS: exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
     }
-    if (!passChanged) delete payload.QB_PASS
+    if (!passChanged)   delete payload.QB_PASS
+    if (!apiKeyChanged) delete payload.QUI_API_KEY
     try {
       const result = await api.saveConfig(payload)
       if (result.warnings?.length) setPersistentWarnings(result.warnings)
@@ -247,13 +273,43 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   return (
     <div className="fade-in" style={{ padding: 24, maxWidth: 800 }}>
 
-      <Card title="qBittorrent Connection">
-        <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={conf.QB_HOST} onChange={v => { set('QB_HOST')(v); setQbitInfo(null) }} style={{ marginBottom: 14 }} />
-        <div style={g2}>
-          <Field label="Username" placeholder="admin" value={conf.QB_USER} onChange={v => { set('QB_USER')(v); setQbitInfo(null) }} />
-          <Field label="Password" type="password" placeholder="(unchanged — leave blank to keep current)"
-            value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v); setQbitInfo(null) }} />
+      <Card title="Torrent Source">
+        {/* Source toggle */}
+        <div style={{ display: 'flex', marginBottom: 18 }}>
+          {['qbit', 'qui'].map((src, i) => (
+            <button key={src} onClick={() => { set('TORRENT_SOURCE')(src); setTestStatus(null); setSourceInfo(null); setIsDirty(true) }} style={{
+              padding: '6px 18px',
+              borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
+              border: `1px solid ${conf.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--border2)'}`,
+              borderRight: i === 0 ? 'none' : undefined,
+              background: conf.TORRENT_SOURCE === src ? 'var(--accent)22' : 'transparent',
+              color: conf.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--text-dim)',
+              fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+            }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
+          ))}
         </div>
+
+        {!isQui ? (
+          <>
+            <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={conf.QB_HOST} onChange={v => { set('QB_HOST')(v); setSourceInfo(null) }} style={{ marginBottom: 14 }} />
+            <div style={g2}>
+              <Field label="Username" placeholder="admin" value={conf.QB_USER} onChange={v => { set('QB_USER')(v); setSourceInfo(null) }} />
+              <Field label="Password" type="password" placeholder="(unchanged — leave blank to keep current)"
+                value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v); setSourceInfo(null) }} />
+            </div>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 14 }}>
+              qui aggregates multiple qBittorrent instances behind one API endpoint — ideal for multi-instance setups sharing a common filesystem (e.g. mergerfs).
+            </p>
+            <Field label="Host URL" placeholder="http://192.168.1.x:7476" value={conf.QUI_HOST} onChange={v => { set('QUI_HOST')(v); setSourceInfo(null) }} style={{ marginBottom: 14 }} />
+            <Field label="API Key" type="password" placeholder="(unchanged — leave blank to keep current)"
+              hint="Create a full-access key in qui under Settings → API Keys."
+              value={conf.QUI_API_KEY} onChange={v => { setApiKeyChanged(true); set('QUI_API_KEY')(v); setSourceInfo(null) }} />
+          </>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
           {testStatus && (testStatus.loading || !testStatus.ok) && (
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
@@ -264,9 +320,29 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             Test Connection
           </button>
         </div>
-        {qbitInfo && (
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', marginTop: 8 }}>
-            {`✓ Connected · qBittorrent ${qbitInfo.version}`}
+        {sourceInfo && testStatus?.ok && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)' }}>
+              {isQui
+                ? `✓ Connected · qui${sourceInfo.version ? ` v${sourceInfo.version}` : ''} · ${sourceInfo.summary}`
+                : `✓ Connected · qBittorrent ${sourceInfo.version || ''}`}
+            </div>
+            {isQui && sourceInfo.skipped?.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <button onClick={() => setQuiSkippedOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+                  {quiSkippedOpen ? '▼' : '▶'} {sourceInfo.skipped.length} skipped instance{sourceInfo.skipped.length !== 1 ? 's' : ''}
+                </button>
+                {quiSkippedOpen && (
+                  <div style={{ marginTop: 4, paddingLeft: 10, borderLeft: '2px solid var(--border2)' }}>
+                    {sourceInfo.skipped.map((inst, i) => (
+                      <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                        {inst.name || inst.id}: {inst._skip_reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Card>
@@ -277,7 +353,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 14 }}>
           <button onClick={handleFetchSavePath} style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
-            {savePathStatus === 'loading' ? 'Fetching…' : 'Fetch from qBittorrent'}
+            {savePathStatus === 'loading' ? 'Fetching…' : `Fetch from ${isQui ? 'qui' : 'qBittorrent'}`}
           </button>
           {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
           {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}

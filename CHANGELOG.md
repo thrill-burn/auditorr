@@ -1,4 +1,17 @@
 # Changelog
+## v1.4.0 — 2026-05-12
+
+### Features
+- **qui torrent source** — auditorr can now connect to [qui](https://github.com/autobrr/qui) as an alternative to a direct qBittorrent connection. qui aggregates multiple qBittorrent instances behind a single API endpoint, making it the right choice for multi-instance setups sharing a common filesystem (e.g. mergerfs). Select the source in Config or the setup wizard; all existing qBittorrent behaviour is unchanged.
+- **`sources/` package** — torrent-source logic is now isolated in `sources/__init__.py`, `sources/_qbit.py`, and `sources/_qui.py` behind a common `fetch_file_map` / `test_connection` / `connection_info` / `fetch_save_path_hint` interface. Adding future sources requires only a new backend module and a one-line dispatcher update.
+- **Source-aware deep links in file explorer** — the Torrents tab now shows a `qBit ↗` or `qui ↗` button on each file row that opens the torrent source web UI. For qui, the link navigates directly to the instance that owns that file.
+- **Source-aware setup wizard** — Step 1 of the setup wizard now has a [qBittorrent] / [qui] segmented toggle with conditional credential fields and post-test info cards for both sources.
+
+### API changes
+- `/api/source_info` (renamed from `/api/qbit_info`) — returns connection info for whichever source is configured
+- `/api/source_save_path` (renamed from `/api/qbit_save_path`) — fetches the common save-path prefix from whichever source is configured
+- `/api/test_connection` — now source-aware; returns `instances`, `eligible_count`, and `skipped` for qui
+
 ## v1.3.6 — 2026-05-11
 
 ### Bug Fixes
