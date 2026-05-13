@@ -79,6 +79,7 @@ def _norm_torrent(t):
         'save_path': (t.get('save_path') or t.get('savePath') or '').rstrip('/'),
         'size':      t.get('size') or t.get('total_size') or t.get('totalSize') or 0,
         'uploaded':  t.get('uploaded') or t.get('uploadedEver') or 0,
+        'name':      t.get('name') or '',
     }
 
 
@@ -184,8 +185,12 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
             timeout=8,
         )
         fi_resp.raise_for_status()
-        files = [_norm_file(f) for f in _unwrap(fi_resp.json())]
-    except Exception:
+        raw_files = _unwrap(fi_resp.json())
+        files = [_norm_file(f) for f in raw_files]
+        if not files and raw_files is not None:
+            log.debug('qui: files endpoint returned empty list for %s', torrent_hash)
+    except Exception as e:
+        log.debug('qui: files endpoint failed for %s: %s', torrent_hash, e)
         files = []
 
     return hosts, files
@@ -233,6 +238,25 @@ def _process_instance(session, base, inst, remote_path, local_path,
                         tracker_map.setdefault(th, ['Unknown'])
                         files_map.setdefault(th, [])
 
+    empty_file_count    = 0
+    nonempty_file_count = 0
+    disk_fallback_count = 0
+    sample_paths        = []
+
+    def _add_entry(full_path, status, hosts):
+        entry = file_map.setdefault(full_path, {
+            'status':        status,
+            'trackers':      set(),
+            'hash':          th,
+            'instance_id':   inst_id,
+            'instance_name': inst_name,
+        })
+        entry['trackers'].update(hosts)
+        if status == 'Seeding' or entry['status'] == 'Seeding':
+            entry['status'] = 'Seeding'
+        elif entry['status'] == 'Paused':
+            entry['status'] = status
+
     for torrent in torrents:
         nt = _norm_torrent(torrent)
         th = nt['hash']
@@ -248,24 +272,81 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + nt['size']
 
         save_path = nt['save_path']
+        raw_save_path = save_path
         if remote_path and save_path.startswith(remote_path) and \
                 save_path[len(remote_path):][:1] in ('/', ''):
             save_path = local_path + save_path[len(remote_path):]
 
-        for f in files_map.get(th, []):
-            full_path = os.path.join(save_path, f['name'])
-            entry = file_map.setdefault(full_path, {
-                'status':        status,
-                'trackers':      set(),
-                'hash':          th,
-                'instance_id':   inst_id,
-                'instance_name': inst_name,
-            })
-            entry['trackers'].update(hosts)
-            if status == 'Seeding' or entry['status'] == 'Seeding':
-                entry['status'] = 'Seeding'
-            elif entry['status'] == 'Paused':
-                entry['status'] = status
+        torrent_files = files_map.get(th, [])
+
+        if torrent_files:
+            nonempty_file_count += 1
+            for f in torrent_files:
+                full_path = os.path.join(save_path, f['name'])
+                if len(sample_paths) < 3:
+                    sample_paths.append({
+                        'source': 'api',
+                        'raw_save_path': raw_save_path,
+                        'mapped_save_path': save_path,
+                        'file_name': f['name'],
+                        'full_path': full_path,
+                    })
+                _add_entry(full_path, status, hosts)
+        else:
+            empty_file_count += 1
+            # Fallback: qui may not expose per-torrent file lists.
+            # Use torrent name to locate files on local filesystem.
+            torrent_name = nt['name']
+            if torrent_name and save_path:
+                torrent_root = os.path.join(save_path, torrent_name)
+                if os.path.isfile(torrent_root):
+                    # Single-file torrent
+                    disk_fallback_count += 1
+                    if len(sample_paths) < 3:
+                        sample_paths.append({
+                            'source': 'disk_fallback_file',
+                            'raw_save_path': raw_save_path,
+                            'mapped_save_path': save_path,
+                            'file_name': torrent_name,
+                            'full_path': torrent_root,
+                        })
+                    _add_entry(torrent_root, status, hosts)
+                elif os.path.isdir(torrent_root):
+                    # Multi-file torrent — walk only the torrent's own subtree
+                    for dir_root, _, dir_files in os.walk(torrent_root):
+                        for fname in dir_files:
+                            full_path = os.path.join(dir_root, fname)
+                            disk_fallback_count += 1
+                            if len(sample_paths) < 3:
+                                sample_paths.append({
+                                    'source': 'disk_fallback_dir',
+                                    'raw_save_path': raw_save_path,
+                                    'mapped_save_path': save_path,
+                                    'file_name': os.path.relpath(full_path, save_path),
+                                    'full_path': full_path,
+                                })
+                            _add_entry(full_path, status, hosts)
+
+    if disk_fallback_count:
+        log.warning(
+            'qui[%s]: %d torrents had no file data from API — used disk fallback '
+            '(walked save_path/name on local filesystem). '
+            'Check if qui exposes GET /api/instances/{id}/torrents/{hash}/files',
+            inst_name, empty_file_count,
+        )
+
+    log.info(
+        'qui[%s]: %d torrents — %d with file lists, %d empty '
+        '(%d disk-fallback entries). file_map total: %d. remote_path=%r local_path=%r',
+        inst_name, len(torrents), nonempty_file_count, empty_file_count,
+        disk_fallback_count, len(file_map), remote_path, local_path,
+    )
+    for sp in sample_paths:
+        log.info(
+            'qui[%s] sample path [%s] — raw_save=%r mapped_save=%r file_name=%r full_path=%r',
+            inst_name, sp['source'], sp['raw_save_path'], sp['mapped_save_path'],
+            sp['file_name'], sp['full_path'],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +392,7 @@ def _fetch_inner(cfg):
     if not eligible:
         reasons = '; '.join(f"{i.get('name','?')}: {_skip_reason(i)}" for i in skipped[:5])
         raise SourceConnectionError(
-            f"No eligible qui instances (need connected + hasLocalFilesystemAccess + useHardlinks/useReflinks). "
+            f"No eligible qui instances (need connected + hasLocalFilesystemAccess). "
             f"Skipped: {reasons or 'none'}"
         )
 
@@ -337,6 +418,16 @@ def _fetch_inner(cfg):
         }
         for host in all_hosts
     }
+
+    if not file_map:
+        log.warning(
+            'qui: file_map is EMPTY after processing all instances — all torrent '
+            'files will appear Orphaned. Likely cause: REMOTE_PATH/LOCAL_PATH '
+            'path mapping is incorrect so save_path substitution failed, OR '
+            'qui reported no torrents. Check per-instance logs above.'
+        )
+    else:
+        log.info('qui: total file_map entries across all instances: %d', len(file_map))
 
     return file_map, sorted(trackers_set), tracker_snapshot
 
