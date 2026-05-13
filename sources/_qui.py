@@ -120,6 +120,20 @@ def _unwrap(response_json):
     return []
 
 
+def _get_version(sess, base, eligible_instances):
+    """Get qBittorrent version from the first eligible instance's app-info."""
+    if not eligible_instances:
+        return None
+    try:
+        inst_id = eligible_instances[0]['id']
+        vr = sess.get(f'{base}/api/instances/{inst_id}/app-info', timeout=5)
+        if vr.ok:
+            return vr.json().get('version')
+    except Exception:
+        pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Per-instance helpers
 # ---------------------------------------------------------------------------
@@ -472,17 +486,8 @@ def test_connection(payload):
         if not isinstance(all_instances, list):
             all_instances = _unwrap(all_instances)
 
-        version = None
-        try:
-            vr = sess.get(f'{base}/api/version', timeout=5)
-            if vr.ok:
-                vd = vr.json()
-                version = (vd.get('version') or vd.get('qui_version')
-                           or vd.get('app_version') or str(vd) if isinstance(vd, str) else None)
-        except Exception:
-            pass
-
         eligible = [i for i in all_instances if _eligible(i)]
+        version = _get_version(sess, base, eligible)
         skipped  = [
             {**i, '_skip_reason': _skip_reason(i)}
             for i in all_instances if not _eligible(i)
@@ -523,19 +528,12 @@ def connection_info(cfg):
     if not isinstance(all_instances, list):
         all_instances = _unwrap(all_instances)
 
+    eligible = [i for i in all_instances if _eligible(i)]
     n = len(all_instances)
-    e = sum(1 for i in all_instances if _eligible(i))
+    e = len(eligible)
     s = n - e
     summary = f'{n} instance{"s" if n != 1 else ""} ({e} scannable, {s} skipped)'
-
-    version = None
-    try:
-        vr = sess.get(f'{base}/api/version', timeout=5)
-        if vr.ok:
-            vd = vr.json()
-            version = vd.get('version') or vd.get('qui_version') or vd.get('app_version')
-    except Exception:
-        pass
+    version  = _get_version(sess, base, eligible)
 
     return {'version': version, 'instance_summary': summary, 'instances': all_instances}
 
@@ -563,15 +561,17 @@ def fetch_save_path_hint(payload):
     first   = eligible[0]
     inst_id = first['id']
 
-    # Ask first eligible instance for ~50 torrents for path detection.
+    # Ask first eligible instance for path detection (page=0, limit=50 is enough).
     # Shared-fs setups report the same prefix from any instance.
     resp2 = sess.get(
         f'{base}/api/instances/{inst_id}/torrents',
-        params={'limit': 50, 'offset': 0},
+        params={'limit': 50, 'page': 0},
         timeout=15,
     )
     resp2.raise_for_status()
-    raw_torrents = _unwrap(resp2.json())
+    raw       = resp2.json()
+    total     = raw.get('total', 0) if isinstance(raw, dict) else 0
+    raw_torrents = _unwrap(raw)
 
     paths        = []
     seeding_size = 0
@@ -589,19 +589,12 @@ def fetch_save_path_hint(payload):
         except ValueError:
             save_path = paths[0]
 
-    version = None
-    try:
-        vr = sess.get(f'{base}/api/version', timeout=5)
-        if vr.ok:
-            vd = vr.json()
-            version = vd.get('version') or vd.get('qui_version') or vd.get('app_version')
-    except Exception:
-        pass
+    version = _get_version(sess, base, eligible)
 
     return {
         'save_path':     save_path,
         'version':       version,
-        'torrent_count': len(raw_torrents),
+        'torrent_count': total or len(raw_torrents),
         'seeding_size':  seeding_size,
         'instances':     all_instances,
     }
