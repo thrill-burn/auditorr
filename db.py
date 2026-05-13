@@ -381,13 +381,11 @@ def db_get_upload_snapshots(since_days=90):
         conn.close()
 
 
-def db_retag_upload_snapshots(from_date_str, source, to_date_str=None):
-    """Set source on upload_snapshots AND audit_runs within [from_date_str, to_date_str].
+def db_delete_upload_snapshots(from_date_str, to_date_str=None):
+    """Delete upload_snapshots (and audit_runs) within a datetime range.
 
-    to_date_str is inclusive to the end of the specified minute — append
-    :59.999999 so a HH:MM value covers the whole minute.
-    Omit to_date_str to retag everything from from_date_str onward.
-    Returns (upload_snapshots_updated, audit_runs_updated).
+    Either bound may be None/'' for open-ended queries.
+    Returns (0,0) if both bounds are empty (safety guard).
     """
     conn = _db_conn()
     try:
@@ -395,7 +393,56 @@ def db_retag_upload_snapshots(from_date_str, source, to_date_str=None):
         if to_date_str:
             to_ceil = to_date_str if len(to_date_str) > 16 else to_date_str + ':59.999999'
 
-        if to_ceil:
+        if from_date_str and to_ceil:
+            c1 = conn.execute(
+                "DELETE FROM upload_snapshots WHERE taken_at >= ? AND taken_at <= ?",
+                (from_date_str, to_ceil)
+            )
+            c2 = conn.execute(
+                "DELETE FROM audit_runs WHERE ran_at >= ? AND ran_at <= ?",
+                (from_date_str, to_ceil)
+            )
+        elif from_date_str:
+            c1 = conn.execute(
+                "DELETE FROM upload_snapshots WHERE taken_at >= ?",
+                (from_date_str,)
+            )
+            c2 = conn.execute(
+                "DELETE FROM audit_runs WHERE ran_at >= ?",
+                (from_date_str,)
+            )
+        elif to_ceil:
+            c1 = conn.execute(
+                "DELETE FROM upload_snapshots WHERE taken_at <= ?",
+                (to_ceil,)
+            )
+            c2 = conn.execute(
+                "DELETE FROM audit_runs WHERE ran_at <= ?",
+                (to_ceil,)
+            )
+        else:
+            return 0, 0
+        conn.commit()
+        return c1.rowcount, c2.rowcount
+    finally:
+        conn.close()
+
+
+def db_retag_upload_snapshots(from_date_str, source, to_date_str=None):
+    """Set source on upload_snapshots AND audit_runs within a datetime range.
+
+    Either bound may be None/'' for open-ended queries (e.g. "everything up to to_date").
+    to_date_str is inclusive to the end of the specified minute — appends :59.999999
+    for HH:MM-precision values.
+    Returns (upload_snapshots_updated, audit_runs_updated). Returns (0,0) if both bounds empty.
+    """
+    conn = _db_conn()
+    try:
+        to_ceil = None
+        if to_date_str:
+            to_ceil = to_date_str if len(to_date_str) > 16 else to_date_str + ':59.999999'
+
+        if from_date_str and to_ceil:
             c1 = conn.execute(
                 "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ? AND taken_at <= ?",
                 (source, from_date_str, to_ceil)
@@ -404,7 +451,7 @@ def db_retag_upload_snapshots(from_date_str, source, to_date_str=None):
                 "UPDATE audit_runs SET source = ? WHERE ran_at >= ? AND ran_at <= ?",
                 (source, from_date_str, to_ceil)
             )
-        else:
+        elif from_date_str:
             c1 = conn.execute(
                 "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ?",
                 (source, from_date_str)
@@ -413,6 +460,17 @@ def db_retag_upload_snapshots(from_date_str, source, to_date_str=None):
                 "UPDATE audit_runs SET source = ? WHERE ran_at >= ?",
                 (source, from_date_str)
             )
+        elif to_ceil:
+            c1 = conn.execute(
+                "UPDATE upload_snapshots SET source = ? WHERE taken_at <= ?",
+                (source, to_ceil)
+            )
+            c2 = conn.execute(
+                "UPDATE audit_runs SET source = ? WHERE ran_at <= ?",
+                (source, to_ceil)
+            )
+        else:
+            return 0, 0
         conn.commit()
         return c1.rowcount, c2.rowcount
     finally:

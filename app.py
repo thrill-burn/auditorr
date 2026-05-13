@@ -19,6 +19,7 @@ from db import (
     db_clear_audit_history,
     db_get_upload_snapshots,
     db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
+    db_delete_upload_snapshots,
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, compute_diff, process_health_metrics, compute_upload_stats
@@ -491,15 +492,27 @@ def get_upload_snapshot_source_counts():
 @require_auth
 def retag_upload_snapshots():
     data      = request.json or {}
-    from_date = (data.get('from') or '').strip()
+    from_date = (data.get('from') or '').strip() or None
     to_date   = (data.get('to')   or '').strip() or None
     source    = (data.get('source') or '').strip()
-    if not from_date:
-        return jsonify({"status": "error", "message": "'from' datetime is required"}), 400
+    if not from_date and not to_date:
+        return jsonify({"status": "error", "message": "At least one of 'from' or 'to' is required"}), 400
     if source not in ('qbit', 'qui'):
         return jsonify({"status": "error", "message": "source must be 'qbit' or 'qui'"}), 400
     snap_count, run_count = db_retag_upload_snapshots(from_date, source, to_date_str=to_date)
     return jsonify({"status": "success", "updated": snap_count, "audit_runs_updated": run_count})
+
+
+@app.route('/api/upload_snapshots/delete', methods=['POST'])
+@require_auth
+def delete_upload_snapshots():
+    data      = request.json or {}
+    from_date = (data.get('from') or '').strip() or None
+    to_date   = (data.get('to')   or '').strip() or None
+    if not from_date and not to_date:
+        return jsonify({"status": "error", "message": "At least one of 'from' or 'to' is required"}), 400
+    snap_count, run_count = db_delete_upload_snapshots(from_date, to_date_str=to_date)
+    return jsonify({"status": "success", "deleted": snap_count, "audit_runs_deleted": run_count})
 
 
 @app.route('/', defaults={'path': ''})

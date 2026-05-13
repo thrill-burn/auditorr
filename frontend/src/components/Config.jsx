@@ -110,6 +110,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [retagTo,         setRetagTo]         = useState('')
   const [retagSource,     setRetagSource]     = useState('qui')
   const [retagStatus,     setRetagStatus]     = useState(null)
+  const [deleteStatus,    setDeleteStatus]    = useState(null)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [sourceInfo, setSourceInfo] = useState(null)
   const [savePathStatus, setSavePathStatus] = useState(null)
@@ -259,12 +260,29 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const g2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }
   const g3 = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }
 
+  const fmtRange = (from, to) =>
+    from && to ? `${from} → ${to}` : from ? `${from} onward` : `up to ${to}`
+
+  const handleDelete = async () => {
+    if (!retagFrom && !retagTo) { setDeleteStatus({ ok: false, msg: 'Enter at least one datetime bound.' }); return }
+    const range = fmtRange(retagFrom, retagTo)
+    if (!window.confirm(`Delete all upload snapshots and audit runs [${range}]? This cannot be undone.`)) return
+    setDeleteStatus({ loading: true })
+    try {
+      const r = await api.deleteUploadSnapshots(retagFrom, retagTo)
+      setDeleteStatus({ ok: true, msg: `Deleted ${r.deleted} upload snapshot${r.deleted !== 1 ? 's' : ''} and ${r.audit_runs_deleted} audit run${r.audit_runs_deleted !== 1 ? 's' : ''}.` })
+      api.uploadSnapshotCounts().then(setSnapshotCounts).catch(() => {})
+      api.auditHistory().then(data => setAuditRuns(data.runs || [])).catch(() => {})
+    } catch (e) { setDeleteStatus({ ok: false, msg: e.message }) }
+  }
+
   const handleRetag = async () => {
-    if (!retagFrom) { setRetagStatus({ ok: false, msg: 'Enter a start datetime.' }); return }
+    if (!retagFrom && !retagTo) { setRetagStatus({ ok: false, msg: 'Enter at least one datetime bound.' }); return }
+    const range = fmtRange(retagFrom, retagTo)
+    if (!window.confirm(`Tag all upload snapshots and audit runs [${range}] as "${retagSource}"?`)) return
     setRetagStatus({ loading: true })
     try {
       const r = await api.retagUploadSnapshots(retagFrom, retagTo, retagSource)
-      const range = retagTo ? `${retagFrom} → ${retagTo}` : `${retagFrom} onward`
       setRetagStatus({ ok: true, msg: `Tagged ${r.updated} upload snapshot${r.updated !== 1 ? 's' : ''} and ${r.audit_runs_updated} audit run${r.audit_runs_updated !== 1 ? 's' : ''} in [${range}] as ${retagSource}.` })
       api.uploadSnapshotCounts().then(setSnapshotCounts).catch(() => {})
     } catch (e) { setRetagStatus({ ok: false, msg: e.message }) }
@@ -603,11 +621,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>Tag snapshots in this range as</label>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Either end may be left blank for an open bound — e.g. blank start + end date = everything up to that date.</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <input
               type="datetime-local"
               value={retagFrom}
-              onChange={e => { setRetagFrom(e.target.value); setRetagStatus(null) }}
+              onChange={e => { setRetagFrom(e.target.value); setRetagStatus(null); setDeleteStatus(null) }}
               style={{
                 padding: '6px 10px', borderRadius: 'var(--r)',
                 border: '1px solid var(--border2)', background: 'var(--surface2)',
@@ -618,8 +637,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             <input
               type="datetime-local"
               value={retagTo}
-              onChange={e => { setRetagTo(e.target.value); setRetagStatus(null) }}
-              placeholder="leave blank for open end"
+              onChange={e => { setRetagTo(e.target.value); setRetagStatus(null); setDeleteStatus(null) }}
               style={{
                 padding: '6px 10px', borderRadius: 'var(--r)',
                 border: '1px solid var(--border2)', background: 'var(--surface2)',
@@ -627,7 +645,6 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                 fontFamily: 'var(--mono)', fontSize: 12, outline: 'none',
               }}
             />
-            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>(end blank = open)</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ display: 'flex' }}>
@@ -648,13 +665,25 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               disabled={retagStatus?.loading}
               style={{ padding: '6px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}
             >
-              {retagStatus?.loading ? 'Applying…' : 'Apply'}
+              {retagStatus?.loading ? 'Applying…' : 'Retag'}
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={deleteStatus?.loading}
+              style={{ padding: '6px 14px', borderRadius: 'var(--r)', border: '1px solid var(--red)44', background: 'transparent', color: 'var(--red)', fontSize: 12, cursor: 'pointer' }}
+            >
+              {deleteStatus?.loading ? 'Deleting…' : 'Delete'}
             </button>
           </div>
         </div>
         {retagStatus && !retagStatus.loading && (
           <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: retagStatus.ok ? 'var(--green)' : 'var(--red)' }}>
             {retagStatus.ok ? '✓ ' : '✗ '}{retagStatus.msg}
+          </div>
+        )}
+        {deleteStatus && !deleteStatus.loading && (
+          <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: deleteStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+            {deleteStatus.ok ? '✓ ' : '✗ '}{deleteStatus.msg}
           </div>
         )}
       </Card>
