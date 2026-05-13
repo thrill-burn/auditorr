@@ -123,6 +123,7 @@ def _fetch_inner(cfg):
         }
         for host in all_hosts
     }
+    tracker_snapshot['_instance_count'] = 1
 
     return file_map, sorted(trackers_set), tracker_snapshot
 

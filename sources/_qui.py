@@ -451,6 +451,7 @@ def _fetch_inner(cfg):
         }
         for host in all_hosts
     }
+    tracker_snapshot['_instance_count'] = len(eligible)
 
     if not file_map:
         log.warning(

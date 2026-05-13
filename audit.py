@@ -277,14 +277,16 @@ def compute_upload_stats(days=30):
     for i in range(1, len(rows)):
         prev_row = rows[i - 1]
         curr_row = rows[i]
-        # Skip deltas across source switches — the uploaded counters are not
-        # comparable between qbit (single instance) and qui (multi-instance
-        # aggregation), so the first post-switch snapshot is treated as a new
-        # baseline rather than producing a fake spike.
-        if prev_row.get('source') != curr_row.get('source'):
-            continue
         prev_snap = prev_row['snapshot']
         curr_snap = curr_row['snapshot']
+
+        # Skip if the number of contributing instances changed — a step-change
+        # in instance count means the cumulative totals shifted baseline (new
+        # instance history added, or a partial snapshot when one was unreachable).
+        # Treat missing _instance_count (old snapshots) as 1 for backward compat.
+        if (prev_snap.get('_instance_count') or 1) != (curr_snap.get('_instance_count') or 1):
+            continue
+
         try:
             t_prev = datetime.fromisoformat(prev_row['taken_at'])
             t_curr = datetime.fromisoformat(curr_row['taken_at'])
@@ -294,7 +296,7 @@ def compute_upload_stats(days=30):
         bucket = daily_by_tracker.setdefault(date_str, {})
 
         for host, curr_data in curr_snap.items():
-            if host == 'Unknown':
+            if host == 'Unknown' or host.startswith('_'):
                 continue
             prev_data = prev_snap.get(host)
             if prev_data is None:
@@ -339,7 +341,7 @@ def compute_upload_stats(days=30):
     tracker_yields = []
     total_seeding_size = 0
     for host, snap_data in latest_snap.items():
-        if host == 'Unknown':
+        if host == 'Unknown' or host.startswith('_'):
             continue
         seeding_size = snap_data.get('seeding_size', 0)
         total_seeding_size += seeding_size
