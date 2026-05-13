@@ -135,17 +135,21 @@ def _fetch_all_torrents(session, base, inst_id):
     all_torrents = []
     seen_hashes  = set()
     offset       = 0
-    limit        = 1000
+    limit        = 10000
+    page         = 0
 
-    for _ in range(200):  # safety cap: at most 200,000 torrents
+    for _ in range(10000):  # safety cap
         resp = session.get(
             f'{base}/api/instances/{inst_id}/torrents',
             params={'limit': limit, 'offset': offset},
-            timeout=30,
+            timeout=60,
         )
         resp.raise_for_status()
         batch = _unwrap(resp.json())
+
         if not batch:
+            log.info('qui: instance %s page %d (offset=%d): empty — done. total=%d',
+                     inst_id, page, offset, len(all_torrents))
             break
 
         new_items = []
@@ -157,10 +161,21 @@ def _fetch_all_torrents(session, base, inst_id):
                 new_items.append(t)
 
         all_torrents.extend(new_items)
+        log.info('qui: instance %s page %d (offset=%d): %d items, %d new, total=%d',
+                 inst_id, page, offset, len(batch), len(new_items), len(all_torrents))
+        page += 1
 
-        # Stop when: last page (fewer than limit), or API ignored offset
-        # (no new unique hashes came back — we've seen everything).
-        if len(batch) < limit or not new_items:
+        if len(batch) < limit:
+            # Last page — fewer items than requested
+            break
+        if not new_items:
+            # Offset pagination not supported — all items were duplicates
+            log.warning(
+                'qui: instance %s returned duplicate hashes at offset=%d — '
+                'offset pagination appears unsupported. Got %d unique torrents total. '
+                'If your library is larger, upgrade qui or contact its maintainer.',
+                inst_id, offset, len(all_torrents),
+            )
             break
         offset += limit
 
