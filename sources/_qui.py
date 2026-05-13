@@ -114,11 +114,9 @@ def _unwrap(response_json):
     if isinstance(response_json, list):
         return response_json
     if isinstance(response_json, dict):
-        return (response_json.get('data')
-                or response_json.get('torrents')
-                or response_json.get('files')
-                or response_json.get('trackers')
-                or [])
+        for key in ('torrents', 'cross_instance_torrents', 'data', 'files', 'trackers'):
+            if key in response_json:
+                return response_json[key] or []
     return []
 
 
@@ -132,24 +130,31 @@ def _fetch_all_torrents(session, base, inst_id):
     Uses hash-deduplication so the loop terminates even if the API ignores
     the offset parameter and returns the same page on every request.
     """
+    # qui uses page-based pagination (0-indexed), max limit=2000 per page
     all_torrents = []
     seen_hashes  = set()
-    offset       = 0
-    limit        = 10000
     page         = 0
+    limit        = 2000
+    total_hint   = None  # populated from first response's 'total' field
 
     for _ in range(10000):  # safety cap
         resp = session.get(
             f'{base}/api/instances/{inst_id}/torrents',
-            params={'limit': limit, 'offset': offset},
+            params={'limit': limit, 'page': page},
             timeout=60,
         )
         resp.raise_for_status()
-        batch = _unwrap(resp.json())
+        raw = resp.json()
+
+        # Extract total count from envelope if present
+        if isinstance(raw, dict) and 'total' in raw and total_hint is None:
+            total_hint = raw['total']
+
+        batch = _unwrap(raw)
 
         if not batch:
-            log.info('qui: instance %s page %d (offset=%d): empty — done. total=%d',
-                     inst_id, page, offset, len(all_torrents))
+            log.info('qui: instance %s page %d: empty — done. total=%d (expected=%s)',
+                     inst_id, page, len(all_torrents), total_hint)
             break
 
         new_items = []
@@ -161,23 +166,22 @@ def _fetch_all_torrents(session, base, inst_id):
                 new_items.append(t)
 
         all_torrents.extend(new_items)
-        log.info('qui: instance %s page %d (offset=%d): %d items, %d new, total=%d',
-                 inst_id, page, offset, len(batch), len(new_items), len(all_torrents))
+        log.info('qui: instance %s page %d: %d items, %d new, running_total=%d/%s',
+                 inst_id, page, len(batch), len(new_items), len(all_torrents), total_hint)
         page += 1
 
+        # Done if: last page, all caught up, or API looping
         if len(batch) < limit:
-            # Last page — fewer items than requested
+            break
+        if total_hint is not None and len(all_torrents) >= total_hint:
             break
         if not new_items:
-            # Offset pagination not supported — all items were duplicates
             log.warning(
-                'qui: instance %s returned duplicate hashes at offset=%d — '
-                'offset pagination appears unsupported. Got %d unique torrents total. '
-                'If your library is larger, upgrade qui or contact its maintainer.',
-                inst_id, offset, len(all_torrents),
+                'qui: instance %s returned all-duplicate hashes on page %d — '
+                'stopping. Got %d/%s unique torrents.',
+                inst_id, page, len(all_torrents), total_hint,
             )
             break
-        offset += limit
 
     return all_torrents
 
