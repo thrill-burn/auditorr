@@ -7,6 +7,13 @@
 - **Source-aware deep links in file explorer** — the Torrents tab now shows a `qBit ↗` or `qui ↗` button on each file row that opens the torrent source web UI. For qui, the link navigates directly to the instance that owns that file.
 - **Source-aware setup wizard** — Step 1 of the setup wizard now has a [qBittorrent] / [qui] segmented toggle with conditional credential fields and post-test info cards for both sources.
 
+### Improvements
+- **Exclusion patterns: hide from file explorer** — a new "File explorer visibility" toggle in Config → Exclusion Patterns controls whether excluded files appear in the file explorer. Default is Visible (existing behaviour). When set to Hidden, excluded files are filtered out of all views; switching the status filter to "Excluded" still shows them so they remain accessible on demand.
+
+### Bug Fixes
+- **Upload spike detection via instance count** — each upload snapshot now embeds `_instance_count` (the number of eligible qui instances contributing to that scan, always 1 for qBittorrent). `compute_upload_stats` skips delta pairs where the instance count differs between consecutive snapshots, preventing false upload spikes when a new qui instance is added or when a partial snapshot was captured while one instance was temporarily unreachable. Old snapshots without the field are treated as count 1 for backward compatibility.
+- **Removed Upload Baseline card from Config** — the retag/delete UI panel exposed destructive database operations with insufficient safeguards. Backend endpoints remain auth-protected and available for direct API access if needed.
+
 ### API changes
 - `/api/source_info` (renamed from `/api/qbit_info`) — returns connection info for whichever source is configured
 - `/api/source_save_path` (renamed from `/api/qbit_save_path`) — fetches the common save-path prefix from whichever source is configured

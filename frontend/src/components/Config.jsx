@@ -117,8 +117,9 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [orPct,  setOrPct]  = useState('')
   const [niPct,  setNiPct]  = useState('')
   const [dupPct, setDupPct] = useState('')
-  const [exclusionPatterns, setExclusionPatterns] = useState('')
-  const [exclusionFocused,  setExclusionFocused]  = useState(false)
+  const [exclusionPatterns,        setExclusionPatterns]        = useState('')
+  const [exclusionFocused,         setExclusionFocused]         = useState(false)
+  const [exclusionHideFromExplorer, setExclusionHideFromExplorer] = useState(false)
 
   const loadConfig = () => {
     api.getConfig().then(data => {
@@ -135,6 +136,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
+      setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
       setPassChanged(false)
       setApiKeyChanged(false)
       setIsDirty(false)
@@ -232,7 +234,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
       NI_RATIO:  parseFloat(niPct)  / 100 || 0.01,
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
-      EXCLUSION_PATTERNS: exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
+      EXCLUSION_PATTERNS:           exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
+      EXCLUSION_HIDE_FROM_EXPLORER: exclusionHideFromExplorer,
     }
     if (!passChanged)   delete payload.QB_PASS
     if (!apiKeyChanged) delete payload.QUI_API_KEY
@@ -525,7 +528,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       <Card title="Exclusion Patterns">
         <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Patterns</label>
         <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
-          One pattern per line. Supports globs: <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>*.srt</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>@eaDir</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>Featurettes</span>. Matching files are excluded from health scoring but still visible in the file explorer.
+          One pattern per line. Supports globs: <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>*.srt</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>@eaDir</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>Featurettes</span>. Matching files are excluded from health scoring.
         </span>
         <textarea
           value={exclusionPatterns}
@@ -543,6 +546,32 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             transition: 'border 0.12s', boxSizing: 'border-box',
           }}
         />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>File explorer visibility</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Control whether excluded files appear in the file explorer.</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 24 }}>
+            {[
+              { value: false, label: 'Visible' },
+              { value: true,  label: 'Hidden'  },
+            ].map(opt => (
+              <button
+                key={String(opt.value)}
+                onClick={() => { setExclusionHideFromExplorer(opt.value); setIsDirty(true) }}
+                style={{
+                  padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
+                  border: `1px solid ${exclusionHideFromExplorer === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
+                  background: exclusionHideFromExplorer === opt.value ? 'var(--accent)18' : 'transparent',
+                  color: exclusionHideFromExplorer === opt.value ? 'var(--accent)' : 'var(--text-dim)',
+                  cursor: 'pointer', transition: 'all 0.12s',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </Card>
 
       <Card title="Appearance">

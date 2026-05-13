@@ -637,11 +637,12 @@ const STATUS_FILTERS = [
 export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, revealPath }) {
   trackers = trackers || []
 
-  const [sonarrConfigured, setSonarrConfigured] = useState(false)
-  const [radarrConfigured, setRadarrConfigured] = useState(false)
-  const [torrentSource,    setTorrentSource]    = useState('qbit')
-  const [qbHost,           setQbHost]           = useState('')
-  const [quiHost,          setQuiHost]          = useState('')
+  const [sonarrConfigured,      setSonarrConfigured]      = useState(false)
+  const [radarrConfigured,      setRadarrConfigured]      = useState(false)
+  const [torrentSource,         setTorrentSource]         = useState('qbit')
+  const [qbHost,                setQbHost]                = useState('')
+  const [quiHost,               setQuiHost]               = useState('')
+  const [hideExcluded,          setHideExcluded]          = useState(false)
 
   useEffect(() => {
     api.getConfig().then(c => {
@@ -650,6 +651,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       setTorrentSource(c.TORRENT_SOURCE || 'qbit')
       setQbHost(c.QB_HOST || '')
       setQuiHost(c.QUI_HOST || '')
+      setHideExcluded(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
     }).catch(() => {})
   }, [])
 
@@ -702,6 +704,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const isFlat       = !!nameQuery.trim() || !!revealPath || userFlat
 
   const filtered = useMemo(() => (files || []).filter(f => {
+    // Hide excluded files when configured to do so (unless the user is explicitly viewing excluded)
+    if (hideExcluded && f.excluded === true && statusFilter !== 'Excluded') return false
+
     // Status
     let sMatch
     if      (statusFilter === 'all')         sMatch = true
@@ -732,7 +737,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     const szMax = sizeMaxBytes === null || f.size <= sizeMaxBytes
 
     return sMatch && iMatch && tMatch && scMatch && nMatch && szMin && szMax
-  }), [files, statusFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
+  }), [files, hideExcluded, statusFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
 
   const sortedFiltered = useMemo(() => {
     if (sortBy === 'size') return [...filtered].sort((a, b) => b.size - a.size)
