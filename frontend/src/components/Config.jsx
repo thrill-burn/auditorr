@@ -105,6 +105,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [auditRuns,   setAuditRuns]   = useState(null)
   const [clearStatus, setClearStatus] = useState(null)
   const [pathTestStatus, setPathTestStatus] = useState(null)
+  const [snapshotCounts,  setSnapshotCounts]  = useState(null)
+  const [retagDate,       setRetagDate]       = useState('')
+  const [retagSource,     setRetagSource]     = useState('qui')
+  const [retagStatus,     setRetagStatus]     = useState(null)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [sourceInfo, setSourceInfo] = useState(null)
   const [savePathStatus, setSavePathStatus] = useState(null)
@@ -144,6 +148,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   useEffect(() => {
     loadConfig()
     api.auditHistory().then(data => setAuditRuns(data.runs || [])).catch(() => setAuditRuns([]))
+    api.uploadSnapshotCounts().then(setSnapshotCounts).catch(() => {})
   }, [])
 
   if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading…</div>
@@ -252,6 +257,16 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   const g2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }
   const g3 = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }
+
+  const handleRetag = async () => {
+    if (!retagDate) { setRetagStatus({ ok: false, msg: 'Enter a date first.' }); return }
+    setRetagStatus({ loading: true })
+    try {
+      const r = await api.retagUploadSnapshots(retagDate, retagSource)
+      setRetagStatus({ ok: true, msg: `Tagged ${r.updated} snapshot${r.updated !== 1 ? 's' : ''} as ${retagSource}. Reload the dashboard to see updated charts.` })
+      api.uploadSnapshotCounts().then(setSnapshotCounts).catch(() => {})
+    } catch (e) { setRetagStatus({ ok: false, msg: e.message }) }
+  }
 
   const handleClearHistory = async () => {
     if (!window.confirm('Clear all audit history? This will reset the score chart and run log. Cannot be undone.')) return
@@ -569,6 +584,63 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             ))}
           </div>
         </div>
+      </Card>
+
+      <Card title="Upload Baseline">
+        <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 16 }}>
+          Upload stats are deltas between consecutive snapshots. When you switch between qBittorrent and qui, the cumulative counters reset to a different scale — causing a spike on the switch date. Fix it by tagging all snapshots from the switch date onward with the new source: the transition pair is then skipped and the spike disappears.
+        </p>
+        {snapshotCounts && (
+          <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+            {Object.entries(snapshotCounts).map(([src, cnt]) => (
+              <div key={src} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '5px 10px' }}>
+                {src}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{cnt}</span> snapshot{cnt !== 1 ? 's' : ''}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>Tag snapshots from this date onward as</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="date"
+                value={retagDate}
+                onChange={e => { setRetagDate(e.target.value); setRetagStatus(null) }}
+                style={{
+                  padding: '6px 10px', borderRadius: 'var(--r)',
+                  border: '1px solid var(--border2)', background: 'var(--surface2)',
+                  color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex' }}>
+                {['qbit', 'qui'].map((src, i) => (
+                  <button key={src} onClick={() => { setRetagSource(src); setRetagStatus(null) }} style={{
+                    padding: '6px 14px',
+                    borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
+                    border: `1px solid ${retagSource === src ? 'var(--accent)' : 'var(--border2)'}`,
+                    borderRight: i === 0 ? 'none' : undefined,
+                    background: retagSource === src ? 'var(--accent)22' : 'transparent',
+                    color: retagSource === src ? 'var(--accent)' : 'var(--text-dim)',
+                    fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+                  }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
+                ))}
+              </div>
+              <button
+                onClick={handleRetag}
+                disabled={retagStatus?.loading}
+                style={{ padding: '6px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}
+              >
+                {retagStatus?.loading ? 'Applying…' : 'Apply'}
+              </button>
+            </div>
+          </div>
+        </div>
+        {retagStatus && !retagStatus.loading && (
+          <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: retagStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+            {retagStatus.ok ? '✓ ' : '✗ '}{retagStatus.msg}
+          </div>
+        )}
       </Card>
 
       <Card title="Audit History">

@@ -18,6 +18,7 @@ from db import (
     db_get_last_two_snapshots, db_get_recent_runs,
     db_clear_audit_history,
     db_get_upload_snapshots,
+    db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, compute_diff, process_health_metrics, compute_upload_stats
@@ -478,6 +479,26 @@ def get_upload_snapshots():
     days  = max(1, min(90, days))
     snaps = db_get_upload_snapshots(since_days=days)
     return jsonify({"snapshots": snaps})
+
+
+@app.route('/api/upload_snapshots/source_counts')
+@require_auth
+def get_upload_snapshot_source_counts():
+    return jsonify(db_count_upload_snapshots_by_source())
+
+
+@app.route('/api/upload_snapshots/retag', methods=['POST'])
+@require_auth
+def retag_upload_snapshots():
+    data = request.json or {}
+    from_date = (data.get('from') or '').strip()
+    source    = (data.get('source') or '').strip()
+    if not from_date:
+        return jsonify({"status": "error", "message": "from date is required (YYYY-MM-DD)"}), 400
+    if source not in ('qbit', 'qui'):
+        return jsonify({"status": "error", "message": "source must be 'qbit' or 'qui'"}), 400
+    count = db_retag_upload_snapshots(from_date, source)
+    return jsonify({"status": "success", "updated": count})
 
 
 @app.route('/', defaults={'path': ''})

@@ -277,6 +277,12 @@ def compute_upload_stats(days=30):
     for i in range(1, len(rows)):
         prev_row = rows[i - 1]
         curr_row = rows[i]
+        # Skip deltas across source switches — the uploaded counters are not
+        # comparable between qbit (single instance) and qui (multi-instance
+        # aggregation), so the first post-switch snapshot is treated as a new
+        # baseline rather than producing a fake spike.
+        if prev_row.get('source') != curr_row.get('source'):
+            continue
         prev_snap = prev_row['snapshot']
         curr_snap = curr_row['snapshot']
         try:
@@ -472,7 +478,7 @@ def run_audit_process(trigger=None):
         }
         # Save upload snapshot — only on successful audits
         try:
-            db_save_upload_snapshot(tracker_snapshot)
+            db_save_upload_snapshot(tracker_snapshot, source=cfg.get('TORRENT_SOURCE', 'qbit'))
         except Exception as e:
             log.warning(f"Could not save upload snapshot: {e}")
 

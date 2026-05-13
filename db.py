@@ -85,6 +85,12 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_upload_taken_at ON upload_snapshots(taken_at);
         ''')
         conn.commit()
+        # Migration: add source column if missing (tracks which backend produced the snapshot)
+        try:
+            conn.execute("ALTER TABLE upload_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
     finally:
         conn.close()
     _migrate_json_files()
@@ -335,12 +341,12 @@ def validate_config(data):
 # Upload snapshots
 # ---------------------------------------------------------------------------
 
-def db_save_upload_snapshot(snapshot_dict):
+def db_save_upload_snapshot(snapshot_dict, source='qbit'):
     conn = _db_conn()
     try:
         conn.execute(
-            'INSERT INTO upload_snapshots (taken_at, snapshot) VALUES (?, ?)',
-            (datetime.now().isoformat(), json.dumps(snapshot_dict))
+            'INSERT INTO upload_snapshots (taken_at, snapshot, source) VALUES (?, ?, ?)',
+            (datetime.now().isoformat(), json.dumps(snapshot_dict), source)
         )
         # Keep at most 1000 rows — delete oldest beyond that
         conn.execute('''
@@ -366,7 +372,33 @@ def db_get_upload_snapshots(since_days=90):
                 'SELECT taken_at, snapshot FROM upload_snapshots WHERE taken_at >= ? ORDER BY taken_at ASC',
                 (cutoff,)
             ).fetchall()
-        return [{'taken_at': r['taken_at'], 'snapshot': json.loads(r['snapshot'])} for r in rows]
+        return [{'taken_at': r['taken_at'], 'snapshot': json.loads(r['snapshot']), 'source': r['source']} for r in rows]
+    finally:
+        conn.close()
+
+
+def db_retag_upload_snapshots(from_date_str, source):
+    """Set source on all upload snapshots taken on or after from_date_str (YYYY-MM-DD)."""
+    conn = _db_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ?",
+            (source, from_date_str)
+        )
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def db_count_upload_snapshots_by_source():
+    """Return {source: count} for all upload snapshots."""
+    conn = _db_conn()
+    try:
+        rows = conn.execute(
+            "SELECT source, COUNT(*) as cnt FROM upload_snapshots GROUP BY source"
+        ).fetchall()
+        return {r['source']: r['cnt'] for r in rows}
     finally:
         conn.close()
 
