@@ -106,7 +106,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [clearStatus, setClearStatus] = useState(null)
   const [pathTestStatus, setPathTestStatus] = useState(null)
   const [snapshotCounts,  setSnapshotCounts]  = useState(null)
-  const [retagDate,       setRetagDate]       = useState('')
+  const [retagFrom,       setRetagFrom]       = useState('')
+  const [retagTo,         setRetagTo]         = useState('')
   const [retagSource,     setRetagSource]     = useState('qui')
   const [retagStatus,     setRetagStatus]     = useState(null)
   const [browserOpen, setBrowserOpen] = useState(false)
@@ -259,11 +260,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const g3 = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }
 
   const handleRetag = async () => {
-    if (!retagDate) { setRetagStatus({ ok: false, msg: 'Enter a date first.' }); return }
+    if (!retagFrom) { setRetagStatus({ ok: false, msg: 'Enter a start datetime.' }); return }
     setRetagStatus({ loading: true })
     try {
-      const r = await api.retagUploadSnapshots(retagDate, retagSource)
-      setRetagStatus({ ok: true, msg: `Tagged ${r.updated} snapshot${r.updated !== 1 ? 's' : ''} as ${retagSource}. Reload the dashboard to see updated charts.` })
+      const r = await api.retagUploadSnapshots(retagFrom, retagTo, retagSource)
+      const range = retagTo ? `${retagFrom} → ${retagTo}` : `${retagFrom} onward`
+      setRetagStatus({ ok: true, msg: `Tagged ${r.updated} snapshot${r.updated !== 1 ? 's' : ''} in [${range}] as ${retagSource}. Reload the dashboard to see updated charts.` })
       api.uploadSnapshotCounts().then(setSnapshotCounts).catch(() => {})
     } catch (e) { setRetagStatus({ ok: false, msg: e.message }) }
   }
@@ -599,41 +601,55 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             ))}
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>Tag snapshots from this date onward as</label>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <input
-                type="date"
-                value={retagDate}
-                onChange={e => { setRetagDate(e.target.value); setRetagStatus(null) }}
-                style={{
-                  padding: '6px 10px', borderRadius: 'var(--r)',
-                  border: '1px solid var(--border2)', background: 'var(--surface2)',
-                  color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none',
-                }}
-              />
-              <div style={{ display: 'flex' }}>
-                {['qbit', 'qui'].map((src, i) => (
-                  <button key={src} onClick={() => { setRetagSource(src); setRetagStatus(null) }} style={{
-                    padding: '6px 14px',
-                    borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
-                    border: `1px solid ${retagSource === src ? 'var(--accent)' : 'var(--border2)'}`,
-                    borderRight: i === 0 ? 'none' : undefined,
-                    background: retagSource === src ? 'var(--accent)22' : 'transparent',
-                    color: retagSource === src ? 'var(--accent)' : 'var(--text-dim)',
-                    fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
-                  }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
-                ))}
-              </div>
-              <button
-                onClick={handleRetag}
-                disabled={retagStatus?.loading}
-                style={{ padding: '6px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}
-              >
-                {retagStatus?.loading ? 'Applying…' : 'Apply'}
-              </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>Tag snapshots in this range as</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="datetime-local"
+              value={retagFrom}
+              onChange={e => { setRetagFrom(e.target.value); setRetagStatus(null) }}
+              style={{
+                padding: '6px 10px', borderRadius: 'var(--r)',
+                border: '1px solid var(--border2)', background: 'var(--surface2)',
+                color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, outline: 'none',
+              }}
+            />
+            <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>→</span>
+            <input
+              type="datetime-local"
+              value={retagTo}
+              onChange={e => { setRetagTo(e.target.value); setRetagStatus(null) }}
+              placeholder="leave blank for open end"
+              style={{
+                padding: '6px 10px', borderRadius: 'var(--r)',
+                border: '1px solid var(--border2)', background: 'var(--surface2)',
+                color: retagTo ? 'var(--text)' : 'var(--text-dim)',
+                fontFamily: 'var(--mono)', fontSize: 12, outline: 'none',
+              }}
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>(end blank = open)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex' }}>
+              {['qbit', 'qui'].map((src, i) => (
+                <button key={src} onClick={() => { setRetagSource(src); setRetagStatus(null) }} style={{
+                  padding: '6px 14px',
+                  borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
+                  border: `1px solid ${retagSource === src ? 'var(--accent)' : 'var(--border2)'}`,
+                  borderRight: i === 0 ? 'none' : undefined,
+                  background: retagSource === src ? 'var(--accent)22' : 'transparent',
+                  color: retagSource === src ? 'var(--accent)' : 'var(--text-dim)',
+                  fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+                }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
+              ))}
             </div>
+            <button
+              onClick={handleRetag}
+              disabled={retagStatus?.loading}
+              style={{ padding: '6px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}
+            >
+              {retagStatus?.loading ? 'Applying…' : 'Apply'}
+            </button>
           </div>
         </div>
         {retagStatus && !retagStatus.loading && (
@@ -659,7 +675,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontFamily: 'var(--mono)' }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                 <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-                  {['Time', 'Trigger', 'Score', 'Status'].map(h => (
+                  {['Time', 'Trigger', 'Source', 'Score', 'Status'].map(h => (
                     <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 600 }}>{h}</th>
                   ))}
                 </tr>
@@ -682,6 +698,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                     <tr key={run.id} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
                       <td style={{ padding: '7px 12px', color: 'var(--text-dim)' }}>{timeStr}</td>
                       <td style={{ padding: '7px 12px', color: 'var(--text-dim)' }}>{run.trigger}</td>
+                      <td style={{ padding: '7px 12px', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10 }}>{run.source || 'qbit'}</td>
                       <td style={{ padding: '7px 12px', color: isOk ? 'var(--text)' : 'var(--text-dim)', fontWeight: isOk ? 600 : 400 }}>
                         {isOk && run.health_score != null ? run.health_score : '—'}
                       </td>

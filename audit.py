@@ -493,7 +493,7 @@ def run_audit_process(trigger=None):
         db_save_results(result)
         snapshot = {"media_files": media_files_data, "torrent_files": torrent_files_data,
                     "dashboard": dashboard_stats}
-        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot)
+        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot, source=cfg.get('TORRENT_SOURCE', 'qbit'))
         log.info("Audit complete.")
         if stat_errors:
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")
@@ -502,13 +502,13 @@ def run_audit_process(trigger=None):
     except sources.SourceConnectionError as e:
         msg = str(e)
         log.error(msg); _save_error_status(msg)
-        db_save_audit(trigger, None, 'error', msg, {})
+        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'))
         set_state(status_message=msg, last_scan_status="error")
     except Exception as e:
         msg = f"Audit error: {e}"
         log.exception("Unexpected error during audit")
         _save_error_status(msg)
-        db_save_audit(trigger, None, 'error', msg, {})
+        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'))
         set_state(status_message=msg, last_scan_status="error")
     finally:
         set_state(progress=100, is_scanning=False,

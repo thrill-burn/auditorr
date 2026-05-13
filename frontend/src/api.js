@@ -70,7 +70,7 @@ export const api = {
   radarrSearch: (path)    => req('/actions/radarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
   uploadStats:          (days)           => req('/upload_stats?days=' + days),
   uploadSnapshotCounts: ()               => req('/upload_snapshots/source_counts'),
-  retagUploadSnapshots: (from, source)   => req('/upload_snapshots/retag', { method: 'POST', body: JSON.stringify({ from, source }) }),
+  retagUploadSnapshots: (from, to, source) => req('/upload_snapshots/retag', { method: 'POST', body: JSON.stringify({ from, to: to || undefined, source }) }),
   browseData:    ()       => req('/browse_data'),
   sourceInfo:    ()       => req('/source_info'),
   fetchSavePath: (creds)  => req('/source_save_path', { method: 'POST', body: JSON.stringify(creds) }),

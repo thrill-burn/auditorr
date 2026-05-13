@@ -85,12 +85,16 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_upload_taken_at ON upload_snapshots(taken_at);
         ''')
         conn.commit()
-        # Migration: add source column if missing (tracks which backend produced the snapshot)
-        try:
-            conn.execute("ALTER TABLE upload_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'")
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        # Migrations: add columns that didn't exist in earlier schema versions
+        for migration in (
+            "ALTER TABLE upload_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'",
+            "ALTER TABLE audit_runs ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'",
+        ):
+            try:
+                conn.execute(migration)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
     finally:
         conn.close()
     _migrate_json_files()
@@ -131,12 +135,12 @@ def _migrate_json_files():
 # Audit runs + snapshots
 # ---------------------------------------------------------------------------
 
-def db_save_audit(trigger, health_score, status, error_message, snapshot):
+def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit'):
     conn = _db_conn()
     try:
         cur = conn.execute(
-            'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message) VALUES (?,?,?,?,?)',
-            (datetime.now().isoformat(), trigger, health_score, status, error_message)
+            'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message, source) VALUES (?,?,?,?,?,?)',
+            (datetime.now().isoformat(), trigger, health_score, status, error_message, source)
         )
         run_id = cur.lastrowid
         conn.execute(
@@ -174,7 +178,7 @@ def db_get_recent_runs(limit=90):
     conn = _db_conn()
     try:
         rows = conn.execute(
-            'SELECT id, ran_at, trigger, health_score, status, error_message FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
+            'SELECT id, ran_at, trigger, health_score, status, error_message, source FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
             (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
@@ -364,12 +368,12 @@ def db_get_upload_snapshots(since_days=90):
     try:
         if since_days == 0:
             rows = conn.execute(
-                'SELECT taken_at, snapshot FROM upload_snapshots ORDER BY taken_at ASC'
+                'SELECT taken_at, snapshot, source FROM upload_snapshots ORDER BY taken_at ASC'
             ).fetchall()
         else:
             cutoff = (datetime.now() - timedelta(days=since_days)).isoformat()
             rows = conn.execute(
-                'SELECT taken_at, snapshot FROM upload_snapshots WHERE taken_at >= ? ORDER BY taken_at ASC',
+                'SELECT taken_at, snapshot, source FROM upload_snapshots WHERE taken_at >= ? ORDER BY taken_at ASC',
                 (cutoff,)
             ).fetchall()
         return [{'taken_at': r['taken_at'], 'snapshot': json.loads(r['snapshot']), 'source': r['source']} for r in rows]
@@ -377,14 +381,27 @@ def db_get_upload_snapshots(since_days=90):
         conn.close()
 
 
-def db_retag_upload_snapshots(from_date_str, source):
-    """Set source on all upload snapshots taken on or after from_date_str (YYYY-MM-DD)."""
+def db_retag_upload_snapshots(from_date_str, source, to_date_str=None):
+    """Set source on upload snapshots within [from_date_str, to_date_str].
+
+    to_date_str is inclusive to the end of the specified minute — append
+    :59.999999 so a HH:MM value covers the whole minute.
+    Omit to_date_str to retag everything from from_date_str onward.
+    """
     conn = _db_conn()
     try:
-        cur = conn.execute(
-            "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ?",
-            (source, from_date_str)
-        )
+        if to_date_str:
+            # Make the upper bound inclusive through the end of the specified minute
+            to_ceil = to_date_str if len(to_date_str) > 16 else to_date_str + ':59.999999'
+            cur = conn.execute(
+                "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ? AND taken_at <= ?",
+                (source, from_date_str, to_ceil)
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ?",
+                (source, from_date_str)
+            )
         conn.commit()
         return cur.rowcount
     finally:
