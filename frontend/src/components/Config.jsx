@@ -110,6 +110,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [savePathStatus, setSavePathStatus] = useState(null)
   const [isDirty, setIsDirty] = useState(false)
   const [quiSkippedOpen, setQuiSkippedOpen] = useState(false)
+  const [savedSource, setSavedSource] = useState('qbit')
 
   // We display ratios as percentages in the UI (0.01 → "1")
   // and convert back on save
@@ -129,6 +130,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         RADARR_API_KEY: data.RADARR_API_KEY === '__stored__' ? '' : data.RADARR_API_KEY,
       }
       setConf(c)
+      setSavedSource(c.TORRENT_SOURCE || 'qbit')
       setOrPct( String(parseFloat((c.OR_RATIO  ?? 0.01) * 100)))
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
@@ -223,6 +225,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   }
 
   const handleSave = async () => {
+    const sourceChanged = conf.TORRENT_SOURCE !== savedSource
     setPersistentWarnings([])
     const payload = {
       ...conf,
@@ -237,12 +240,13 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       const result = await api.saveConfig(payload)
       if (result.warnings?.length) setPersistentWarnings(result.warnings)
       else setPersistentWarnings([])
-      setSaveStatus({ ok: true, msg: 'Saved!' })
+      setSaveStatus({ ok: true, msg: sourceChanged ? 'Saved! Starting audit…' : 'Saved!' })
       setTimeout(() => setSaveStatus(null), 5000)
       // Re-fetch config so form shows server-confirmed values
       loadConfig()
       // Refresh dashboard so threshold changes are reflected immediately
       if (onConfigSaved) onConfigSaved()
+      if (sourceChanged && onScan) onScan()
     } catch (e) { setSaveStatus({ ok: false, msg: e.message }) }
   }
 
