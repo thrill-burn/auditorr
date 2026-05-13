@@ -498,8 +498,8 @@ def retag_upload_snapshots():
         return jsonify({"status": "error", "message": "'from' datetime is required"}), 400
     if source not in ('qbit', 'qui'):
         return jsonify({"status": "error", "message": "source must be 'qbit' or 'qui'"}), 400
-    count = db_retag_upload_snapshots(from_date, source, to_date_str=to_date)
-    return jsonify({"status": "success", "updated": count})
+    snap_count, run_count = db_retag_upload_snapshots(from_date, source, to_date_str=to_date)
+    return jsonify({"status": "success", "updated": snap_count, "audit_runs_updated": run_count})
 
 
 @app.route('/', defaults={'path': ''})

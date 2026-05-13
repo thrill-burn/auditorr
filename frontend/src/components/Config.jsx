@@ -265,7 +265,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     try {
       const r = await api.retagUploadSnapshots(retagFrom, retagTo, retagSource)
       const range = retagTo ? `${retagFrom} → ${retagTo}` : `${retagFrom} onward`
-      setRetagStatus({ ok: true, msg: `Tagged ${r.updated} snapshot${r.updated !== 1 ? 's' : ''} in [${range}] as ${retagSource}. Reload the dashboard to see updated charts.` })
+      setRetagStatus({ ok: true, msg: `Tagged ${r.updated} upload snapshot${r.updated !== 1 ? 's' : ''} and ${r.audit_runs_updated} audit run${r.audit_runs_updated !== 1 ? 's' : ''} in [${range}] as ${retagSource}.` })
       api.uploadSnapshotCounts().then(setSnapshotCounts).catch(() => {})
     } catch (e) { setRetagStatus({ ok: false, msg: e.message }) }
   }

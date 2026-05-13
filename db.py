@@ -382,28 +382,39 @@ def db_get_upload_snapshots(since_days=90):
 
 
 def db_retag_upload_snapshots(from_date_str, source, to_date_str=None):
-    """Set source on upload snapshots within [from_date_str, to_date_str].
+    """Set source on upload_snapshots AND audit_runs within [from_date_str, to_date_str].
 
     to_date_str is inclusive to the end of the specified minute — append
     :59.999999 so a HH:MM value covers the whole minute.
     Omit to_date_str to retag everything from from_date_str onward.
+    Returns (upload_snapshots_updated, audit_runs_updated).
     """
     conn = _db_conn()
     try:
+        to_ceil = None
         if to_date_str:
-            # Make the upper bound inclusive through the end of the specified minute
             to_ceil = to_date_str if len(to_date_str) > 16 else to_date_str + ':59.999999'
-            cur = conn.execute(
+
+        if to_ceil:
+            c1 = conn.execute(
                 "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ? AND taken_at <= ?",
                 (source, from_date_str, to_ceil)
             )
+            c2 = conn.execute(
+                "UPDATE audit_runs SET source = ? WHERE ran_at >= ? AND ran_at <= ?",
+                (source, from_date_str, to_ceil)
+            )
         else:
-            cur = conn.execute(
+            c1 = conn.execute(
                 "UPDATE upload_snapshots SET source = ? WHERE taken_at >= ?",
                 (source, from_date_str)
             )
+            c2 = conn.execute(
+                "UPDATE audit_runs SET source = ? WHERE ran_at >= ?",
+                (source, from_date_str)
+            )
         conn.commit()
-        return cur.rowcount
+        return c1.rowcount, c2.rowcount
     finally:
         conn.close()
 
