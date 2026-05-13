@@ -36,7 +36,7 @@ Public interface:
 import os
 import socket
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 import requests
 
@@ -126,11 +126,17 @@ def _unwrap(response_json):
 # ---------------------------------------------------------------------------
 
 def _fetch_all_torrents(session, base, inst_id):
-    """Fetch all torrents for one instance via limit/offset pagination."""
-    torrents = []
-    offset   = 0
-    limit    = 1000
-    while True:
+    """Fetch all torrents for one instance.
+
+    Uses hash-deduplication so the loop terminates even if the API ignores
+    the offset parameter and returns the same page on every request.
+    """
+    all_torrents = []
+    seen_hashes  = set()
+    offset       = 0
+    limit        = 1000
+
+    for _ in range(200):  # safety cap: at most 200,000 torrents
         resp = session.get(
             f'{base}/api/instances/{inst_id}/torrents',
             params={'limit': limit, 'offset': offset},
@@ -138,11 +144,26 @@ def _fetch_all_torrents(session, base, inst_id):
         )
         resp.raise_for_status()
         batch = _unwrap(resp.json())
-        torrents.extend(batch)
-        if len(batch) < limit:
+        if not batch:
+            break
+
+        new_items = []
+        for t in batch:
+            h = t.get('hash') or t.get('infohash_v1') or ''
+            if not h or h not in seen_hashes:
+                if h:
+                    seen_hashes.add(h)
+                new_items.append(t)
+
+        all_torrents.extend(new_items)
+
+        # Stop when: last page (fewer than limit), or API ignored offset
+        # (no new unique hashes came back — we've seen everything).
+        if len(batch) < limit or not new_items:
             break
         offset += limit
-    return torrents
+
+    return all_torrents
 
 
 def _fetch_torrent_data(session, base, inst_id, torrent_hash):
@@ -150,7 +171,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
     try:
         tr_resp = session.get(
             f'{base}/api/instances/{inst_id}/torrents/{torrent_hash}/trackers',
-            timeout=15,
+            timeout=8,
         )
         tr_resp.raise_for_status()
         hosts = _tracker_hosts(_unwrap(tr_resp.json()))
@@ -160,7 +181,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
     try:
         fi_resp = session.get(
             f'{base}/api/instances/{inst_id}/torrents/{torrent_hash}/files',
-            timeout=15,
+            timeout=8,
         )
         fi_resp.raise_for_status()
         files = [_norm_file(f) for f in _unwrap(fi_resp.json())]
@@ -187,12 +208,30 @@ def _process_instance(session, base, inst, remote_path, local_path,
         hosts, files = _fetch_torrent_data(session, base, inst_id, th)
         return th, hosts, files
 
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    # Per-torrent file/tracker fetch — bounded total timeout so a single
+    # hung request can't stall the whole scan indefinitely.
+    _PER_INSTANCE_TIMEOUT = 300  # 5 min ceiling regardless of library size
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(_fetch, t): t for t in torrents}
-        for future in as_completed(futures):
-            th, hosts, files = future.result()
-            tracker_map[th] = hosts
-            files_map[th]   = files
+        try:
+            for future in as_completed(futures, timeout=_PER_INSTANCE_TIMEOUT):
+                try:
+                    th, hosts, files = future.result()
+                except Exception:
+                    th    = _norm_torrent(futures[future])['hash']
+                    hosts, files = ['Unknown'], []
+                if th:
+                    tracker_map[th] = hosts
+                    files_map[th]   = files
+        except FuturesTimeout:
+            log.warning('qui: timed out fetching per-torrent data for instance %s — '
+                        'using partial results', inst_name)
+            for f, t in futures.items():
+                if not f.done():
+                    th = _norm_torrent(t)['hash']
+                    if th:
+                        tracker_map.setdefault(th, ['Unknown'])
+                        files_map.setdefault(th, [])
 
     for torrent in torrents:
         nt = _norm_torrent(torrent)
