@@ -58,6 +58,10 @@ def _session(api_key):
     return s
 
 
+def _connection_error_message(base):
+    return f"Could not reach qui at '{base}' - check the host URL and ensure qui is running."
+
+
 def _eligible(instance):
     return (
         instance.get('connected')
@@ -393,7 +397,8 @@ def fetch_file_map(cfg):
     except SourceConnectionError:
         raise
     except requests.exceptions.ConnectionError as e:
-        raise SourceConnectionError(f"qui connection error: {e}") from e
+        base = cfg.get('QUI_HOST', '').rstrip('/')
+        raise SourceConnectionError(f"qui connection error: {_connection_error_message(base)}") from e
     except requests.exceptions.HTTPError as e:
         raise SourceConnectionError(f"qui HTTP error: {e}") from e
     except Exception as e:

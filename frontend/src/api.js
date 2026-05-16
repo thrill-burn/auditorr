@@ -22,7 +22,7 @@ async function req(path, opts = {}, retried = false) {
   }
 
   const data = await res.json()
-  if (!res.ok) throw new Error(data.message || 'Request failed')
+  if (!res.ok) throw new Error(data.message || data.error || 'Request failed')
   return data
 }
 
@@ -45,7 +45,7 @@ async function reqText(path, opts = {}, retried = false) {
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
-    throw new Error(data.message || 'Request failed')
+    throw new Error(data.message || data.error || 'Request failed')
   }
   return res.text()
 }

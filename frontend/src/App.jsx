@@ -209,7 +209,8 @@ function AppInner() {
       if (prevScanRef.current && !state.is_scanning) {
         await fetchResults(true)
         const msg = state.status_message?.startsWith('Audit error') ||
-                    state.status_message?.startsWith('qBittorrent')
+                    state.status_message?.startsWith('qBittorrent') ||
+                    state.status_message?.startsWith('qui')
           ? state.status_message : 'Audit complete'
         const isError = msg !== 'Audit complete'
         toast(msg, isError ? 'error' : 'success')

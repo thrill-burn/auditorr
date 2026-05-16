@@ -71,6 +71,18 @@ def require_auth(f):
         return f(*args, **kwargs)
     return decorated
 
+
+def _is_source_error_status(status):
+    if not isinstance(status, str):
+        return False
+    return status.startswith((
+        'qBittorrent error',
+        'qBittorrent connection error',
+        'qui error',
+        'qui connection error',
+        'qui HTTP error',
+    ))
+
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
@@ -281,8 +293,7 @@ def test_connection():
     elif result.get('ok'):
         try:
             curr = db_load_results()
-            if curr.get('status', '').startswith('qBittorrent error') or \
-                    curr.get('status', '').startswith('qui error'):
+            if _is_source_error_status(curr.get('status', '')):
                 curr['status'] = 'ok'
                 db_save_results(curr)
         except Exception:
