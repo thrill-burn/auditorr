@@ -54,6 +54,7 @@ export const api = {
   results:        ()     => req('/results'),
   progress:       ()     => req('/progress'),
   changes:        ()     => req('/changes'),
+  changeLog:      ()     => req('/change_log'),
   auditHistory:   ()     => req('/audit_history'),
   clearHistory:   ()     => req('/clear_history', { method: 'POST' }),
   startScan:      ()     => req('/start_scan', { method: 'POST' }),

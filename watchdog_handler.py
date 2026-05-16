@@ -47,6 +47,9 @@ class AuditDebounceHandler(FileSystemEventHandler):
 def start_watchdog():
     global _observer
     cfg   = db_load_config()
+    if not cfg.get('WATCHDOG_ENABLED', True):
+        log.info("Watchdog: disabled in config, not starting.")
+        return
     paths = {p for p in {cfg.get('LOCAL_PATH',''), cfg.get('MEDIA_PATH','')} if p and os.path.exists(p)}
     if not paths:
         log.warning("Watchdog: no valid paths to watch.")

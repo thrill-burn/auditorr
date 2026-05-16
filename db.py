@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     'MEDIA_PATH':         '/data/media',
     'REMOTE_PATH':        '/data/torrents',
     'LOCAL_PATH':         '/data/torrents',
+    'WATCHDOG_ENABLED':   True,
     'WATCHDOG_COOLDOWN':  60,
     'SCHEDULED_INTERVAL': 360,
     'OR_RATIO':           0.01,
@@ -84,6 +85,15 @@ def init_db():
                 snapshot    TEXT    NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_upload_taken_at ON upload_snapshots(taken_at);
+            CREATE TABLE IF NOT EXISTS change_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                ran_at       TEXT NOT NULL,
+                health_score REAL,
+                trigger      TEXT,
+                source       TEXT NOT NULL DEFAULT 'qbit',
+                diff_json    TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_change_log_ran_at ON change_log(ran_at);
         ''')
         conn.commit()
         # Migrations: add columns that didn't exist in earlier schema versions
@@ -340,6 +350,40 @@ def validate_config(data):
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must not exceed 200 characters")
 
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Change log
+# ---------------------------------------------------------------------------
+
+def db_save_change_log_entry(ran_at, health_score, trigger, source, diff):
+    conn = _db_conn()
+    try:
+        conn.execute(
+            'INSERT INTO change_log (ran_at, health_score, trigger, source, diff_json) VALUES (?,?,?,?,?)',
+            (ran_at, health_score, trigger, source, json.dumps(diff))
+        )
+        cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+        conn.execute('DELETE FROM change_log WHERE ran_at < ?', (cutoff,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def db_get_change_log(limit=500):
+    conn = _db_conn()
+    try:
+        rows = conn.execute(
+            'SELECT id, ran_at, health_score, trigger, source, diff_json FROM change_log ORDER BY ran_at DESC LIMIT ?',
+            (limit,)
+        ).fetchall()
+        return [
+            {**{k: row[k] for k in ('id', 'ran_at', 'health_score', 'trigger', 'source')},
+             'diff': json.loads(row['diff_json'])}
+            for row in rows
+        ]
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from db import (
     db_get_upload_snapshots,
     db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
     db_delete_upload_snapshots,
+    db_get_change_log,
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, compute_diff, process_health_metrics, compute_upload_stats
@@ -74,6 +75,12 @@ def require_auth(f):
 # Startup
 # ---------------------------------------------------------------------------
 
+def _torrent_source_configured(cfg):
+    source = cfg.get('TORRENT_SOURCE', 'qbit')
+    host_key = 'QUI_HOST' if source == 'qui' else 'QB_HOST'
+    return bool(cfg.get(host_key))
+
+
 def startup():
     # Use a lock file to ensure only one gunicorn worker runs the startup audit.
     # Both workers import the module and hit this code, but only the first one
@@ -87,15 +94,21 @@ def startup():
             except OSError:
                 log.info("Startup audit already running in another worker, skipping.")
                 return
-            log.info("Running startup audit...")
-            if try_start_scanning("startup"):
-                run_audit_process("startup")
+            if _torrent_source_configured(db_load_config()):
+                log.info("Running startup audit...")
+                if try_start_scanning("startup"):
+                    run_audit_process("startup")
+            else:
+                log.info("Torrent source not configured, skipping startup audit.")
             start_watchdog()
     except ImportError:
         # fcntl not available (Windows) — just run without locking
-        log.info("Running startup audit...")
-        if try_start_scanning("startup"):
-            run_audit_process("startup")
+        if _torrent_source_configured(db_load_config()):
+            log.info("Running startup audit...")
+            if try_start_scanning("startup"):
+                run_audit_process("startup")
+        else:
+            log.info("Torrent source not configured, skipping startup audit.")
         start_watchdog()
 
 threading.Thread(target=startup, daemon=True).start()
@@ -131,6 +144,12 @@ def get_changes():
     prev = snaps[1]['snapshot']
     diff = compute_diff(prev, curr)
     return jsonify({"changes": diff, "prev_ran_at": snaps[1]['ran_at'], "curr_ran_at": snaps[0]['ran_at']})
+
+
+@app.route('/api/change_log')
+@require_auth
+def get_change_log():
+    return jsonify({"entries": db_get_change_log()})
 
 
 @app.route('/api/audit_history')
@@ -191,6 +210,7 @@ def handle_config():
                 'MEDIA_PATH':         str(data.get('MEDIA_PATH', '')),
                 'REMOTE_PATH':        str(data.get('REMOTE_PATH', '')),
                 'LOCAL_PATH':         str(data.get('LOCAL_PATH', '')),
+                'WATCHDOG_ENABLED':   bool(data.get('WATCHDOG_ENABLED', True)),
                 'WATCHDOG_COOLDOWN':  int(data.get('WATCHDOG_COOLDOWN', 60)),
                 'SCHEDULED_INTERVAL': int(data.get('SCHEDULED_INTERVAL', 360)),
                 'OR_RATIO':           float(data.get('OR_RATIO',  0.01)),

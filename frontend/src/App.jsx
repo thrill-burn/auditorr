@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import SetupWizard  from './components/SetupWizard'
+import ChangeLog    from './components/ChangeLog'
 import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
@@ -111,7 +112,7 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
 // Hash-based routing helpers
 function getHashTab() {
   const hash = window.location.hash.replace('#', '') || 'dashboard'
-  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'config']
+  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -357,6 +358,9 @@ function AppInner() {
               allTrackers={allTrackers}
               onTrackersChange={setSelectedTrackers}
             />
+          )}
+          {tab === 'changes' && (
+            <ChangeLog />
           )}
           {tab === 'config' && (
             <Config

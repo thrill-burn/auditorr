@@ -85,17 +85,29 @@ function LoadingResultsCard() {
 
 export default function ScanProgress({ isScanning, progress, phase, statusMessage, scannedFiles, totalFiles, isLoadingResults }) {
   const [visible, setVisible] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const panelRef = useRef(null)
 
   useEffect(() => {
     if (isScanning || isLoadingResults) {
       setVisible(true)
+      if (isScanning) setDismissed(false)
     } else {
       const t = setTimeout(() => setVisible(false), 300)
       return () => clearTimeout(t)
     }
   }, [isScanning, isLoadingResults])
 
-  if (!visible) return null
+  useEffect(() => {
+    if (!visible || dismissed) return
+    const onMouseDown = (e) => {
+      if (panelRef.current && !panelRef.current.contains(e.target)) setDismissed(true)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [visible, dismissed])
+
+  if (!visible || dismissed) return null
 
   const torrentsDone = phase === 'disk' || phase === 'post' || phase === 'idle'
   const torrentsActive = phase === 'connecting' || phase === 'torrents'
@@ -117,7 +129,7 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
   return (
     <>
       <style>{PULSE_STYLE}</style>
-      <div style={{
+      <div ref={panelRef} style={{
         position: 'fixed', bottom: 24, right: 24,
         maxWidth: 860, width: 'calc(100vw - 48px)',
         background: 'var(--surface)', border: '1px solid var(--border)',
@@ -135,7 +147,16 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
                 {LOGO}
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>Scanning library…</span>
               </div>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--accent)' }}>{progress}%</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--accent)' }}>{progress}%</span>
+                <button
+                  onClick={() => setDismissed(true)}
+                  title="Dismiss"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: 'var(--text-dim)', fontSize: 16, lineHeight: 1, opacity: 0.6 }}
+                  onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                  onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
+                >×</button>
+              </div>
             </div>
 
             {/* Phase bars */}

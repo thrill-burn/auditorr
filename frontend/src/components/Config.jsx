@@ -120,6 +120,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [exclusionPatterns,        setExclusionPatterns]        = useState('')
   const [exclusionFocused,         setExclusionFocused]         = useState(false)
   const [exclusionHideFromExplorer, setExclusionHideFromExplorer] = useState(false)
+  const [watchdogEnabled, setWatchdogEnabled] = useState(true)
 
   const loadConfig = () => {
     api.getConfig().then(data => {
@@ -137,6 +138,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
+      setWatchdogEnabled(c.WATCHDOG_ENABLED !== false)
       setPassChanged(false)
       setApiKeyChanged(false)
       setIsDirty(false)
@@ -236,6 +238,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
       EXCLUSION_PATTERNS:           exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
       EXCLUSION_HIDE_FROM_EXPLORER: exclusionHideFromExplorer,
+      WATCHDOG_ENABLED:             watchdogEnabled,
     }
     if (!passChanged)   delete payload.QB_PASS
     if (!apiKeyChanged) delete payload.QUI_API_KEY
@@ -430,7 +433,26 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       )}
 
       <Card title="Watchdog & Scheduled Audits">
-        <div style={g2}>
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Filesystem Watchdog</label>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 10, lineHeight: 1.45 }}>
+            Automatically re-audit when files change. Disable for large libraries with frequent downloads to avoid constant rescans.
+          </span>
+          <div style={{ display: 'flex' }}>
+            {[{ label: 'Enabled', value: true }, { label: 'Disabled', value: false }].map((opt, i) => (
+              <button key={String(opt.value)} onClick={() => { setWatchdogEnabled(opt.value); setIsDirty(true) }} style={{
+                padding: '7px 18px',
+                borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
+                border: `1px solid ${watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
+                borderRight: i === 0 ? 'none' : undefined,
+                background: watchdogEnabled === opt.value ? 'var(--accent)18' : 'transparent',
+                color: watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--text-dim)',
+                fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+              }}>{opt.label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ ...g2, opacity: watchdogEnabled ? 1 : 0.4, pointerEvents: watchdogEnabled ? undefined : 'none' }}>
           <Field label="Watchdog Cooldown (seconds)" type="number"
             hint="After a filesystem change is detected, wait this many seconds before running an audit. Default: 60."
             placeholder="60" value={conf.WATCHDOG_COOLDOWN} onChange={set('WATCHDOG_COOLDOWN')} />
@@ -668,7 +690,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             Last audit: {lastAuditTime}
           </span>
           <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-            Audits run automatically via watchdog. Use the button below to trigger one manually.
+            Audits run automatically via watchdog (if enabled) and on a scheduled interval. Use the button below to trigger one manually.
           </span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, marginLeft: 20 }}>

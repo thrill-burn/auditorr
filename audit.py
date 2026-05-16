@@ -11,6 +11,7 @@ from db import (
     db_load_config, db_load_history, db_save_history,
     db_load_results, db_save_results, db_save_audit,
     db_save_upload_snapshot, db_get_upload_snapshots,
+    db_get_last_two_snapshots, db_save_change_log_entry,
 )
 from state import get_state, set_state, update_progress
 
@@ -496,6 +497,20 @@ def run_audit_process(trigger=None):
         snapshot = {"media_files": media_files_data, "torrent_files": torrent_files_data,
                     "dashboard": dashboard_stats}
         db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot, source=cfg.get('TORRENT_SOURCE', 'qbit'))
+        try:
+            snaps = db_get_last_two_snapshots()
+            if len(snaps) == 2:
+                diff = compute_diff(snaps[1]['snapshot'], snaps[0]['snapshot'])
+                if diff:
+                    db_save_change_log_entry(
+                        ran_at=snaps[0]['ran_at'],
+                        health_score=dashboard_stats['score'],
+                        trigger=trigger,
+                        source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                        diff=diff,
+                    )
+        except Exception as e:
+            log.warning(f"Could not save change log entry: {e}")
         log.info("Audit complete.")
         if stat_errors:
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")
