@@ -1,4 +1,14 @@
 # Changelog
+## v1.4.1 — 2026-05-16
+
+### Features
+- **Change Log page** — new "Changes" sidebar page with a persistent, browsable history of file-level diffs between consecutive audits. Each entry shows timestamp, trigger, health score, and score delta, with expandable category chips (Became Orphaned / New Duplicates / Newly Imported / Duplicates Resolved / New Files / Removed Files) and file lists. A filter bar lets you narrow to entries containing a specific category. Diffs are stored in a new `change_log` SQLite table, pruned to 90 days, and computed automatically at the end of every successful audit.
+- **Watchdog enable/disable toggle** — new "Filesystem Watchdog" toggle in Config → Watchdog & Scheduled Audits. Enabled by default; disable for large libraries with frequent downloads to prevent constant rescans. The cooldown and interval fields dim and become non-interactive when the watchdog is disabled.
+
+### Bug Fixes
+- **Startup audit skipped when unconfigured** — auditorr no longer fires an audit on startup when the configured torrent source has no host set (fresh install or new container). This prevented a spurious `qBittorrent error` from appearing in the UI before the user had completed setup. The first audit now starts correctly after step 2 of the setup wizard is submitted, using the source the user actually selected.
+- **Scan progress panel dismissible** — the scanning card (bottom-right) can now be dismissed by clicking anywhere outside it or pressing the × button. The panel reappears automatically when the next scan starts.
+
 ## v1.4.0 — 2026-05-12
 
 ### Features
