@@ -1,5 +1,41 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
+import { FixedSizeList } from 'react-window'
 import { api } from '../api'
+
+const AUDIT_ROW_H = 36
+const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 1fr'
+
+const AuditRunRow = ({ index, style, data }) => {
+  const run = data[index]
+  const isOk = run.status === 'ok'
+  const timeStr = new Date(run.ran_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return (
+    <div style={{
+      ...style,
+      display: 'grid', gridTemplateColumns: AUDIT_COLS, alignItems: 'center',
+      borderBottom: '1px solid var(--border)',
+      background: index % 2 === 0 ? 'transparent' : 'var(--surface2)',
+      fontFamily: 'var(--mono)',
+    }}>
+      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{timeStr}</div>
+      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)' }}>{run.trigger}</div>
+      <div style={{ padding: '0 12px', fontSize: 10, color: 'var(--text-dim)' }}>{run.source || 'qbit'}</div>
+      <div style={{ padding: '0 12px', fontSize: 11, color: isOk ? 'var(--text)' : 'var(--text-dim)', fontWeight: isOk ? 600 : 400 }}>
+        {isOk && run.health_score != null ? run.health_score : '—'}
+      </div>
+      <div style={{ padding: '0 12px' }}>
+        <span style={{
+          padding: '2px 8px', borderRadius: 99, fontSize: 10,
+          background: isOk ? 'var(--green)18' : 'var(--red)18',
+          color: isOk ? 'var(--green)' : 'var(--red)',
+          border: `1px solid ${isOk ? 'var(--green)' : 'var(--red)'}35`,
+        }}>
+          {isOk ? 'ok' : run.error_message?.split(':')[0] || 'error'}
+        </span>
+      </div>
+    </div>
+  )
+}
 
 function DataBrowser({ onSelectMedia, onSelectTorrents }) {
   const [result, setResult] = useState(null)
@@ -149,6 +185,17 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     loadConfig()
     api.auditHistory().then(data => setAuditRuns(data.runs || [])).catch(() => setAuditRuns([]))
   }, [])
+
+  const dedupedRuns = useMemo(() => {
+    if (!auditRuns) return []
+    const seen = new Set()
+    return auditRuns.filter(run => {
+      const key = run.ran_at.slice(0, 16) + run.trigger + run.status
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [auditRuns])
 
   if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading…</div>
 
@@ -625,61 +672,33 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       <Card title="Audit History">
         <div style={{ marginBottom: 14 }}>
           <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-            Last {Math.min(auditRuns?.length || 0, 50)} audit runs. History is stored in SQLite and survives restarts.
+            {dedupedRuns.length} audit runs. History is stored indefinitely in SQLite and survives restarts.
           </span>
         </div>
 
         {!auditRuns ? (
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', padding: '12px 0' }}>Loading…</div>
-        ) : auditRuns.length === 0 ? (
+        ) : dedupedRuns.length === 0 ? (
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', padding: '12px 0' }}>No audit runs recorded yet.</div>
         ) : (
-          <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--r)' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontFamily: 'var(--mono)' }}>
-              <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
-                <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-                  {['Time', 'Trigger', 'Source', 'Score', 'Status'].map(h => (
-                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 600 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(() => {
-                  // Deduplicate consecutive runs with same timestamp+trigger (gunicorn dual-worker artifact)
-                  const seen = new Set()
-                  return auditRuns.filter(run => {
-                    const key = run.ran_at.slice(0, 16) + run.trigger + run.status
-                    if (seen.has(key)) return false
-                    seen.add(key)
-                    return true
-                  }).slice(0, 50)
-                })().map((run, i) => {
-                  const isOk = run.status === 'ok'
-                  const dt = new Date(run.ran_at)
-                  const timeStr = dt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                  return (
-                    <tr key={run.id} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--surface2)' }}>
-                      <td style={{ padding: '7px 12px', color: 'var(--text-dim)' }}>{timeStr}</td>
-                      <td style={{ padding: '7px 12px', color: 'var(--text-dim)' }}>{run.trigger}</td>
-                      <td style={{ padding: '7px 12px', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10 }}>{run.source || 'qbit'}</td>
-                      <td style={{ padding: '7px 12px', color: isOk ? 'var(--text)' : 'var(--text-dim)', fontWeight: isOk ? 600 : 400 }}>
-                        {isOk && run.health_score != null ? run.health_score : '—'}
-                      </td>
-                      <td style={{ padding: '7px 12px' }}>
-                        <span style={{
-                          padding: '2px 8px', borderRadius: 99, fontSize: 10,
-                          background: isOk ? 'var(--green)18' : 'var(--red)18',
-                          color: isOk ? 'var(--green)' : 'var(--red)',
-                          border: `1px solid ${isOk ? 'var(--green)' : 'var(--red)'}35`,
-                        }}>
-                          {isOk ? 'ok' : run.error_message?.split(':')[0] || 'error'}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+          <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', overflow: 'hidden' }}>
+            <div style={{
+              display: 'grid', gridTemplateColumns: AUDIT_COLS,
+              background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
+            }}>
+              {['Time', 'Trigger', 'Source', 'Score', 'Status'].map(h => (
+                <div key={h} style={{ padding: '8px 12px', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 600, fontFamily: 'var(--mono)' }}>{h}</div>
+              ))}
+            </div>
+            <FixedSizeList
+              height={Math.min(dedupedRuns.length * AUDIT_ROW_H, 320)}
+              itemCount={dedupedRuns.length}
+              itemSize={AUDIT_ROW_H}
+              itemData={dedupedRuns}
+              width="100%"
+            >
+              {AuditRunRow}
+            </FixedSizeList>
           </div>
         )}
       </Card>

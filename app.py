@@ -167,7 +167,7 @@ def get_change_log():
 @app.route('/api/audit_history')
 @require_auth
 def get_audit_history():
-    return jsonify({"runs": db_get_recent_runs(90)})
+    return jsonify({"runs": db_get_recent_runs()})
 
 
 @app.route('/api/clear_history', methods=['POST'])

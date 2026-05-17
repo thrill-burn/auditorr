@@ -166,7 +166,7 @@ export default function ChangeLog() {
           )}
         </div>
         <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.55 }}>
-          File-level changes detected between consecutive audits, kept for 90 days.
+          File-level changes detected between consecutive audits, kept indefinitely.
         </p>
       </div>
 

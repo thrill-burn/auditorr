@@ -185,13 +185,18 @@ def db_get_last_two_snapshots():
         conn.close()
 
 
-def db_get_recent_runs(limit=90):
+def db_get_recent_runs(limit=None):
     conn = _db_conn()
     try:
-        rows = conn.execute(
-            'SELECT id, ran_at, trigger, health_score, status, error_message, source FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
-            (limit,)
-        ).fetchall()
+        if limit is not None:
+            rows = conn.execute(
+                'SELECT id, ran_at, trigger, health_score, status, error_message, source FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
+                (limit,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                'SELECT id, ran_at, trigger, health_score, status, error_message, source FROM audit_runs ORDER BY ran_at DESC'
+            ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -363,8 +368,6 @@ def db_save_change_log_entry(ran_at, health_score, trigger, source, diff):
             'INSERT INTO change_log (ran_at, health_score, trigger, source, diff_json) VALUES (?,?,?,?,?)',
             (ran_at, health_score, trigger, source, json.dumps(diff))
         )
-        cutoff = (datetime.now() - timedelta(days=90)).isoformat()
-        conn.execute('DELETE FROM change_log WHERE ran_at < ?', (cutoff,))
         conn.commit()
     finally:
         conn.close()
