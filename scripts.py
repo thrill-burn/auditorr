@@ -32,14 +32,15 @@ def _build_dup_groups(torrent_files, local_path, media_path=''):
     """Group torrent files with duplicate_paths into structured groups for the Actions page."""
     script_root = _compute_script_root(local_path, media_path)
     groups      = []
-    seen_inodes = set()
+    seen_files = set()
     for f in torrent_files:
         if not f.get('duplicate_paths'):
             continue
         inode = f['inode']
-        if inode in seen_inodes:
+        file_id = f.get('file_id', inode)
+        if file_id in seen_files:
             continue
-        seen_inodes.add(inode)
+        seen_files.add(file_id)
         torrent_full = posixpath.join(local_path, f['path']) if local_path else f['path']
         torrent_rel  = posixpath.relpath(torrent_full, script_root)
         try:

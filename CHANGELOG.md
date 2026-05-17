@@ -1,4 +1,16 @@
 # Changelog
+## v1.4.2 - 2026-05-17
+
+### Performance
+- **Virtual scrolling in Media / Torrents explorer** — both flat list and tree view now use `react-window` `FixedSizeList` backed by `AutoSizer`. Only the visible rows (~20–30) are mounted in the DOM regardless of library size, eliminating the primary source of slowness on large libraries. The tree view pre-computes a flat ordered array of visible rows (respecting open/closed folder state) so virtualization applies to the full expanded tree, not just root-level folders.
+- **Debounced search** — the filename search input now waits 150 ms after the last keystroke before filtering, preventing per-keystroke full-array scans on large libraries.
+- **Single-pass summary stats** — the Total / Seeding / Orphaned counts and sizes are now computed in one loop instead of four separate filter/reduce passes over the filtered array.
+- **Stable `itemData` references** — `itemData` objects passed to `react-window` are `useMemo`'d, preventing unnecessary re-renders of all visible rows on unrelated state changes.
+- **Row state isolation** — virtual list item renderers key inner row components by `node.path`, forcing a clean remount (and resetting Sonarr/Radarr button state) whenever a list slot's file changes after a filter update.
+
+### Bug Fixes
+- **Duplicate detection false positives** - file identity now uses both device and inode (`st_dev`, `st_ino`) instead of inode alone. This prevents unrelated same-size files on different mounts or filesystems from being grouped together when their raw inode numbers collide, reducing false duplicate flags for small files and cross-device libraries. Dedupe script grouping and duplicate health counts now use the same device-aware identity.
+
 ## v1.4.1 — 2026-05-16
 
 ### Features

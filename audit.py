@@ -74,32 +74,34 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
             try:
                 st       = os.stat(full_path)
                 inode    = st.st_ino
+                file_key = (st.st_dev, st.st_ino)
                 size     = st.st_size
                 nlink    = st.st_nlink
                 rel_path = os.path.relpath(full_path, base_path)
-                inode_map.setdefault(inode, {
+                inode_map.setdefault(file_key, {
                     'trackers': set(), 'status': 'Orphaned',
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
                     'instance_id': None, 'instance_name': None,
                 })
                 if source_label == 'Torrent':
-                    inode_map[inode]['torrent_paths'].append(full_path)
+                    inode_map[file_key]['torrent_paths'].append(full_path)
                     qbit_info = qbit_file_map.get(full_path)
                     if qbit_info:
-                        inode_map[inode]['trackers'].update(qbit_info['trackers'])
-                        inode_map[inode]['hash']          = qbit_info.get('hash', '')
-                        inode_map[inode]['instance_id']   = qbit_info.get('instance_id')
-                        inode_map[inode]['instance_name'] = qbit_info.get('instance_name')
-                        cur = inode_map[inode]['status']
+                        inode_map[file_key]['trackers'].update(qbit_info['trackers'])
+                        inode_map[file_key]['hash']          = qbit_info.get('hash', '')
+                        inode_map[file_key]['instance_id']   = qbit_info.get('instance_id')
+                        inode_map[file_key]['instance_name'] = qbit_info.get('instance_name')
+                        cur = inode_map[file_key]['status']
                         if qbit_info['status'] == 'Seeding' or cur == 'Seeding':
-                            inode_map[inode]['status'] = 'Seeding'
+                            inode_map[file_key]['status'] = 'Seeding'
                         elif cur == 'Orphaned':
-                            inode_map[inode]['status'] = qbit_info['status']
+                            inode_map[file_key]['status'] = qbit_info['status']
                 else:
-                    inode_map[inode]['media_paths'].append(full_path)
+                    inode_map[file_key]['media_paths'].append(full_path)
                 records.append({
                     "full_path": full_path, "rel_path": rel_path,
-                    "size": size, "inode": inode, "nlink": nlink, "source": source_label,
+                    "size": size, "inode": inode, "file_key": file_key,
+                    "nlink": nlink, "source": source_label,
                     "excluded": _is_excluded(rel_path, filename, exclusion_patterns),
                 })
             except Exception as e:
@@ -115,7 +117,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
 
 
 def _build_duplicate_map(all_records):
-    """O(n) duplicate detection: group by size, then inode, then hash representatives only."""
+    """O(n) duplicate detection: group by size, then file identity, then hash representatives only."""
     size_groups = {}
     for f in all_records:
         if f['size'] > 0:
@@ -123,23 +125,24 @@ def _build_duplicate_map(all_records):
 
     duplicate_map = {}
     for size, items in size_groups.items():
-        inode_to_rep = {}
+        key_to_rep = {}
         for item in items:
-            if item['inode'] not in inode_to_rep:
-                inode_to_rep[item['inode']] = item
-        if len(inode_to_rep) <= 1:
+            file_key = item.get('file_key', item['inode'])
+            if file_key not in key_to_rep:
+                key_to_rep[file_key] = item
+        if len(key_to_rep) <= 1:
             continue
-        hash_to_inodes = {}
-        for inode, rep in inode_to_rep.items():
+        hash_to_keys = {}
+        for file_key, rep in key_to_rep.items():
             fh = get_fast_hash(rep['full_path'], size)
             if fh:
-                hash_to_inodes.setdefault(fh, []).append(inode)
-        for fh, inodes in hash_to_inodes.items():
-            if len(inodes) <= 1:
+                hash_to_keys.setdefault(fh, []).append(file_key)
+        for fh, file_keys in hash_to_keys.items():
+            if len(file_keys) <= 1:
                 continue
-            for inode in inodes:
-                others = [inode_to_rep[o]['full_path'] for o in inodes if o != inode]
-                duplicate_map.setdefault(inode, []).extend(others)
+            for file_key in file_keys:
+                others = [key_to_rep[o]['full_path'] for o in file_keys if o != file_key]
+                duplicate_map.setdefault(file_key, []).extend(others)
     return duplicate_map
 
 
@@ -147,14 +150,17 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
     torrent_files_data = []
     for item in torrent_records:
         inode = item['inode']
-        info  = inode_map[inode]
+        file_key = item.get('file_key', inode)
+        file_id = f"{file_key[0]}:{file_key[1]}" if isinstance(file_key, tuple) else str(file_key)
+        info  = inode_map[file_key]
         torrent_files_data.append({
             "path": item['rel_path'], "size": item['size'], "inode": inode,
+            "file_id": file_id,
             "status": info['status'],
             "imported": item['nlink'] > 1 or len(info['media_paths']) > 0,
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['media_paths'],
-            "duplicate_paths": duplicate_map.get(inode, []),
+            "duplicate_paths": duplicate_map.get(file_key, []),
             "excluded": item.get('excluded', False),
             "hash": info.get('hash', ''),
             "instance_id":   info.get('instance_id'),
@@ -163,13 +169,16 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
     media_files_data = []
     for item in media_records:
         inode = item['inode']
-        info  = inode_map[inode]
+        file_key = item.get('file_key', inode)
+        file_id = f"{file_key[0]}:{file_key[1]}" if isinstance(file_key, tuple) else str(file_key)
+        info  = inode_map[file_key]
         media_files_data.append({
             "path": item['rel_path'], "size": item['size'], "inode": inode,
+            "file_id": file_id,
             "status": info['status'], "imported": True,
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['torrent_paths'],
-            "duplicate_paths": duplicate_map.get(inode, []),
+            "duplicate_paths": duplicate_map.get(file_key, []),
             "excluded": item.get('excluded', False),
         })
     return torrent_files_data, media_files_data
@@ -194,11 +203,12 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
     orphaned_torrent_size = sum(f['size'] for f in scoring_torrents if f['status'] == 'Orphaned')
     not_imported_size     = sum(f['size'] for f in scoring_torrents
                                 if not f['imported'] and f['status'] != 'Orphaned')
-    seen_inodes = set()
+    seen_files = set()
     dup_size = dup_count = 0
     for f in scoring_media + scoring_torrents:
-        if f.get('duplicate_paths') and f.get('inode') not in seen_inodes:
-            seen_inodes.add(f['inode']); dup_size += f['size']; dup_count += 1
+        file_id = f.get('file_id', f.get('inode'))
+        if f.get('duplicate_paths') and file_id not in seen_files:
+            seen_files.add(file_id); dup_size += f['size']; dup_count += 1
     hl_ratio = (hardlinked_media_size / total_media_size) if total_media_size > 0 else 1.0
     hl_score = hl_ratio * 70
     or_limit   = total_torrents_size * or_ratio

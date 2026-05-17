@@ -1,7 +1,25 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { FixedSizeList } from 'react-window'
+import AutoSizer from 'react-virtualized-auto-sizer'
 import { formatBytes } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const FLAT_ITEM_HEIGHT = 50  // FlatFileRow: 2 lines + padding
+const TREE_ITEM_HEIGHT = 36  // FolderRow / FileRow: 1 line + padding
+
+// ─── Hooks ───────────────────────────────────────────────────────────────────
+
+function useDebounce(value, delay) {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(t)
+  }, [value, delay])
+  return debounced
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -40,7 +58,6 @@ function Chip({ active, color, onClick, children, style }) {
   )
 }
 
-// Compact text input for the toolbar
 function FilterInput({ value, onChange, placeholder, width = 160 }) {
   const [focused, setFocused] = useState(false)
   return (
@@ -63,7 +80,6 @@ function FilterInput({ value, onChange, placeholder, width = 160 }) {
   )
 }
 
-// Compact number input for size range
 function SizeInput({ value, onChange, placeholder }) {
   const [focused, setFocused] = useState(false)
   return (
@@ -214,40 +230,54 @@ function sortedKeys(children) {
   return [...dirs, ...files]
 }
 
-function FolderRow({ name, node, depth, tab, openRef, onToggle, path, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost }) {
+// Flatten the tree into a sorted array of visible rows, respecting open/closed state.
+// Called in a useMemo that depends on [tree, tick] so it re-runs only when the tree
+// or an open/close toggle changes.
+function flattenVisible(children, openSet, depth = 0, parentPath = '') {
+  const rows = []
+  for (const k of sortedKeys(children)) {
+    const node = children[k]
+    const nodePath = parentPath ? `${parentPath}/${k}` : k
+    if (node._isDir) {
+      rows.push({ type: 'folder', name: k, node, depth, path: nodePath })
+      if (openSet.has(nodePath)) {
+        const nested = flattenVisible(node.children, openSet, depth + 1, nodePath)
+        for (let i = 0; i < nested.length; i++) rows.push(nested[i])
+      }
+    } else {
+      rows.push({ type: 'file', name: k, node, depth })
+    }
+  }
+  return rows
+}
+
+// ─── Row components ──────────────────────────────────────────────────────────
+// Each row fills exactly its slot height (boxSizing border-box) so react-window
+// positions them correctly with no gaps.
+
+function FolderRow({ name, node, depth, openRef, onToggle, path }) {
   const open = openRef.current.has(path)
   const indent = (depth * 20) + 14
   return (
-    <div>
-      <div
-        onClick={(e) => { e.stopPropagation(); onToggle(path) }}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '8px 16px 8px ' + indent + 'px',
-          borderBottom: '1px solid var(--border)',
-          background: open ? 'var(--surface2)' : 'var(--surface)',
-          cursor: 'pointer', userSelect: 'none',
-        }}
-      >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="3">
-          {open ? <polyline points="6 9 12 15 18 9"/> : <polyline points="9 18 15 12 9 6"/>}
-        </svg>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-        </svg>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(node.size)}</span>
-      </div>
-      {open && sortedKeys(node.children).map(k =>
-        node.children[k]._isDir
-          ? <FolderRow key={k} name={k} node={node.children[k]} depth={depth+1} tab={tab}
-              openRef={openRef} onToggle={onToggle} path={path + '/' + k}
-              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
-              torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
-          : <FileRow   key={k} name={k} node={node.children[k]} depth={depth+1} tab={tab}
-              sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
-              torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
-      )}
+    <div
+      onClick={(e) => { e.stopPropagation(); onToggle(path) }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        height: TREE_ITEM_HEIGHT, boxSizing: 'border-box',
+        paddingLeft: indent, paddingRight: 16,
+        borderBottom: '1px solid var(--border)',
+        background: open ? 'var(--surface2)' : 'var(--surface)',
+        cursor: 'pointer', userSelect: 'none', overflow: 'hidden',
+      }}
+    >
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="3" style={{ flexShrink: 0 }}>
+        {open ? <polyline points="6 9 12 15 18 9"/> : <polyline points="9 18 15 12 9 6"/>}
+      </svg>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" style={{ flexShrink: 0 }}>
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(node.size)}</span>
     </div>
   )
 }
@@ -300,13 +330,13 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
     }
   }
 
-
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '7px 16px 7px ' + indent + 'px',
+      height: TREE_ITEM_HEIGHT, boxSizing: 'border-box',
+      paddingLeft: indent, paddingRight: 16,
       borderBottom: '1px solid var(--border)',
-      background: 'var(--surface)', gap: 12,
+      background: 'var(--surface)', gap: 12, overflow: 'hidden',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, flex: 1 }}>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" strokeWidth="2" style={{ flexShrink: 0 }}>
@@ -326,17 +356,9 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
             title="Search in Sonarr"
             onClick={handleSonarrSearch}
             style={{
-              background: 'var(--blue)18',
-              border: '1px solid var(--blue)44',
-              borderRadius: 99,
-              color: 'var(--blue)',
-              fontFamily: 'var(--mono)',
-              fontSize: 10,
-              fontWeight: 600,
-              padding: '1px 8px',
-              cursor: 'pointer',
-              flexShrink: 0,
-              transition: 'background 0.1s',
+              background: 'var(--blue)18', border: '1px solid var(--blue)44', borderRadius: 99,
+              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
             onMouseLeave={e => e.currentTarget.style.background = 'var(--blue)18'}
@@ -349,17 +371,9 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
             title="Search in Radarr"
             onClick={handleRadarrSearch}
             style={{
-              background: 'var(--yellow)18',
-              border: '1px solid var(--yellow)44',
-              borderRadius: 99,
-              color: 'var(--yellow)',
-              fontFamily: 'var(--mono)',
-              fontSize: 10,
-              fontWeight: 600,
-              padding: '1px 8px',
-              cursor: 'pointer',
-              flexShrink: 0,
-              transition: 'background 0.1s',
+              background: 'var(--yellow)18', border: '1px solid var(--yellow)44', borderRadius: 99,
+              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
             onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)18'}
@@ -420,8 +434,6 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
   )
 }
 
-// ─── Flat file row (used in flat/search mode) ────────────────────────────────
-
 function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, isRevealed }) {
   const basename    = node.path.replace(/\\/g, '/').split('/').pop()
   const dirname     = node.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
@@ -473,10 +485,12 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
 
   return (
     <div style={{
+      height: FLAT_ITEM_HEIGHT, boxSizing: 'border-box',
       padding: '6px 16px',
       borderBottom: '1px solid var(--border)',
       background: isRevealed ? 'var(--accent)08' : 'var(--surface)',
       borderLeft: isRevealed ? '2px solid var(--accent)' : 'none',
+      overflow: 'hidden',
     }}>
       {/* Line 1 */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -566,9 +580,57 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
         </div>
       </div>
       {/* Line 2: directory */}
-      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>
+      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {dirname}
       </div>
+    </div>
+  )
+}
+
+// ─── react-window item renderers (defined at module level — stable references) ─
+
+// Wraps each item with the absolute-position style from react-window.
+// key={node.path} on the inner component forces remount when the node changes
+// (e.g. after a filter change that shifts items in the list), resetting hook state.
+
+const FlatRowRenderer = ({ index, style, data }) => {
+  const { nodes, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath } = data
+  const node = nodes[index]
+  return (
+    <div style={style}>
+      <FlatFileRow
+        key={node.path}
+        node={node}
+        tab={tab}
+        sonarrConfigured={sonarrConfigured}
+        radarrConfigured={radarrConfigured}
+        torrentSource={torrentSource}
+        qbHost={qbHost}
+        quiHost={quiHost}
+        isRevealed={!!revealPath && node.path === revealPath}
+      />
+    </div>
+  )
+}
+
+const TreeRowRenderer = ({ index, style, data }) => {
+  const { rows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost } = data
+  const row = rows[index]
+  return (
+    <div style={style}>
+      {row.type === 'folder'
+        ? <FolderRow
+            key={row.path}
+            name={row.name} node={row.node} depth={row.depth}
+            openRef={openRef} onToggle={onToggle} path={row.path}
+          />
+        : <FileRow
+            key={row.path || row.name}
+            name={row.name} node={row.node} depth={row.depth} tab={tab}
+            sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
+            torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost}
+          />
+      }
     </div>
   )
 }
@@ -664,8 +726,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const [userFlat, setUserFlat] = useState(() => localStorage.getItem('auditorr_view_flat') === '1')
   const [sortBy, setSortBy] = useState('name')
 
-  // Name search
+  // Raw name query drives the input; debounced value drives filtering
   const [nameQuery, setNameQuery] = useState('')
+  const debouncedNameQuery = useDebounce(nameQuery, 150)
 
   useEffect(() => {
     if (revealPath) {
@@ -674,7 +737,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     }
   }, [revealPath])
 
-  // Size range
   const [sizeMinVal,  setSizeMinVal]  = useState('')
   const [sizeMinUnit, setSizeMinUnit] = useState('GB')
   const [sizeMaxVal,  setSizeMaxVal]  = useState('')
@@ -700,14 +762,12 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   const sizeMinBytes = useMemo(() => toBytes(sizeMinVal, sizeMinUnit), [sizeMinVal, sizeMinUnit])
   const sizeMaxBytes = useMemo(() => toBytes(sizeMaxVal, sizeMaxUnit), [sizeMaxVal, sizeMaxUnit])
-  const nameLower    = nameQuery.trim().toLowerCase()
-  const isFlat       = !!nameQuery.trim() || !!revealPath || userFlat
+  const nameLower    = debouncedNameQuery.trim().toLowerCase()
+  const isFlat       = !!debouncedNameQuery.trim() || !!revealPath || userFlat
 
   const filtered = useMemo(() => (files || []).filter(f => {
-    // Hide excluded files when configured to do so (unless the user is explicitly viewing excluded)
     if (hideExcluded && f.excluded === true && statusFilter !== 'Excluded') return false
 
-    // Status
     let sMatch
     if      (statusFilter === 'all')         sMatch = true
     else if (statusFilter === 'Duplicate')   sMatch = (f.duplicate_paths||[]).length > 0
@@ -715,24 +775,19 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     else if (statusFilter === 'Excluded')    sMatch = f.excluded === true
     else                                     sMatch = f.status === statusFilter
 
-    // Import
     const iMatch = importFilter === 'all' || (importFilter === 'notImported' && !f.imported)
 
-    // Trackers
     const tMatch =
       (trackerInc.length === 0 || trackerInc.some(t => (f.trackers||[]).includes(t))) &&
       (trackerExc.length === 0 || !trackerExc.some(t => (f.trackers||[]).includes(t)))
 
-    // Seed count (from cross-seed bar navigation)
     const scMatch = seedCount === null || (() => {
       const n = (f.trackers||[]).filter(t => t !== 'None').length
       return n === seedCount
     })()
 
-    // Name search
     const nMatch = !nameLower || f.path.toLowerCase().includes(nameLower)
 
-    // Size range
     const szMin = sizeMinBytes === null || f.size >= sizeMinBytes
     const szMax = sizeMaxBytes === null || f.size <= sizeMaxBytes
 
@@ -748,17 +803,31 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     })
   }, [filtered, sortBy])
 
-  const stats = useMemo(() => ({
-    total:        filtered.length,
-    totalSize:    filtered.reduce((a,f) => a+f.size, 0),
-    seeding:      filtered.filter(f => f.status==='Seeding').length,
-    seedingSize:  filtered.filter(f => f.status==='Seeding').reduce((a,f) => a+f.size, 0),
-    orphaned:     filtered.filter(f => f.status==='Orphaned').length,
-    orphanedSize: filtered.filter(f => f.status==='Orphaned').reduce((a,f) => a+f.size, 0),
-  }), [filtered])
+  // Single-pass stats computation
+  const stats = useMemo(() => {
+    let total = 0, totalSize = 0, seeding = 0, seedingSize = 0, orphaned = 0, orphanedSize = 0
+    for (const f of filtered) {
+      total++
+      totalSize += f.size
+      if (f.status === 'Seeding') { seeding++; seedingSize += f.size }
+      if (f.status === 'Orphaned') { orphaned++; orphanedSize += f.size }
+    }
+    return { total, totalSize, seeding, seedingSize, orphaned, orphanedSize }
+  }, [filtered])
 
-  const tree     = useMemo(() => buildTree(filtered), [filtered])
-  const rootKeys = sortedKeys(tree.children)
+  const tree = useMemo(() => buildTree(filtered), [filtered])
+
+  // Flat array of visible tree rows — recomputed when tree changes or a folder is toggled
+  const treeRows = useMemo(() => flattenVisible(tree.children, openRef.current), [tree, tick])
+
+  // Stable itemData objects for react-window (avoids forcing re-renders of all visible rows)
+  const flatItemData = useMemo(() => ({
+    nodes: sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath,
+  }), [sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath])
+
+  const treeItemData = useMemo(() => ({
+    rows: treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost,
+  }), [treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost])
 
   const exportCSV = () => {
     const rows = ['RelativePath,Size,Status,Imported,Trackers,LinkedPaths,DuplicatePaths',
@@ -794,6 +863,12 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
+
+  const emptyMsg = (
+    <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
+      No files match the current filters.
+    </div>
+  )
 
   return (
     <div style={{ padding: '0 24px 24px' }}>
@@ -840,7 +915,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           </>}
           <div style={{ flex: 1 }} />
 
-          {/* Active seed-count filter badge */}
           {seedCount !== null && (
             <Chip active color="var(--blue)" onClick={() => setSeedCount(null)}>
               {seedCount === 0 ? '0× (orphaned)' : `${seedCount}× seeded`} ✕
@@ -849,7 +923,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
           {/* View toggle */}
           {(() => {
-            const forced = !!nameQuery.trim() || !!revealPath
+            const forced = !!debouncedNameQuery.trim() || !!revealPath
             return (
               <div style={{ display: 'flex', flexShrink: 0 }}>
                 <button
@@ -879,7 +953,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             )
           })()}
 
-          {/* Sort toggle (flat mode only) */}
           {isFlat && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Sort:</span>
@@ -907,7 +980,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             </div>
           )}
 
-          {/* Copy paths button */}
           <button onClick={copyPaths} title={`Copy ${filtered.length} paths to clipboard`} style={{
             padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
             border: `1px solid ${copied ? 'var(--green)' : 'var(--border2)'}`,
@@ -925,7 +997,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
         {/* Row 2: search + size range */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 0 8px', flexWrap: 'wrap' }}>
-          {/* Name search */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <FilterInput value={nameQuery} onChange={setNameQuery} placeholder="🔎 search filename…" width={200} />
             {nameQuery && (
@@ -937,10 +1008,8 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             )}
           </div>
 
-          {/* Divider */}
           <div style={{ width: 1, height: 18, background: 'var(--border2)' }} />
 
-          {/* Size range */}
           <SizeRangeFilter
             minVal={sizeMinVal}  minUnit={sizeMinUnit}
             maxVal={sizeMaxVal}  maxUnit={sizeMaxUnit}
@@ -949,7 +1018,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             onClear={() => { setSizeMinVal(''); setSizeMaxVal('') }}
           />
 
-          {/* Live match count */}
           {(nameQuery || hasSizeFilter) && (
             <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--accent)' }}>
               {filtered.length.toLocaleString()} match{filtered.length !== 1 ? 'es' : ''}
@@ -989,44 +1057,45 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
         </div>
       )}
 
-      {/* ── File tree / flat list ── */}
+      {/* ── Virtualized file list ── */}
       <div style={{
         background:'var(--surface)', border:'1px solid var(--border)',
         borderRadius:'var(--rl)', overflow:'hidden',
-        minHeight: 'calc(100vh - 360px)',
+        height: 'calc(100vh - 360px)',
       }}>
         {isFlat ? (
-          filtered.length === 0 ? (
-            <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
-              No files match the current filters.
-            </div>
-          ) : sortedFiltered.map(node => (
-            <FlatFileRow
-              key={node.path}
-              node={node}
-              tab={tab}
-              sonarrConfigured={sonarrConfigured}
-              radarrConfigured={radarrConfigured}
-              torrentSource={torrentSource}
-              qbHost={qbHost}
-              quiHost={quiHost}
-              isRevealed={!!revealPath && node.path === revealPath}
-            />
-          ))
+          sortedFiltered.length === 0 ? emptyMsg : (
+            <AutoSizer>
+              {({ height, width }) => (
+                <FixedSizeList
+                  height={height}
+                  width={width}
+                  itemCount={sortedFiltered.length}
+                  itemSize={FLAT_ITEM_HEIGHT}
+                  itemData={flatItemData}
+                  overscanCount={10}
+                >
+                  {FlatRowRenderer}
+                </FixedSizeList>
+              )}
+            </AutoSizer>
+          )
         ) : (
-          rootKeys.length === 0 ? (
-            <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
-              No files match the current filters.
-            </div>
-          ) : rootKeys.map(k =>
-            tree.children[k]._isDir
-              ? <FolderRow key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
-                  openRef={openRef} onToggle={onToggle} path={k}
-                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
-                  torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
-              : <FileRow   key={k} name={k} node={tree.children[k]} depth={0} tab={tab}
-                  sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
-                  torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost} />
+          treeRows.length === 0 ? emptyMsg : (
+            <AutoSizer>
+              {({ height, width }) => (
+                <FixedSizeList
+                  height={height}
+                  width={width}
+                  itemCount={treeRows.length}
+                  itemSize={TREE_ITEM_HEIGHT}
+                  itemData={treeItemData}
+                  overscanCount={10}
+                >
+                  {TreeRowRenderer}
+                </FixedSizeList>
+              )}
+            </AutoSizer>
           )
         )}
       </div>
