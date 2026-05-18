@@ -3,13 +3,23 @@ import { api } from '../api'
 import { formatBytes } from '../utils'
 
 const CATEGORIES = [
-  { key: 'newly_orphaned',      label: 'Became Orphaned',    color: 'var(--yellow)', icon: '⚠' },
-  { key: 'new_duplicates',      label: 'New Duplicates',      color: 'var(--purple)', icon: '⊕' },
-  { key: 'newly_imported',      label: 'Newly Imported',      color: 'var(--green)',  icon: '✓' },
-  { key: 'resolved_duplicates', label: 'Duplicates Resolved', color: 'var(--blue)',   icon: '✓' },
-  { key: 'new_files',           label: 'New Files',           color: 'var(--text-dim)', icon: '+' },
-  { key: 'removed_files',       label: 'Removed Files',       color: 'var(--text-dim)', icon: '−' },
+  { key: 'newly_orphaned',      label: 'Orphaned',       color: 'var(--yellow)' },
+  { key: 'new_duplicates',      label: 'New Dupe',        color: 'var(--purple)' },
+  { key: 'newly_imported',      label: 'Imported',        color: 'var(--green)'  },
+  { key: 'resolved_duplicates', label: 'Dupe Resolved',   color: 'var(--blue)'   },
+  { key: 'new_files',           label: 'New File',        color: 'var(--text-dim)' },
+  { key: 'removed_files',       label: 'Removed',         color: 'var(--text-dim)' },
 ]
+
+// Labels used in the page-level filter bar (slightly more descriptive)
+const FILTER_LABELS = {
+  newly_orphaned:      'Became Orphaned',
+  new_duplicates:      'New Duplicates',
+  newly_imported:      'Newly Imported',
+  resolved_duplicates: 'Duplicates Resolved',
+  new_files:           'New Files',
+  removed_files:       'Removed Files',
+}
 
 const TRIGGER_LABELS = {
   watchdog:  'watchdog',
@@ -40,19 +50,33 @@ function ScoreDelta({ delta }) {
 }
 
 function EntryCard({ entry }) {
-  const [openCat, setOpenCat] = useState(null)
+  const [expanded, setExpanded] = useState(false)
+  const [activeFilter, setActiveFilter] = useState(null)
 
   const activeCats = CATEGORIES.filter(c => entry.diff[c.key]?.length > 0)
 
-  const toggleCat = (key) => setOpenCat(prev => prev === key ? null : key)
+  const allRows = []
+  for (const cat of CATEGORIES) {
+    for (const item of (entry.diff[cat.key] || [])) allRows.push({ ...item, cat })
+  }
+
+  const rows = activeFilter ? allRows.filter(r => r.cat.key === activeFilter) : allRows
 
   return (
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderLeft: '3px solid var(--accent)', borderRadius: 10, overflow: 'hidden',
     }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', flexWrap: 'wrap' }}>
+      {/* Header — click to expand */}
+      <button
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+          padding: '12px 16px', background: 'transparent', border: 'none',
+          cursor: allRows.length > 0 ? 'pointer' : 'default',
+          textAlign: 'left', flexWrap: 'wrap',
+        }}
+      >
         <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 600 }}>
           {fmtDate(entry.ran_at)}
         </span>
@@ -71,64 +95,113 @@ function EntryCard({ entry }) {
           </span>
         )}
         <ScoreDelta delta={entry.diff.score_delta} />
-      </div>
-
-      {/* Category chips */}
-      {activeCats.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 16px 12px' }}>
-          {activeCats.map(cat => {
-            const items = entry.diff[cat.key]
-            const isOpen = openCat === cat.key
-            return (
-              <button
-                key={cat.key}
-                onClick={() => toggleCat(cat.key)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '4px 10px', borderRadius: 99, cursor: 'pointer',
-                  border: `1px solid ${isOpen ? cat.color : cat.color + '40'}`,
-                  background: isOpen ? cat.color + '18' : cat.color + '0a',
-                  color: cat.color, fontFamily: 'var(--mono)', fontSize: 11,
-                  fontWeight: isOpen ? 600 : 400, transition: 'all 0.12s',
-                }}
-              >
-                <span>{cat.icon}</span>
-                <span>{items.length} {cat.label}</span>
-                <span style={{ opacity: 0.6, fontSize: 9 }}>{isOpen ? '▲' : '▼'}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Expanded file list */}
-      {openCat && entry.diff[openCat]?.length > 0 && (
-        <div style={{
-          borderTop: '1px solid var(--border)',
-          background: 'var(--surface2)',
-          maxHeight: 260, overflowY: 'auto',
-          padding: '8px 16px 12px 16px',
-        }}>
-          {entry.diff[openCat].map((item, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '4px 0',
-              borderBottom: i < entry.diff[openCat].length - 1 ? '1px solid var(--border)' : 'none',
-            }}>
-              <span style={{
-                fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+        {/* Category count badges + chevron pushed to the right */}
+        {activeCats.length > 0 && (
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginLeft: 'auto', alignItems: 'center' }}>
+            {activeCats.map(cat => (
+              <span key={cat.key} style={{
+                fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+                color: cat.color, background: cat.color + '18',
+                border: `1px solid ${cat.color}30`,
+                borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap',
               }}>
-                {item.path}
+                {entry.diff[cat.key].length} {cat.label}
               </span>
-              {item.size != null && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', flexShrink: 0, marginLeft: 12 }}>
-                  {formatBytes(item.size)}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
+            ))}
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', marginLeft: 2 }}>
+              {expanded ? '▲' : '▼'}
+            </span>
+          </div>
+        )}
+      </button>
+
+      {/* Expanded table */}
+      {expanded && allRows.length > 0 && (
+        <>
+          {/* Filter chips */}
+          <div style={{
+            display: 'flex', gap: 5, flexWrap: 'wrap',
+            padding: '7px 16px', borderTop: '1px solid var(--border)',
+            background: 'var(--surface2)',
+          }}>
+            <button
+              onClick={e => { e.stopPropagation(); setActiveFilter(null) }}
+              style={{
+                padding: '2px 10px', borderRadius: 99, fontSize: 11,
+                border: `1px solid ${activeFilter === null ? 'var(--accent)' : 'var(--border2)'}`,
+                background: activeFilter === null ? 'var(--accent)22' : 'transparent',
+                color: activeFilter === null ? 'var(--accent)' : 'var(--text-dim)',
+                cursor: 'pointer', fontFamily: 'var(--mono)',
+              }}
+            >All ({allRows.length})</button>
+            {activeCats.map(cat => {
+              const active = activeFilter === cat.key
+              return (
+                <button key={cat.key}
+                  onClick={e => { e.stopPropagation(); setActiveFilter(active ? null : cat.key) }}
+                  style={{
+                    padding: '2px 10px', borderRadius: 99, fontSize: 11,
+                    border: `1px solid ${active ? cat.color : 'var(--border2)'}`,
+                    background: active ? cat.color + '22' : 'transparent',
+                    color: active ? cat.color : 'var(--text-dim)',
+                    cursor: 'pointer', fontFamily: 'var(--mono)',
+                  }}
+                >
+                  {cat.label} ({entry.diff[cat.key].length})
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Column headers */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: '130px 1fr 80px',
+            padding: '5px 16px', borderTop: '1px solid var(--border)',
+            background: 'var(--surface2)',
+          }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Type</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Path</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', textAlign: 'right' }}>Size</span>
+          </div>
+
+          {/* Rows */}
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            {rows.map((row, i) => (
+              <div key={i} style={{
+                display: 'grid', gridTemplateColumns: '130px 1fr 80px',
+                alignItems: 'center', height: 36,
+                padding: '0 16px',
+                borderTop: '1px solid var(--border)',
+                background: 'var(--surface)', boxSizing: 'border-box', overflow: 'hidden',
+              }}>
+                <div>
+                  <span style={{
+                    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+                    color: row.cat.color, background: row.cat.color + '18',
+                    border: `1px solid ${row.cat.color}30`,
+                    borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap',
+                  }}>{row.cat.label}</span>
+                </div>
+                <div style={{ overflow: 'hidden', paddingRight: 8 }}>
+                  <span style={{
+                    fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
+                    display: 'block', overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {row.path}
+                  </span>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  {row.size != null && (
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+                      {formatBytes(row.size)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
@@ -194,7 +267,7 @@ export default function ChangeLog() {
               fontFamily: 'var(--mono)', transition: 'all 0.12s',
             }}
           >
-            {cat.icon} {cat.label}
+            {FILTER_LABELS[cat.key]}
           </button>
         ))}
       </div>
