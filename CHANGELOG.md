@@ -1,5 +1,8 @@
 # Changelog
-## v1.4.2 - 2026-05-17
+## v1.4.2 — 2026-05-18
+
+### Improvements
+- **Changes page redesigned as a table** — the Changes panel now renders all file-level diffs as a flat table instead of accordion-style popups. Each row shows a color-coded type tag (Orphaned, New Dupe, Imported, Dupe Resolved, New File, Removed), the file path, and its size. A filter chip bar above the table lets you narrow to a single change category with per-category counts. Paths that can be revealed in the file explorer remain clickable.
 
 ### Performance
 - **Virtual scrolling in Media / Torrents explorer** — both flat list and tree view now use `react-window` `FixedSizeList` backed by `AutoSizer`. Only the visible rows (~20–30) are mounted in the DOM regardless of library size, eliminating the primary source of slowness on large libraries. The tree view pre-computes a flat ordered array of visible rows (respecting open/closed folder state) so virtualization applies to the full expanded tree, not just root-level folders.
