@@ -131,7 +131,7 @@ threading.Thread(target=startup, daemon=True).start()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "version": "1.3.6"}), 200
+    return jsonify({"status": "ok", "version": "1.4.3"}), 200
 
 
 @app.route('/api/results')
@@ -393,7 +393,10 @@ def test_paths():
 @require_auth
 def test_sonarr():
     data = request.json or {}
-    ok, msg = _test_arr_connection(data.get('url', ''), data.get('api_key', ''))
+    existing = db_load_config()
+    url     = data.get('url', '')     or existing.get('SONARR_URL', '')
+    api_key = data.get('api_key', '') or existing.get('SONARR_API_KEY', '')
+    ok, msg = _test_arr_connection(url, api_key)
     if ok:
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": msg}), 400
@@ -403,7 +406,10 @@ def test_sonarr():
 @require_auth
 def test_radarr():
     data = request.json or {}
-    ok, msg = _test_arr_connection(data.get('url', ''), data.get('api_key', ''))
+    existing = db_load_config()
+    url     = data.get('url', '')     or existing.get('RADARR_URL', '')
+    api_key = data.get('api_key', '') or existing.get('RADARR_API_KEY', '')
+    ok, msg = _test_arr_connection(url, api_key)
     if ok:
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": msg}), 400

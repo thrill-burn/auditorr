@@ -1,4 +1,9 @@
 # Changelog
+## v1.4.3 — 2026-05-18
+
+### Bug Fixes
+- **Test Sonarr / Test Radarr always failed** — the test endpoints now fall back to the stored API key (and URL) when the frontend submits a blank value. The config GET response masks keys as `__stored__` for security; the form cleared this to an empty string, causing the test to immediately return "URL and API key are required" even with a valid saved key.
+
 ## v1.4.2 — 2026-05-18
 
 ### Improvements
