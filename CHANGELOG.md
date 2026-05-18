@@ -2,7 +2,8 @@
 ## v1.4.2 — 2026-05-18
 
 ### Improvements
-- **Changes page redesigned as a table** — the Changes panel now renders all file-level diffs as a flat table instead of accordion-style popups. Each row shows a color-coded type tag (Orphaned, New Dupe, Imported, Dupe Resolved, New File, Removed), the file path, and its size. A filter chip bar above the table lets you narrow to a single change category with per-category counts. Paths that can be revealed in the file explorer remain clickable.
+- **Audit History redesigned as a flat table** — the Changes page now renders all file-level diffs across all scans as a single virtualized table (react-window) instead of per-scan accordion cards. Columns: Date, Trigger, Type, Path, Size. A sticky filter bar provides category chips, date-range presets (24h / 7d / 30d / 90d), a debounced path search input, and a CSV export button for the current filtered view.
+- **New File / Removed split by side** — "New File" and "Removed" change types are now split into "New Torrent" / "New Media" and "Removed Torrent" / "Removed Media", keyed on the existing `tab` field already present in diffs. Makes it clear when both sides of a hardlink arrived or left together, rather than showing duplicate-looking entries. Applied consistently in both the Audit History table and the dashboard Changes panel.
 
 ### Performance
 - **Virtual scrolling in Media / Torrents explorer** — both flat list and tree view now use `react-window` `FixedSizeList` backed by `AutoSizer`. Only the visible rows (~20–30) are mounted in the DOM regardless of library size, eliminating the primary source of slowness on large libraries. The tree view pre-computes a flat ordered array of visible rows (respecting open/closed folder state) so virtualization applies to the full expanded tree, not just root-level folders.
