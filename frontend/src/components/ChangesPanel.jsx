@@ -2,12 +2,14 @@ import React, { useState } from 'react'
 import { formatBytes } from '../utils'
 
 const CATEGORIES = [
-  { key: 'newly_orphaned',      label: 'Orphaned',       color: 'var(--yellow)', navigable: true  },
-  { key: 'new_duplicates',      label: 'New Dupe',        color: 'var(--purple)', navigable: true  },
-  { key: 'newly_imported',      label: 'Imported',        color: 'var(--green)',  navigable: true  },
-  { key: 'resolved_duplicates', label: 'Dupe Resolved',   color: 'var(--blue)',   navigable: true  },
-  { key: 'new_files',           label: 'New File',        color: 'var(--text-dim)', navigable: true  },
-  { key: 'removed_files',       label: 'Removed',         color: 'var(--text-dim)', navigable: false },
+  { key: 'newly_orphaned',      diffKey: 'newly_orphaned',      tab: null,       label: 'Orphaned',       color: 'var(--yellow)',   navigable: true  },
+  { key: 'new_duplicates',      diffKey: 'new_duplicates',      tab: null,       label: 'New Dupe',        color: 'var(--purple)',   navigable: true  },
+  { key: 'newly_imported',      diffKey: 'newly_imported',      tab: null,       label: 'Imported',        color: 'var(--green)',    navigable: true  },
+  { key: 'resolved_duplicates', diffKey: 'resolved_duplicates', tab: null,       label: 'Dupe Resolved',   color: 'var(--blue)',     navigable: true  },
+  { key: 'new_torrent',         diffKey: 'new_files',           tab: 'torrents', label: 'New Torrent',     color: 'var(--text-dim)', navigable: true  },
+  { key: 'new_media',           diffKey: 'new_files',           tab: 'media',    label: 'New Media',       color: 'var(--text-dim)', navigable: true  },
+  { key: 'removed_torrent',     diffKey: 'removed_files',       tab: 'torrents', label: 'Removed Torrent', color: 'var(--text-dim)', navigable: false },
+  { key: 'removed_media',       diffKey: 'removed_files',       tab: 'media',    label: 'Removed Media',   color: 'var(--text-dim)', navigable: false },
 ]
 
 const ROW_HEIGHT = 36
@@ -36,7 +38,9 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
   // Flatten all items across categories into a single table rows list
   const allRows = []
   for (const cat of CATEGORIES) {
-    const items = changes[cat.key] || []
+    const items = (changes[cat.diffKey] || []).filter(item =>
+      cat.tab == null || item.tab === cat.tab
+    )
     for (const item of items) {
       allRows.push({ ...item, cat })
     }
@@ -49,7 +53,11 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
 
   // Counts per category for filter chips
   const counts = {}
-  for (const cat of CATEGORIES) counts[cat.key] = (changes[cat.key] || []).length
+  for (const cat of CATEGORIES) {
+    counts[cat.key] = (changes[cat.diffKey] || []).filter(item =>
+      cat.tab == null || item.tab === cat.tab
+    ).length
+  }
 
   const scoreDelta = changes.score_delta
   const fmtDate = dt => dt ? new Date(dt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
