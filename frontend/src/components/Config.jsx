@@ -480,32 +480,36 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       )}
 
       <Card title="Watchdog & Scheduled Audits">
-        <div style={{ marginBottom: 18 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Filesystem Watchdog</label>
-          <span style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 10, lineHeight: 1.45 }}>
-            Automatically re-audit when files change. Disable for large libraries with frequent downloads to avoid constant rescans.
-          </span>
-          <div style={{ display: 'flex' }}>
-            {[{ label: 'Enabled', value: true }, { label: 'Disabled', value: false }].map((opt, i) => (
-              <button key={String(opt.value)} onClick={() => { setWatchdogEnabled(opt.value); setIsDirty(true) }} style={{
-                padding: '7px 18px',
-                borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
-                border: `1px solid ${watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
-                borderRight: i === 0 ? 'none' : undefined,
-                background: watchdogEnabled === opt.value ? 'var(--accent)18' : 'transparent',
-                color: watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--text-dim)',
-                fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
-              }}>{opt.label}</button>
-            ))}
+        <div style={{ ...g2 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Filesystem Watchdog</label>
+            <span style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 10, lineHeight: 1.45 }}>
+              Re-audit automatically when files change. Disable to avoid constant rescans on large libraries with frequent downloads.
+            </span>
+            <div style={{ display: 'flex', marginBottom: 14 }}>
+              {[{ label: 'Enabled', value: true }, { label: 'Disabled', value: false }].map((opt, i) => (
+                <button key={String(opt.value)} onClick={() => { setWatchdogEnabled(opt.value); setIsDirty(true) }} style={{
+                  padding: '7px 18px',
+                  borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
+                  border: `1px solid ${watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
+                  borderRight: i === 0 ? 'none' : undefined,
+                  background: watchdogEnabled === opt.value ? 'var(--accent)18' : 'transparent',
+                  color: watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--text-dim)',
+                  fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+                }}>{opt.label}</button>
+              ))}
+            </div>
+            <div style={{ opacity: watchdogEnabled ? 1 : 0.4, pointerEvents: watchdogEnabled ? undefined : 'none' }}>
+              <Field label="Watchdog Cooldown (seconds)" type="number"
+                hint="After a filesystem change is detected, wait this many seconds before triggering an audit. Default: 60."
+                placeholder="60" value={conf.WATCHDOG_COOLDOWN} onChange={set('WATCHDOG_COOLDOWN')} />
+            </div>
           </div>
-        </div>
-        <div style={{ ...g2, opacity: watchdogEnabled ? 1 : 0.4, pointerEvents: watchdogEnabled ? undefined : 'none' }}>
-          <Field label="Watchdog Cooldown (seconds)" type="number"
-            hint="After a filesystem change is detected, wait this many seconds before running an audit. Default: 60."
-            placeholder="60" value={conf.WATCHDOG_COOLDOWN} onChange={set('WATCHDOG_COOLDOWN')} />
-          <Field label="Scheduled Interval (minutes)" type="number"
-            hint="Fallback: run an audit every N minutes even if the watchdog fires no events. Catches missed changes on NFS/bind mounts. Default: 360 (6h)."
-            placeholder="360" value={conf.SCHEDULED_INTERVAL} onChange={set('SCHEDULED_INTERVAL')} />
+          <div>
+            <Field label="Scheduled Interval (minutes)" type="number"
+              hint="Run an audit every N minutes regardless of watchdog activity. Catches missed changes on NFS/bind mounts. Default: 360 (6h)."
+              placeholder="360" value={conf.SCHEDULED_INTERVAL} onChange={set('SCHEDULED_INTERVAL')} />
+          </div>
         </div>
       </Card>
 
@@ -709,7 +713,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             Last audit: {lastAuditTime}
           </span>
           <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-            Audits run automatically via watchdog (if enabled) and on a scheduled interval. Use the button below to trigger one manually.
+            Watchdog (if enabled) re-audits on file changes. Scheduled interval runs independently regardless of watchdog state. Use the button below to trigger one manually.
           </span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, marginLeft: 20 }}>
