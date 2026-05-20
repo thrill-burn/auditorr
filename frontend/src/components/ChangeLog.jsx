@@ -193,7 +193,7 @@ export default function ChangeLog() {
   const itemData = useMemo(() => ({ rows }), [rows])
 
   return (
-    <div className="fade-in" style={{ padding: '0 24px 24px' }}>
+    <div className="fade-in" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
 
       {/* Page header */}
       <div style={{ padding: '16px 0 14px' }}>
@@ -213,12 +213,12 @@ export default function ChangeLog() {
         </p>
       </div>
 
-      {/* Sticky filter bar */}
+      {/* Filter bar */}
       <div style={{
-        position: 'sticky', top: 0, zIndex: 90,
         background: 'var(--bg)',
         borderBottom: '1px solid var(--border)',
         marginBottom: 14,
+        flexShrink: 0,
       }}>
         {/* Row 1: category chips */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 0 4px' }}>
@@ -322,7 +322,7 @@ export default function ChangeLog() {
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--rl)', overflow: 'hidden',
-          height: 'calc(100vh - 360px)',
+          flex: 1, minHeight: 0,
         }}>
           {entries == null ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>

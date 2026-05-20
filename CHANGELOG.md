@@ -1,4 +1,12 @@
 # Changelog
+## v1.4.4 — 2026-05-19
+
+### Bug Fixes
+- **qui seeding size inflated N× in multi-instance setups** — tracker seeding size and upload stats are now deduplicated by torrent hash across all qui instances. In setups where qui's per-instance torrent endpoint returns all managed torrents regardless of which instance is queried, the same hash was being counted once per eligible instance, causing `seeding_size` for a tracker to read as N× the correct value (e.g. 220 TB instead of 28 TB with ~8 instances).
+
+### Improvements
+- **Media / Torrents and Change Log pages fill the viewport** — all three pages now use a flex-column layout that fills the available height exactly. The virtualized file list and change log table expand to the bottom of the window rather than stopping at a fixed `calc(100vh - 360px)` offset, eliminating the blank space below the table. The "N files · X TB" footer line on the Media/Torrents pages is preserved as a flex item below the list and cannot be overwritten.
+
 ## v1.4.3 — 2026-05-18
 
 ### Bug Fixes

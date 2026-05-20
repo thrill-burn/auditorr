@@ -871,10 +871,10 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   )
 
   return (
-    <div style={{ padding: '0 24px 24px' }}>
+    <div style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
 
       {/* ── Summary cards ── */}
-      <div style={{ padding: '16px 0 14px', display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+      <div style={{ padding: '16px 0 14px', display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, flexShrink: 0 }}>
         {[
           { label:'Total Files', val:stats.total,    size:stats.totalSize,    color:'var(--text)' },
           { label:'Seeding',     val:stats.seeding,  size:stats.seedingSize,  color:'var(--green)' },
@@ -888,12 +888,12 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
         ))}
       </div>
 
-      {/* ── Toolbar: two rows, fully sticky ── */}
+      {/* ── Toolbar ── */}
       <div style={{
-        position: 'sticky', top: 0, zIndex: 90,
         background: 'var(--bg)',
         borderBottom: '1px solid var(--border)',
         marginBottom: 14,
+        flexShrink: 0,
       }}>
         {/* Row 1: chips */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 0 6px' }}>
@@ -1030,7 +1030,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       {showTrackers && trackers.length > 0 && (
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--r)', padding: '12px 16px', marginBottom: 14,
+          borderRadius: 'var(--r)', padding: '12px 16px', marginBottom: 14, flexShrink: 0,
         }}>
           <div style={{ fontFamily:'var(--mono)', fontSize:9, color:'var(--text-dim)', letterSpacing:2, textTransform:'uppercase', marginBottom:10 }}>
             + include &nbsp;/&nbsp; − exclude
@@ -1061,7 +1061,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       <div style={{
         background:'var(--surface)', border:'1px solid var(--border)',
         borderRadius:'var(--rl)', overflow:'hidden',
-        height: 'calc(100vh - 360px)',
+        flex: 1, minHeight: 0,
       }}>
         {isFlat ? (
           sortedFiltered.length === 0 ? emptyMsg : (

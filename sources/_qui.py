@@ -234,7 +234,8 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 
 
 def _process_instance(session, base, inst, remote_path, local_path,
-                      file_map, trackers_set, tracker_upload, tracker_seeding_size):
+                      file_map, trackers_set, tracker_upload, tracker_seeding_size,
+                      seen_hashes):
     inst_id   = inst['id']
     inst_name = inst.get('name', str(inst_id))
 
@@ -304,9 +305,18 @@ def _process_instance(session, base, inst, remote_path, local_path,
 
         for h in hosts:
             trackers_set.add(h)
-            tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
-            if status == 'Seeding':
-                tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + nt['size']
+
+        # Attribute upload/seeding stats once per unique torrent hash.
+        # In multi-instance qui setups the per-instance torrent endpoint can
+        # return all managed torrents regardless of which instance_id is queried,
+        # so the same hash appears N times and inflates seeding_size by N×.
+        # seen_hashes is shared across all _process_instance calls to prevent this.
+        if th not in seen_hashes:
+            seen_hashes.add(th)
+            for h in hosts:
+                tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
+                if status == 'Seeding':
+                    tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + nt['size']
 
         save_path = nt['save_path']
         raw_save_path = save_path
@@ -440,11 +450,13 @@ def _fetch_inner(cfg):
     trackers_set         = set()
     tracker_upload       = {}
     tracker_seeding_size = {}
+    seen_hashes          = set()  # deduplicate stats across all instances
 
     for inst in eligible:
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
-                               file_map, trackers_set, tracker_upload, tracker_seeding_size)
+                               file_map, trackers_set, tracker_upload, tracker_seeding_size,
+                               seen_hashes)
         except Exception as e:
             log.warning(f"qui: skipping instance {inst.get('name','?')} due to error: {e}")
 

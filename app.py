@@ -131,7 +131,7 @@ threading.Thread(target=startup, daemon=True).start()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "version": "1.4.3"}), 200
+    return jsonify({"status": "ok", "version": "1.4.4"}), 200
 
 
 @app.route('/api/results')
