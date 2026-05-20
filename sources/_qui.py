@@ -17,8 +17,11 @@ Expected response shapes (may differ — check /api/docs):
     [{id, name, host, connected, hasLocalFilesystemAccess, useHardlinks, useReflinks, ...}]
 
   GET /api/instances/{id}/torrents?limit=N&offset=M
-    [{hash, state, save_path, size, uploaded, name, ...}]  (qBit-compatible field names)
-    OR {"data": [...], "total": N}  (paginated envelope)
+    {"torrents": [...], "total": N, "page": N, "limit": N}
+    torrent fields (confirmed against live API): hash, infohash_v1, name, save_path,
+    size, total_size, state, uploaded, uploaded_session, ratio, upspeed, tracker, ...
+    NOTE: OpenAPI spec is incomplete — actual response uses snake_case and includes
+    uploaded (cumulative bytes). The spec's Torrent schema is inaccurate.
 
   GET /api/instances/{id}/torrents/{hash}/files
     [{name, size, ...}]  (name = relative path inside torrent)
