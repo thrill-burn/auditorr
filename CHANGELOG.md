@@ -3,9 +3,11 @@
 
 ### Bug Fixes
 - **qui seeding size inflated N× in multi-instance setups** — tracker seeding size and upload stats are now deduplicated by torrent hash across all qui instances. In setups where qui's per-instance torrent endpoint returns all managed torrents regardless of which instance is queried, the same hash was being counted once per eligible instance, causing `seeding_size` for a tracker to read as N× the correct value (e.g. 220 TB instead of 28 TB with ~8 instances).
+- **Hardlink/duplicate popover off-screen and mispositioned** — replaced the hover-triggered filename popover with a click-triggered modal. The old implementation added `window.scrollY` to a `position: fixed` coordinate (double-counting scroll offset), causing the tooltip to appear far below its anchor when the page was scrolled. The popover also disappeared when moving the mouse toward it and rendered off-screen for rows near the bottom of the viewport. The new ⓘ button next to the filename opens a centered overlay showing all hardlink and duplicate paths; close with ✕, backdrop click, or Escape.
 
 ### Improvements
 - **Media / Torrents and Change Log pages fill the viewport** — all three pages now use a flex-column layout that fills the available height exactly. The virtualized file list and change log table expand to the bottom of the window rather than stopping at a fixed `calc(100vh - 360px)` offset, eliminating the blank space below the table. The "N files · X TB" footer line on the Media/Torrents pages is preserved as a flex item below the list and cannot be overwritten.
+- **Scan duration tracked and displayed** — audit wall-clock time is now captured for every scan (success and error) and stored in a new `duration_seconds` column in `audit_runs`. The Config audit history table shows a Duration column (e.g. `45s`, `2m 13s`). The Audit History page annotates each entry's date with the scan time for that audit (e.g. `May 19, 12:00 · 2m 13s`). Existing rows in the database show `—` until the next audit completes.
 
 ## v1.4.3 — 2026-05-18
 

@@ -1,5 +1,6 @@
 import os
 import math
+import time
 import hashlib
 import logging
 import fnmatch
@@ -463,6 +464,7 @@ def run_audit_process(trigger=None):
     # avoiding a race between set_state(trigger=...) and reading it back
     if trigger is None:
         trigger = get_state().get('trigger', 'manual')
+    scan_start = time.time()
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
               status_message="Connecting to torrent source...", last_scan_status="running", phase="connecting")
     try:
@@ -506,7 +508,7 @@ def run_audit_process(trigger=None):
         db_save_results(result)
         snapshot = {"media_files": media_files_data, "torrent_files": torrent_files_data,
                     "dashboard": dashboard_stats}
-        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot, source=cfg.get('TORRENT_SOURCE', 'qbit'))
+        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         try:
             snaps = db_get_last_two_snapshots()
             if len(snaps) == 2:
@@ -529,13 +531,13 @@ def run_audit_process(trigger=None):
     except sources.SourceConnectionError as e:
         msg = str(e)
         log.error(msg); _save_error_status(msg)
-        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'))
+        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         set_state(status_message=msg, last_scan_status="error")
     except Exception as e:
         msg = f"Audit error: {e}"
         log.exception("Unexpected error during audit")
         _save_error_status(msg)
-        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'))
+        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         set_state(status_message=msg, last_scan_status="error")
     finally:
         set_state(progress=100, is_scanning=False,

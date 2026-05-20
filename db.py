@@ -100,6 +100,7 @@ def init_db():
         for migration in (
             "ALTER TABLE upload_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'",
             "ALTER TABLE audit_runs ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'",
+            "ALTER TABLE audit_runs ADD COLUMN duration_seconds REAL",
         ):
             try:
                 conn.execute(migration)
@@ -146,12 +147,12 @@ def _migrate_json_files():
 # Audit runs + snapshots
 # ---------------------------------------------------------------------------
 
-def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit'):
+def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit', duration_seconds=None):
     conn = _db_conn()
     try:
         cur = conn.execute(
-            'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message, source) VALUES (?,?,?,?,?,?)',
-            (datetime.now().isoformat(), trigger, health_score, status, error_message, source)
+            'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message, source, duration_seconds) VALUES (?,?,?,?,?,?,?)',
+            (datetime.now().isoformat(), trigger, health_score, status, error_message, source, duration_seconds)
         )
         run_id = cur.lastrowid
         conn.execute(
@@ -190,12 +191,12 @@ def db_get_recent_runs(limit=None):
     try:
         if limit is not None:
             rows = conn.execute(
-                'SELECT id, ran_at, trigger, health_score, status, error_message, source FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
+                'SELECT id, ran_at, trigger, health_score, status, error_message, source, duration_seconds FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
                 (limit,)
             ).fetchall()
         else:
             rows = conn.execute(
-                'SELECT id, ran_at, trigger, health_score, status, error_message, source FROM audit_runs ORDER BY ran_at DESC'
+                'SELECT id, ran_at, trigger, health_score, status, error_message, source, duration_seconds FROM audit_runs ORDER BY ran_at DESC'
             ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -377,11 +378,15 @@ def db_get_change_log(limit=500):
     conn = _db_conn()
     try:
         rows = conn.execute(
-            'SELECT id, ran_at, health_score, trigger, source, diff_json FROM change_log ORDER BY ran_at DESC LIMIT ?',
+            '''SELECT cl.id, cl.ran_at, cl.health_score, cl.trigger, cl.source, cl.diff_json, ar.duration_seconds
+               FROM change_log cl
+               LEFT JOIN audit_runs ar ON ar.ran_at = cl.ran_at
+               ORDER BY cl.ran_at DESC LIMIT ?''',
             (limit,)
         ).fetchall()
         return [
             {**{k: row[k] for k in ('id', 'ran_at', 'health_score', 'trigger', 'source')},
+             'duration_seconds': row['duration_seconds'],
              'diff': json.loads(row['diff_json'])}
             for row in rows
         ]

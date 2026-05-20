@@ -3,7 +3,13 @@ import { FixedSizeList } from 'react-window'
 import { api } from '../api'
 
 const AUDIT_ROW_H = 36
-const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 1fr'
+const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 0.8fr 1fr'
+
+function fmtDuration(s) {
+  if (s == null) return '—'
+  if (s < 60) return `${Math.round(s)}s`
+  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
+}
 
 const AuditRunRow = ({ index, style, data }) => {
   const run = data[index]
@@ -22,6 +28,9 @@ const AuditRunRow = ({ index, style, data }) => {
       <div style={{ padding: '0 12px', fontSize: 10, color: 'var(--text-dim)' }}>{run.source || 'qbit'}</div>
       <div style={{ padding: '0 12px', fontSize: 11, color: isOk ? 'var(--text)' : 'var(--text-dim)', fontWeight: isOk ? 600 : 400 }}>
         {isOk && run.health_score != null ? run.health_score : '—'}
+      </div>
+      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)' }}>
+        {fmtDuration(run.duration_seconds)}
       </div>
       <div style={{ padding: '0 12px' }}>
         <span style={{
@@ -690,7 +699,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               display: 'grid', gridTemplateColumns: AUDIT_COLS,
               background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
             }}>
-              {['Time', 'Trigger', 'Source', 'Score', 'Status'].map(h => (
+              {['Time', 'Trigger', 'Source', 'Score', 'Duration', 'Status'].map(h => (
                 <div key={h} style={{ padding: '8px 12px', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 600, fontFamily: 'var(--mono)' }}>{h}</div>
               ))}
             </div>

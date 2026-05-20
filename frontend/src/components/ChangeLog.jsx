@@ -48,6 +48,12 @@ function fmtDate(iso) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+function fmtDuration(s) {
+  if (s == null) return null
+  if (s < 60) return `${Math.round(s)}s`
+  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
+}
+
 // ─── Virtual row ─────────────────────────────────────────────────────────────
 
 function ChangeRow({ index, style, data }) {
@@ -71,6 +77,11 @@ function ChangeRow({ index, style, data }) {
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block',
         }}>
           {fmtDate(row.ran_at)}
+          {fmtDuration(row.duration_seconds) && (
+            <span style={{ color: 'var(--text-dim)', opacity: 0.6, fontSize: 10 }}>
+              {' · '}{fmtDuration(row.duration_seconds)}
+            </span>
+          )}
         </span>
       </div>
       {/* Trigger */}
@@ -144,8 +155,9 @@ export default function ChangeLog() {
         )
         for (const item of items) {
           rows.push({
-            ran_at:  entry.ran_at,
-            trigger: entry.trigger,
+            ran_at:           entry.ran_at,
+            trigger:          entry.trigger,
+            duration_seconds: entry.duration_seconds ?? null,
             cat,
             path: item.path,
             size: item.size ?? null,
