@@ -295,7 +295,7 @@ function FolderRow({ name, node, depth, openRef, onToggle, path }) {
   )
 }
 
-function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost }) {
+function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, onOpenPopup }) {
   const indent      = (depth * 20) + 14
   const isDupe      = node.duplicate_paths?.length > 0
   const isOrphan    = node.status === 'Orphaned'
@@ -311,8 +311,6 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
   const toast = useToast()
   const [sonarrState, setSonarrState] = useState('idle')
   const [radarrState, setRadarrState] = useState('idle')
-  const [showPaths,   setShowPaths]   = useState(false)
-  const [pathsAnchor, setPathsAnchor] = useState(null)
 
   const handleSonarrSearch = async (e) => {
     e.stopPropagation()
@@ -362,15 +360,12 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
         {hasPaths && (
           <button
-            onClick={e => { e.stopPropagation(); setPathsAnchor(e.currentTarget.getBoundingClientRect()); setShowPaths(true) }}
+            onClick={e => { e.stopPropagation(); onOpenPopup({ name, linkedPaths: node.linked_paths, duplicatePaths: node.duplicate_paths, anchorRect: e.currentTarget.getBoundingClientRect() }) }}
             title="Show hardlinks & duplicates"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
             onMouseEnter={e => e.currentTarget.style.opacity = '1'}
             onMouseLeave={e => e.currentTarget.style.opacity = '0.7'}
           >ⓘ</button>
-        )}
-        {showPaths && (
-          <PathsModal name={name} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} onClose={() => setShowPaths(false)} anchorRect={pathsAnchor} />
         )}
         {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
       </div>
@@ -458,7 +453,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
   )
 }
 
-function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, isRevealed }) {
+function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, isRevealed, onOpenPopup }) {
   const basename    = node.path.replace(/\\/g, '/').split('/').pop()
   const dirname     = node.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
   const isDupe      = node.duplicate_paths?.length > 0
@@ -475,8 +470,6 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
   const toast = useToast()
   const [sonarrState, setSonarrState] = useState('idle')
   const [radarrState, setRadarrState] = useState('idle')
-  const [showPaths,   setShowPaths]   = useState(false)
-  const [pathsAnchor, setPathsAnchor] = useState(null)
 
   const handleSonarrSearch = async (e) => {
     e.stopPropagation()
@@ -529,15 +522,12 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basename}</span>
           {hasPaths && (
             <button
-              onClick={e => { e.stopPropagation(); setPathsAnchor(e.currentTarget.getBoundingClientRect()); setShowPaths(true) }}
+              onClick={e => { e.stopPropagation(); onOpenPopup({ name: basename, linkedPaths: node.linked_paths, duplicatePaths: node.duplicate_paths, anchorRect: e.currentTarget.getBoundingClientRect() }) }}
               title="Show hardlinks & duplicates"
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
               onMouseEnter={e => e.currentTarget.style.opacity = '1'}
               onMouseLeave={e => e.currentTarget.style.opacity = '0.7'}
             >ⓘ</button>
-          )}
-          {showPaths && (
-            <PathsModal name={basename} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} onClose={() => setShowPaths(false)} anchorRect={pathsAnchor} />
           )}
           {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
         </div>
@@ -629,7 +619,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
 // (e.g. after a filter change that shifts items in the list), resetting hook state.
 
 const FlatRowRenderer = ({ index, style, data }) => {
-  const { nodes, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath } = data
+  const { nodes, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath, onOpenPopup } = data
   const node = nodes[index]
   return (
     <div style={style}>
@@ -643,13 +633,14 @@ const FlatRowRenderer = ({ index, style, data }) => {
         qbHost={qbHost}
         quiHost={quiHost}
         isRevealed={!!revealPath && node.path === revealPath}
+        onOpenPopup={onOpenPopup}
       />
     </div>
   )
 }
 
 const TreeRowRenderer = ({ index, style, data }) => {
-  const { rows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost } = data
+  const { rows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, onOpenPopup } = data
   const row = rows[index]
   return (
     <div style={style}>
@@ -664,6 +655,7 @@ const TreeRowRenderer = ({ index, style, data }) => {
             name={row.name} node={row.node} depth={row.depth} tab={tab}
             sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
             torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost}
+            onOpenPopup={onOpenPopup}
           />
       }
     </div>
@@ -777,6 +769,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const [sizeMaxVal,  setSizeMaxVal]  = useState('')
   const [sizeMaxUnit, setSizeMaxUnit] = useState('GB')
 
+  const [popup, setPopup] = useState(null)
+  const openPopup = useCallback((data) => setPopup(data), [])
+
   const openRef = useRef(new Set())
   const [tick, setTick] = useState(0)
   const onToggle = useCallback((path) => {
@@ -857,12 +852,12 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   // Stable itemData objects for react-window (avoids forcing re-renders of all visible rows)
   const flatItemData = useMemo(() => ({
-    nodes: sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath,
-  }), [sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath])
+    nodes: sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath, onOpenPopup: openPopup,
+  }), [sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath, openPopup])
 
   const treeItemData = useMemo(() => ({
-    rows: treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost,
-  }), [treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost])
+    rows: treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, onOpenPopup: openPopup,
+  }), [treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, openPopup])
 
   const exportCSV = () => {
     const rows = ['RelativePath,Size,Status,Imported,Trackers,LinkedPaths,DuplicatePaths',
@@ -1138,6 +1133,16 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       <div style={{ marginTop:8, fontFamily:'var(--mono)', fontSize:10, color:'var(--text-dim)', textAlign:'right' }}>
         {filtered.length.toLocaleString()} files · {formatBytes(stats.totalSize)}
       </div>
+
+      {popup && (
+        <PathsModal
+          name={popup.name}
+          linkedPaths={popup.linkedPaths}
+          duplicatePaths={popup.duplicatePaths}
+          anchorRect={popup.anchorRect}
+          onClose={() => setPopup(null)}
+        />
+      )}
     </div>
   )
 }
