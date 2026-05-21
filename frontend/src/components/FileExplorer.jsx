@@ -103,7 +103,7 @@ function SizeInput({ value, onChange, placeholder }) {
   )
 }
 
-function PathsModal({ name, linkedPaths, duplicatePaths, onClose }) {
+function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) {
   useEffect(() => {
     const handler = e => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', handler)
@@ -112,27 +112,45 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose }) {
 
   const pathStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', wordBreak: 'break-all', lineHeight: 1.65, padding: '4px 0' }
 
+  const POPOVER_W = 580
+  const popoverStyle = anchorRect ? (() => {
+    const top = anchorRect.bottom + 8
+    const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - POPOVER_W - 16))
+    const maxH = Math.max(160, window.innerHeight - top - 16)
+    return {
+      position: 'fixed', top, left, width: POPOVER_W,
+      maxHeight: maxH, overflowY: 'auto',
+      background: 'var(--surface)',
+      border: '1px solid var(--border2)',
+      borderRadius: 10,
+      padding: '18px 20px',
+      boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+      zIndex: 10001,
+    }
+  })() : {
+    background: 'var(--surface)',
+    border: '1px solid var(--border2)',
+    borderRadius: 10,
+    padding: '18px 20px',
+    maxWidth: 620, width: '100%',
+    maxHeight: '70vh', overflowY: 'auto',
+    boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+  }
+
   return (
     <div
       onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 10000,
-        background: 'rgba(0,0,0,0.55)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 24,
+        background: anchorRect ? 'transparent' : 'rgba(0,0,0,0.55)',
+        display: anchorRect ? 'block' : 'flex',
+        alignItems: 'center', justifyContent: 'center',
+        padding: anchorRect ? 0 : 24,
       }}
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{
-          background: 'var(--surface)',
-          border: '1px solid var(--border2)',
-          borderRadius: 10,
-          padding: '18px 20px',
-          maxWidth: 620, width: '100%',
-          maxHeight: '70vh', overflowY: 'auto',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
-        }}
+        style={popoverStyle}
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 600, wordBreak: 'break-all', lineHeight: 1.5 }}>
@@ -294,6 +312,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
   const [sonarrState, setSonarrState] = useState('idle')
   const [radarrState, setRadarrState] = useState('idle')
   const [showPaths,   setShowPaths]   = useState(false)
+  const [pathsAnchor, setPathsAnchor] = useState(null)
 
   const handleSonarrSearch = async (e) => {
     e.stopPropagation()
@@ -343,7 +362,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
         {hasPaths && (
           <button
-            onClick={e => { e.stopPropagation(); setShowPaths(true) }}
+            onClick={e => { e.stopPropagation(); setPathsAnchor(e.currentTarget.getBoundingClientRect()); setShowPaths(true) }}
             title="Show hardlinks & duplicates"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
             onMouseEnter={e => e.currentTarget.style.opacity = '1'}
@@ -351,7 +370,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
           >ⓘ</button>
         )}
         {showPaths && (
-          <PathsModal name={name} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} onClose={() => setShowPaths(false)} />
+          <PathsModal name={name} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} onClose={() => setShowPaths(false)} anchorRect={pathsAnchor} />
         )}
         {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
       </div>
@@ -457,6 +476,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
   const [sonarrState, setSonarrState] = useState('idle')
   const [radarrState, setRadarrState] = useState('idle')
   const [showPaths,   setShowPaths]   = useState(false)
+  const [pathsAnchor, setPathsAnchor] = useState(null)
 
   const handleSonarrSearch = async (e) => {
     e.stopPropagation()
@@ -509,7 +529,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basename}</span>
           {hasPaths && (
             <button
-              onClick={e => { e.stopPropagation(); setShowPaths(true) }}
+              onClick={e => { e.stopPropagation(); setPathsAnchor(e.currentTarget.getBoundingClientRect()); setShowPaths(true) }}
               title="Show hardlinks & duplicates"
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
               onMouseEnter={e => e.currentTarget.style.opacity = '1'}
@@ -517,7 +537,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
             >ⓘ</button>
           )}
           {showPaths && (
-            <PathsModal name={basename} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} onClose={() => setShowPaths(false)} />
+            <PathsModal name={basename} linkedPaths={node.linked_paths} duplicatePaths={node.duplicate_paths} onClose={() => setShowPaths(false)} anchorRect={pathsAnchor} />
           )}
           {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
         </div>
