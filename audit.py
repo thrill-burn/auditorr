@@ -149,9 +149,16 @@ def _build_duplicate_map(all_records):
 
 def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
     torrent_files_data = []
+    seen_torrent_keys = set()
     for item in torrent_records:
         inode = item['inode']
         file_key = item.get('file_key', inode)
+        # Cross-seeded files share an inode across multiple torrent directories.
+        # Only emit one entry per unique inode so the file browser and health
+        # metrics don't count the same physical file N times (once per cross-seed).
+        if file_key in seen_torrent_keys:
+            continue
+        seen_torrent_keys.add(file_key)
         file_id = f"{file_key[0]}:{file_key[1]}" if isinstance(file_key, tuple) else str(file_key)
         info  = inode_map[file_key]
         torrent_files_data.append({
@@ -168,9 +175,13 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
             "instance_name": info.get('instance_name'),
         })
     media_files_data = []
+    seen_media_keys = set()
     for item in media_records:
         inode = item['inode']
         file_key = item.get('file_key', inode)
+        if file_key in seen_media_keys:
+            continue
+        seen_media_keys.add(file_key)
         file_id = f"{file_key[0]}:{file_key[1]}" if isinstance(file_key, tuple) else str(file_key)
         info  = inode_map[file_key]
         media_files_data.append({
