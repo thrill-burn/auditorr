@@ -9,6 +9,8 @@
   - **`audit_snapshots` no longer stores file lists** — the per-audit snapshot previously included the full `media_files` and `torrent_files` arrays (300–500 MB of JSON per row on large libraries). At the end of every successful audit these two snapshots were immediately re-read and deserialized to compute the change log diff — a 600 MB–1 GB peak that repeated on every `/api/changes` request. Snapshots now store only `dashboard` stats (a few KB per row). Diff computation uses the in-memory file data *before* overwriting `file_results`, and `/api/changes` reads the pre-computed diff from `change_log` instead of deserializing snapshots. A one-time startup migration strips file lists from any existing rows using SQLite's `json_remove` (no Python deserialization required).
 
 ### Bug Fixes
+- **Media/Torrents blank page after lazy-load refactor** — fixed a React hook ordering violation in the File Explorer that could crash the app after navigating to Media or Torrents. The lazy-loaded pages first rendered a loading skeleton with no file list, then re-rendered when `/api/files` returned data; a `useState` hook below that early skeleton return caused React to see a different hook order between renders.
+- **Old-result migration for lazy file storage** — if an existing `latest_results` row still contains legacy `media_files` or `torrent_files` arrays, startup/read migration now moves those arrays into the new `file_results` table before stripping them from `/api/results`. This preserves Media/Torrents data across upgrade instead of leaving the lazy file endpoint empty until the next audit.
 - **Local Torrent Path hint text typo** — corrected "youor" → "your" in the Config path mappings field hint.
 
 ## v1.4.4 — 2026-05-19

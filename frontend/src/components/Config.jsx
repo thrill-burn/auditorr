@@ -437,7 +437,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <Field label="Local Torrent Path"
-              hint="Local Save Path: The path qBittorrent saves downloads on disk from this container's perspective."
+              hint="The path qBittorrent saves downloads on disk from this container's perspective."
               placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={v => { set('LOCAL_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
             {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
               <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: pathTestStatus.local_path?.ok ? 'var(--green)' : 'var(--red)' }}>
