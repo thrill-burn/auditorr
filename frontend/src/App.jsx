@@ -358,7 +358,7 @@ function AppInner() {
           {(tab === 'media' || tab === 'torrents') && (
             <FileExplorer
               key={navKey}
-              files={tab === 'media' ? (mediaFiles || []) : (torrentFiles || [])}
+              files={tab === 'media' ? mediaFiles : torrentFiles}
               trackers={results?.trackers || []}
               tab={tab}
               initialStatus={pendingNav?.status}

@@ -257,9 +257,27 @@ def db_load_results():
         row = conn.execute('SELECT results_json FROM latest_results WHERE id = 1').fetchone()
         if row:
             data = json.loads(row['results_json'])
-            # Strip any file lists present in rows written by older versions.
-            data.pop('media_files', None)
-            data.pop('torrent_files', None)
+            # Migrate any file lists present in old-format rows into file_results,
+            # then rewrite the row without them so future reads stay fast.
+            needs_rewrite = False
+            for tab_key, db_tab in [('media_files', 'media'), ('torrent_files', 'torrents')]:
+                if tab_key in data:
+                    files = data.pop(tab_key)
+                    needs_rewrite = True
+                    existing = conn.execute(
+                        'SELECT 1 FROM file_results WHERE tab = ?', (db_tab,)
+                    ).fetchone()
+                    if not existing:
+                        conn.execute(
+                            'INSERT INTO file_results (tab, files_json) VALUES (?, ?)',
+                            (db_tab, json.dumps(files))
+                        )
+            if needs_rewrite:
+                conn.execute(
+                    'UPDATE latest_results SET results_json = ? WHERE id = 1',
+                    (json.dumps(data),)
+                )
+                conn.commit()
             return data
         return {"trackers": [], "status": "No audit run yet.", "dashboard": None}
     finally:
