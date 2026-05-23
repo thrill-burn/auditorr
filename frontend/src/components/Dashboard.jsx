@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
@@ -389,58 +389,16 @@ function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
   )
 }
 
-// ── Compute cross-seed stats from media_files ─────────────────────────────────
-function computeCrossSeedStats(mediaFiles) {
-  if (!mediaFiles || mediaFiles.length === 0) return null
-
-  // Group by seed count (number of real trackers, excluding "None")
-  const buckets = {}   // count → total_size
-  let weightedSum = 0
-  let totalSize = 0
-
-  for (const f of mediaFiles) {
-    const realTrackers = (f.trackers || []).filter(t => t !== 'None')
-    const n = realTrackers.length  // 0 = orphaned/not seeded
-    buckets[n] = (buckets[n] || 0) + f.size
-    weightedSum += f.size * n
-    totalSize += f.size
-  }
-
-  // Cross-seed score: weightedSum / totalSize (e.g. 1.8 = avg 1.8x seeded)
-  const crossSeedMultiplier = totalSize > 0 ? weightedSum / totalSize : 0
-
-  // Build sorted segments array for the bar
-  const maxCount = Math.max(...Object.keys(buckets).map(Number))
-  const segments = []
-  for (let i = 0; i <= maxCount; i++) {
-    segments.push({ count: i, size: buckets[i] || 0 })
-  }
-
-  // Tracker leaderboard from media files
-  const trackerMap = {}
-  for (const f of mediaFiles) {
-    for (const t of (f.trackers || [])) {
-      if (t === 'None') continue
-      if (!trackerMap[t]) trackerMap[t] = { name: t, size: 0, count: 0 }
-      trackerMap[t].size += f.size
-      trackerMap[t].count++
-    }
-  }
-  const trackerStats = Object.values(trackerMap).sort((a, b) => b.size - a.size)
-
-  return { crossSeedMultiplier, segments, totalSize, trackerStats }
-}
-
 // ── Tracker card (shared between modal and Trackers page) ─────────────────────
-export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate, onClose }) {
-  const trackerTorrents = torrentFiles.filter(f => (f.trackers || []).includes(trackerName))
-  const seeding     = trackerTorrents.filter(f => f.status === 'Seeding')
-  const orphaned    = trackerTorrents.filter(f => f.status === 'Orphaned')
-  const notImported = trackerTorrents.filter(f => !f.imported && f.status !== 'Orphaned')
-
-  const seedingSize     = seeding.reduce((a, f) => a + f.size, 0)
-  const orphanedSize    = orphaned.reduce((a, f) => a + f.size, 0)
-  const notImportedSize = notImported.reduce((a, f) => a + f.size, 0)
+// trackerStats = { seeding_count, seeding_size, orphaned_count, orphaned_size,
+//                  not_imported_count, not_imported_size } — pre-computed by backend
+export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate, onClose }) {
+  const seedingSize     = trackerStats?.seeding_size      ?? 0
+  const seedingCount    = trackerStats?.seeding_count     ?? 0
+  const orphanedSize    = trackerStats?.orphaned_size     ?? 0
+  const orphanedCount   = trackerStats?.orphaned_count    ?? 0
+  const notImportedSize = trackerStats?.not_imported_size  ?? 0
+  const notImportedCount = trackerStats?.not_imported_count ?? 0
 
   const yieldData = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
   const yieldPct  = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(2) + '%' : '—'
@@ -454,11 +412,11 @@ export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate
   const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}`
 
   const statBoxes = [
-    { label: 'Seeding',      value: formatBytes(seedingSize),                                          sub: `${seeding.length} files`,                          color: 'var(--green)'  },
+    { label: 'Seeding',      value: formatBytes(seedingSize),                                          sub: `${seedingCount} files`,                          color: 'var(--green)'  },
     { label: 'Uploaded',     value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—',         sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet', color: 'var(--blue)'   },
     { label: 'Yield',        value: yieldPct,                                                          sub: 'uploaded / seeding',                               color: 'var(--accent)' },
-    { label: 'Orphaned',     value: formatBytes(orphanedSize),                                         sub: `${orphaned.length} files`,                         color: 'var(--yellow)' },
-    { label: 'Not Imported', value: formatBytes(notImportedSize),                                      sub: `${notImported.length} files`,                      color: 'var(--red)'    },
+    { label: 'Orphaned',     value: formatBytes(orphanedSize),                                         sub: `${orphanedCount} files`,                         color: 'var(--yellow)' },
+    { label: 'Not Imported', value: formatBytes(notImportedSize),                                      sub: `${notImportedCount} files`,                      color: 'var(--red)'    },
   ]
 
   const btnStyle = {
@@ -546,22 +504,22 @@ export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate
 
         {/* Navigation buttons */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {seeding.length > 0 && (
+          {seedingCount > 0 && (
             <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
-              View Seeding Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seeding.length} files · {formatBytes(seedingSize)})</span>
+              View Seeding Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seedingCount} files · {formatBytes(seedingSize)})</span>
             </button>
           )}
-          {orphaned.length > 0 && (
+          {orphanedCount > 0 && (
             <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
-              View Orphaned Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphaned.length} files · {formatBytes(orphanedSize)})</span>
+              View Orphaned Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphanedCount} files · {formatBytes(orphanedSize)})</span>
             </button>
           )}
-          {notImported.length > 0 && (
+          {notImportedCount > 0 && (
             <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
-              View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImported.length} files · {formatBytes(notImportedSize)})</span>
+              View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImportedCount} files · {formatBytes(notImportedSize)})</span>
             </button>
           )}
         </div>
@@ -572,7 +530,7 @@ export function TrackerCard({ trackerName, torrentFiles, uploadStats, onNavigate
 }
 
 // ── Tracker detail modal (thin wrapper around TrackerCard) ────────────────────
-function TrackerDetailModal({ trackerName, torrentFiles, uploadStats, onNavigate, onClose }) {
+function TrackerDetailModal({ trackerName, trackerStats, uploadStats, onNavigate, onClose }) {
   return (
     <div
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
@@ -584,7 +542,7 @@ function TrackerDetailModal({ trackerName, torrentFiles, uploadStats, onNavigate
       >
         <TrackerCard
           trackerName={trackerName}
-          torrentFiles={torrentFiles}
+          trackerStats={trackerStats}
           uploadStats={uploadStats}
           onNavigate={onNavigate}
           onClose={onClose}
@@ -616,8 +574,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     }).catch(() => {})
   }, [timeRange])
 
-  // Cross-seed calculations use media_files passed via data
-  const cs = useMemo(() => data ? computeCrossSeedStats(data.media_files) : null, [data?.media_files])
+  // Cross-seed stats are pre-computed by the backend audit process
+  const cs = data?.cross_seed_stats ?? null
 
   if (!data) return <DashboardSkeleton />
 
@@ -627,9 +585,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     ? Math.round((det.hardlinked_media_size / det.total_media_size) * 100) : 100
   const c = scoreColor(score)
 
-  const notImportedPaths = (data.torrent_files || [])
-    .filter(f => !f.imported && f.status !== 'Orphaned')
-    .map(f => f.path)
+  const notImportedPaths = data.not_imported_paths || []
 
   const metrics = [
     {
@@ -727,11 +683,11 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     return { delta, label: `vs ${actualDays}d ago` }
   })()
 
-  const csMultDisplay = cs ? cs.crossSeedMultiplier.toFixed(2) : null
+  const csMultDisplay = cs ? cs.multiplier.toFixed(2) : null
 
   // Upload chart: derive active trackers and reshape daily data for Recharts
   const effectiveTrackers = selectedTrackers !== null ? selectedTrackers : allTrackers
-  const filteredTrackerStats = cs ? cs.trackerStats.filter(t => effectiveTrackers.includes(t.name)) : []
+  const filteredTrackerStats = cs ? cs.tracker_stats.filter(t => effectiveTrackers.includes(t.name)) : []
   const uploadChartData = uploadStats ? (() => {
     const activeTrackers = Object.keys(
       (uploadStats.daily_uploads || []).reduce((acc, day) => {
@@ -865,7 +821,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
             {/* Distribution bar */}
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 }}>Disk Space by Seed Count</div>
-              <CrossSeedBar segments={cs.segments} totalSize={cs.totalSize} onNavigate={onNavigate} />
+              <CrossSeedBar segments={cs.segments} totalSize={cs.total_size} onNavigate={onNavigate} />
             </div>
           </div>
 
@@ -1070,8 +1026,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       {trackerDetail && (
         <TrackerDetailModal
           trackerName={trackerDetail}
-          torrentFiles={data.torrent_files || []}
-          mediaFiles={data.media_files || []}
+          trackerStats={data.tracker_file_stats?.[trackerDetail]}
           uploadStats={uploadStats}
           onNavigate={(action) => { setTrackerDetail(null); onNavigate(action) }}
           onClose={() => setTrackerDetail(null)}

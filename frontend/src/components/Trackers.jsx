@@ -3,7 +3,7 @@ import { TrackerCard } from './Dashboard'
 import FilterBar from './FilterBar'
 import { api } from '../api'
 
-export default function Trackers({ torrentFiles, onNavigate, timeRange, onTimeRangeChange, selectedTrackers, allTrackers, onTrackersChange }) {
+export default function Trackers({ trackerFileStats, onNavigate, timeRange, onTimeRangeChange, selectedTrackers, allTrackers, onTrackersChange }) {
   const [uploadStats, setUploadStats] = useState(null)
   const [sortKey, setSortKey] = useState('seedingSize')
   const [sortDir, setSortDir] = useState('desc')
@@ -12,14 +12,10 @@ export default function Trackers({ torrentFiles, onNavigate, timeRange, onTimeRa
     api.uploadStats(timeRange).then(d => { if (!d.status) setUploadStats(d) }).catch(() => {})
   }, [timeRange])
 
-  // Build stats map for sorting
+  // Build stats map for sorting — seeding sizes come from pre-computed backend summary
   const statsMap = {}
-  for (const f of torrentFiles) {
-    for (const t of (f.trackers || [])) {
-      if (t === 'None') continue
-      if (!statsMap[t]) statsMap[t] = { seeding_size: 0, uploaded: 0, yield_val: null }
-      if (f.status === 'Seeding') statsMap[t].seeding_size += f.size
-    }
+  for (const [t, s] of Object.entries(trackerFileStats || {})) {
+    statsMap[t] = { seeding_size: s.seeding_size || 0, uploaded: 0, yield_val: null }
   }
   for (const ty of (uploadStats?.tracker_yields || [])) {
     if (!statsMap[ty.tracker]) statsMap[ty.tracker] = { seeding_size: 0, uploaded: 0, yield_val: null }
@@ -91,7 +87,7 @@ export default function Trackers({ torrentFiles, onNavigate, timeRange, onTimeRa
             <div key={tracker} style={{ width: '860px', flexShrink: 0 }}>
               <TrackerCard
                 trackerName={tracker}
-                torrentFiles={torrentFiles}
+                trackerStats={trackerFileStats?.[tracker]}
                 uploadStats={uploadStats}
                 onNavigate={onNavigate}
               />

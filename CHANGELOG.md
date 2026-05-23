@@ -1,4 +1,16 @@
 # Changelog
+## v1.5.0 — 2026-05-22
+
+### Performance
+- **Large-library memory usage** — four changes combine to reduce peak and sustained RAM for libraries with hundreds of thousands of files. Users previously reported 8 GB of Docker memory usage after 24 hours; the root causes were all in the backend:
+  - **Early release of scan intermediates** — `torrent_records`, `media_records`, `inode_map`, and `duplicate_map` are explicitly deleted after `_assemble_records()` so Python's GC can collect them before subsequent allocations. For a 500k-file library these four structures together can reach 600–700 MB.
+  - **Early release of raw qBittorrent objects** — `tracker_map` and `files_map` (the raw per-torrent dicts from the qBittorrent API) are released immediately after the normalized `file_map` is built in `sources/_qbit.py`.
+  - **File lists removed from `/api/results`** — `media_files` and `torrent_files` are no longer embedded in the `latest_results` SQLite row or returned by `/api/results`. A new `/api/files?tab=media|torrents` endpoint and `file_results` table serve them on demand. The frontend fetches them lazily only when the user navigates to the File Explorer or Trackers tabs. Dashboard, Sidebar, and Trackers now derive all display values from pre-computed summary stats (`tracker_file_stats`, `not_imported_paths`, `cross_seed_stats`) stored directly in `/api/results`, so a typical page load and dashboard refresh never touches the file lists at all.
+  - **`audit_snapshots` no longer stores file lists** — the per-audit snapshot previously included the full `media_files` and `torrent_files` arrays (300–500 MB of JSON per row on large libraries). At the end of every successful audit these two snapshots were immediately re-read and deserialized to compute the change log diff — a 600 MB–1 GB peak that repeated on every `/api/changes` request. Snapshots now store only `dashboard` stats (a few KB per row). Diff computation uses the in-memory file data *before* overwriting `file_results`, and `/api/changes` reads the pre-computed diff from `change_log` instead of deserializing snapshots. A one-time startup migration strips file lists from any existing rows using SQLite's `json_remove` (no Python deserialization required).
+
+### Bug Fixes
+- **Local Torrent Path hint text typo** — corrected "youor" → "your" in the Config path mappings field hint.
+
 ## v1.4.4 — 2026-05-19
 
 ### Bug Fixes

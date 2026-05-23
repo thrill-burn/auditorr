@@ -114,6 +114,7 @@ def _fetch_inner(cfg):
                 entry["status"] = 'Seeding'
             elif entry["status"] == 'Paused':
                 entry["status"] = status
+    del tracker_map, files_map
 
     all_hosts        = set(tracker_upload) | set(tracker_seeding_size)
     tracker_snapshot = {

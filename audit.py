@@ -12,7 +12,8 @@ from db import (
     db_load_config, db_load_history, db_save_history,
     db_load_results, db_save_results, db_save_audit,
     db_save_upload_snapshot, db_get_upload_snapshots,
-    db_get_last_two_snapshots, db_save_change_log_entry,
+    db_save_change_log_entry,
+    db_save_file_results, db_load_file_results,
 )
 from state import get_state, set_state, update_progress
 
@@ -460,6 +461,65 @@ def compute_diff(prev_snap, curr_snap):
 
 
 # ---------------------------------------------------------------------------
+# Pre-computed summary stats (avoid shipping raw file lists on /api/results)
+# ---------------------------------------------------------------------------
+
+def _compute_cross_seed_stats(media_files):
+    if not media_files:
+        return None
+    buckets      = {}
+    weighted_sum = 0
+    total_size   = 0
+    tracker_map  = {}
+    for f in media_files:
+        real_trackers = [t for t in (f.get('trackers') or []) if t != 'None']
+        n = len(real_trackers)
+        buckets[n]    = buckets.get(n, 0) + f['size']
+        weighted_sum += f['size'] * n
+        total_size   += f['size']
+        for t in real_trackers:
+            if t not in tracker_map:
+                tracker_map[t] = {'name': t, 'size': 0, 'count': 0}
+            tracker_map[t]['size']  += f['size']
+            tracker_map[t]['count'] += 1
+    multiplier   = weighted_sum / total_size if total_size > 0 else 0
+    max_count    = max(buckets.keys()) if buckets else 0
+    segments     = [{'count': i, 'size': buckets.get(i, 0)} for i in range(max_count + 1)]
+    tracker_stats = sorted(tracker_map.values(), key=lambda x: -x['size'])
+    return {
+        'multiplier':    multiplier,
+        'segments':      segments,
+        'total_size':    total_size,
+        'tracker_stats': tracker_stats,
+    }
+
+
+def _compute_tracker_file_stats(torrent_files):
+    stats = {}
+    for f in torrent_files:
+        for t in (f.get('trackers') or []):
+            if t == 'None':
+                continue
+            if t not in stats:
+                stats[t] = {
+                    'seeding_count': 0, 'seeding_size': 0,
+                    'orphaned_count': 0, 'orphaned_size': 0,
+                    'not_imported_count': 0, 'not_imported_size': 0,
+                }
+            s = stats[t]
+            if f['status'] == 'Seeding':
+                s['seeding_count'] += 1
+                s['seeding_size']  += f['size']
+            elif f['status'] == 'Orphaned':
+                s['orphaned_count'] += 1
+                s['orphaned_size']  += f['size']
+            if not f.get('imported') and f['status'] != 'Orphaned':
+                s['not_imported_count'] += 1
+                s['not_imported_size']  += f['size']
+    return stats
+
+
+# ---------------------------------------------------------------------------
 # Main audit process
 # ---------------------------------------------------------------------------
 
@@ -496,11 +556,24 @@ def run_audit_process(trigger=None):
         duplicate_map = _build_duplicate_map(torrent_records + media_records)
         torrent_files_data, media_files_data = _assemble_records(
             torrent_records, media_records, inode_map, duplicate_map)
+        del torrent_records, media_records, inode_map, duplicate_map
         set_state(status_message="Computing health metrics...", phase="post")
-        dashboard_stats = process_health_metrics(media_files_data, torrent_files_data, cfg)
+        dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg)
+        cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
+        tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
+        not_imported_paths = [
+            f['path'] for f in torrent_files_data
+            if not f['imported'] and f['status'] != 'Orphaned'
+        ]
+        if cross_seed_stats:
+            dashboard_stats['cross_seed_stats'] = cross_seed_stats
+
         result = {
-            "media_files": media_files_data, "torrent_files": torrent_files_data,
-            "trackers": trackers, "status": "ok", "dashboard": dashboard_stats,
+            "trackers":           trackers,
+            "status":             "ok",
+            "dashboard":          dashboard_stats,
+            "tracker_file_stats": tracker_file_stats,
+            "not_imported_paths": not_imported_paths,
         }
         # Save upload snapshot — only on successful audits
         try:
@@ -516,17 +589,27 @@ def run_audit_process(trigger=None):
             yield_summary = None
         result["yield_summary"] = yield_summary
 
-        db_save_results(result)
-        snapshot = {"media_files": media_files_data, "torrent_files": torrent_files_data,
-                    "dashboard": dashboard_stats}
-        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
+        # Compute diff from old file_results vs current in-memory data — BEFORE overwriting.
+        # This avoids storing file lists in audit_snapshots (300MB+ per row for large libraries)
+        # and avoids deserializing two fat snapshots on every audit and every /api/changes call.
+        ran_at = datetime.now().isoformat()
         try:
-            snaps = db_get_last_two_snapshots()
-            if len(snaps) == 2:
-                diff = compute_diff(snaps[1]['snapshot'], snaps[0]['snapshot'])
+            old_media    = db_load_file_results('media')
+            old_torrents = db_load_file_results('torrents')
+            if old_media or old_torrents:
+                prev_snap = {
+                    "media_files": old_media, "torrent_files": old_torrents,
+                    "dashboard":   db_load_results().get('dashboard'),
+                }
+                curr_snap = {
+                    "media_files": media_files_data, "torrent_files": torrent_files_data,
+                    "dashboard":   dashboard_stats,
+                }
+                diff = compute_diff(prev_snap, curr_snap)
+                del old_media, old_torrents, prev_snap, curr_snap
                 if diff:
                     db_save_change_log_entry(
-                        ran_at=snaps[0]['ran_at'],
+                        ran_at=ran_at,
                         health_score=dashboard_stats['score'],
                         trigger=trigger,
                         source=cfg.get('TORRENT_SOURCE', 'qbit'),
@@ -534,6 +617,16 @@ def run_audit_process(trigger=None):
                     )
         except Exception as e:
             log.warning(f"Could not save change log entry: {e}")
+        # Persist file lists separately so /api/results only loads summary data
+        db_save_file_results('media',    media_files_data)
+        db_save_file_results('torrents', torrent_files_data)
+        db_save_results(result)
+        # Snapshot stores only dashboard stats — no file lists (eliminates 300MB+ per row)
+        snapshot = {"dashboard": dashboard_stats}
+        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot,
+                      source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                      duration_seconds=round(time.time() - scan_start, 1),
+                      ran_at=ran_at)
         log.info("Audit complete.")
         if stat_errors:
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")

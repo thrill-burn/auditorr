@@ -14,8 +14,9 @@ from db import (
     init_db,
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
+    db_load_file_results,
     db_save_history,
-    db_get_last_two_snapshots, db_get_recent_runs,
+    db_get_recent_runs,
     db_clear_audit_history,
     db_get_upload_snapshots,
     db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
@@ -23,7 +24,7 @@ from db import (
     db_get_change_log,
 )
 from state import get_state, set_state, try_start_scanning
-from audit import run_audit_process, compute_diff, process_health_metrics, compute_upload_stats
+from audit import run_audit_process, process_health_metrics, compute_upload_stats
 from arr import _test_arr_connection, arr_rescan, arr_search
 from scripts import generate_script
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -131,13 +132,22 @@ threading.Thread(target=startup, daemon=True).start()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "version": "1.4.4"}), 200
+    return jsonify({"status": "ok", "version": "1.5.0"}), 200
 
 
 @app.route('/api/results')
 @require_auth
 def get_results():
     return jsonify(db_load_results())
+
+
+@app.route('/api/files')
+@require_auth
+def get_files():
+    tab = request.args.get('tab', '')
+    if tab not in ('media', 'torrents'):
+        return jsonify({"error": "tab must be 'media' or 'torrents'"}), 400
+    return jsonify(db_load_file_results(tab))
 
 
 @app.route('/api/progress')
@@ -149,13 +159,16 @@ def get_progress():
 @app.route('/api/changes')
 @require_auth
 def get_changes():
-    snaps = db_get_last_two_snapshots()
-    if len(snaps) < 2:
+    # Use audit_runs for timestamps (cheap — no blob data) and change_log for the pre-computed diff.
+    # This avoids deserializing two 300MB+ audit snapshots on every request.
+    ok_runs = [r for r in db_get_recent_runs(limit=10) if r['status'] == 'ok']
+    if len(ok_runs) < 2:
         return jsonify({"changes": None, "message": "Not enough audit history yet."})
-    curr = snaps[0]['snapshot']
-    prev = snaps[1]['snapshot']
-    diff = compute_diff(prev, curr)
-    return jsonify({"changes": diff, "prev_ran_at": snaps[1]['ran_at'], "curr_ran_at": snaps[0]['ran_at']})
+    curr_ran_at = ok_runs[0]['ran_at']
+    prev_ran_at = ok_runs[1]['ran_at']
+    entries = db_get_change_log(limit=1)
+    diff = entries[0]['diff'] if (entries and entries[0]['ran_at'] == curr_ran_at) else None
+    return jsonify({"changes": diff, "prev_ran_at": prev_ran_at, "curr_ran_at": curr_ran_at})
 
 
 @app.route('/api/change_log')
@@ -245,10 +258,12 @@ def handle_config():
         # Recompute health metrics immediately using existing scan results
         # so threshold changes are reflected on the dashboard without a full rescan
         try:
-            curr = db_load_results()
-            if curr.get('media_files') and curr.get('torrent_files'):
+            curr         = db_load_results()
+            media_files  = db_load_file_results('media')
+            torrent_files = db_load_file_results('torrents')
+            if media_files and torrent_files:
                 new_dashboard = process_health_metrics(
-                    curr['media_files'], curr['torrent_files'], new_conf, update_history=False)
+                    media_files, torrent_files, new_conf, update_history=False)
                 curr['dashboard'] = new_dashboard
                 db_save_results(curr)
         except Exception as e:
@@ -419,7 +434,8 @@ def test_radarr():
 @require_auth
 def get_action_script(script_type):
     results = db_load_results()
-    cfg     = db_load_config()
+    results['torrent_files'] = db_load_file_results('torrents')
+    cfg = db_load_config()
     try:
         script = generate_script(script_type, results, cfg)
     except ValueError as e:

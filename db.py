@@ -94,6 +94,10 @@ def init_db():
                 diff_json    TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_change_log_ran_at ON change_log(ran_at);
+            CREATE TABLE IF NOT EXISTS file_results (
+                tab        TEXT PRIMARY KEY,
+                files_json TEXT NOT NULL
+            );
         ''')
         conn.commit()
         # Migrations: add columns that didn't exist in earlier schema versions
@@ -107,6 +111,19 @@ def init_db():
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # column already exists
+        # Strip full file lists from any existing audit_snapshots rows — they were previously
+        # stored there for diff computation but are now handled via file_results + change_log.
+        # json_remove operates on the raw SQLite blob without Python deserializing it.
+        try:
+            conn.execute(
+                "UPDATE audit_snapshots SET snapshot_json = "
+                "json_remove(snapshot_json, '$.media_files', '$.torrent_files') "
+                "WHERE json_type(snapshot_json, '$.media_files') IS NOT NULL "
+                "   OR json_type(snapshot_json, '$.torrent_files') IS NOT NULL"
+            )
+            conn.commit()
+        except Exception as e:
+            log.warning(f"Could not strip file lists from audit_snapshots: {e}")
     finally:
         conn.close()
     _migrate_json_files()
@@ -147,12 +164,14 @@ def _migrate_json_files():
 # Audit runs + snapshots
 # ---------------------------------------------------------------------------
 
-def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit', duration_seconds=None):
+def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit', duration_seconds=None, ran_at=None):
+    if ran_at is None:
+        ran_at = datetime.now().isoformat()
     conn = _db_conn()
     try:
         cur = conn.execute(
             'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message, source, duration_seconds) VALUES (?,?,?,?,?,?,?)',
-            (datetime.now().isoformat(), trigger, health_score, status, error_message, source, duration_seconds)
+            (ran_at, trigger, health_score, status, error_message, source, duration_seconds)
         )
         run_id = cur.lastrowid
         conn.execute(
@@ -218,11 +237,14 @@ def db_clear_audit_history():
 # ---------------------------------------------------------------------------
 
 def db_save_results(results):
+    # Strip file lists — they are stored separately in file_results to keep
+    # this row small so every db_load_results call deserializes only summary data.
+    summary = {k: v for k, v in results.items() if k not in ('media_files', 'torrent_files')}
     conn = _db_conn()
     try:
         conn.execute(
             'INSERT OR REPLACE INTO latest_results (id, results_json) VALUES (1, ?)',
-            (json.dumps(results),)
+            (json.dumps(summary),)
         )
         conn.commit()
     finally:
@@ -234,11 +256,33 @@ def db_load_results():
     try:
         row = conn.execute('SELECT results_json FROM latest_results WHERE id = 1').fetchone()
         if row:
-            return json.loads(row['results_json'])
-        return {
-            "media_files": [], "torrent_files": [], "trackers": [],
-            "status": "No audit run yet.", "dashboard": None,
-        }
+            data = json.loads(row['results_json'])
+            # Strip any file lists present in rows written by older versions.
+            data.pop('media_files', None)
+            data.pop('torrent_files', None)
+            return data
+        return {"trackers": [], "status": "No audit run yet.", "dashboard": None}
+    finally:
+        conn.close()
+
+
+def db_save_file_results(tab, files):
+    conn = _db_conn()
+    try:
+        conn.execute(
+            'INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
+            (tab, json.dumps(files))
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def db_load_file_results(tab):
+    conn = _db_conn()
+    try:
+        row = conn.execute('SELECT files_json FROM file_results WHERE tab = ?', (tab,)).fetchone()
+        return json.loads(row['files_json']) if row else []
     finally:
         conn.close()
 

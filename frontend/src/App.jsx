@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import SetupWizard  from './components/SetupWizard'
 import ChangeLog    from './components/ChangeLog'
 import Sidebar      from './components/Sidebar'
@@ -121,8 +121,10 @@ function setHashTab(tab) {
 
 function AppInner() {
   const [tab,        setTab]        = useState(getHashTab)
-  const [results,    setResults]    = useState(null)
-  const [changes,    setChanges]    = useState(null)
+  const [results,      setResults]      = useState(null)
+  const [changes,      setChanges]      = useState(null)
+  const [mediaFiles,   setMediaFiles]   = useState(null)   // null = not yet loaded
+  const [torrentFiles, setTorrentFiles] = useState(null)
   const [scanState,  setScanState]  = useState({
     is_scanning: false, progress: 0, last_audit_time: 'Never',
     trigger: 'idle', next_scan_in: null, status_message: '',
@@ -140,21 +142,16 @@ function AppInner() {
   const [revealPath,         setRevealPath]         = useState(null)
   const [showWizard,         setShowWizard]         = useState(false)
   const [isLoadingResults,   setIsLoadingResults]   = useState(false)
-  const prevScanRef  = useRef(false)
-  const intervalRef  = useRef(null)
+  const prevScanRef      = useRef(false)
+  const intervalRef      = useRef(null)
+  const filesFetchingRef = useRef({ media: false, torrents: false })
 
   useEffect(() => {
     if (tab !== 'media' && tab !== 'torrents') setRevealPath(null)
   }, [tab])
 
-  const allTrackers = useMemo(() => {
-    if (!results) return []
-    const set = new Set()
-    for (const f of results.media_files || []) {
-      for (const t of f.trackers || []) { if (t !== 'None') set.add(t) }
-    }
-    return [...set].sort()
-  }, [results])
+  // tracker names come pre-sorted from the backend
+  const allTrackers = results?.trackers || []
   const toast       = useToast()
 
   // Apply theme to document root
@@ -174,13 +171,31 @@ function AppInner() {
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
 
+  const ensureFilesLoaded = useCallback(async (fileTab) => {
+    if (filesFetchingRef.current[fileTab]) return
+    filesFetchingRef.current[fileTab] = true
+    const setter = fileTab === 'media' ? setMediaFiles : setTorrentFiles
+    try {
+      setter(await api.files(fileTab))
+    } catch (e) {
+      console.error('Failed to load files for tab:', fileTab, e)
+      setter([])
+    } finally {
+      filesFetchingRef.current[fileTab] = false
+    }
+  }, [])
+
   const fetchResults = useCallback(async (fromScan = false) => {
     setIsRefreshing(true)
-    if (fromScan) setIsLoadingResults(true)
+    if (fromScan) {
+      setIsLoadingResults(true)
+      // Invalidate file caches so the next tab visit re-fetches fresh data
+      setMediaFiles(null)
+      setTorrentFiles(null)
+    }
     try {
       const data = await api.results()
       setResults(data)
-      // Also fetch changes diff
       try {
         const changesData = await api.changes()
         setChanges(changesData)
@@ -220,6 +235,13 @@ function AppInner() {
       prevScanRef.current = state.is_scanning
     } catch (e) { console.error('Poll error:', e) }
   }, [fetchResults, toast])
+
+  // Lazy-load file lists only when a tab that needs them becomes active
+  useEffect(() => {
+    if (tab === 'media'    && mediaFiles   === null) ensureFilesLoaded('media')
+    if (tab === 'torrents' && torrentFiles === null) ensureFilesLoaded('torrents')
+    if (tab === 'trackers' && torrentFiles === null) ensureFilesLoaded('torrents')
+  }, [tab, mediaFiles, torrentFiles, ensureFilesLoaded])
 
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission()
@@ -278,15 +300,8 @@ function AppInner() {
     setTab(action.tab)
   }
 
-  // Cross-seed multiplier computed from media_files
-  const crossSeedMultiplier = results?.media_files ? (() => {
-    let ws = 0, ts = 0
-    for (const f of results.media_files) {
-      const n = (f.trackers||[]).filter(t => t !== 'None').length
-      ws += f.size * n; ts += f.size
-    }
-    return ts > 0 ? ws / ts : null
-  })() : null
+  // Pre-computed by the backend — no need to iterate file lists client-side
+  const crossSeedMultiplier = results?.dashboard?.cross_seed_stats?.multiplier ?? null
 
   const navKey = tab +
     (pendingNav?.status || '') +
@@ -323,7 +338,11 @@ function AppInner() {
           )}
           {tab === 'dashboard' && (
             <Dashboard
-              data={results?.dashboard ? { ...results.dashboard, media_files: results.media_files, torrent_files: results.torrent_files } : null}
+              data={results?.dashboard ? {
+                ...results.dashboard,
+                tracker_file_stats: results.tracker_file_stats,
+                not_imported_paths: results.not_imported_paths,
+              } : null}
               changes={changes}
               onNavigate={handleNavigate}
               isRefreshing={isRefreshing}
@@ -339,7 +358,7 @@ function AppInner() {
           {(tab === 'media' || tab === 'torrents') && (
             <FileExplorer
               key={navKey}
-              files={results ? (tab === 'media' ? results.media_files : results.torrent_files) : []}
+              files={tab === 'media' ? (mediaFiles || []) : (torrentFiles || [])}
               trackers={results?.trackers || []}
               tab={tab}
               initialStatus={pendingNav?.status}
@@ -351,7 +370,7 @@ function AppInner() {
           )}
           {tab === 'trackers' && (
             <Trackers
-              torrentFiles={results?.torrent_files || []}
+              trackerFileStats={results?.tracker_file_stats || {}}
               onNavigate={handleNavigate}
               timeRange={timeRange}
               onTimeRangeChange={setTimeRange}
