@@ -859,6 +859,8 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     rows: treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, onOpenPopup: openPopup,
   }), [treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, openPopup])
 
+  const [copied, setCopied] = useState(false)
+
   const exportCSV = () => {
     const rows = ['RelativePath,Size,Status,Imported,Trackers,LinkedPaths,DuplicatePaths',
       ...filtered.map(f =>
@@ -877,7 +879,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   const activeTrackerCount = trackerInc.length + trackerExc.length
   const hasSizeFilter = sizeMinVal || sizeMaxVal
-  const [copied, setCopied] = useState(false)
 
   const copyPaths = () => {
     const paths = filtered.map(f => f.path).join('\n')
