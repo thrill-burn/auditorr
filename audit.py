@@ -286,12 +286,13 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
 # Upload / yield stats
 # ---------------------------------------------------------------------------
 
-def compute_upload_stats(days=30):
+def compute_upload_stats(days=30, from_date=None, to_date=None):
     """Compute per-tracker upload deltas and yield from stored snapshots.
 
     Returns None if fewer than 2 snapshots exist (not enough data for deltas).
+    Pass from_date/to_date (ISO date strings) to query a specific range instead of days.
     """
-    rows = db_get_upload_snapshots(since_days=days)
+    rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date)
     if len(rows) < 2:
         return None
 

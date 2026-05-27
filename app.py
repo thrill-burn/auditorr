@@ -518,10 +518,15 @@ def actions_radarr_search():
 @app.route('/api/upload_stats')
 @require_auth
 def get_upload_stats():
-    days  = request.args.get('days', 30, type=int)
-    if days != 0:
-        days = max(1, min(365, days))
-    stats = compute_upload_stats(days)
+    from_date = request.args.get('from') or None
+    to_date   = request.args.get('to')   or None
+    if from_date or to_date:
+        stats = compute_upload_stats(from_date=from_date, to_date=to_date)
+    else:
+        days = request.args.get('days', 30, type=int)
+        if days != 0:
+            days = max(1, min(365, days))
+        stats = compute_upload_stats(days)
     if stats is None:
         return jsonify({"status": "pending", "message": "Not enough data yet. Upload stats require at least 2 audits."})
     return jsonify(stats)

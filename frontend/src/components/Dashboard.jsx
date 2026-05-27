@@ -444,11 +444,11 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
   const activeTab = CHART_TABS.find(t => t.key === chartTab) || CHART_TABS[0]
 
   const statBoxes = [
-    { label: 'Seeding',      value: formatBytes(seedingSize),                                          sub: `${seedingCount} files`,                          color: 'var(--green)'  },
-    { label: 'Uploaded',     value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—',         sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet', color: 'var(--blue)'   },
-    { label: 'Yield',        value: yieldPct,                                                          sub: 'uploaded / seeding',                               color: 'var(--accent)' },
-    { label: 'Orphaned',     value: formatBytes(orphanedSize),                                         sub: `${orphanedCount} files`,                         color: 'var(--yellow)' },
-    { label: 'Not Imported', value: formatBytes(notImportedSize),                                      sub: `${notImportedCount} files`,                      color: 'var(--red)'    },
+    { label: 'Seeding',      tabKey: 'seeding',      value: formatBytes(seedingSize),                                  sub: `${seedingCount} files`,                                                   color: 'var(--green)'  },
+    { label: 'Uploaded',     tabKey: 'upload',        value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—', sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet',         color: 'var(--blue)'   },
+    { label: 'Yield',        tabKey: 'yield',         value: yieldPct,                                                  sub: 'uploaded / seeding',                                                      color: 'var(--accent)' },
+    { label: 'Orphaned',     tabKey: 'orphaned',      value: formatBytes(orphanedSize),                                 sub: `${orphanedCount} files`,                                                  color: 'var(--yellow)' },
+    { label: 'Not Imported', tabKey: 'not_imported',  value: formatBytes(notImportedSize),                              sub: `${notImportedCount} files`,                                               color: 'var(--red)'    },
   ]
 
   const btnStyle = {
@@ -478,33 +478,35 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
       {/* Content */}
       <div style={{ overflowY: 'auto', flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-        {/* Stats row */}
+        {/* Stats row — click to select chart */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-          {statBoxes.map(s => (
-            <div key={s.label} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px' }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
-            </div>
-          ))}
+          {statBoxes.map(s => {
+            const active = chartTab === s.tabKey
+            return (
+              <div
+                key={s.label}
+                onClick={() => setChartTab(s.tabKey)}
+                style={{
+                  background: active ? s.color + '10' : 'var(--surface2)',
+                  border: `1px solid ${active ? s.color : 'var(--border)'}`,
+                  borderRadius: 'var(--r)', padding: '10px 14px',
+                  cursor: 'pointer', transition: 'border-color 0.12s, background 0.12s',
+                }}
+              >
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: active ? s.color : 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
+              </div>
+            )
+          })}
         </div>
 
         {/* Trend charts */}
         {uploadStats && (
           hasTrendData ? (
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>Trend</div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  {CHART_TABS.map(t => (
-                    <button key={t.key} onClick={() => setChartTab(t.key)} style={{
-                      background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
-                      color: chartTab === t.key ? t.color : 'var(--text-dim)',
-                      fontWeight: chartTab === t.key ? 700 : 400,
-                    }}>{t.label}</button>
-                  ))}
-                </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>
+                {activeTab.label} Trend
               </div>
               <div style={{ height: 160 }}>
                 <ResponsiveContainer width="100%" height={160}>

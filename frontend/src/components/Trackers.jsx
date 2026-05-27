@@ -3,14 +3,24 @@ import { TrackerCard } from './Dashboard'
 import FilterBar from './FilterBar'
 import { api } from '../api'
 
-export default function Trackers({ trackerFileStats, onNavigate, timeRange, onTimeRangeChange, selectedTrackers, allTrackers, onTrackersChange }) {
+function initialDateFrom(timeRange) {
+  if (!timeRange) return ''
+  const d = new Date()
+  d.setDate(d.getDate() - timeRange)
+  return d.toISOString().slice(0, 10)
+}
+
+export default function Trackers({ trackerFileStats, onNavigate, timeRange, selectedTrackers, allTrackers, onTrackersChange }) {
   const [uploadStats, setUploadStats] = useState(null)
-  const [sortKey, setSortKey] = useState('seedingSize')
-  const [sortDir, setSortDir] = useState('desc')
+  const [sortKey,     setSortKey]     = useState('seedingSize')
+  const [sortDir,     setSortDir]     = useState('desc')
+  const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(timeRange))
+  const [dateTo,      setDateTo]      = useState('')
 
   useEffect(() => {
-    api.uploadStats(timeRange).then(d => { if (!d.status) setUploadStats(d) }).catch(() => {})
-  }, [timeRange])
+    const params = (dateFrom || dateTo) ? { from: dateFrom || undefined, to: dateTo || undefined } : 0
+    api.uploadStats(params).then(d => { if (!d.status) setUploadStats(d) }).catch(() => {})
+  }, [dateFrom, dateTo])
 
   // Build stats map for sorting — seeding sizes come from pre-computed backend summary
   const statsMap = {}
@@ -69,8 +79,10 @@ export default function Trackers({ trackerFileStats, onNavigate, timeRange, onTi
   return (
     <>
     <FilterBar
-      timeRange={timeRange}
-      onTimeRangeChange={onTimeRangeChange}
+      dateFrom={dateFrom}
+      dateTo={dateTo}
+      onDateFromChange={setDateFrom}
+      onDateToChange={setDateTo}
       selectedTrackers={selectedTrackers}
       allTrackers={allTrackers}
       onTrackersChange={onTrackersChange}

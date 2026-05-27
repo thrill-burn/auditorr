@@ -478,10 +478,24 @@ def db_save_upload_snapshot(snapshot_dict, source='qbit'):
         conn.close()
 
 
-def db_get_upload_snapshots(since_days=90):
+def db_get_upload_snapshots(since_days=90, from_date=None, to_date=None):
     conn = _db_conn()
     try:
-        if since_days == 0:
+        if from_date or to_date:
+            conditions, params = [], []
+            if from_date:
+                conditions.append('taken_at >= ?')
+                params.append(from_date)
+            if to_date:
+                to_ceil = to_date if len(to_date) > 10 else to_date + 'T23:59:59.999999'
+                conditions.append('taken_at <= ?')
+                params.append(to_ceil)
+            where = ' AND '.join(conditions)
+            rows = conn.execute(
+                f'SELECT taken_at, snapshot, source FROM upload_snapshots WHERE {where} ORDER BY taken_at ASC',
+                params
+            ).fetchall()
+        elif since_days == 0:
             rows = conn.execute(
                 'SELECT taken_at, snapshot, source FROM upload_snapshots ORDER BY taken_at ASC'
             ).fetchall()

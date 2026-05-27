@@ -70,7 +70,15 @@ export const api = {
   radarrRescan: (paths)   => req('/actions/radarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
   sonarrSearch: (path)    => req('/actions/sonarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
   radarrSearch: (path)    => req('/actions/radarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
-  uploadStats:          (days)           => req('/upload_stats?days=' + days),
+  uploadStats: (params) => {
+    if (params && typeof params === 'object') {
+      const q = new URLSearchParams()
+      if (params.from) q.set('from', params.from)
+      if (params.to)   q.set('to',   params.to)
+      return req('/upload_stats?' + q.toString())
+    }
+    return req('/upload_stats?days=' + params)
+  },
   uploadSnapshotCounts: ()               => req('/upload_snapshots/source_counts'),
   retagUploadSnapshots:  (from, to, source) => req('/upload_snapshots/retag',  { method: 'POST', body: JSON.stringify({ from, to: to || undefined, source }) }),
   deleteUploadSnapshots: (from, to)         => req('/upload_snapshots/delete', { method: 'POST', body: JSON.stringify({ from, to: to || undefined }) }),

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 
-export default function FilterBar({ timeRange, onTimeRangeChange, selectedTrackers, allTrackers, onTrackersChange, sortControls }) {
+export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, dateTo, onDateFromChange, onDateToChange, selectedTrackers, allTrackers, onTrackersChange, sortControls }) {
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef(null)
   const effectiveTrackers = selectedTrackers ?? allTrackers
@@ -22,17 +22,56 @@ export default function FilterBar({ timeRange, onTimeRangeChange, selectedTracke
       padding: '8px 20px',
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     }}>
-      {/* Left: time range */}
-      <div style={{ display: 'flex', gap: 10 }}>
-        {[7, 30, 90, 0].map(d => (
-          <button key={d} onClick={() => onTimeRangeChange(d)} style={{
-            background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-            fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
-            color: timeRange === d ? 'var(--accent)' : 'var(--text-dim)',
-            fontWeight: timeRange === d ? 700 : 400,
-          }}>{d === 0 ? 'All' : d + 'd'}</button>
-        ))}
-      </div>
+      {/* Left: time range (presets) or date range picker */}
+      {onDateFromChange ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            type="date"
+            value={dateFrom || ''}
+            onChange={e => onDateFromChange(e.target.value)}
+            title="From date"
+            style={{
+              height: 24, padding: '0 6px', borderRadius: 5, fontSize: 10,
+              border: `1px solid ${dateFrom ? 'var(--accent)66' : 'var(--border2)'}`,
+              background: dateFrom ? 'var(--surface2)' : 'transparent',
+              color: 'var(--text)', fontFamily: 'var(--mono)', outline: 'none', cursor: 'pointer',
+            }}
+          />
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>—</span>
+          <input
+            type="date"
+            value={dateTo || ''}
+            onChange={e => onDateToChange(e.target.value)}
+            title="To date"
+            style={{
+              height: 24, padding: '0 6px', borderRadius: 5, fontSize: 10,
+              border: `1px solid ${dateTo ? 'var(--accent)66' : 'var(--border2)'}`,
+              background: dateTo ? 'var(--surface2)' : 'transparent',
+              color: 'var(--text)', fontFamily: 'var(--mono)', outline: 'none', cursor: 'pointer',
+            }}
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              onClick={() => { onDateFromChange(''); onDateToChange('') }}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px',
+                fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+              }}
+            >✕</button>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 10 }}>
+          {[7, 30, 90, 0].map(d => (
+            <button key={d} onClick={() => onTimeRangeChange(d)} style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+              fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+              color: timeRange === d ? 'var(--accent)' : 'var(--text-dim)',
+              fontWeight: timeRange === d ? 700 : 400,
+            }}>{d === 0 ? 'All' : d + 'd'}</button>
+          ))}
+        </div>
+      )}
 
       {/* Centre: sort controls */}
       <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
