@@ -32,14 +32,6 @@ const TRIGGER_LABELS = {
   startup:   'startup',
 }
 
-const DATE_PRESETS = [
-  { label: 'All time', days: null },
-  { label: '24h',      days: 1    },
-  { label: '7d',       days: 7    },
-  { label: '30d',      days: 30   },
-  { label: '90d',      days: 90   },
-]
-
 const ROW_HEIGHT = 36
 const COL_HEADER_HEIGHT = 28
 
@@ -133,7 +125,8 @@ export default function ChangeLog() {
   const [entries,   setEntries]   = useState(null)
   const [error,     setError]     = useState(null)
   const [catFilter, setCatFilter] = useState(null)
-  const [dateDays,  setDateDays]  = useState(null)
+  const [dateFrom,  setDateFrom]  = useState('')
+  const [dateTo,    setDateTo]    = useState('')
   const [pathQuery, setPathQuery] = useState('')
   const [copied,    setCopied]    = useState(false)
   const debouncedPath = useDebounce(pathQuery, 150)
@@ -170,9 +163,14 @@ export default function ChangeLog() {
 
   const rows = useMemo(() => {
     let r = allRows
-    if (dateDays != null) {
-      const cutoff = Date.now() - dateDays * 86400_000
-      r = r.filter(row => new Date(row.ran_at).getTime() >= cutoff)
+    if (dateFrom) {
+      const from = new Date(dateFrom).getTime()
+      r = r.filter(row => new Date(row.ran_at).getTime() >= from)
+    }
+    if (dateTo) {
+      // include the full selected day
+      const to = new Date(dateTo).getTime() + 86400_000
+      r = r.filter(row => new Date(row.ran_at).getTime() < to)
     }
     if (catFilter) r = r.filter(row => row.cat.key === catFilter)
     if (debouncedPath.trim()) {
@@ -180,7 +178,7 @@ export default function ChangeLog() {
       r = r.filter(row => row.path.toLowerCase().includes(q))
     }
     return r
-  }, [allRows, dateDays, catFilter, debouncedPath])
+  }, [allRows, dateFrom, dateTo, catFilter, debouncedPath])
 
   const exportCSV = useCallback(() => {
     const lines = [
@@ -216,7 +214,7 @@ export default function ChangeLog() {
           <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>Audit History</span>
           {entries != null && (
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-              {rows.length.toLocaleString()} {(catFilter || dateDays != null || debouncedPath.trim()) ? 'matching' : 'changes'}
+              {rows.length.toLocaleString()} {(catFilter || dateFrom || dateTo || debouncedPath.trim()) ? 'matching' : 'changes'}
             </span>
           )}
         </div>
@@ -264,24 +262,46 @@ export default function ChangeLog() {
             )
           })}
         </div>
-        {/* Row 2: date presets + search + export */}
+        {/* Row 2: date range + search + export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '4px 0 8px' }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Date:</span>
-          {DATE_PRESETS.map(preset => {
-            const active = dateDays === preset.days
-            return (
-              <button key={preset.label}
-                onClick={() => setDateDays(active ? null : preset.days)}
-                style={{
-                  padding: '3px 10px', borderRadius: 99, fontSize: 11, cursor: 'pointer',
-                  border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-                  background: active ? 'var(--accent)22' : 'transparent',
-                  color: active ? 'var(--accent)' : 'var(--text-dim)',
-                  fontFamily: 'var(--mono)', transition: 'all 0.12s',
-                }}
-              >{preset.label}</button>
-            )
-          })}
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)}
+            title="From date"
+            style={{
+              height: 28, padding: '0 8px', borderRadius: 6, fontSize: 11,
+              border: `1px solid ${dateFrom ? 'var(--accent)66' : 'var(--border2)'}`,
+              background: dateFrom ? 'var(--surface2)' : 'transparent',
+              color: 'var(--text)', fontFamily: 'var(--mono)',
+              outline: 'none', cursor: 'pointer',
+            }}
+          />
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>—</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={e => setDateTo(e.target.value)}
+            title="To date"
+            style={{
+              height: 28, padding: '0 8px', borderRadius: 6, fontSize: 11,
+              border: `1px solid ${dateTo ? 'var(--accent)66' : 'var(--border2)'}`,
+              background: dateTo ? 'var(--surface2)' : 'transparent',
+              color: 'var(--text)', fontFamily: 'var(--mono)',
+              outline: 'none', cursor: 'pointer',
+            }}
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              onClick={() => { setDateFrom(''); setDateTo('') }}
+              style={{
+                padding: '2px 7px', borderRadius: 99, fontSize: 11,
+                border: '1px solid var(--border2)', background: 'transparent',
+                color: 'var(--text-dim)', cursor: 'pointer',
+              }}
+            >✕</button>
+          )}
 
           <div style={{ width: 1, height: 18, background: 'var(--border2)', margin: '0 2px' }} />
 

@@ -64,3 +64,4 @@ tests/
 TESTING.md
 .pytest_cache/
 .tmp/
+.internal

@@ -61,7 +61,18 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 
 ---
 
-## v1.5 — Future Ideas
+## v1.5 — Shipped ✅
+
+### v1.5.0 — Large-library memory optimizations
+
+- **Early release of scan intermediates** — `torrent_records`, `media_records`, `inode_map`, and `duplicate_map` are explicitly deleted after `_assemble_records()` so Python's GC can collect them before subsequent allocations. For a 500k-file library these four structures together can reach 600–700 MB.
+- **Early release of raw qBittorrent objects** — `tracker_map` and `files_map` are released immediately after the normalized `file_map` is built in `sources/_qbit.py`.
+- **Lazy file endpoint** — `media_files` and `torrent_files` removed from `/api/results` and the `latest_results` row. A new `/api/files?tab=media|torrents` endpoint serves them on demand. The frontend fetches file lists only when navigating to File Explorer or Trackers; Dashboard, Sidebar, and Trackers derive display values from pre-computed summary stats in `/api/results`.
+- **`audit_snapshots` no longer stores file lists** — snapshots now contain only dashboard stats (a few KB per row). Diff computation uses in-memory file data before overwriting `file_results`. `/api/changes` reads from `change_log`. A one-time startup migration strips file lists from existing rows via SQLite `json_remove`.
+
+---
+
+## v1.6 — Future Ideas
 
 - **Webhook / notification support** — alert when health score drops below threshold (Discord, ntfy.sh, Gotify)
 - **Per-tracker import success rate** — of files downloaded from each tracker, what % got imported by Sonarr/Radarr
