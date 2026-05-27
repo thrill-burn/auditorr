@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import DatePicker from './DatePicker'
 
 export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, dateTo, onDateFromChange, onDateToChange, selectedTrackers, allTrackers, onTrackersChange, sortControls }) {
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -25,31 +26,9 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
       {/* Left: time range (presets) or date range picker */}
       {onDateFromChange ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            type="date"
-            value={dateFrom || ''}
-            onChange={e => onDateFromChange(e.target.value)}
-            title="From date"
-            style={{
-              height: 24, padding: '0 6px', borderRadius: 5, fontSize: 10,
-              border: `1px solid ${dateFrom ? 'var(--accent)66' : 'var(--border2)'}`,
-              background: dateFrom ? 'var(--surface2)' : 'transparent',
-              color: 'var(--text)', fontFamily: 'var(--mono)', outline: 'none', cursor: 'pointer',
-            }}
-          />
+          <DatePicker value={dateFrom || ''} onChange={onDateFromChange} placeholder="From" />
           <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>—</span>
-          <input
-            type="date"
-            value={dateTo || ''}
-            onChange={e => onDateToChange(e.target.value)}
-            title="To date"
-            style={{
-              height: 24, padding: '0 6px', borderRadius: 5, fontSize: 10,
-              border: `1px solid ${dateTo ? 'var(--accent)66' : 'var(--border2)'}`,
-              background: dateTo ? 'var(--surface2)' : 'transparent',
-              color: 'var(--text)', fontFamily: 'var(--mono)', outline: 'none', cursor: 'pointer',
-            }}
-          />
+          <DatePicker value={dateTo || ''} onChange={onDateToChange} placeholder="To" />
           {(dateFrom || dateTo) && (
             <button
               onClick={() => { onDateFromChange(''); onDateToChange('') }}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import DatePicker from './DatePicker'
 import { FixedSizeList } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
 import { api } from '../api'
@@ -265,33 +266,9 @@ export default function ChangeLog() {
         {/* Row 2: date range + search + export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '4px 0 8px' }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Date:</span>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={e => setDateFrom(e.target.value)}
-            title="From date"
-            style={{
-              height: 28, padding: '0 8px', borderRadius: 6, fontSize: 11,
-              border: `1px solid ${dateFrom ? 'var(--accent)66' : 'var(--border2)'}`,
-              background: dateFrom ? 'var(--surface2)' : 'transparent',
-              color: 'var(--text)', fontFamily: 'var(--mono)',
-              outline: 'none', cursor: 'pointer',
-            }}
-          />
+          <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" />
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>—</span>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={e => setDateTo(e.target.value)}
-            title="To date"
-            style={{
-              height: 28, padding: '0 8px', borderRadius: 6, fontSize: 11,
-              border: `1px solid ${dateTo ? 'var(--accent)66' : 'var(--border2)'}`,
-              background: dateTo ? 'var(--surface2)' : 'transparent',
-              color: 'var(--text)', fontFamily: 'var(--mono)',
-              outline: 'none', cursor: 'pointer',
-            }}
-          />
+          <DatePicker value={dateTo} onChange={setDateTo} placeholder="To" />
           {(dateFrom || dateTo) && (
             <button
               onClick={() => { setDateFrom(''); setDateTo('') }}
