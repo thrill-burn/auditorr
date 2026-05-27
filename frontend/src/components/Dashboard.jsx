@@ -310,7 +310,7 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
           <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 6, display: 'inline-flex', gap: 10, alignItems: 'center' }}>
             <div style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>
-              {seg.count === 0 ? 'Orphaned (0×)' : `${seg.count}× seeded`}
+              {seg.count === 0 ? 'Not Seeded (0×)' : `${seg.count}× seeded`}
             </span>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
               {formatBytes(seg.size)} · {pct}%
@@ -334,7 +334,7 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
             >
               <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
               <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-                {seg.count === 0 ? '0× (orphaned)' : `${seg.count}×`} — {pct}%
+                {seg.count === 0 ? '0× (not seeded)' : `${seg.count}×`} — {pct}%
               </span>
             </button>
           )
@@ -865,7 +865,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
           {/* Cross-seed effectiveness */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Cross-Seed Effectiveness</div>
@@ -929,11 +929,11 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Upload Activity</div>
             </div>
-            <div style={{ height: 220 }}>
+            <div style={{ flex: 1, minHeight: 0 }}>
               {effectiveTrackers.length === 0
                 ? <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No trackers selected</div>
                 : (
-                  <ResponsiveContainer width="100%" height={220}>
+                  <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
                       <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />

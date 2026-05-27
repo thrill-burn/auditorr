@@ -610,6 +610,8 @@ def run_audit_process(trigger=None):
             for tracker, fstats in tracker_file_stats.items():
                 if tracker not in aug:
                     aug[tracker] = {'uploaded': 0, 'seeding_size': 0}
+                aug[tracker]['seeding_size']       = fstats['seeding_size']
+                aug[tracker]['seeding_count']      = fstats['seeding_count']
                 aug[tracker]['orphaned_size']      = fstats['orphaned_size']
                 aug[tracker]['orphaned_count']     = fstats['orphaned_count']
                 aug[tracker]['not_imported_size']  = fstats['not_imported_size']

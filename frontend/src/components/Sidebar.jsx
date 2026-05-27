@@ -168,7 +168,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 background: 'var(--blue)10', border: '1px solid var(--blue)25',
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Cross-seed</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Cross-seed</span>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--blue)', lineHeight: 1 }}>
                   {csDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
                 </span>
