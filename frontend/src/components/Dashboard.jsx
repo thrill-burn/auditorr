@@ -435,10 +435,11 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
   const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}-${chartTab}`
 
   const CHART_TABS = [
-    { key: 'upload',   label: 'Upload',   dataKey: 'uploaded',      color: 'var(--accent)', fmt: formatBytes },
-    { key: 'seeding',  label: 'Seeding',  dataKey: 'seeding_size',  color: 'var(--green)',  fmt: formatBytes },
-    { key: 'orphaned', label: 'Orphaned', dataKey: 'orphaned_size', color: 'var(--yellow)', fmt: formatBytes },
-    { key: 'yield',    label: 'Yield',    dataKey: 'yield_pct',     color: 'var(--purple)', fmt: v => v != null ? v.toFixed(3) + '%' : '—' },
+    { key: 'seeding',      label: 'Seeding',      dataKey: 'seeding_size',      color: 'var(--green)',  fmt: formatBytes },
+    { key: 'upload',       label: 'Uploaded',     dataKey: 'uploaded',          color: 'var(--blue)',   fmt: formatBytes },
+    { key: 'yield',        label: 'Yield',        dataKey: 'yield_pct',         color: 'var(--accent)', fmt: v => v != null ? v.toFixed(3) + '%' : '—' },
+    { key: 'orphaned',     label: 'Orphaned',     dataKey: 'orphaned_size',     color: 'var(--yellow)', fmt: formatBytes },
+    { key: 'not_imported', label: 'Not Imported', dataKey: 'not_imported_size', color: 'var(--red)',    fmt: formatBytes },
   ]
   const activeTab = CHART_TABS.find(t => t.key === chartTab) || CHART_TABS[0]
 
@@ -519,6 +520,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                     <YAxis
                       tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
                       tickLine={false} axisLine={false}
+                      domain={chartTab === 'seeding' ? ['auto', 'auto'] : [0, 'auto']}
                       tickFormatter={chartTab === 'yield'
                         ? v => v != null ? v.toFixed(2) + '%' : ''
                         : v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
