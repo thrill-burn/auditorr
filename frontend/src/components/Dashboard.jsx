@@ -301,27 +301,29 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
         })}
       </div>
 
-      {/* Tooltip */}
-      {hovered !== null && segments[hovered] && segments[hovered].size > 0 && (() => {
-        const seg = segments[hovered]
-        const color = seedColor(seg.count)
-        const pct = ((seg.size / totalSize) * 100).toFixed(1)
-        return (
-          <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 6, display: 'inline-flex', gap: 10, alignItems: 'center' }}>
-            <div style={{ width: 10, height: 10, borderRadius: 3, background: color, flexShrink: 0 }} />
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>
-              {seg.count === 0 ? 'Not Seeded (0×)' : `${seg.count}× seeded`}
-            </span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-              {formatBytes(seg.size)} · {pct}%
-            </span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>click to filter →</span>
-          </div>
-        )
-      })()}
+      {/* Hover info strip — fixed height so legend never shifts */}
+      <div style={{ height: 28, marginTop: 8, display: 'flex', alignItems: 'center' }}>
+        {hovered !== null && segments[hovered]?.size > 0 && (() => {
+          const seg = segments[hovered]
+          const color = seedColor(seg.count)
+          const pct = ((seg.size / totalSize) * 100).toFixed(1)
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>
+                {seg.count === 0 ? 'Not Seeded (0×)' : `${seg.count}× seeded`}
+              </span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                {formatBytes(seg.size)} · {pct}%
+              </span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>click to filter →</span>
+            </div>
+          )
+        })()}
+      </div>
 
       {/* Legend */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: hovered !== null ? 8 : 12 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px' }}>
         {segments.map((seg, i) => {
           if (seg.size === 0) return null
           const color = seedColor(seg.count)
@@ -865,7 +867,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
           {/* Cross-seed effectiveness */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 14 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Cross-Seed Effectiveness</div>
