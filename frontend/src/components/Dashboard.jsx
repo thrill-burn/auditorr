@@ -393,23 +393,54 @@ function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
 // trackerStats = { seeding_count, seeding_size, orphaned_count, orphaned_size,
 //                  not_imported_count, not_imported_size } — pre-computed by backend
 export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate, onClose }) {
-  const seedingSize     = trackerStats?.seeding_size      ?? 0
-  const seedingCount    = trackerStats?.seeding_count     ?? 0
-  const orphanedSize    = trackerStats?.orphaned_size     ?? 0
-  const orphanedCount   = trackerStats?.orphaned_count    ?? 0
-  const notImportedSize = trackerStats?.not_imported_size  ?? 0
+  const [chartTab, setChartTab] = useState('upload')
+
+  const seedingSize      = trackerStats?.seeding_size       ?? 0
+  const seedingCount     = trackerStats?.seeding_count      ?? 0
+  const orphanedSize     = trackerStats?.orphaned_size      ?? 0
+  const orphanedCount    = trackerStats?.orphaned_count     ?? 0
+  const notImportedSize  = trackerStats?.not_imported_size  ?? 0
   const notImportedCount = trackerStats?.not_imported_count ?? 0
 
-  const yieldData = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
-  const yieldPct  = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(2) + '%' : '—'
+  const yieldData     = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
+  const yieldPct      = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(2) + '%' : '—'
   const uploadedBytes = yieldData?.uploaded ?? null
 
-  const uploadTrendData = uploadStats?.daily_uploads?.map(day => ({
-    date: day.date.slice(5),
-    uploaded: day.by_tracker?.[trackerName] || 0,
-  }))
-  const hasUploadData = uploadTrendData?.some(d => d.uploaded > 0)
-  const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}`
+  // Merge daily_uploads (delta bytes) + daily_tracker_stats (point-in-time) by date
+  const trendData = (() => {
+    if (!uploadStats) return []
+    const byDate = {}
+    for (const day of (uploadStats.daily_uploads || [])) {
+      const d = day.date
+      if (!byDate[d]) byDate[d] = { date: d.slice(5) }
+      byDate[d].uploaded = day.by_tracker?.[trackerName] || 0
+    }
+    for (const day of (uploadStats.daily_tracker_stats || [])) {
+      const s = day.by_tracker?.[trackerName]
+      if (!s) continue
+      const d = day.date
+      if (!byDate[d]) byDate[d] = { date: d.slice(5) }
+      byDate[d].seeding_size      = s.seeding_size || 0
+      byDate[d].orphaned_size     = s.orphaned_size || 0
+      byDate[d].not_imported_size = s.not_imported_size || 0
+      const uploaded = byDate[d].uploaded || 0
+      const seeding  = s.seeding_size || 0
+      byDate[d].yield_pct = seeding > 0 ? (uploaded / seeding) * 100 : null
+    }
+    return Object.entries(byDate)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([, v]) => v)
+  })()
+  const hasTrendData = trendData.some(d => (d.uploaded || 0) > 0 || (d.seeding_size || 0) > 0)
+  const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}-${chartTab}`
+
+  const CHART_TABS = [
+    { key: 'upload',   label: 'Upload',   dataKey: 'uploaded',      color: 'var(--accent)', fmt: formatBytes },
+    { key: 'seeding',  label: 'Seeding',  dataKey: 'seeding_size',  color: 'var(--green)',  fmt: formatBytes },
+    { key: 'orphaned', label: 'Orphaned', dataKey: 'orphaned_size', color: 'var(--yellow)', fmt: formatBytes },
+    { key: 'yield',    label: 'Yield',    dataKey: 'yield_pct',     color: 'var(--purple)', fmt: v => v != null ? v.toFixed(3) + '%' : '—' },
+  ]
+  const activeTab = CHART_TABS.find(t => t.key === chartTab) || CHART_TABS[0]
 
   const statBoxes = [
     { label: 'Seeding',      value: formatBytes(seedingSize),                                          sub: `${seedingCount} files`,                          color: 'var(--green)'  },
@@ -457,18 +488,30 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
           ))}
         </div>
 
-        {/* Upload trend */}
+        {/* Trend charts */}
         {uploadStats && (
-          hasUploadData ? (
+          hasTrendData ? (
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>Upload Trend</div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>Trend</div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {CHART_TABS.map(t => (
+                    <button key={t.key} onClick={() => setChartTab(t.key)} style={{
+                      background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+                      color: chartTab === t.key ? t.color : 'var(--text-dim)',
+                      fontWeight: chartTab === t.key ? 700 : 400,
+                    }}>{t.label}</button>
+                  ))}
+                </div>
+              </div>
               <div style={{ height: 160 }}>
                 <ResponsiveContainer width="100%" height={160}>
-                  <AreaChart data={uploadTrendData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                  <AreaChart data={trendData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                     <defs>
                       <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.25} />
-                        <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
+                        <stop offset="0%" stopColor={activeTab.color} stopOpacity={0.25} />
+                        <stop offset="100%" stopColor={activeTab.color} stopOpacity={0.02} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
@@ -476,21 +519,35 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                     <YAxis
                       tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
                       tickLine={false} axisLine={false}
-                      tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                      tickFormatter={chartTab === 'yield'
+                        ? v => v != null ? v.toFixed(2) + '%' : ''
+                        : v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
                     />
                     <Tooltip
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null
+                        const val = payload[0].value
                         return (
                           <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(payload[0].value)}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>
+                              {val != null ? activeTab.fmt(val) : '—'}
+                            </div>
                           </div>
                         )
                       }}
-                      cursor={{ stroke: 'var(--accent)', strokeWidth: 1, strokeOpacity: 0.4, strokeDasharray: '3 3' }}
+                      cursor={{ stroke: activeTab.color, strokeWidth: 1, strokeOpacity: 0.4, strokeDasharray: '3 3' }}
                     />
-                    <Area type="linear" dataKey="uploaded" stroke="var(--accent)" strokeWidth={1.5} fill={`url(#${gradId})`} dot={false} activeDot={{ r: 4, fill: 'var(--accent)', stroke: 'var(--bg)', strokeWidth: 2 }} />
+                    <Area
+                      type="linear"
+                      dataKey={activeTab.dataKey}
+                      stroke={activeTab.color}
+                      strokeWidth={1.5}
+                      fill={`url(#${gradId})`}
+                      dot={false}
+                      connectNulls={false}
+                      activeDot={{ r: 4, fill: activeTab.color, stroke: 'var(--bg)', strokeWidth: 2 }}
+                    />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>

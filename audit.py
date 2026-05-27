@@ -341,6 +341,31 @@ def compute_upload_stats(days=30):
         for date_str, by_tracker in sorted(daily_by_tracker.items())
     ]
 
+    # Per-day point-in-time stats: seeding_size, orphaned_size, not_imported_size
+    # Use the last snapshot of each day (all rows, not just delta pairs)
+    daily_point_by_tracker = {}
+    for row in rows:
+        try:
+            t = datetime.fromisoformat(row['taken_at'])
+        except ValueError:
+            continue
+        date_str = t.strftime('%Y-%m-%d')
+        day_stats = {}
+        for host, snap_data in row['snapshot'].items():
+            if host == 'Unknown' or host.startswith('_'):
+                continue
+            day_stats[host] = {
+                'seeding_size':      snap_data.get('seeding_size', 0),
+                'orphaned_size':     snap_data.get('orphaned_size', 0),
+                'not_imported_size': snap_data.get('not_imported_size', 0),
+            }
+        daily_point_by_tracker[date_str] = day_stats
+
+    daily_tracker_stats = [
+        {'date': date_str, 'by_tracker': stats}
+        for date_str, stats in sorted(daily_point_by_tracker.items())
+    ]
+
     # Total uploaded over the period
     total_uploaded = sum(d['total'] for d in daily_uploads)
 
@@ -382,12 +407,13 @@ def compute_upload_stats(days=30):
     library_yield = (total_uploaded / total_seeding_size) if total_seeding_size > 0 else None
 
     return {
-        "period_days":       period_days,
-        "library_yield":     round(library_yield, 4) if library_yield is not None else None,
-        "total_uploaded":    total_uploaded,
-        "total_seeding_size": total_seeding_size,
-        "daily_uploads":     daily_uploads,
-        "tracker_yields":    tracker_yields,
+        "period_days":         period_days,
+        "library_yield":       round(library_yield, 4) if library_yield is not None else None,
+        "total_uploaded":      total_uploaded,
+        "total_seeding_size":  total_seeding_size,
+        "daily_uploads":       daily_uploads,
+        "daily_tracker_stats": daily_tracker_stats,
+        "tracker_yields":      tracker_yields,
     }
 
 
@@ -576,8 +602,18 @@ def run_audit_process(trigger=None):
             "not_imported_paths": not_imported_paths,
         }
         # Save upload snapshot — only on successful audits
+        # Augment with per-tracker file health stats so daily seeding/orphaned trends
+        # can be plotted from the same snapshot rows.
         try:
-            db_save_upload_snapshot(tracker_snapshot, source=cfg.get('TORRENT_SOURCE', 'qbit'))
+            aug = {k: (dict(v) if isinstance(v, dict) else v) for k, v in tracker_snapshot.items()}
+            for tracker, fstats in tracker_file_stats.items():
+                if tracker not in aug:
+                    aug[tracker] = {'uploaded': 0, 'seeding_size': 0}
+                aug[tracker]['orphaned_size']      = fstats['orphaned_size']
+                aug[tracker]['orphaned_count']     = fstats['orphaned_count']
+                aug[tracker]['not_imported_size']  = fstats['not_imported_size']
+                aug[tracker]['not_imported_count'] = fstats['not_imported_count']
+            db_save_upload_snapshot(aug, source=cfg.get('TORRENT_SOURCE', 'qbit'))
         except Exception as e:
             log.warning(f"Could not save upload snapshot: {e}")
 
