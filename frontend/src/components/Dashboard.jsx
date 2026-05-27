@@ -446,7 +446,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
   const statBoxes = [
     { label: 'Seeding',      tabKey: 'seeding',      value: formatBytes(seedingSize),                                  sub: `${seedingCount} files`,                                                   color: 'var(--green)'  },
     { label: 'Uploaded',     tabKey: 'upload',        value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—', sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet',         color: 'var(--blue)'   },
-    { label: 'Yield',        tabKey: 'yield',         value: yieldPct,                                                  sub: 'uploaded / seeding',                                                      color: 'var(--accent)' },
+    { label: 'Yield',        tabKey: 'yield',         value: yieldPct,                                                  sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet',         color: 'var(--accent)' },
     { label: 'Orphaned',     tabKey: 'orphaned',      value: formatBytes(orphanedSize),                                 sub: `${orphanedCount} files`,                                                  color: 'var(--yellow)' },
     { label: 'Not Imported', tabKey: 'not_imported',  value: formatBytes(notImportedSize),                              sub: `${notImportedCount} files`,                                               color: 'var(--red)'    },
   ]
