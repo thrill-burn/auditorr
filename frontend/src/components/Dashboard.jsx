@@ -105,8 +105,8 @@ function HealthDial({ score, status, smartTrend, color }) {
             stroke="var(--bg)" strokeWidth="2.5" />
         ))}
         <text x={CX} y={CY - 6} textAnchor="middle" fontFamily="var(--mono)" fontSize="38" fontWeight="700" fill={color}>{score}</text>
-        <text x={CX} y={CY + 12} textAnchor="middle" fontFamily="var(--mono)" fontSize="10" fill="var(--text-dim)">/ 100</text>
-        <text x={CX} y={CY + 28} textAnchor="middle" fontFamily="var(--mono)" fontSize="9" fontWeight="600" fill={color} letterSpacing="1.5">{status?.toUpperCase()}</text>
+        <text x={CX} y={CY + 12} textAnchor="middle" fontFamily="var(--mono)" fontSize="11" fill="var(--text-dim)">/ 100</text>
+        <text x={CX} y={CY + 28} textAnchor="middle" fontFamily="var(--mono)" fontSize="11" fontWeight="600" fill={color} letterSpacing="1.5">{status?.toUpperCase()}</text>
       </svg>
       {delta != null && (
         <div style={{
@@ -128,11 +128,11 @@ function GrafanaTooltip({ active, payload, label, color }) {
   if (!active || !payload?.length) return null
   return (
     <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 130 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
         <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{payload[0].value}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>/ 100</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/ 100</span>
       </div>
     </div>
   )
@@ -150,7 +150,7 @@ function UploadActivityTooltip({ active, payload, label }) {
   const total = payload.reduce((s, p) => s + (p.value || 0), 0)
   return (
     <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 160 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
       {items.map(p => (
         <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
           <div style={{ width: 8, height: 8, borderRadius: 2, background: p.fill, flexShrink: 0 }} />
@@ -160,7 +160,7 @@ function UploadActivityTooltip({ active, payload, label }) {
       ))}
       {items.length > 1 && (
         <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Total</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Total</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
         </div>
       )}
@@ -215,12 +215,12 @@ function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigat
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color, borderRadius: '12px 12px 0 0' }} />
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 4 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>{label}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color, background: color + '18', border: '1px solid ' + color + '35', borderRadius: 4, padding: '1px 6px' }}>{pts}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>{label}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, background: color + '18', border: '1px solid ' + color + '35', borderRadius: 4, padding: '1px 6px' }}>{pts}</span>
       </div>
       <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, marginTop: 10 }}>{value}</span>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
-      <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
+      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto', paddingTop: 14 }}>
         {enrichedRows.map((row, rowIdx) => {
           const visibleActions = row.filter(a => !a.hidden)
@@ -315,7 +315,7 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
               {formatBytes(seg.size)} · {pct}%
             </span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--accent)' }}>click to filter →</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>click to filter →</span>
           </div>
         )
       })()}
@@ -333,7 +333,7 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
               style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
                 {seg.count === 0 ? '0× (orphaned)' : `${seg.count}×`} — {pct}%
               </span>
             </button>
@@ -376,7 +376,7 @@ function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{t.name}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>{t.count} files · {formatBytes(t.size)}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>{t.count} files · {formatBytes(t.size)}</span>
               </div>
               <div style={{ height: 4, background: 'var(--surface3)', borderRadius: 99, overflow: 'hidden' }}>
                 <div style={{ width: barPct + '%', height: '100%', background: colors[i], borderRadius: 99 }} />
@@ -493,7 +493,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                   cursor: 'pointer', transition: 'border-color 0.12s, background 0.12s',
                 }}
               >
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: active ? s.color : 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: active ? s.color : 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
               </div>
@@ -505,7 +505,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
         {uploadStats && (
           hasTrendData ? (
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>
                 {activeTab.label} Trend
               </div>
               <div style={{ height: 160 }}>
@@ -518,9 +518,9 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
                     <YAxis
-                      tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                      tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
                       tickLine={false} axisLine={false}
                       domain={chartTab === 'seeding' ? ['auto', 'auto'] : [0, 'auto']}
                       tickFormatter={chartTab === 'yield'
@@ -533,7 +533,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                         const val = payload[0].value
                         return (
                           <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>
                               {val != null ? activeTab.fmt(val) : '—'}
                             </div>
@@ -823,16 +823,16 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       {/* Row 1: dial + chart */}
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', alignSelf: 'flex-start' }}>Library Health</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', alignSelf: 'flex-start' }}>Library Health</span>
           <HealthDial score={score} status={status} smartTrend={smartTrend} color={c} />
         </div>
 
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 14px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase' }}>Score History</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase' }}>Score History</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>avg_score</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>avg_score</span>
             </div>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -845,8 +845,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-              <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => v.slice(5)} />
-              <YAxis domain={[minScore, maxScore]} tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickCount={5} tickFormatter={v => Math.round(v)} />
+              <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => v.slice(5)} />
+              <YAxis domain={[minScore, maxScore]} tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickCount={5} tickFormatter={v => Math.round(v)} />
               <Tooltip content={<GrafanaTooltip color={c} />} cursor={{ stroke: c + '40', strokeWidth: 1, strokeDasharray: '3 3' }} />
               <Area type="linear" dataKey="avg_score" stroke={c} strokeWidth={1.5} fill="url(#grafanaGrad)" dot={false} activeDot={{ r: 4, fill: c, stroke: 'var(--bg)', strokeWidth: 2 }} />
             </AreaChart>
@@ -868,12 +868,12 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Cross-Seed Effectiveness</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Cross-Seed Effectiveness</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--blue)', lineHeight: 1 }}>{csMultDisplay}×</span>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>avg seed multiplier</span>
                 </div>
-                <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6, maxWidth: 340 }}>
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6, maxWidth: 340 }}>
                   Weighted average of how many trackers each byte of media is seeded on. 1.0× = all files seeded once. Higher is better.
                 </p>
               </div>
@@ -881,7 +881,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
             {/* Distribution bar */}
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 }}>Disk Space by Seed Count</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 }}>Disk Space by Seed Count</div>
               <CrossSeedBar segments={cs.segments} totalSize={cs.total_size} onNavigate={onNavigate} />
             </div>
           </div>
@@ -889,8 +889,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           {/* Tracker leaderboard */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Top Trackers by Disk Space</div>
-              <p style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Top Trackers by Disk Space</div>
+              <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
             </div>
             <TrackerLeaderboard trackerStats={filteredTrackerStats} onTrackerDetail={setTrackerDetail} />
 
@@ -902,7 +902,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                     key={t.name}
                     onClick={() => setTrackerDetail(t.name)}
                     style={{
-                      fontFamily: 'var(--mono)', fontSize: 10, padding: '3px 8px',
+                      fontFamily: 'var(--mono)', fontSize: 11, padding: '3px 8px',
                       borderRadius: 99, border: '1px solid var(--border2)',
                       background: 'transparent', color: 'var(--text-dim)',
                       cursor: 'pointer', transition: 'all 0.12s',
@@ -927,7 +927,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           {/* Upload Activity */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Upload Activity</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Upload Activity</div>
             </div>
             <div style={{ height: 220 }}>
               {effectiveTrackers.length === 0
@@ -936,9 +936,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
                       <YAxis
-                        tick={{ fontFamily: 'var(--mono)', fontSize: 9, fill: 'var(--text-dim)' }}
+                        tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
                         tickLine={false} axisLine={false}
                         tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
                       />
@@ -962,14 +962,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
                   {yieldPanelTab === 'upload' ? 'Upload by Tracker' : 'Library Yield'}
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
                   {['upload', 'yield'].map(tab => (
                     <button key={tab} onClick={() => setYieldPanelTab(tab)} style={{
                       background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                      fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1, textTransform: 'uppercase',
+                      fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
                       color: yieldPanelTab === tab ? 'var(--accent)' : 'var(--text-dim)',
                       fontWeight: yieldPanelTab === tab ? 700 : 400,
                     }}>{tab}</button>
@@ -983,7 +983,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                       {formatBytes(yieldRows.reduce((s, t) => s + t.uploaded, 0))}
                     </span>
                   </div>
-                  <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
                     total uploaded · {uploadStats.period_days} day window
                   </p>
                 </>
@@ -1002,7 +1002,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                       over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
                     </span>
                   </div>
-                  <p style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
                     Upload volume relative to seeding size. Higher yield = your disk space is earning more.
                   </p>
                 </>
@@ -1020,7 +1020,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <th key={h} style={{
                                 textAlign: h === 'Tracker' ? 'left' : 'right',
                                 padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                                letterSpacing: 1, fontSize: 11, textTransform: 'uppercase',
                                 borderBottom: '1px solid var(--border)',
                               }}>{h}</th>
                             ))}
@@ -1032,7 +1032,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <td style={{ padding: '5px 8px', maxWidth: 120 }}>
                                 <button
                                   onClick={() => setTrackerDetail(t.tracker)}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
                                 >{t.tracker}</button>
                               </td>
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
@@ -1055,7 +1055,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <th key={h} style={{
                                 textAlign: h === 'Tracker' ? 'left' : 'right',
                                 padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                letterSpacing: 1, fontSize: 9, textTransform: 'uppercase',
+                                letterSpacing: 1, fontSize: 11, textTransform: 'uppercase',
                                 borderBottom: '1px solid var(--border)',
                               }}>{h}</th>
                             ))}
@@ -1067,7 +1067,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <td style={{ padding: '5px 8px', maxWidth: 120 }}>
                                 <button
                                   onClick={() => setTrackerDetail(t.tracker)}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 10, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
                                 >{t.tracker}</button>
                               </td>
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>

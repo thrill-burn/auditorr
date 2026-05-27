@@ -20,6 +20,13 @@
   --sans:      'DM Sans', sans-serif;
   --r:         6px;
   --rl:        12px;
+  /* Type scale */
+  --font-xs:   9px;   /* SVG chart tick annotations only */
+  --font-sm:   11px;  /* labels, badges, column headers, secondary body */
+  --font-base: 12px;  /* primary body, inputs */
+  --font-md:   13px;  /* card titles, prominent values */
+  --font-lg:   15px;  /* modal headers, tracker card titles */
+  --font-xl:   20px;  /* page headers */
 }
 
 [data-theme="light"] {

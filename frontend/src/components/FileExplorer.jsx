@@ -37,7 +37,7 @@ function detectMediaType(filePath) {
 function Tag({ color, children }) {
   return (
     <span style={{
-      padding: '1px 7px', borderRadius: 99, fontSize: 10, fontWeight: 600,
+      padding: '1px 7px', borderRadius: 99, fontSize: 11, fontWeight: 600,
       fontFamily: 'var(--mono)', background: color + '22', color,
       border: '1px solid ' + color + '44', whiteSpace: 'nowrap', flexShrink: 0,
     }}>{children}</span>
@@ -164,7 +164,7 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
 
         {linkedPaths?.length > 0 && (
           <div style={{ marginBottom: duplicatePaths?.length > 0 ? 16 : 0 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>
               Hardlinks ({linkedPaths.length})
             </div>
             {linkedPaths.map((p, i) => (
@@ -175,7 +175,7 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
 
         {duplicatePaths?.length > 0 && (
           <div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--purple)', marginBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--purple)', marginBottom: 6 }}>
               Duplicates ({duplicatePaths.length})
             </div>
             {duplicatePaths.map((p, i) => (
@@ -290,7 +290,7 @@ function FolderRow({ name, node, depth, openRef, onToggle, path }) {
         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
       </svg>
       <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(node.size)}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(node.size)}</span>
     </div>
   )
 }
@@ -376,7 +376,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
             onClick={handleSonarrSearch}
             style={{
               background: 'var(--blue)18', border: '1px solid var(--blue)44', borderRadius: 99,
-              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
               padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
@@ -391,7 +391,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
             onClick={handleRadarrSearch}
             style={{
               background: 'var(--yellow)18', border: '1px solid var(--yellow)44', borderRadius: 99,
-              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
               padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
@@ -400,11 +400,11 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
             {radarrState === 'loading' ? 'Opening…' : radarrState === 'success' ? '✓ Opened' : radarrState === 'error' ? '✗ Failed' : 'Open in Radarr'}
           </button>
         )}
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
         {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
         {notImported && <Tag color="var(--red)">not imported</Tag>}
         <Tag color={isOrphan ? 'var(--yellow)' : node.status === 'Seeding' ? 'var(--green)' : 'var(--blue)'}>{(node.status||'').toLowerCase()}</Tag>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
           {(node.trackers||[]).join(' · ')}
         </span>
         {showSourceLink && (
@@ -419,7 +419,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
             }}
             style={{
               background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,
-              color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10,
+              color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11,
               padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'border-color 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
@@ -535,7 +535,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           {showSearchButtons && showSonarr && (
             <button title="Search in Sonarr" onClick={handleSonarrSearch} style={{
               background: 'var(--blue)18', border: '1px solid var(--blue)44', borderRadius: 99,
-              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
               padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
@@ -546,7 +546,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           {showSearchButtons && showRadarr && (
             <button title="Search in Radarr" onClick={handleRadarrSearch} style={{
               background: 'var(--yellow)18', border: '1px solid var(--yellow)44', borderRadius: 99,
-              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
               padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
@@ -554,11 +554,11 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
               {radarrState === 'loading' ? 'Opening…' : radarrState === 'success' ? '✓ Opened' : radarrState === 'error' ? '✗ Failed' : 'Open in Radarr'}
             </button>
           )}
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
           {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
           {notImported && <Tag color="var(--red)">not imported</Tag>}
           <Tag color={isOrphan ? 'var(--yellow)' : node.status === 'Seeding' ? 'var(--green)' : 'var(--blue)'}>{(node.status||'').toLowerCase()}</Tag>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
             {(node.trackers||[]).join(' · ')}
           </span>
           {showSourceLink && (
@@ -573,7 +573,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
               }}
               style={{
                 background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,
-                color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10,
+                color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11,
                 padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'border-color 0.1s',
               }}
               onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
@@ -605,7 +605,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
         </div>
       </div>
       {/* Line 2: directory */}
-      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {dirname}
       </div>
     </div>
@@ -679,10 +679,10 @@ function SizeRangeFilter({ minVal, minUnit, maxVal, maxUnit, onMinVal, onMinUnit
   const hasValue = minVal || maxVal
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
       <SizeInput value={minVal} onChange={onMinVal} placeholder="min" />
       <UnitSelect value={minUnit} onChange={onMinUnit} />
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>–</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>–</span>
       <SizeInput value={maxVal} onChange={onMaxVal} placeholder="max" />
       <UnitSelect value={maxUnit} onChange={onMaxUnit} />
       {hasValue && (
@@ -986,7 +986,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
           {isFlat && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Sort:</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Sort:</span>
               <button
                 onClick={() => setSortBy('name')}
                 style={{
@@ -1050,7 +1050,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           />
 
           {(nameQuery || hasSizeFilter) && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--accent)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>
               {filtered.length.toLocaleString()} match{filtered.length !== 1 ? 'es' : ''}
             </span>
           )}

@@ -25,7 +25,7 @@ const AuditRunRow = ({ index, style, data }) => {
     }}>
       <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{timeStr}</div>
       <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)' }}>{run.trigger}</div>
-      <div style={{ padding: '0 12px', fontSize: 10, color: 'var(--text-dim)' }}>{run.source || 'qbit'}</div>
+      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)' }}>{run.source || 'qbit'}</div>
       <div style={{ padding: '0 12px', fontSize: 11, color: isOk ? 'var(--text)' : 'var(--text-dim)', fontWeight: isOk ? 600 : 400 }}>
         {isOk && run.health_score != null ? run.health_score : '—'}
       </div>
@@ -34,7 +34,7 @@ const AuditRunRow = ({ index, style, data }) => {
       </div>
       <div style={{ padding: '0 12px' }}>
         <span style={{
-          padding: '2px 8px', borderRadius: 99, fontSize: 10,
+          padding: '2px 8px', borderRadius: 99, fontSize: 11,
           background: isOk ? 'var(--green)18' : 'var(--red)18',
           color: isOk ? 'var(--green)' : 'var(--red)',
           border: `1px solid ${isOk ? 'var(--green)' : 'var(--red)'}35`,
@@ -56,7 +56,7 @@ function DataBrowser({ onSelectMedia, onSelectTorrents }) {
   const btnStyle = {
     padding: '2px 8px', borderRadius: 'var(--r)', border: '1px solid var(--border2)',
     background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)',
-    fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap',
+    fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap',
   }
 
   if (!result) return (
@@ -132,7 +132,7 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
 function Card({ title, children }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', padding: 24, marginBottom: 16 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
       {children}
     </div>
   )
@@ -395,13 +395,13 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             </div>
             {isQui && sourceInfo.skipped?.length > 0 && (
               <div style={{ marginTop: 6 }}>
-                <button onClick={() => setQuiSkippedOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+                <button onClick={() => setQuiSkippedOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
                   {quiSkippedOpen ? '▼' : '▶'} {sourceInfo.skipped.length} skipped instance{sourceInfo.skipped.length !== 1 ? 's' : ''}
                 </button>
                 {quiSkippedOpen && (
                   <div style={{ marginTop: 4, paddingLeft: 10, borderLeft: '2px solid var(--border2)' }}>
                     {sourceInfo.skipped.map((inst, i) => (
-                      <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                      <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6 }}>
                         {inst.name || inst.id}: {inst._skip_reason}
                       </div>
                     ))}
@@ -599,7 +599,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             const v = parseFloat(pct)
             if (!v || isNaN(v)) return null
             return (
-              <div key={label} style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '6px 10px' }}>
+              <div key={label} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '6px 10px' }}>
                 {label}: all 10 pts lost at <span style={{ color: 'var(--accent)' }}>{v}%</span> of library
               </div>
             )
@@ -700,7 +700,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
             }}>
               {['Time', 'Trigger', 'Source', 'Score', 'Duration', 'Status'].map(h => (
-                <div key={h} style={{ padding: '8px 12px', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 600, fontFamily: 'var(--mono)' }}>{h}</div>
+                <div key={h} style={{ padding: '8px 12px', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 600, fontFamily: 'var(--mono)' }}>{h}</div>
               ))}
             </div>
             <FixedSizeList
@@ -718,7 +718,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, borderTop: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
             Last audit: {lastAuditTime}
           </span>
           <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>

@@ -80,15 +80,15 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
         borderBottom: showBody ? '1px solid var(--border)' : 'none',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
             Changes since last scan
           </span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
             {fmtDate(prevRanAt)} → {fmtDate(currRanAt)}
           </span>
           {scoreDelta != null && (
             <span style={{
-              fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+              fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
               color: scoreDelta >= 0 ? 'var(--green)' : 'var(--red)',
               background: (scoreDelta >= 0 ? 'var(--green)' : 'var(--red)') + '15',
               border: `1px solid ${(scoreDelta >= 0 ? 'var(--green)' : 'var(--red)')}30`,
@@ -98,7 +98,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
             </span>
           )}
           {hasItems && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
               {allRows.length} {allRows.length === 1 ? 'change' : 'changes'}
             </span>
           )}
@@ -106,7 +106,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button onClick={handleCollapse} style={{
             background: 'none', border: 'none', color: 'var(--text-dim)',
-            fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer', lineHeight: 1, padding: '2px 5px',
+            fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', lineHeight: 1, padding: '2px 5px',
           }}>{collapsed ? '▶' : '▼'}</button>
           <button onClick={handleDismiss} style={{
             background: 'none', border: 'none', color: 'var(--text-dim)',
@@ -164,9 +164,9 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
             borderBottom: '1px solid var(--border)',
             background: 'var(--surface2)',
           }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Type</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Path</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', textAlign: 'right' }}>Size</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Type</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Path</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', textAlign: 'right' }}>Size</span>
           </div>
 
           {/* Rows */}
@@ -186,7 +186,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
                 {/* Type tag */}
                 <div>
                   <span style={{
-                    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+                    fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
                     color: row.cat.color,
                     background: row.cat.color + '18',
                     border: `1px solid ${row.cat.color}30`,
@@ -223,7 +223,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
                 {/* Size */}
                 <div style={{ textAlign: 'right' }}>
                   {row.size != null && (
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
                       {formatBytes(row.size)}
                     </span>
                   )}

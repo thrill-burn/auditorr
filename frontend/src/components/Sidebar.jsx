@@ -155,9 +155,9 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               background: scoreC + '10', border: '1px solid ' + scoreC + '25',
               display: 'flex', flexDirection: 'column', gap: 2,
             }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 8, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Health</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Health</span>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: scoreC, lineHeight: 1 }}>
-                {score}<span style={{ fontSize: 9, color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
+                {score}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
               </span>
             </div>
 
@@ -168,9 +168,9 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 background: 'var(--blue)10', border: '1px solid var(--blue)25',
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 8, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Cross-seed</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Cross-seed</span>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--blue)', lineHeight: 1 }}>
-                  {csDisplay}<span style={{ fontSize: 9, color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
+                  {csDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
                 </span>
               </div>
             )}
@@ -181,33 +181,33 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
         {isScanning ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--accent)' }}>Scanning…</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--accent)' }}>{progress}%</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>Scanning…</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>{progress}%</span>
             </div>
             <div style={{ height: 3, background: 'var(--border2)', borderRadius: 99, overflow: 'hidden' }}>
               <div style={{ width: progress + '%', height: '100%', background: 'var(--accent)', borderRadius: 99, transition: 'width 0.4s ease' }} />
             </div>
             {statusMessage && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
             )}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {lastScanStatus === 'error' && statusMessage && (
               <div style={{ padding: '5px 8px', borderRadius: 5, background: 'var(--red)12', border: '1px solid var(--red)30', marginBottom: 2 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
                   ✗ {statusMessage}
                 </span>
               </div>
             )}
             {lastAuditTime !== 'Never' && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-faint)' }}>last run {lastAuditTime}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>last run {lastAuditTime}</span>
             )}
             {nextScanIn != null && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--yellow)' }}>⏱ next in {nextScanIn}s</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--yellow)' }}>⏱ next in {nextScanIn}s</span>
             )}
             {triggerLabel && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)' }}>{triggerLabel}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{triggerLabel}</span>
             )}
           </div>
         )}

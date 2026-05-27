@@ -61,14 +61,20 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 
 ---
 
-## v1.5 — Shipped ✅
+## v1.5 — In Progress 🚧
 
-### v1.5.0 — Large-library memory optimizations
+### v1.5.0 — Large-library memory optimizations & tracker analytics
 
 - **Early release of scan intermediates** — `torrent_records`, `media_records`, `inode_map`, and `duplicate_map` are explicitly deleted after `_assemble_records()` so Python's GC can collect them before subsequent allocations. For a 500k-file library these four structures together can reach 600–700 MB.
 - **Early release of raw qBittorrent objects** — `tracker_map` and `files_map` are released immediately after the normalized `file_map` is built in `sources/_qbit.py`.
 - **Lazy file endpoint** — `media_files` and `torrent_files` removed from `/api/results` and the `latest_results` row. A new `/api/files?tab=media|torrents` endpoint serves them on demand. The frontend fetches file lists only when navigating to File Explorer or Trackers; Dashboard, Sidebar, and Trackers derive display values from pre-computed summary stats in `/api/results`.
 - **`audit_snapshots` no longer stores file lists** — snapshots now contain only dashboard stats (a few KB per row). Diff computation uses in-memory file data before overwriting `file_results`. `/api/changes` reads from `change_log`. A one-time startup migration strips file lists from existing rows via SQLite `json_remove`.
+- **Per-tracker trend charts** — TrackerCard has 5 chart tabs: Seeding, Uploaded, Yield (daily uploaded ÷ seeding %), Orphaned, Not Imported. Click any stat box to switch the chart; active box gets a colored outline. Seeding chart auto-scales the y-axis so small changes are visible.
+- **Daily health stats in upload snapshots** — each audit augments the upload snapshot with per-tracker `orphaned_size`, `orphaned_count`, `not_imported_size`, `not_imported_count` from the file walk. `compute_upload_stats` returns a new `daily_tracker_stats` field: per-day point-in-time stats per tracker (last snapshot of each day).
+- **Trackers date range** — Trackers page owns independent `dateFrom`/`dateTo` state, initialized from the Dashboard's current lookback on first mount, then fully decoupled. FilterBar renders date pickers when in date-range mode and preset buttons when in lookback mode.
+- **`/api/upload_stats` date range params** — endpoint now accepts `from=` and `to=` ISO date strings alongside the existing `days=` param. `db_get_upload_snapshots` supports the same.
+- **Change Log date range filter** — replaced the preset day buttons (7d / 30d / 90d) with a from/to date range picker.
+- **Custom DatePicker component** — replaces native `<input type="date">` across the app. Calendar popover styled with CSS variables; shows month navigation, today highlight, selected day accent fill, and a Clear button. Used identically in FilterBar and ChangeLog.
 
 ---
 

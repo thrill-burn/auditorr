@@ -81,7 +81,7 @@ function ChangeRow({ index, style, data }) {
       <div>
         {row.trigger && (
           <span style={{
-            fontFamily: 'var(--mono)', fontSize: 10,
+            fontFamily: 'var(--mono)', fontSize: 11,
             color: 'var(--text-dim)', background: 'var(--surface2)',
             border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 6px',
             whiteSpace: 'nowrap',
@@ -93,7 +93,7 @@ function ChangeRow({ index, style, data }) {
       {/* Type */}
       <div>
         <span style={{
-          fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+          fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
           color: row.cat.color, background: row.cat.color + '18',
           border: `1px solid ${row.cat.color}30`,
           borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap',
@@ -111,7 +111,7 @@ function ChangeRow({ index, style, data }) {
       {/* Size */}
       <div style={{ textAlign: 'right' }}>
         {row.size != null && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
             {formatBytes(row.size)}
           </span>
         )}
@@ -208,7 +208,7 @@ export default function ChangeLog() {
 
       {/* Page header */}
       <div style={{ padding: '16px 0 14px' }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>
           Change Log
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -265,7 +265,7 @@ export default function ChangeLog() {
         </div>
         {/* Row 2: date range + search + export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '4px 0 8px' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Date:</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Date:</span>
           <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" />
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>—</span>
           <DatePicker value={dateTo} onChange={setDateTo} placeholder="To" />
@@ -358,7 +358,7 @@ export default function ChangeLog() {
               }}>
                 {['Date', 'Trigger', 'Type', 'Path', 'Size'].map((col, i) => (
                   <span key={col} style={{
-                    fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)',
+                    fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
                     letterSpacing: 1.5, textTransform: 'uppercase',
                     textAlign: i === 4 ? 'right' : 'left',
                   }}>{col}</span>
@@ -387,7 +387,7 @@ export default function ChangeLog() {
       )}
 
       {!error && entries != null && rows.length > 0 && (
-        <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textAlign: 'right' }}>
+        <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'right' }}>
           {rows.length.toLocaleString()} {rows.length === 1 ? 'change' : 'changes'}
           {entries.length > 0 && ` across ${entries.length.toLocaleString()} ${entries.length === 1 ? 'audit' : 'audits'}`}
         </div>

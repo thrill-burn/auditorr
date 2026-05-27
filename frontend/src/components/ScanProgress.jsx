@@ -36,14 +36,14 @@ const LOGO = (
 function PhaseBar({ label, fillPct, pulse, phaseStatus }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1.5, width: 56, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1.5, width: 56, flexShrink: 0 }}>{label}</span>
       <div style={{ flex: 1, height: 6, background: 'var(--border2)', borderRadius: 99, overflow: 'hidden' }}>
         <div
           className={pulse ? 'audit-pulse' : undefined}
           style={{ height: '100%', width: `${fillPct}%`, background: 'var(--accent)', borderRadius: 99, transition: 'width 0.3s ease' }}
         />
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', width: 130, flexShrink: 0, textAlign: 'right' }}>{phaseStatus}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', width: 130, flexShrink: 0, textAlign: 'right' }}>{phaseStatus}</span>
     </div>
   )
 }
@@ -76,7 +76,7 @@ function LoadingResultsCard() {
       </div>
 
       {/* Status */}
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>
         Deserializing audit results…
       </div>
     </>
@@ -172,7 +172,7 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
 
             {/* Status message */}
             {statusMessage && (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {statusMessage}
               </div>
             )}

@@ -105,7 +105,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
           {/* Day-of-week headers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: 4 }}>
             {DOW.map(d => (
-              <div key={d} style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', textAlign: 'center', padding: '2px 0' }}>{d}</div>
+              <div key={d} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '2px 0' }}>{d}</div>
             ))}
           </div>
 
@@ -143,7 +143,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
               onClick={() => { onChange(''); setOpen(false) }}
               style={{
                 ...btnBase, marginTop: 10, width: '100%', padding: '5px 0',
-                border: '1px solid var(--border2)', fontSize: 10, color: 'var(--text-dim)',
+                border: '1px solid var(--border2)', fontSize: 11, color: 'var(--text-dim)',
               }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
               onMouseLeave={e => e.currentTarget.style.background = 'none'}

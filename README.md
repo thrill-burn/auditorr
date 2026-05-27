@@ -9,7 +9,9 @@ It cross-references your hardlinked torrent and media directories with qBittorre
 - **Health score (0–100)** — see how clean and efficient your library is
 - **Find wasted disk space** — duplicates, orphaned files, unlinked torrents with one-click delete and dedupe scripts
 - **Upload analytics & library yield** — daily upload volume per tracker, yield % over time, tracker leaderboard
+- **Per-tracker trend charts** — track seeding size, daily upload, orphaned data, not-imported data, and daily yield over time; click any stat box to switch the chart
 - **Cross-seeding insights** — weighted average seed multiplier, segmented disk bar, per-tracker breakdown
+- **Date range filtering** — Trackers page has an independent date range picker; Change Log supports from/to filtering
 - **Powerful file explorer** — tree and flat views, filter by status, tracker, seed count, size, filename
 - **Sonarr/Radarr integration** — open orphaned media directly in Sonarr or Radarr for interactive search
 - **Guided setup** — first-run wizard connects qBittorrent, verifies your paths, and optionally sets up Sonarr/Radarr
