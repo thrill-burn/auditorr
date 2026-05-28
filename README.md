@@ -19,7 +19,7 @@ scans.
       <a href="docs/feature-media.png"><img src="docs/feature-media.png" alt="Media explorer" /></a>
       <p><b>Media explorer</b><br>
       Tree or flat view of your library. See every hardlink
-      per file and which tracker is seeding it.</p>
+      per file and which tracker is seeding it. Connect to Sonarr/Radarr and fix orphaned files.</p>
     </td>
     <td width="50%" valign="top">
       <a href="docs/feature-torrents.png"><img src="docs/feature-torrents.png" alt="Torrents" /></a>
