@@ -4,6 +4,7 @@ from unittest.mock import patch
 from arr import arr_search, fetch_arr_media_index, normalize_arr_connections, test_arr_connections
 from audit import _compute_tracker_file_stats, _not_imported_paths, process_health_metrics
 from exclusions import is_excluded
+from media_server_exclusions import expand_exclusion_patterns
 from relink import find_relink_candidates
 
 
@@ -111,6 +112,31 @@ class ExclusionRuleTests(unittest.TestCase):
         self.assertEqual(_not_imported_paths(torrent_files), ["movies/Movie.mkv"])
         self.assertEqual(tracker_stats["tracker.example"]["not_imported_count"], 1)
         self.assertEqual(tracker_stats["tracker.example"]["not_imported_size"], 1000)
+
+    def test_media_server_presets_add_common_sidecar_exclusions(self):
+        patterns = expand_exclusion_patterns({
+            "EXCLUSION_PATTERNS": [],
+            "MEDIA_SERVER_EXCLUSION_PRESETS": ["plex", "jellyfin", "emby", "kodi", "ums"],
+        })
+
+        for full_path, rel_path, filename in [
+            ("/data/media/TV/Show/.plexmatch", "TV/Show/.plexmatch", ".plexmatch"),
+            ("/data/media/Movies/Movie (2024)/movie.nfo", "Movies/Movie (2024)/movie.nfo", "movie.nfo"),
+            ("/data/media/Movies/Movie (2024)/poster.jpg", "Movies/Movie (2024)/poster.jpg", "poster.jpg"),
+            ("/data/media/Movies/Movie (2024)/fanart-1.png", "Movies/Movie (2024)/fanart-1.png", "fanart-1.png"),
+            ("/data/media/Movies/Movie (2024)/Movie (2024)-poster.jpg", "Movies/Movie (2024)/Movie (2024)-poster.jpg", "Movie (2024)-poster.jpg"),
+            ("/data/media/Movies/Movie (2024)/Movie (2024)-fanart-1.jpg", "Movies/Movie (2024)/Movie (2024)-fanart-1.jpg", "Movie (2024)-fanart-1.jpg"),
+            ("/data/media/TV/Show/Season 01/season.nfo", "TV/Show/Season 01/season.nfo", "season.nfo"),
+            ("/data/media/Music/Album/albumart.jpg", "Music/Album/albumart.jpg", "albumart.jpg"),
+        ]:
+            self.assertTrue(is_excluded(full_path, rel_path, filename, patterns), filename)
+        self.assertFalse(is_excluded(
+            "/data/media/Movies/Movie (2024)/movie.mkv",
+            "Movies/Movie (2024)/movie.mkv",
+            "movie.mkv",
+            patterns,
+        ))
+
 
 class ArrConnectionTests(unittest.TestCase):
     def test_legacy_arr_config_normalizes_to_connection_list(self):

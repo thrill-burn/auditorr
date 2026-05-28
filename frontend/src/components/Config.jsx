@@ -4,6 +4,13 @@ import { api } from '../api'
 
 const AUDIT_ROW_H = 36
 const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 0.8fr 1fr'
+const MEDIA_SERVER_PRESETS = [
+  { id: 'plex', label: 'Plex' },
+  { id: 'jellyfin', label: 'Jellyfin' },
+  { id: 'emby', label: 'Emby' },
+  { id: 'kodi', label: 'Kodi' },
+  { id: 'ums', label: 'Universal Media Server' },
+]
 
 function fmtDuration(s) {
   if (s == null) return '—'
@@ -164,6 +171,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [dupPct, setDupPct] = useState('')
   const [exclusionPatterns,        setExclusionPatterns]        = useState('')
   const [exclusionFocused,         setExclusionFocused]         = useState(false)
+  const [mediaServerPresets,       setMediaServerPresets]       = useState([])
   const [exclusionHideFromExplorer, setExclusionHideFromExplorer] = useState(false)
   const [arrConnectionsText,       setArrConnectionsText]       = useState('')
   const [arrConnectionsFocused,    setArrConnectionsFocused]    = useState(false)
@@ -185,6 +193,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
+      setMediaServerPresets(Array.isArray(c.MEDIA_SERVER_EXCLUSION_PRESETS) ? c.MEDIA_SERVER_EXCLUSION_PRESETS : [])
       setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
       setArrConnectionsText(JSON.stringify(c.ARR_CONNECTIONS || [], null, 2))
       setArrTestStatus(null)
@@ -333,6 +342,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       NI_RATIO:  parseFloat(niPct)  / 100 || 0.01,
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
       EXCLUSION_PATTERNS:           exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
+      MEDIA_SERVER_EXCLUSION_PRESETS: mediaServerPresets,
       EXCLUSION_HIDE_FROM_EXPLORER: exclusionHideFromExplorer,
       ARR_CONNECTIONS:              arrConnections,
       WATCHDOG_ENABLED:             watchdogEnabled,
@@ -355,6 +365,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   const g2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }
   const g3 = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }
+
+  const toggleMediaPreset = id => {
+    setMediaServerPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
+    setIsDirty(true)
+  }
 
   const handleClearHistory = async () => {
     if (!window.confirm('Clear all audit history? This will reset the score chart and run log. Cannot be undone.')) return
@@ -710,6 +725,32 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             transition: 'border 0.12s', boxSizing: 'border-box',
           }}
         />
+        <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Media server sidecar presets</div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
+            Ignore metadata and artwork sidecars commonly written or read by media servers, such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>.plexmatch</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>.nfo</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>poster.jpg</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>fanart.jpg</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>folder.jpg</span>.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {MEDIA_SERVER_PRESETS.map(preset => {
+              const active = mediaServerPresets.includes(preset.id)
+              return (
+                <button
+                  key={preset.id}
+                  onClick={() => toggleMediaPreset(preset.id)}
+                  style={{
+                    padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12,
+                    border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
+                    background: active ? 'var(--accent)18' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--text-dim)',
+                    cursor: 'pointer', transition: 'all 0.12s',
+                  }}
+                >
+                  {preset.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>File explorer visibility</div>

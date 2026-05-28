@@ -28,6 +28,7 @@ from audit import run_audit_process, process_health_metrics, compute_upload_stat
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections
 from scripts import generate_script
 from relink import find_relink_candidates
+from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -243,6 +244,9 @@ def handle_config():
                 'NI_RATIO':           float(data.get('NI_RATIO',  0.01)),
                 'DUP_RATIO':          float(data.get('DUP_RATIO', 0.01)),
                 'EXCLUSION_PATTERNS':           [p for p in data.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)],
+                'MEDIA_SERVER_EXCLUSION_PRESETS': normalize_media_server_presets(
+                    data.get('MEDIA_SERVER_EXCLUSION_PRESETS', [])
+                ),
                 'EXCLUSION_HIDE_FROM_EXPLORER': bool(data.get('EXCLUSION_HIDE_FROM_EXPLORER', False)),
                 'SONARR_URL':         str(data.get('SONARR_URL', '')),
                 'SONARR_API_KEY':     str(data['SONARR_API_KEY']) if data.get('SONARR_API_KEY') else existing.get('SONARR_API_KEY', ''),

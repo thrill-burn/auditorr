@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import sources
 from exclusions import is_excluded
+from media_server_exclusions import expand_exclusion_patterns
 
 from db import (
     db_load_config, db_load_history, db_save_history,
@@ -573,7 +574,7 @@ def run_audit_process(trigger=None):
         total_ref = [0]
         set_state(total_files=0, status_message="Scanning torrent directory...", phase="disk")
         inode_map          = {}
-        exclusion_patterns = cfg.get('EXCLUSION_PATTERNS', [])
+        exclusion_patterns = expand_exclusion_patterns(cfg)
         torrent_records, scanned, torrent_errors = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref)

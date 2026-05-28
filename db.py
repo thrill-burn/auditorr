@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     'NI_RATIO':           0.01,
     'DUP_RATIO':          0.01,
     'EXCLUSION_PATTERNS':          [],
+    'MEDIA_SERVER_EXCLUSION_PRESETS': [],
     'EXCLUSION_HIDE_FROM_EXPLORER': False,
     'SONARR_URL':         '',
     'SONARR_API_KEY':     '',
@@ -417,6 +418,18 @@ def validate_config(data):
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must be a string")
                 elif len(p) > 200:
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must not exceed 200 characters")
+
+    presets = data.get('MEDIA_SERVER_EXCLUSION_PRESETS')
+    if presets is not None:
+        allowed_presets = {'plex', 'jellyfin', 'emby', 'kodi', 'ums'}
+        if not isinstance(presets, list):
+            errors.append("MEDIA_SERVER_EXCLUSION_PRESETS must be a list")
+        elif len(presets) > len(allowed_presets):
+            errors.append("MEDIA_SERVER_EXCLUSION_PRESETS contains too many entries")
+        else:
+            for i, preset in enumerate(presets):
+                if str(preset).lower() not in allowed_presets:
+                    errors.append(f"MEDIA_SERVER_EXCLUSION_PRESETS[{i}] must be one of plex, jellyfin, emby, kodi, ums")
 
     arr_connections = data.get('ARR_CONNECTIONS')
     if arr_connections is not None:
