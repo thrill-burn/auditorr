@@ -1,4 +1,5 @@
 import os
+import time
 import socket
 import threading
 import logging
@@ -94,6 +95,21 @@ def _torrent_source_configured(cfg):
     return bool(cfg.get(host_key))
 
 
+def _run_startup_audit():
+    """Run the startup audit, retrying once after 60s on connection errors (other containers may not be ready)."""
+    if not _torrent_source_configured(db_load_config()):
+        log.info("Torrent source not configured, skipping startup audit.")
+        return
+    if try_start_scanning("startup"):
+        run_audit_process("startup")
+    state = get_state()
+    if state.get('last_scan_status') == 'error' and _is_source_error_status(state.get('status_message', '')):
+        log.warning("Startup audit failed with connection error, retrying in 60s...")
+        time.sleep(60)
+        if try_start_scanning("startup"):
+            run_audit_process("startup")
+
+
 def startup():
     # Use a lock file to ensure only one gunicorn worker runs the startup audit.
     # Both workers import the module and hit this code, but only the first one
@@ -107,21 +123,11 @@ def startup():
             except OSError:
                 log.info("Startup audit already running in another worker, skipping.")
                 return
-            if _torrent_source_configured(db_load_config()):
-                log.info("Running startup audit...")
-                if try_start_scanning("startup"):
-                    run_audit_process("startup")
-            else:
-                log.info("Torrent source not configured, skipping startup audit.")
+            _run_startup_audit()
             start_watchdog()
     except ImportError:
         # fcntl not available (Windows) — just run without locking
-        if _torrent_source_configured(db_load_config()):
-            log.info("Running startup audit...")
-            if try_start_scanning("startup"):
-                run_audit_process("startup")
-        else:
-            log.info("Torrent source not configured, skipping startup audit.")
+        _run_startup_audit()
         start_watchdog()
 
 threading.Thread(target=startup, daemon=True).start()

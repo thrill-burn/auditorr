@@ -228,6 +228,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         : { TORRENT_SOURCE: 'qbit', QB_HOST: conf.QB_HOST, QB_USER: conf.QB_USER, QB_PASS: conf.QB_PASS }
       const r = await api.testConnection(payload)
       setTestStatus({ ok: true })
+      if (onConfigSaved) onConfigSaved()
       if (isQui) {
         const n = (r.instances || []).length
         const e = r.eligible_count ?? 0
