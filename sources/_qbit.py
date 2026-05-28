@@ -108,7 +108,12 @@ def _fetch_inner(cfg):
             status = 'Paused'
         for f in files_map.get(torrent.hash, []):
             full_path = os.path.join(save_path, f.name)
-            entry = file_map.setdefault(full_path, {"status": status, "trackers": set(), "hash": torrent.hash})
+            entry = file_map.setdefault(full_path, {
+                "status": status,
+                "trackers": set(),
+                "hash": torrent.hash,
+                "category": getattr(torrent, 'category', '') or '',
+            })
             entry["trackers"].update(hosts)
             if status == 'Seeding' or entry["status"] == 'Seeding':
                 entry["status"] = 'Seeding'

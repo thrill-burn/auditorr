@@ -87,6 +87,7 @@ def _norm_torrent(t):
         'size':      t.get('size') or t.get('total_size') or t.get('totalSize') or 0,
         'uploaded':  t.get('uploaded') or t.get('uploadedEver') or 0,
         'name':      t.get('name') or '',
+        'category':  t.get('category') or '',
     }
 
 
@@ -284,13 +285,14 @@ def _process_instance(session, base, inst, remote_path, local_path,
     disk_fallback_count = 0
     sample_paths        = []
 
-    def _add_entry(full_path, status, hosts):
+    def _add_entry(full_path, status, hosts, category=''):
         entry = file_map.setdefault(full_path, {
             'status':        status,
             'trackers':      set(),
             'hash':          th,
             'instance_id':   inst_id,
             'instance_name': inst_name,
+            'category':      category or '',
         })
         entry['trackers'].update(hosts)
         if status == 'Seeding' or entry['status'] == 'Seeding':
@@ -341,7 +343,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                         'file_name': f['name'],
                         'full_path': full_path,
                     })
-                _add_entry(full_path, status, hosts)
+                _add_entry(full_path, status, hosts, nt.get('category', ''))
         else:
             empty_file_count += 1
             # Fallback: qui may not expose per-torrent file lists.
@@ -360,7 +362,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                             'file_name': torrent_name,
                             'full_path': torrent_root,
                         })
-                    _add_entry(torrent_root, status, hosts)
+                    _add_entry(torrent_root, status, hosts, nt.get('category', ''))
                 elif os.path.isdir(torrent_root):
                     # Multi-file torrent — walk only the torrent's own subtree
                     for dir_root, _, dir_files in os.walk(torrent_root):
@@ -375,7 +377,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                                     'file_name': os.path.relpath(full_path, save_path),
                                     'full_path': full_path,
                                 })
-                            _add_entry(full_path, status, hosts)
+                            _add_entry(full_path, status, hosts, nt.get('category', ''))
 
     if disk_fallback_count:
         log.warning(

@@ -3,10 +3,10 @@ import math
 import time
 import hashlib
 import logging
-import fnmatch
 from datetime import datetime, timedelta
 
 import sources
+from exclusions import is_excluded
 
 from db import (
     db_load_config, db_load_history, db_save_history,
@@ -46,21 +46,8 @@ def get_fast_hash(filepath, size, chunk_size=65536):
 # ---------------------------------------------------------------------------
 
 def _is_excluded(rel_path, filename, patterns):
-    """Return True if the file matches any exclusion glob pattern."""
-    if not patterns:
-        return False
-    norm  = rel_path.replace('\\', '/')
-    parts = norm.split('/')
-    for pat in patterns:
-        if fnmatch.fnmatch(filename, pat):
-            return True
-        if fnmatch.fnmatch(norm, pat):
-            return True
-        # Check each parent directory component
-        for part in parts[:-1]:
-            if fnmatch.fnmatch(part, pat):
-                return True
-    return False
+    """Backward-compatible wrapper used by older tests/imports."""
+    return is_excluded(rel_path, rel_path, filename, patterns)
 
 
 def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None):
@@ -93,6 +80,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         inode_map[file_key]['hash']          = qbit_info.get('hash', '')
                         inode_map[file_key]['instance_id']   = qbit_info.get('instance_id')
                         inode_map[file_key]['instance_name'] = qbit_info.get('instance_name')
+                        inode_map[file_key]['category']      = qbit_info.get('category', '')
                         cur = inode_map[file_key]['status']
                         if qbit_info['status'] == 'Seeding' or cur == 'Seeding':
                             inode_map[file_key]['status'] = 'Seeding'
@@ -104,7 +92,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     "full_path": full_path, "rel_path": rel_path,
                     "size": size, "inode": inode, "file_key": file_key,
                     "nlink": nlink, "source": source_label,
-                    "excluded": _is_excluded(rel_path, filename, exclusion_patterns),
+                    "excluded": is_excluded(full_path, rel_path, filename, exclusion_patterns),
                 })
             except Exception as e:
                 log.warning(f"Could not stat {full_path}: {e}")
@@ -172,6 +160,7 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
             "duplicate_paths": duplicate_map.get(file_key, []),
             "excluded": item.get('excluded', False),
             "hash": info.get('hash', ''),
+            "category": info.get('category', ''),
             "instance_id":   info.get('instance_id'),
             "instance_name": info.get('instance_name'),
         })
@@ -524,6 +513,8 @@ def _compute_cross_seed_stats(media_files):
 def _compute_tracker_file_stats(torrent_files):
     stats = {}
     for f in torrent_files:
+        if f.get('excluded'):
+            continue
         for t in (f.get('trackers') or []):
             if t == 'None':
                 continue
@@ -544,6 +535,18 @@ def _compute_tracker_file_stats(torrent_files):
                 s['not_imported_count'] += 1
                 s['not_imported_size']  += f['size']
     return stats
+
+
+def _is_not_imported_torrent(f):
+    return (
+        not f.get('excluded')
+        and not f.get('imported')
+        and f.get('status') != 'Orphaned'
+    )
+
+
+def _not_imported_paths(torrent_files):
+    return [f['path'] for f in torrent_files if _is_not_imported_torrent(f)]
 
 
 # ---------------------------------------------------------------------------
@@ -588,10 +591,7 @@ def run_audit_process(trigger=None):
         dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg)
         cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
         tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
-        not_imported_paths = [
-            f['path'] for f in torrent_files_data
-            if not f['imported'] and f['status'] != 'Orphaned'
-        ]
+        not_imported_paths = _not_imported_paths(torrent_files_data)
         if cross_seed_stats:
             dashboard_stats['cross_seed_stats'] = cross_seed_stats
 

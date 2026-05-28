@@ -30,6 +30,210 @@ _SERVICE_MAP = {
 }
 
 
+def normalize_arr_connections(cfg, service=None):
+    """Return normalized Sonarr/Radarr connection records.
+
+    Supports the legacy singleton config keys and the new ARR_CONNECTIONS list.
+    """
+    raw_connections = cfg.get('ARR_CONNECTIONS')
+    normalized = []
+
+    if isinstance(raw_connections, list) and raw_connections:
+        for raw in raw_connections:
+            if not isinstance(raw, dict):
+                continue
+            conn = _normalize_arr_connection(raw)
+            if conn and (service is None or conn['service'] == service):
+                normalized.append(conn)
+    else:
+        for svc_name, svc in _SERVICE_MAP.items():
+            url = str(cfg.get(svc['url_key'], '')).strip()
+            api_key = str(cfg.get(svc['key_key'], '')).strip()
+            if not url or not api_key:
+                continue
+            if service is not None and svc_name != service:
+                continue
+            normalized.append(_normalize_arr_connection({
+                'id': f'{svc_name}-default',
+                'service': svc_name,
+                'name': svc['name'],
+                'base_url': url,
+                'api_key': api_key,
+                'remote_path': cfg.get(svc['remote_key'], ''),
+            }))
+
+    seen = set()
+    deduped = []
+    for conn in normalized:
+        if conn['id'] in seen:
+            raise ValueError(f"Duplicate Arr connection id: {conn['id']}")
+        seen.add(conn['id'])
+        deduped.append(conn)
+    return deduped
+
+
+def fetch_arr_media_index(cfg):
+    """Fetch managed media-file paths from every configured Arr instance."""
+    media = []
+    for conn in normalize_arr_connections(cfg):
+        try:
+            if conn['service'] == 'radarr':
+                rows = _fetch_radarr_media(conn)
+            else:
+                rows = _fetch_sonarr_media(conn)
+            media.extend(_apply_arr_media_path_mapping(rows, conn, cfg))
+        except Exception as e:
+            log.warning("Could not fetch %s media from %s: %s", conn['service'], conn['id'], e)
+    return media
+
+
+def test_arr_connections(cfg):
+    """Probe configured Arr instances and confirm managed file metadata is readable."""
+    connections = normalize_arr_connections(cfg)
+    results = []
+
+    for conn in connections:
+        item = {
+            'id': conn['id'],
+            'name': conn['name'],
+            'service': conn['service'],
+            'base_url': conn['base_url'],
+            'ok': False,
+            'managed_file_count': 0,
+            'sample_paths': [],
+        }
+        try:
+            ok, message = _test_arr_connection(conn['base_url'], conn['api_key'])
+        except Exception as e:
+            ok, message = False, str(e)
+
+        if not ok:
+            item['message'] = message or 'Connection failed'
+            results.append(item)
+            continue
+
+        try:
+            media = _fetch_radarr_media(conn) if conn['service'] == 'radarr' else _fetch_sonarr_media(conn)
+            media = _apply_arr_media_path_mapping(media, conn, cfg)
+            item['ok'] = True
+            item['managed_file_count'] = len(media)
+            item['sample_paths'] = [m['path'] for m in media if m.get('path')][:5]
+        except Exception as e:
+            item['message'] = f'Connected, but media file metadata could not be read: {e}'
+        results.append(item)
+
+    return {
+        'ok': bool(connections) and all(item['ok'] for item in results),
+        'connection_count': len(connections),
+        'connections': results,
+    }
+
+
+def _normalize_arr_connection(raw):
+    service = str(raw.get('service', '')).strip().lower()
+    if service not in _SERVICE_MAP:
+        return None
+    base_url = str(raw.get('base_url') or raw.get('url') or '').strip().rstrip('/')
+    api_key = str(raw.get('api_key') or raw.get('apiKey') or '').strip()
+    if not base_url or not api_key:
+        return None
+    conn_id = str(raw.get('id') or f"{service}-{_slug(raw.get('name') or service)}").strip()
+    return {
+        'id': conn_id,
+        'service': service,
+        'name': str(raw.get('name') or _SERVICE_MAP[service]['name']).strip(),
+        'base_url': base_url,
+        'api_key': api_key,
+        'remote_path': str(raw.get('remote_path') or raw.get('remotePath') or '').strip(),
+        'media_path': str(raw.get('media_path') or raw.get('mediaPath') or '').strip(),
+        'local_media_path': str(raw.get('local_media_path') or raw.get('localMediaPath') or '').strip(),
+    }
+
+
+def _apply_arr_media_path_mapping(rows, conn, cfg):
+    arr_root = conn.get('media_path', '')
+    local_root = conn.get('local_media_path', '') or cfg.get('MEDIA_PATH', '')
+    mapped = []
+    for row in rows:
+        item = dict(row)
+        original_path = item.get('path', '')
+        mapped_path = _replace_path_prefix(original_path, arr_root, local_root)
+        if mapped_path != original_path:
+            item['arr_path'] = original_path
+            item['path'] = mapped_path
+        mapped.append(item)
+    return mapped
+
+
+def _replace_path_prefix(path, source_root, target_root):
+    if not path or not source_root or not target_root:
+        return path
+    path_norm = _path_norm(path)
+    source_norm = _path_norm(source_root).rstrip('/')
+    target_norm = _path_norm(target_root).rstrip('/')
+    if not source_norm:
+        return path
+    if path_norm == source_norm:
+        return target_norm
+    if path_norm.startswith(f'{source_norm}/'):
+        return f"{target_norm}/{path_norm[len(source_norm):].lstrip('/')}"
+    return path
+
+
+def _path_norm(path):
+    return str(path or '').replace('\\', '/').replace('//', '/')
+
+
+def _fetch_radarr_media(conn):
+    rows = []
+    for movie in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie'):
+        movie_file = movie.get('movieFile') or {}
+        path = movie_file.get('path')
+        if not path:
+            continue
+        rows.append({
+            'connection_id': conn['id'],
+            'connection_name': conn['name'],
+            'service': 'radarr',
+            'title': movie.get('title') or '',
+            'year': movie.get('year'),
+            'path': path,
+            'relative_path': movie_file.get('relativePath'),
+            'arr_id': movie.get('id'),
+            'file_id': movie_file.get('id'),
+        })
+    return rows
+
+
+def _fetch_sonarr_media(conn):
+    rows = []
+    for series in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series'):
+        series_id = series.get('id')
+        if series_id is None:
+            continue
+        for episode_file in _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/episodefile?seriesId={series_id}'):
+            path = episode_file.get('path')
+            if not path:
+                continue
+            rows.append({
+                'connection_id': conn['id'],
+                'connection_name': conn['name'],
+                'service': 'sonarr',
+                'title': series.get('title') or '',
+                'year': series.get('year'),
+                'path': path,
+                'relative_path': episode_file.get('relativePath'),
+                'arr_id': series_id,
+                'file_id': episode_file.get('id'),
+                'episode_ids': episode_file.get('episodeIds') or [],
+            })
+    return rows
+
+
+def _slug(value):
+    return re.sub(r'[^a-z0-9]+', '-', str(value).lower()).strip('-') or 'default'
+
+
 def _arr_command(base_url, api_key, command_name, path):
     """POST a command to a Sonarr/Radarr instance."""
     endpoint = base_url.rstrip('/') + '/api/v3/command'
@@ -106,22 +310,24 @@ def arr_rescan(cfg, service, paths):
     Raises ValueError if the service is not configured, or re-raises network errors.
     """
     svc = _SERVICE_MAP[service]
-    url        = cfg.get(svc['url_key'], '').strip()
-    key        = cfg.get(svc['key_key'], '').strip()
+    connections = normalize_arr_connections(cfg, service=service)
     local_path = cfg.get('LOCAL_PATH', '').strip()
-    if not url or not key:
+    if not connections:
         raise ValueError(f"{svc['name']} not configured")
-    remote_path = cfg.get(svc['remote_key'], '').strip()
-    for path in paths:
-        abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
-        if remote_path and local_path and abs_path.startswith(local_path) and \
-                abs_path[len(local_path):][:1] in ('/', ''):
-            arr_path = remote_path + abs_path[len(local_path):]
-        else:
-            arr_path = abs_path
-        arr_path = os.path.dirname(arr_path)
-        _arr_command(url, key, svc['command'], arr_path)
-    return len(paths)
+    command_count = 0
+    for conn in connections:
+        remote_path = conn.get('remote_path', '').strip()
+        for path in paths:
+            abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
+            if remote_path and local_path and abs_path.startswith(local_path) and \
+                    abs_path[len(local_path):][:1] in ('/', ''):
+                arr_path = remote_path + abs_path[len(local_path):]
+            else:
+                arr_path = abs_path
+            arr_path = os.path.dirname(arr_path)
+            _arr_command(conn['base_url'], conn['api_key'], svc['command'], arr_path)
+            command_count += 1
+    return command_count
 
 
 def arr_search(cfg, service, file_path):
@@ -131,34 +337,40 @@ def arr_search(cfg, service, file_path):
     ValueError if not configured, or re-raises network errors.
     """
     svc = _SERVICE_MAP[service]
-    url = cfg.get(svc['url_key'], '').strip()
-    key = cfg.get(svc['key_key'], '').strip()
-    if not url or not key:
+    connections = normalize_arr_connections(cfg, service=service)
+    if not connections:
         raise ValueError(f"{svc['name']} not configured")
     filename         = os.path.basename(file_path)
     title            = _parse_title_from_filename(filename)
     parsed_normalized = _normalize_title(title)
-    try:
-        items = _arr_get(url, key, svc['list_path'])
-    except urllib.error.HTTPError as e:
-        raise ConnectionError(f"{svc['name']} returned HTTP {e.code}: {e.reason}") from e
     best             = None
     best_score       = 0
-    for item in items:
-        candidate = _normalize_title(item.get('title', ''))
-        alt       = _normalize_title(item.get('cleanTitle', ''))
-        if candidate == parsed_normalized or alt == parsed_normalized:
-            best = item
+    best_conn        = None
+    for conn in connections:
+        try:
+            items = _arr_get(conn['base_url'], conn['api_key'], svc['list_path'])
+        except urllib.error.HTTPError as e:
+            raise ConnectionError(f"{conn['name']} returned HTTP {e.code}: {e.reason}") from e
+        for item in items:
+            candidate = _normalize_title(item.get('title', ''))
+            alt       = _normalize_title(item.get('cleanTitle', ''))
+            if candidate == parsed_normalized or alt == parsed_normalized:
+                best = item
+                best_conn = conn
+                best_score = float('inf')
+                break
+            if parsed_normalized in candidate or candidate in parsed_normalized:
+                score = len(candidate)
+                if score > best_score:
+                    best       = item
+                    best_conn  = conn
+                    best_score = score
+        if best_score == float('inf'):
             break
-        if parsed_normalized in candidate or candidate in parsed_normalized:
-            score = len(candidate)
-            if score > best_score:
-                best       = item
-                best_score = score
     if best is None:
         raise LookupError(
             f"'{title}' not found in {svc['name']} library. "
             f"Make sure it is added and monitored in {svc['name']} first."
         )
-    result_url = url.rstrip('/') + svc['slug_prefix'] + best['titleSlug']
-    return {"url": result_url, "title": best.get('title', title)}
+    result_url = best_conn['base_url'].rstrip('/') + svc['slug_prefix'] + best['titleSlug']
+    return {"url": result_url, "title": best.get('title', title), "connection_id": best_conn['id']}
