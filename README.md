@@ -1,81 +1,90 @@
 # auditorr
 
-auditorr shows you exactly what’s happening inside your media library.
+**A media library audit tool for qBittorrent / qui + Sonarr / Radarr.**
+Hardlink-based health score, per-tracker analytics, cross-seed
+effectiveness, and a change log that tells you exactly what moved between
+scans.
 
-It cross-references your hardlinked torrent and media directories with qBittorrent (or [qui](https://github.com/autobrr/qui) for multi-instance setups) to generate a real-time health score, detecting orphaned files, duplicates, missing links, and calculates tracker statistics.
-
-![Dashboard](docs/dashboard.png)
-
-- **Health score (0–100)** — see how clean and efficient your library is
-- **Find wasted disk space** — duplicates, orphaned files, unlinked torrents with one-click delete and dedupe scripts
-- **Upload analytics & library yield** — daily upload volume per tracker, yield % over time, tracker leaderboard
-- **Per-tracker trend charts** — track seeding size, daily upload, orphaned data, not-imported data, and daily yield over time; click any stat box to switch the chart
-- **Cross-seeding insights** — weighted average seed multiplier, segmented disk bar, per-tracker breakdown
-- **Date range filtering** — Trackers page has an independent date range picker; Change Log supports from/to filtering
-- **Powerful file explorer** — tree and flat views, filter by status, tracker, seed count, size, filename
-- **Sonarr/Radarr integration** — open orphaned media directly in Sonarr or Radarr for interactive search
-- **Guided setup** — first-run wizard connects qBittorrent, verifies your paths, and optionally sets up Sonarr/Radarr
+<p align="center">
+  <a href="docs/dashboard.png">
+    <img src="docs/dashboard.png" alt="auditorr dashboard" width="900" />
+  </a>
+</p>
 
 ---
 
-## Who is this for?
-
-auditorr is built for self-hosted media setups using qBittorrent + Sonarr/Radarr with hardlinks, following the [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/).
-
-The health score reflects how well your library is actually connected and seeding.
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/feature-media.png"><img src="docs/feature-media.png" alt="Media explorer" /></a>
+      <p><b>Media explorer</b><br>
+      Tree or flat view of your library. Click a file to see every hardlink
+      sibling and which tracker is seeding it — answer <i>"is this episode
+      actually linked to my downloads?"</i> in one click.</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/feature-torrents.png"><img src="docs/feature-torrents.png" alt="Torrents" /></a>
+      <p><b>Torrents</b><br>
+      Every file qBittorrent / qui is seeding, with tracker, status, and
+      reverse hardlink lookup. A <code>qbit/qui ↗</code> chip per row
+      deep-links to that torrent in your client.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/feature-trackers.png"><img src="docs/feature-trackers.png" alt="Trackers" /></a>
+      <p><b>Trackers</b><br>
+      Per-tracker analytics: seeding TB, 30-day uploaded, <b>yield %</b>
+      (uploaded ÷ seeding), orphaned, not imported, and an uploaded trend
+      sparkline. Deep-link into the explorer pre-filtered by tracker.</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/feature-changes.png"><img src="docs/feature-changes.png" alt="Change log" /></a>
+      <p><b>Change log</b><br>
+      File-level diff between every consecutive audit — kept indefinitely.
+      Filter by type (orphaned / imported / new / removed), search by path,
+      export CSV. The fastest way to see why your score moved.</p>
+    </td>
+  </tr>
+</table>
 
 ---
 
-## Installation
+## Install
 
-### Instant Quick Start
+### Unraid
 
-```bash
-docker run -d \
-  --name auditorr \
-  -p 8677:8677 \
-  -v /mnt/user/appdata/auditorr/data:/app/data \
-  -v /mnt/user/data:/data:ro \
-  ghcr.io/thrill-burn/auditorr:latest
-```
+auditorr is available on **Unraid Community Apps** — search for `auditorr`
+in the Apps tab and install in one click. The template ships with sensible
+defaults:
 
-Then open `http://your-server-ip:8677`. On first launch, a setup wizard will guide you through connecting qBittorrent and configuring your data paths.
-
-### unRaid (Recommended)
-
-Docker tab → Add Container button at the bottom and fill in the blanks:
-
-- **Name:** `auditorr`
-- **Repository:** `ghcr.io/thrill-burn/auditorr:latest`
-- **Icon URL:** `https://raw.githubusercontent.com/thrill-burn/auditorr/main/docs/icon.png`
 - **WebUI:** `http://[IP]:[PORT:8677]/`
-- **App Path:** `/mnt/user/appdata/auditorr/data` → `/app/data`
-- **Data Path:** `/mnt/user/data` → `/data`
-- **Port Mapping:** `8677 → 8677`
-
-Press the Apply button, let the container install, then open `http://your-server-ip:8677`. The setup wizard will guide you through the rest.
+- **Appdata:** `/mnt/user/appdata/auditorr/data` → `/app/data`
+- **Data:** `/mnt/user/data` → `/data` (read-only)
 
 ### Docker Compose
 
 ```yaml
 services:
   auditorr:
-    image: ghcr.io/thrill-burn/auditorr:latest
+    build: .
     container_name: auditorr
     restart: unless-stopped
     ports:
       - "8677:8677"
     volumes:
-      - /mnt/user/appdata/auditorr/data:/app/data
-      - /mnt/user/data:/data:ro
-      # TRaSH folder defaults, change if required
+      - ./data:/app/data
+      - /path/to/media:/data/media:ro
+      - /path/to/torrents:/data/torrents:ro
     environment:
       - AUDITORR_PORT=8677
-      # Uncomment to enable authentication:
-      # - AUDITORR_SECRET=your-secret-key
 ```
 
-### Build from source
+Open `http://your-server-ip:8677` and point auditorr at your torrent source
+from the in-app settings.
+
+<details>
+<summary><b>Build from source</b></summary>
 
 ```bash
 git clone https://github.com/thrill-burn/auditorr.git
@@ -84,91 +93,37 @@ docker build -t auditorr .
 docker run -d \
   --name auditorr \
   -p 8677:8677 \
-  -v /mnt/user/appdata/auditorr/data:/app/data \
-  -v /mnt/user/data:/data:ro \
+  -v /path/to/appdata:/app/data \
+  -v /path/to/media:/data/media:ro \
+  -v /path/to/torrents:/data/torrents:ro \
   auditorr
 ```
 
----
-## Important
-
-auditorr assumes a **hardlink-based setup**.
-
-If you are not using hardlinks, your health score will be low even if your library appears functional.
+</details>
 
 ---
 
-## Will this break my library?
+## Health score
 
-No. auditorr is designed from the ground up to be read-only and non-destructive.
+| Component         | Max pts | What it measures                                                    |
+| ----------------- | ------- | ------------------------------------------------------------------- |
+| Hardlinked Media  |     70  | % of media library hardlinked back to a torrent file                |
+| Orphaned Torrents |     10  | Files in your torrent folder that qBittorrent has no record of      |
+| Not Imported      |     10  | Seeding torrents with no matching file in your media library        |
+| Duplicate Files   |     10  | Bit-for-bit identical files that share no inode (true disk dupes)   |
 
-- **Your media is physically read-only** — the Docker volume mount uses the `:ro` flag. auditorr cannot write, move, or delete any file in your media or torrent directories at the OS level, regardless of what any code does.
-- **qBittorrent access is read-only** — auditorr only calls qBittorrent's read endpoints (torrent list, file list, tracker list). It never pauses, removes, or modifies any torrent or tracker.
-- **No direct tracker communication** — auditorr never connects to your trackers. All tracker information (names, stats, upload data) is pulled from qBittorrent's local API, which already has that data. Your tracker relationships stay between you and qBittorrent.
-- **Scripts are yours to review** — the delete and dedupe scripts are plain text bash files. auditorr never executes them — you download, read, and run them yourself.
-- **Your credentials stay local** — Sonarr, Radarr, and qBittorrent credentials are stored in a SQLite database on your server and masked in the UI. Never sent anywhere except your own LAN instances.
-- **No external connections** — auditorr makes no outbound requests to the internet. Every API call goes to your own qBittorrent, Sonarr, or Radarr on your LAN.
-- **LAN-only by default** — the web UI is accessible only from private network IP ranges. No telemetry, no analytics, no phone-home.
+The 10-point categories lose points **linearly** as problem data grows
+toward the configured threshold. At the threshold, all 10 points are gone.
 
----
-## Configuration
-
-All configuration is done through the **Config** tab in the UI.
-
-### Torrent source
-
-auditorr supports two torrent sources — select one in the **Torrent Source** card:
-
-| Source | When to use |
-|---|---|
-| **qBittorrent** | Single qBittorrent instance — the default. Enter the host URL, username, and password. |
-| **qui** | [qui](https://github.com/autobrr/qui) aggregates multiple qBittorrent instances behind one API endpoint. Ideal for multi-instance setups sharing a common filesystem (e.g. mergerfs). Enter the qui host URL and a full-access API key from qui Settings → API Keys. |
-
-Only one source is active at a time. Switching sources and saving will take effect on the next audit.
-
-| Setting | Description |
-|---|---|
-| **qBittorrent Host** | URL of your qBittorrent instance, e.g. `http://192.168.1.x:8080` |
-| **Test Connection** | Verifies credentials and shows qBittorrent version, torrent count, and seeding size |
-| **qBit Save Path** | The path qBittorrent reports via its API. Use **Fetch from qBittorrent** to auto-populate. |
-| **Local Torrent Path** | Where those files actually live from auditorr's perspective (may differ if qBit runs in its own container) |
-| **Media Path** | Your final media library directory |
-| **Test Paths** | Verifies that Media Path and Local Torrent Path are visible inside the container, with per-path ✓/✗ feedback |
-| **Browse container filesystem** | Expandable `/data` directory browser — click any directory to fill Media Path or Local Torrent Path |
-| **Watchdog Cooldown** | Seconds to wait after a filesystem change before running an audit (default: 60) |
-| **Scheduled Interval** | Fallback audit interval in minutes (default: 360) |
-| **Thresholds** | Percentage of library at which each category loses all its points |
-| **Sonarr URL** | URL of your Sonarr instance, e.g. `http://192.168.1.x:8989`. Must be browser-accessible (LAN IP). |
-| **Sonarr API Key** | Found in Sonarr → Settings → General |
-| **Radarr URL** | URL of your Radarr instance, e.g. `http://192.168.1.x:7878`. Must be browser-accessible (LAN IP). |
-| **Radarr API Key** | Found in Radarr → Settings → General |
-| **Sonarr Remote Path** | Path to downloads as Sonarr sees it inside its container. Leave blank if paths are the same. |
-| **Radarr Remote Path** | Same for Radarr. |
-| **Exclusion Patterns** | Glob patterns (one per line) to exclude files from health scoring. e.g. `*.srt`, `@eaDir` |
-
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `AUDITORR_PORT` | `8677` | Port to listen on |
-| `AUDITORR_SECRET` | *(unset)* | If set, all API routes require `X-Auditorr-Secret: <value>` header |
-| `DATA_DIR` | `/app/data` | Where config, history, and SQLite db are stored |
-
----
-
-## Health Score
-
-| Component | Max Points | Description |
-|---|---|---|
-| Hardlinked Media | 70 | % of media library hardlinked back to a torrent file |
-| Orphaned Torrents | 10 | Files in media folder unknown to qBittorrent |
-| Not Imported | 10 | Seeding torrents with no matching media file |
-| Duplicate Files | 10 | Bit-for-bit identical files sharing no inode |
-
-For the 10-point categories, points are lost linearly as problem data grows toward the configured threshold. At the threshold, all 10 points are gone.
+> [!IMPORTANT]
+> The Hardlinked Media score assumes you use hardlinks between your torrent
+> folder and your media library — the
+> [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/) folder
+> structure. Without hardlinks, this score is 0 regardless of how healthy
+> the rest of your library is.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT — see [LICENSE](LICENSE).
