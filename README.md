@@ -18,9 +18,8 @@ scans.
     <td width="50%" valign="top">
       <a href="docs/feature-media.png"><img src="docs/feature-media.png" alt="Media explorer" /></a>
       <p><b>Media explorer</b><br>
-      Tree or flat view of your library. Click a file to see every hardlink
-      sibling and which tracker is seeding it — answer <i>"is this episode
-      actually linked to my downloads?"</i> in one click.</p>
+      Tree or flat view of your library. See every hardlink
+      per file and which tracker is seeding it.</p>
     </td>
     <td width="50%" valign="top">
       <a href="docs/feature-torrents.png"><img src="docs/feature-torrents.png" alt="Torrents" /></a>
@@ -34,14 +33,14 @@ scans.
     <td width="50%" valign="top">
       <a href="docs/feature-trackers.png"><img src="docs/feature-trackers.png" alt="Trackers" /></a>
       <p><b>Trackers</b><br>
-      Per-tracker analytics: seeding TB, 30-day uploaded, <b>yield %</b>
+      Per-tracker analytics: seeding TB, uploaded volume, yield %
       (uploaded ÷ seeding), orphaned, not imported, and an uploaded trend
-      sparkline. Deep-link into the explorer pre-filtered by tracker.</p>
+      graph. Deep-link into the explorer pre-filtered by tracker.</p>
     </td>
     <td width="50%" valign="top">
       <a href="docs/feature-changes.png"><img src="docs/feature-changes.png" alt="Change log" /></a>
       <p><b>Change log</b><br>
-      File-level diff between every consecutive audit — kept indefinitely.
+      File-level diff between every consecutive audit, kept indefinitely.
       Filter by type (orphaned / imported / new / removed), search by path,
       export CSV. The fastest way to see why your score moved.</p>
     </td>
@@ -55,8 +54,7 @@ scans.
 ### Unraid
 
 auditorr is available on **Unraid Community Apps** — search for `auditorr`
-in the Apps tab and install in one click. The template ships with sensible
-defaults:
+in the Apps tab and install in one click.
 
 - **WebUI:** `http://[IP]:[PORT:8677]/`
 - **Appdata:** `/mnt/user/appdata/auditorr/data` → `/app/data`
