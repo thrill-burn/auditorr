@@ -103,13 +103,13 @@ def _run_startup_audit():
         log.info("Torrent source not configured, skipping startup audit.")
         return
     if try_start_scanning("startup"):
-        run_audit_process("startup")
+        run_audit_process("startup", persist_source_errors=False)
     state = get_state()
     if state.get('last_scan_status') == 'error' and _is_source_error_status(state.get('status_message', '')):
-        log.warning("Startup audit failed with connection error, retrying in 60s...")
+        log.warning("Startup audit failed with connection error, retrying in 60s before recording a failure...")
         time.sleep(60)
         if try_start_scanning("startup"):
-            run_audit_process("startup")
+            run_audit_process("startup", persist_source_errors=True)
 
 
 def startup():
@@ -140,7 +140,7 @@ threading.Thread(target=startup, daemon=True).start()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "version": "1.5.0"}), 200
+    return jsonify({"status": "ok", "version": "1.5.1"}), 200
 
 
 @app.route('/api/results')

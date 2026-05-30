@@ -11,6 +11,10 @@ const MEDIA_SERVER_PRESETS = [
   { id: 'kodi', label: 'Kodi' },
   { id: 'ums', label: 'Universal Media Server' },
 ]
+const ARR_SERVICES = [
+  { id: 'sonarr', label: 'Sonarr', port: '8989' },
+  { id: 'radarr', label: 'Radarr', port: '7878' },
+]
 
 function fmtDuration(s) {
   if (s == null) return '—'
@@ -173,8 +177,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [exclusionFocused,         setExclusionFocused]         = useState(false)
   const [mediaServerPresets,       setMediaServerPresets]       = useState([])
   const [exclusionHideFromExplorer, setExclusionHideFromExplorer] = useState(false)
-  const [arrConnectionsText,       setArrConnectionsText]       = useState('')
-  const [arrConnectionsFocused,    setArrConnectionsFocused]    = useState(false)
+  const [arrConnections,           setArrConnections]           = useState([])
   const [arrTestStatus,            setArrTestStatus]            = useState(null)
   const [watchdogEnabled, setWatchdogEnabled] = useState(true)
 
@@ -195,7 +198,15 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setMediaServerPresets(Array.isArray(c.MEDIA_SERVER_EXCLUSION_PRESETS) ? c.MEDIA_SERVER_EXCLUSION_PRESETS : [])
       setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
-      setArrConnectionsText(JSON.stringify(c.ARR_CONNECTIONS || [], null, 2))
+      setArrConnections((c.ARR_CONNECTIONS || []).map(conn => ({
+        id: conn.id || '',
+        service: conn.service || 'sonarr',
+        name: conn.name || '',
+        base_url: conn.base_url || conn.url || '',
+        api_key: conn.api_key === '__stored__' ? '' : (conn.api_key || ''),
+        media_path: conn.media_path || '',
+        local_media_path: conn.local_media_path || '',
+      })))
       setArrTestStatus(null)
       setWatchdogEnabled(c.WATCHDOG_ENABLED !== false)
       setPassChanged(false)
@@ -299,24 +310,37 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     } catch (e) { setRadarrTestStatus({ ok: false, msg: e.message }) }
   }
 
-  const parseArrConnections = () => {
-    let arrConnections = []
-    arrConnections = arrConnectionsText.trim() ? JSON.parse(arrConnectionsText) : []
-    if (!Array.isArray(arrConnections)) throw new Error('ARR connections must be a JSON array')
+  const cleanArrConnections = () => {
+    const seen = new Set()
     return arrConnections
+      .map((conn, i) => {
+        const service = (conn.service || 'sonarr').toLowerCase()
+        const label = service === 'radarr' ? 'radarr' : 'sonarr'
+        const name = (conn.name || '').trim()
+        const id = (conn.id || name || `${label}-${i + 1}`)
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, '-')
+          .replace(/^-+|-+$/g, '') || `${label}-${i + 1}`
+        const uniqueId = seen.has(id) ? `${id}-${i + 1}` : id
+        seen.add(uniqueId)
+        return {
+          id: uniqueId,
+          service: label,
+          name,
+          base_url: (conn.base_url || '').trim(),
+          api_key: conn.api_key || '',
+          media_path: (conn.media_path || '').trim(),
+          local_media_path: (conn.local_media_path || '').trim(),
+        }
+      })
+      .filter(conn => conn.base_url || conn.api_key || conn.name || conn.media_path || conn.local_media_path)
   }
 
   const handleTestArrConnections = async () => {
     setArrTestStatus({ loading: true })
-    let arrConnections = []
     try {
-      arrConnections = parseArrConnections()
-    } catch (e) {
-      setArrTestStatus({ ok: false, msg: `Invalid Arr connections JSON: ${e.message}` })
-      return
-    }
-    try {
-      const result = await api.testArrConnections({ ...conf, ARR_CONNECTIONS: arrConnections })
+      const result = await api.testArrConnections({ ...conf, ARR_CONNECTIONS: cleanArrConnections() })
       setArrTestStatus({
         ok: !!result.ok,
         msg: result.message,
@@ -330,13 +354,6 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const handleSave = async () => {
     const sourceChanged = conf.TORRENT_SOURCE !== savedSource
     setPersistentWarnings([])
-    let arrConnections = []
-    try {
-      arrConnections = parseArrConnections()
-    } catch (e) {
-      setSaveStatus({ ok: false, msg: `Invalid Arr connections JSON: ${e.message}` })
-      return
-    }
     const payload = {
       ...conf,
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
@@ -345,7 +362,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       EXCLUSION_PATTERNS:           exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
       MEDIA_SERVER_EXCLUSION_PRESETS: mediaServerPresets,
       EXCLUSION_HIDE_FROM_EXPLORER: exclusionHideFromExplorer,
-      ARR_CONNECTIONS:              arrConnections,
+      ARR_CONNECTIONS:              cleanArrConnections(),
       WATCHDOG_ENABLED:             watchdogEnabled,
     }
     if (!passChanged)   delete payload.QB_PASS
@@ -369,6 +386,36 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   const toggleMediaPreset = id => {
     setMediaServerPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
+    setIsDirty(true)
+  }
+
+  const setArrConnection = (index, key, value) => {
+    setArrConnections(prev => prev.map((conn, i) => i === index ? { ...conn, [key]: value } : conn))
+    setArrTestStatus(null)
+    setIsDirty(true)
+  }
+
+  const addArrConnection = (service = 'sonarr') => {
+    const base = ARR_SERVICES.find(s => s.id === service) || ARR_SERVICES[0]
+    setArrConnections(prev => [
+      ...prev,
+      {
+        id: `${base.id}-${prev.filter(c => c.service === base.id).length + 1}`,
+        service: base.id,
+        name: '',
+        base_url: '',
+        api_key: '',
+        media_path: '',
+        local_media_path: '',
+      },
+    ])
+    setArrTestStatus(null)
+    setIsDirty(true)
+  }
+
+  const removeArrConnection = index => {
+    setArrConnections(prev => prev.filter((_, i) => i !== index))
+    setArrTestStatus(null)
     setIsDirty(true)
   }
 
@@ -529,27 +576,67 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           )}
         </div>
         <div style={{ marginTop: 18 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Advanced: multiple Sonarr/Radarr instances</label>
-          <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
-            Optional JSON array. Leave empty to use the single Sonarr/Radarr fields above. Each entry needs <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>id</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>service</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>base_url</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>api_key</span>. Add <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>media_path</span> and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>local_media_path</span> when an Arr container sees a different library path than auditorr.
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Multiple Sonarr/Radarr instances</label>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 10 }}>
+            Add extra Sonarr or Radarr servers for 4K, anime, kids, or other split libraries. Leave this empty to use the single Sonarr/Radarr fields below.
           </span>
-          <textarea
-            value={arrConnectionsText}
-            onChange={e => { setArrConnectionsText(e.target.value); setIsDirty(true); setArrTestStatus(null) }}
-            onFocus={() => setArrConnectionsFocused(true)}
-            onBlur={() => setArrConnectionsFocused(false)}
-            placeholder={'[\n  {\n    "id": "radarr-4k",\n    "service": "radarr",\n    "name": "4K Radarr",\n    "base_url": "http://192.168.1.x:7878",\n    "api_key": "paste key",\n    "media_path": "/movies-4k",\n    "local_media_path": "/data/media/movies-4k"\n  }\n]'}
-            style={{
-              width: '100%', height: 140, padding: '8px 11px',
-              borderRadius: 'var(--r)',
-              border: `1px solid ${arrConnectionsFocused ? 'var(--accent)' : 'var(--border2)'}`,
-              background: 'var(--surface2)', color: 'var(--text)',
-              fontFamily: 'var(--mono)', fontSize: 12,
-              outline: 'none', resize: 'vertical',
-              transition: 'border 0.12s', boxSizing: 'border-box',
-            }}
-          />
+          {arrConnections.length === 0 ? (
+            <div style={{ padding: '10px 12px', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', color: 'var(--text-dim)', fontSize: 11, marginBottom: 10 }}>
+              No extra Arr instances configured.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
+              {arrConnections.map((conn, index) => {
+                const service = conn.service === 'radarr' ? 'radarr' : 'sonarr'
+                return (
+                  <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: 12, background: 'var(--surface2)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        <div style={{ display: 'flex' }}>
+                          {ARR_SERVICES.map((opt, i) => (
+                            <button key={opt.id} onClick={() => setArrConnection(index, 'service', opt.id)} style={{
+                              padding: '5px 10px',
+                              borderRadius: i === 0 ? 'var(--r) 0 0 var(--r)' : '0 var(--r) var(--r) 0',
+                              border: `1px solid ${service === opt.id ? 'var(--accent)' : 'var(--border2)'}`,
+                              borderRight: i === 0 ? 'none' : undefined,
+                              background: service === opt.id ? 'var(--accent)18' : 'transparent',
+                              color: service === opt.id ? 'var(--accent)' : 'var(--text-dim)',
+                              fontSize: 11, cursor: 'pointer',
+                            }}>{opt.label}</button>
+                          ))}
+                        </div>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {conn.id || `${service}-${index + 1}`}
+                        </span>
+                      </div>
+                      <button onClick={() => removeArrConnection(index)} style={{ padding: '5px 9px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 11, cursor: 'pointer' }}>
+                        Remove
+                      </button>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                      <Field label="Label" placeholder={service === 'radarr' ? '4K Radarr' : 'Anime Sonarr'} value={conn.name} onChange={v => setArrConnection(index, 'name', v)} />
+                      <Field label="ID" placeholder={`${service}-4k`} value={conn.id} onChange={v => setArrConnection(index, 'id', v)} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                      <Field label="URL" placeholder={`http://192.168.1.x:${ARR_SERVICES.find(s => s.id === service)?.port}`} value={conn.base_url} onChange={v => setArrConnection(index, 'base_url', v)} />
+                      <Field label="API Key" type="password" placeholder="(unchanged - leave blank to keep current)" value={conn.api_key} onChange={v => setArrConnection(index, 'api_key', v)} />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <Field label="Arr Media Path" placeholder="/movies or /tv" hint="Path as this Arr instance sees its library." value={conn.media_path} onChange={v => setArrConnection(index, 'media_path', v)} />
+                      <Field label="Auditorr Media Path" placeholder="/data/media/movies" hint="Matching path inside auditorr. Leave blank when paths already match." value={conn.local_media_path} onChange={v => setArrConnection(index, 'local_media_path', v)} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => addArrConnection('sonarr')} style={{ padding: '6px 12px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
+              Add Sonarr
+            </button>
+            <button onClick={() => addArrConnection('radarr')} style={{ padding: '6px 12px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
+              Add Radarr
+            </button>
             <button onClick={handleTestArrConnections} style={{ padding: '6px 12px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
               {arrTestStatus?.loading ? 'Testing…' : 'Test Arr Connections'}
             </button>

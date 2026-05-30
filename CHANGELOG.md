@@ -1,4 +1,19 @@
 # Changelog
+## v1.5.1 — 2026-05-29
+
+### Features
+- **Media server exclusion presets** — new "Media Server" section in Config → Exclusion Patterns. Select one or more presets (Plex, Jellyfin, Emby, Kodi, UMS) to automatically exclude all common sidecar files for that server: `.nfo` files, artwork images (`poster.jpg`, `folder.jpg`, `fanart*.jpg`, `*-backdrop.png`, etc.), and server-specific metadata files (`.plexmatch`, `extrafanart`). Presets are applied on top of any custom exclusion patterns and are deduplicated before the scan.
+- **Arr metadata relink workflow** — new "Relink" button in the dashboard for media files that are missing hardlinks. auditorr cross-references each unlinked media file against Sonarr/Radarr metadata and unlinked torrent files, scores each candidate by size match, title token overlap, year, service/category, and seeding status, then generates a reviewed bash script (`ln` with pre-flight `cmp` verification). The script never executes automatically — you review and run it manually. Supports multi-instance Arr connections; per-connection path mapping is applied before matching.
+- **Human-friendly multi-Arr settings** — Config now uses editable Sonarr/Radarr instance rows instead of a raw JSON textarea. Add Sonarr or Radarr instances, choose the service, label them, set URL/API key, and optionally map per-instance media paths while preserving the same saved `ARR_CONNECTIONS` format.
+
+### Bug Fixes
+- **qui/qBittorrent connection race on server reboot** — startup audit now retries once after a 60-second delay when the first attempt fails with a source connection error (e.g. qBittorrent or qui not yet ready on container start). The first transient failure is not persisted to audit history; if the retry succeeds, only the successful audit appears in history. If the retry also fails, that final failure is recorded. Manual, watchdog, and scheduled scan errors are unchanged.
+
+### Performance
+- **Precompiled exclusion patterns** — `compile_exclusions(patterns)` pre-classifies every pattern into typed buckets at audit startup: O(1) extension set (`ext:` rules and pure `*.<ext>` globs), O(1) exact-name set (barewords and `name:` rules), precomputed subtree prefix tuples (`/**` and trailing-`/` patterns), and precomputed variant tuples for path globs and plain-path prefix rules. The compiled matcher's `match()` does only the per-file work. For a 100-pattern list including all media-server presets, this eliminates ~100 `_norm`/`_variants` calls per file, reducing exclusion checking from the dominant scan cost to near-zero.
+- **Relink candidate scan scalability** — `find_relink_candidates` now pre-builds the eligible torrent list (filtering excluded/linked/orphaned torrents and precomputing `_token_text` and the token set once per torrent) before the media loop, eliminating the O(media × torrents) redundant work. Added a `RELINK_MAX_PAIRS` guard (default 25,000,000): if the eligible pair count exceeds the cap, the scan logs a warning and returns an empty list rather than pinning the single worker. Below the cap, output is identical.
+- **Parallel Sonarr episode-file fetching** — `_fetch_sonarr_media` now fans the per-series `/api/v3/episodefile?seriesId=` requests over a bounded thread pool (≤ 8 workers) instead of issuing them sequentially. For Sonarr libraries with hundreds of series this eliminates the N+1 sequential API call pattern and cuts fetch time roughly proportional to series count.
+
 ## v1.5.0 — 2026-05-22
 
 ### Performance

@@ -560,7 +560,7 @@ def _save_error_status(message):
     db_save_results(curr)
 
 
-def run_audit_process(trigger=None):
+def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
     # avoiding a race between set_state(trigger=...) and reading it back
@@ -677,8 +677,10 @@ def run_audit_process(trigger=None):
         set_state(status_message=status_msg, last_scan_status="ok")
     except sources.SourceConnectionError as e:
         msg = str(e)
-        log.error(msg); _save_error_status(msg)
-        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
+        log.error(msg)
+        if persist_source_errors:
+            _save_error_status(msg)
+            db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         set_state(status_message=msg, last_scan_status="error")
     except Exception as e:
         msg = f"Audit error: {e}"
