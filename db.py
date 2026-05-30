@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     'NI_RATIO':           0.01,
     'DUP_RATIO':          0.01,
     'EXCLUSION_PATTERNS':          [],
+    'MEDIA_SERVER_EXCLUSION_PRESETS': [],
     'EXCLUSION_HIDE_FROM_EXPLORER': False,
     'SONARR_URL':         '',
     'SONARR_API_KEY':     '',
@@ -33,6 +34,7 @@ DEFAULT_CONFIG = {
     'RADARR_API_KEY':     '',
     'SONARR_REMOTE_PATH': '',  # Path as Sonarr sees it (inside its container)
     'RADARR_REMOTE_PATH': '',  # Path as Radarr sees it (inside its container)
+    'ARR_CONNECTIONS':    [],  # Optional multi-instance Sonarr/Radarr connections
 }
 
 
@@ -416,6 +418,48 @@ def validate_config(data):
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must be a string")
                 elif len(p) > 200:
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must not exceed 200 characters")
+
+    presets = data.get('MEDIA_SERVER_EXCLUSION_PRESETS')
+    if presets is not None:
+        allowed_presets = {'plex', 'jellyfin', 'emby', 'kodi', 'ums'}
+        if not isinstance(presets, list):
+            errors.append("MEDIA_SERVER_EXCLUSION_PRESETS must be a list")
+        elif len(presets) > len(allowed_presets):
+            errors.append("MEDIA_SERVER_EXCLUSION_PRESETS contains too many entries")
+        else:
+            for i, preset in enumerate(presets):
+                if str(preset).lower() not in allowed_presets:
+                    errors.append(f"MEDIA_SERVER_EXCLUSION_PRESETS[{i}] must be one of plex, jellyfin, emby, kodi, ums")
+
+    arr_connections = data.get('ARR_CONNECTIONS')
+    if arr_connections is not None:
+        if not isinstance(arr_connections, list):
+            errors.append("ARR_CONNECTIONS must be a list")
+        elif len(arr_connections) > 50:
+            errors.append("ARR_CONNECTIONS must not exceed 50 connections")
+        else:
+            seen_ids = set()
+            for i, conn in enumerate(arr_connections):
+                if not isinstance(conn, dict):
+                    errors.append(f"ARR_CONNECTIONS[{i}] must be an object")
+                    continue
+                service = str(conn.get('service', '')).lower()
+                if service not in ('sonarr', 'radarr'):
+                    errors.append(f"ARR_CONNECTIONS[{i}].service must be 'sonarr' or 'radarr'")
+                conn_id = str(conn.get('id', '')).strip()
+                if not conn_id:
+                    errors.append(f"ARR_CONNECTIONS[{i}].id is required")
+                elif conn_id in seen_ids:
+                    errors.append(f"ARR_CONNECTIONS[{i}].id must be unique")
+                seen_ids.add(conn_id)
+                if conn.get('base_url') and len(str(conn.get('base_url'))) > 300:
+                    errors.append(f"ARR_CONNECTIONS[{i}].base_url is too long")
+                if conn.get('url') and len(str(conn.get('url'))) > 300:
+                    errors.append(f"ARR_CONNECTIONS[{i}].url is too long")
+                if conn.get('media_path') and len(str(conn.get('media_path'))) > 300:
+                    errors.append(f"ARR_CONNECTIONS[{i}].media_path is too long")
+                if conn.get('local_media_path') and len(str(conn.get('local_media_path'))) > 300:
+                    errors.append(f"ARR_CONNECTIONS[{i}].local_media_path is too long")
 
     return errors
 

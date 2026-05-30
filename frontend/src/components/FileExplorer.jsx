@@ -299,7 +299,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
   const indent      = (depth * 20) + 14
   const isDupe      = node.duplicate_paths?.length > 0
   const isOrphan    = node.status === 'Orphaned'
-  const notImported = !node.imported && tab === 'torrents'
+  const notImported = !node.excluded && !node.imported && node.status !== 'Orphaned' && tab === 'torrents'
   const showSearchButtons = tab === 'media' && isOrphan
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
@@ -458,7 +458,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
   const dirname     = node.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
   const isDupe      = node.duplicate_paths?.length > 0
   const isOrphan    = node.status === 'Orphaned'
-  const notImported = !node.imported && tab === 'torrents'
+  const notImported = !node.excluded && !node.imported && node.status !== 'Orphaned' && tab === 'torrents'
   const showSearchButtons = tab === 'media' && isOrphan
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
@@ -735,8 +735,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   useEffect(() => {
     api.getConfig().then(c => {
-      setSonarrConfigured(!!c.SONARR_URL)
-      setRadarrConfigured(!!c.RADARR_URL)
+      const arrConnections = Array.isArray(c.ARR_CONNECTIONS) ? c.ARR_CONNECTIONS : []
+      setSonarrConfigured(!!c.SONARR_URL || arrConnections.some(conn => String(conn.service || '').toLowerCase() === 'sonarr'))
+      setRadarrConfigured(!!c.RADARR_URL || arrConnections.some(conn => String(conn.service || '').toLowerCase() === 'radarr'))
       setTorrentSource(c.TORRENT_SOURCE || 'qbit')
       setQbHost(c.QB_HOST || '')
       setQuiHost(c.QUI_HOST || '')
@@ -801,11 +802,11 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     let sMatch
     if      (statusFilter === 'all')         sMatch = true
     else if (statusFilter === 'Duplicate')   sMatch = (f.duplicate_paths||[]).length > 0
-    else if (statusFilter === 'NotImported') sMatch = !f.imported && f.status !== 'Orphaned'
+    else if (statusFilter === 'NotImported') sMatch = !f.excluded && !f.imported && f.status !== 'Orphaned'
     else if (statusFilter === 'Excluded')    sMatch = f.excluded === true
     else                                     sMatch = f.status === statusFilter
 
-    const iMatch = importFilter === 'all' || (importFilter === 'notImported' && !f.imported)
+    const iMatch = importFilter === 'all' || (importFilter === 'notImported' && !f.excluded && !f.imported && f.status !== 'Orphaned')
 
     const tMatch =
       (trackerInc.length === 0 || trackerInc.some(t => (f.trackers||[]).includes(t))) &&

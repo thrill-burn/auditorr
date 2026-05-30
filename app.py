@@ -26,8 +26,10 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats
-from arr import _test_arr_connection, arr_rescan, arr_search
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections
 from scripts import generate_script
+from relink import find_relink_candidates
+from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -248,6 +250,9 @@ def handle_config():
                 'NI_RATIO':           float(data.get('NI_RATIO',  0.01)),
                 'DUP_RATIO':          float(data.get('DUP_RATIO', 0.01)),
                 'EXCLUSION_PATTERNS':           [p for p in data.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)],
+                'MEDIA_SERVER_EXCLUSION_PRESETS': normalize_media_server_presets(
+                    data.get('MEDIA_SERVER_EXCLUSION_PRESETS', [])
+                ),
                 'EXCLUSION_HIDE_FROM_EXPLORER': bool(data.get('EXCLUSION_HIDE_FROM_EXPLORER', False)),
                 'SONARR_URL':         str(data.get('SONARR_URL', '')),
                 'SONARR_API_KEY':     str(data['SONARR_API_KEY']) if data.get('SONARR_API_KEY') else existing.get('SONARR_API_KEY', ''),
@@ -255,6 +260,10 @@ def handle_config():
                 'RADARR_API_KEY':     str(data['RADARR_API_KEY']) if data.get('RADARR_API_KEY') else existing.get('RADARR_API_KEY', ''),
                 'SONARR_REMOTE_PATH': str(data.get('SONARR_REMOTE_PATH', '')),
                 'RADARR_REMOTE_PATH': str(data.get('RADARR_REMOTE_PATH', '')),
+                'ARR_CONNECTIONS':    _merge_arr_connection_secrets(
+                    data.get('ARR_CONNECTIONS', existing.get('ARR_CONNECTIONS', [])),
+                    existing.get('ARR_CONNECTIONS', []),
+                ),
             }
         except (ValueError, TypeError) as e:
             return jsonify({"status": "error", "message": f"Invalid value: {e}"}), 400
@@ -286,7 +295,33 @@ def handle_config():
         cfg['SONARR_API_KEY'] = '__stored__'
     if cfg.get('RADARR_API_KEY'):
         cfg['RADARR_API_KEY'] = '__stored__'
+    if isinstance(cfg.get('ARR_CONNECTIONS'), list):
+        cfg['ARR_CONNECTIONS'] = [
+            {**c, 'api_key': '__stored__'} if c.get('api_key') else c
+            for c in cfg['ARR_CONNECTIONS']
+        ]
     return jsonify(cfg)
+
+
+def _merge_arr_connection_secrets(incoming, existing):
+    existing_by_id = {
+        str(c.get('id')): c
+        for c in existing
+        if isinstance(c, dict) and c.get('id')
+    } if isinstance(existing, list) else {}
+    merged = []
+    if not isinstance(incoming, list):
+        return []
+    for raw in incoming:
+        if not isinstance(raw, dict):
+            continue
+        conn = dict(raw)
+        if conn.get('api_key') == '__stored__' or not conn.get('api_key'):
+            old = existing_by_id.get(str(conn.get('id')))
+            if old and old.get('api_key'):
+                conn['api_key'] = old['api_key']
+        merged.append(conn)
+    return merged
 
 
 @app.route('/api/test_connection', methods=['POST'])
@@ -436,17 +471,75 @@ def test_radarr():
     return jsonify({"status": "error", "message": msg}), 400
 
 
+@app.route('/api/test_arr_connections', methods=['POST'])
+@require_auth
+def test_arr_connections_route():
+    data = request.json or {}
+    existing = db_load_config()
+    cfg = {**existing}
+
+    for key in (
+        'SONARR_URL', 'SONARR_API_KEY', 'SONARR_REMOTE_PATH',
+        'RADARR_URL', 'RADARR_API_KEY', 'RADARR_REMOTE_PATH',
+    ):
+        if data.get(key):
+            cfg[key] = data[key]
+
+    if 'ARR_CONNECTIONS' in data:
+        cfg['ARR_CONNECTIONS'] = _merge_arr_connection_secrets(
+            data.get('ARR_CONNECTIONS', []),
+            existing.get('ARR_CONNECTIONS', []),
+        )
+
+    try:
+        result = test_arr_connections(cfg)
+    except ValueError as e:
+        return jsonify({
+            "status": "error",
+            "ok": False,
+            "message": str(e),
+            "connection_count": 0,
+            "connections": [],
+        })
+    if result['connection_count'] == 0:
+        result['message'] = 'No Sonarr/Radarr connections configured'
+    return jsonify({
+        "status": "success" if result.get('ok') else "error",
+        **result,
+    })
+
+
 @app.route('/api/actions/script/<script_type>')
 @require_auth
 def get_action_script(script_type):
+    cfg = db_load_config()
     results = db_load_results()
     results['torrent_files'] = db_load_file_results('torrents')
-    cfg = db_load_config()
+    if script_type == 'relink_media_hardlinks':
+        media_files = db_load_file_results('media')
+        results['media_files'] = media_files
+        results['relink_candidates'] = find_relink_candidates(
+            media_files,
+            results['torrent_files'],
+            fetch_arr_media_index(cfg),
+            cfg,
+        )
     try:
         script = generate_script(script_type, results, cfg)
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     return app.response_class(script, mimetype='text/plain; charset=utf-8')
+
+
+@app.route('/api/actions/relink_candidates')
+@require_auth
+def actions_relink_candidates():
+    cfg = db_load_config()
+    media_files = db_load_file_results('media')
+    torrent_files = db_load_file_results('torrents')
+    arr_media = fetch_arr_media_index(cfg)
+    candidates = find_relink_candidates(media_files, torrent_files, arr_media, cfg)
+    return jsonify({"status": "success", "candidates": candidates})
 
 
 @app.route('/api/actions/sonarr_rescan', methods=['POST'])

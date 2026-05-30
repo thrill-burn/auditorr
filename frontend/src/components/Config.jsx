@@ -4,6 +4,13 @@ import { api } from '../api'
 
 const AUDIT_ROW_H = 36
 const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 0.8fr 1fr'
+const MEDIA_SERVER_PRESETS = [
+  { id: 'plex', label: 'Plex' },
+  { id: 'jellyfin', label: 'Jellyfin' },
+  { id: 'emby', label: 'Emby' },
+  { id: 'kodi', label: 'Kodi' },
+  { id: 'ums', label: 'Universal Media Server' },
+]
 
 function fmtDuration(s) {
   if (s == null) return '—'
@@ -164,7 +171,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [dupPct, setDupPct] = useState('')
   const [exclusionPatterns,        setExclusionPatterns]        = useState('')
   const [exclusionFocused,         setExclusionFocused]         = useState(false)
+  const [mediaServerPresets,       setMediaServerPresets]       = useState([])
   const [exclusionHideFromExplorer, setExclusionHideFromExplorer] = useState(false)
+  const [arrConnectionsText,       setArrConnectionsText]       = useState('')
+  const [arrConnectionsFocused,    setArrConnectionsFocused]    = useState(false)
+  const [arrTestStatus,            setArrTestStatus]            = useState(null)
   const [watchdogEnabled, setWatchdogEnabled] = useState(true)
 
   const loadConfig = () => {
@@ -182,7 +193,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
+      setMediaServerPresets(Array.isArray(c.MEDIA_SERVER_EXCLUSION_PRESETS) ? c.MEDIA_SERVER_EXCLUSION_PRESETS : [])
       setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
+      setArrConnectionsText(JSON.stringify(c.ARR_CONNECTIONS || [], null, 2))
+      setArrTestStatus(null)
       setWatchdogEnabled(c.WATCHDOG_ENABLED !== false)
       setPassChanged(false)
       setApiKeyChanged(false)
@@ -285,16 +299,53 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     } catch (e) { setRadarrTestStatus({ ok: false, msg: e.message }) }
   }
 
+  const parseArrConnections = () => {
+    let arrConnections = []
+    arrConnections = arrConnectionsText.trim() ? JSON.parse(arrConnectionsText) : []
+    if (!Array.isArray(arrConnections)) throw new Error('ARR connections must be a JSON array')
+    return arrConnections
+  }
+
+  const handleTestArrConnections = async () => {
+    setArrTestStatus({ loading: true })
+    let arrConnections = []
+    try {
+      arrConnections = parseArrConnections()
+    } catch (e) {
+      setArrTestStatus({ ok: false, msg: `Invalid Arr connections JSON: ${e.message}` })
+      return
+    }
+    try {
+      const result = await api.testArrConnections({ ...conf, ARR_CONNECTIONS: arrConnections })
+      setArrTestStatus({
+        ok: !!result.ok,
+        msg: result.message,
+        connections: result.connections || [],
+      })
+    } catch (e) {
+      setArrTestStatus({ ok: false, msg: e.message })
+    }
+  }
+
   const handleSave = async () => {
     const sourceChanged = conf.TORRENT_SOURCE !== savedSource
     setPersistentWarnings([])
+    let arrConnections = []
+    try {
+      arrConnections = parseArrConnections()
+    } catch (e) {
+      setSaveStatus({ ok: false, msg: `Invalid Arr connections JSON: ${e.message}` })
+      return
+    }
     const payload = {
       ...conf,
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
       NI_RATIO:  parseFloat(niPct)  / 100 || 0.01,
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
       EXCLUSION_PATTERNS:           exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
+      MEDIA_SERVER_EXCLUSION_PRESETS: mediaServerPresets,
       EXCLUSION_HIDE_FROM_EXPLORER: exclusionHideFromExplorer,
+      ARR_CONNECTIONS:              arrConnections,
       WATCHDOG_ENABLED:             watchdogEnabled,
     }
     if (!passChanged)   delete payload.QB_PASS
@@ -315,6 +366,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   const g2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }
   const g3 = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }
+
+  const toggleMediaPreset = id => {
+    setMediaServerPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
+    setIsDirty(true)
+  }
 
   const handleClearHistory = async () => {
     if (!window.confirm('Clear all audit history? This will reset the score chart and run log. Cannot be undone.')) return
@@ -472,6 +528,47 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             />
           )}
         </div>
+        <div style={{ marginTop: 18 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Advanced: multiple Sonarr/Radarr instances</label>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
+            Optional JSON array. Leave empty to use the single Sonarr/Radarr fields above. Each entry needs <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>id</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>service</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>base_url</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>api_key</span>. Add <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>media_path</span> and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>local_media_path</span> when an Arr container sees a different library path than auditorr.
+          </span>
+          <textarea
+            value={arrConnectionsText}
+            onChange={e => { setArrConnectionsText(e.target.value); setIsDirty(true); setArrTestStatus(null) }}
+            onFocus={() => setArrConnectionsFocused(true)}
+            onBlur={() => setArrConnectionsFocused(false)}
+            placeholder={'[\n  {\n    "id": "radarr-4k",\n    "service": "radarr",\n    "name": "4K Radarr",\n    "base_url": "http://192.168.1.x:7878",\n    "api_key": "paste key",\n    "media_path": "/movies-4k",\n    "local_media_path": "/data/media/movies-4k"\n  }\n]'}
+            style={{
+              width: '100%', height: 140, padding: '8px 11px',
+              borderRadius: 'var(--r)',
+              border: `1px solid ${arrConnectionsFocused ? 'var(--accent)' : 'var(--border2)'}`,
+              background: 'var(--surface2)', color: 'var(--text)',
+              fontFamily: 'var(--mono)', fontSize: 12,
+              outline: 'none', resize: 'vertical',
+              transition: 'border 0.12s', boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+            <button onClick={handleTestArrConnections} style={{ padding: '6px 12px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
+              {arrTestStatus?.loading ? 'Testing…' : 'Test Arr Connections'}
+            </button>
+            {arrTestStatus && !arrTestStatus.loading && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: arrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                {arrTestStatus.ok ? '✓ Connected' : `✗ ${arrTestStatus.msg || 'Connection check failed'}`}
+              </span>
+            )}
+          </div>
+          {arrTestStatus?.connections?.length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {arrTestStatus.connections.map(conn => (
+                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: conn.ok ? 'var(--text-dim)' : 'var(--red)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {conn.ok ? '✓' : '✗'} {conn.name || conn.id} · {conn.service} · {conn.managed_file_count || 0} managed file{conn.managed_file_count === 1 ? '' : 's'}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </Card>
 
       {saveWarnings.length > 0 && (
@@ -608,17 +705,17 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
       </Card>
 
-      <Card title="Exclusion Patterns">
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Patterns</label>
+      <Card title="Exclusion Folders & Patterns">
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Ignored folders or files</label>
         <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
-          One pattern per line. Supports globs: <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>*.srt</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>@eaDir</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>Featurettes</span>. Matching files are excluded from health scoring.
+          One rule per line. Add unmanaged torrent folders here to keep books, music, games, or other categories out of Not Imported reporting. Plain folder paths work; <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>data/torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>/data/torrents/books</span>, and <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>/mnt/user/data/torrents/books</span> all target the same TRaSH-style folder. File names, directory names, and legacy globs still work.
         </span>
         <textarea
           value={exclusionPatterns}
           onChange={e => { setExclusionPatterns(e.target.value); setIsDirty(true) }}
           onFocus={() => setExclusionFocused(true)}
           onBlur={() => setExclusionFocused(false)}
-          placeholder={'@eaDir\n*.srt\nFeaturettes'}
+          placeholder={'torrents/games\ntorrents/lidarr\ntorrents/music\ntorrents/books\nmedia/music\n**/.plexmatch\n*.srt'}
           style={{
             width: '100%', height: 120, padding: '8px 11px',
             borderRadius: 'var(--r)',
@@ -629,6 +726,32 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             transition: 'border 0.12s', boxSizing: 'border-box',
           }}
         />
+        <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Media server sidecar presets</div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
+            Ignore metadata and artwork sidecars commonly written or read by media servers, such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>.plexmatch</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>.nfo</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>poster.jpg</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>fanart.jpg</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>folder.jpg</span>.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {MEDIA_SERVER_PRESETS.map(preset => {
+              const active = mediaServerPresets.includes(preset.id)
+              return (
+                <button
+                  key={preset.id}
+                  onClick={() => toggleMediaPreset(preset.id)}
+                  style={{
+                    padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12,
+                    border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
+                    background: active ? 'var(--accent)18' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--text-dim)',
+                    cursor: 'pointer', transition: 'all 0.12s',
+                  }}
+                >
+                  {preset.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>File explorer visibility</div>
