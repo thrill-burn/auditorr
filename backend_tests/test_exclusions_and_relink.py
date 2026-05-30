@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from arr import arr_search, fetch_arr_media_index, normalize_arr_connections, test_arr_connections
 from audit import _compute_tracker_file_stats, _not_imported_paths, process_health_metrics
-from exclusions import is_excluded
+from exclusions import compile_exclusions, is_excluded
 from media_server_exclusions import expand_exclusion_patterns
 from relink import find_relink_candidates
 
@@ -136,6 +136,118 @@ class ExclusionRuleTests(unittest.TestCase):
             "movie.mkv",
             patterns,
         ))
+
+
+class CompiledExclusionMatcherTests(unittest.TestCase):
+    def test_compiled_matcher_agrees_with_is_excluded_across_all_pattern_types(self):
+        """compile_exclusions().match() must produce identical results to is_excluded()."""
+        custom_patterns = [
+            # ext: rules
+            "ext:.nfo",
+            "ext:srt",
+            # name: rules
+            "name:@eaDir",
+            "name:.@__thumb",
+            # contains: rules
+            "contains:sample",
+            # barewords
+            "Featurettes",
+            "Extras",
+            "BehindTheScenes",
+            # subtree glob patterns
+            "torrents/games/**",
+            "torrents/books/**",
+            "data/torrents/music/**",
+            "media/music/**",
+            # Docker path: plain path → subtree prefix with /data/ variant handling
+            "/mnt/user/data/torrents/books",
+            # Path glob (** prefix)
+            "**/.plexmatch",
+            # Legacy filename glob
+            "*.srt",
+            # Pure ext glob (should route to ext bucket, not fnmatch)
+            "*.nfo",
+        ]
+        cfg = {
+            "EXCLUSION_PATTERNS": custom_patterns,
+            "MEDIA_SERVER_EXCLUSION_PRESETS": ["plex", "jellyfin", "emby", "kodi", "ums"],
+        }
+        patterns = expand_exclusion_patterns(cfg)
+        compiled = compile_exclusions(patterns)
+
+        # Corpus: (full_path, rel_path, filename)
+        corpus = [
+            # NFO / sidecar files — should be excluded
+            ("/data/media/Movies/Movie (2024)/movie.nfo", "Movies/Movie (2024)/movie.nfo", "movie.nfo"),
+            ("/data/media/TV/Show/Season 01/season.nfo", "TV/Show/Season 01/season.nfo", "season.nfo"),
+            ("/data/media/TV/Show/tvshow.nfo", "TV/Show/tvshow.nfo", "tvshow.nfo"),
+            ("/data/media/Movies/Movie/artist.nfo", "Movies/Movie/artist.nfo", "artist.nfo"),
+            ("/data/media/Movies/Movie/Movie.en.srt", "Movies/Movie/Movie.en.srt", "Movie.en.srt"),
+            # Artwork exact names — should be excluded
+            ("/data/media/Movies/Movie (2024)/poster.jpg", "Movies/Movie (2024)/poster.jpg", "poster.jpg"),
+            ("/data/media/Movies/Movie (2024)/folder.jpg", "Movies/Movie (2024)/folder.jpg", "folder.jpg"),
+            ("/data/media/Movies/Movie (2024)/cover.jpg", "Movies/Movie (2024)/cover.jpg", "cover.jpg"),
+            ("/data/media/Movies/Movie (2024)/background.jpg", "Movies/Movie (2024)/background.jpg", "background.jpg"),
+            ("/data/media/Music/Album/albumart.jpg", "Music/Album/albumart.jpg", "albumart.jpg"),
+            # Artwork globs (*-name.ext) — should be excluded
+            ("/data/media/Movies/Movie (2024)/Movie (2024)-poster.jpg", "Movies/Movie (2024)/Movie (2024)-poster.jpg", "Movie (2024)-poster.jpg"),
+            ("/data/media/Movies/Movie (2024)/Movie (2024)-fanart-1.jpg", "Movies/Movie (2024)/Movie (2024)-fanart-1.jpg", "Movie (2024)-fanart-1.jpg"),
+            # Artwork globs (name*.ext) — should be excluded
+            ("/data/media/Movies/Movie/fanart-1.png", "Movies/Movie/fanart-1.png", "fanart-1.png"),
+            ("/data/media/Movies/Movie/backdrop-wide.jpg", "Movies/Movie/backdrop-wide.jpg", "backdrop-wide.jpg"),
+            # .plexmatch — path glob **/.plexmatch
+            ("/data/media/TV/Show/.plexmatch", "TV/Show/.plexmatch", ".plexmatch"),
+            ("/data/media/Movies/Movie (2024)/.plexmatch", "Movies/Movie (2024)/.plexmatch", ".plexmatch"),
+            # Segment barewords — should be excluded
+            ("/data/media/Movie/Featurettes/Behind The Scenes.mkv", "Movie/Featurettes/Behind The Scenes.mkv", "Behind The Scenes.mkv"),
+            ("/data/media/Movie/Extras/Deleted.mkv", "Movie/Extras/Deleted.mkv", "Deleted.mkv"),
+            # contains: sample — should be excluded
+            ("/data/media/Movies/Movie/sample.mkv", "Movies/Movie/sample.mkv", "sample.mkv"),
+            ("/data/torrents/movies/Movie/sample-clip.mp4", "movies/Movie/sample-clip.mp4", "sample-clip.mp4"),
+            # name: segments — should be excluded
+            ("/data/media/TV/@eaDir/thumb.jpg", "TV/@eaDir/thumb.jpg", "thumb.jpg"),
+            # Subtree globs — should be excluded
+            ("/data/torrents/games/Game.iso", "games/Game.iso", "Game.iso"),
+            ("/data/torrents/books/Book.epub", "books/Book.epub", "Book.epub"),
+            # Docker /data/ variant — plain path rule
+            ("/mnt/user/data/torrents/books/Book.epub", "books/Book.epub", "Book.epub"),
+            # ext: rule (srt)
+            ("/data/media/Movies/Movie/Movie.en.srt", "Movies/Movie/Movie.en.srt", "Movie.en.srt"),
+            # Media files — must NOT be excluded
+            ("/data/media/Movies/Movie (2024)/Movie (2024).mkv", "Movies/Movie (2024)/Movie (2024).mkv", "Movie (2024).mkv"),
+            ("/data/media/Movies/Movie (2024)/Movie (2024).mp4", "Movies/Movie (2024)/Movie (2024).mp4", "Movie (2024).mp4"),
+            ("/data/media/TV/Show/Season 01/S01E01.mkv", "TV/Show/Season 01/S01E01.mkv", "S01E01.mkv"),
+            ("/data/torrents/movies/The.Matrix.1999.1080p.BluRay-GRP/The.Matrix.1999.1080p.BluRay-GRP.mkv",
+             "movies/The.Matrix.1999.1080p.BluRay-GRP/The.Matrix.1999.1080p.BluRay-GRP.mkv",
+             "The.Matrix.1999.1080p.BluRay-GRP.mkv"),
+            ("/data/media/TV/Show/Season 02/S02E03.mp4", "TV/Show/Season 02/S02E03.mp4", "S02E03.mp4"),
+            ("/data/torrents/movies/Sci-Fi.Classic.1999.REMUX/Sci-Fi.Classic.1999.REMUX.mkv",
+             "movies/Sci-Fi.Classic.1999.REMUX/Sci-Fi.Classic.1999.REMUX.mkv",
+             "Sci-Fi.Classic.1999.REMUX.mkv"),
+        ]
+
+        for full_path, rel_path, filename in corpus:
+            expected = is_excluded(full_path, rel_path, filename, patterns)
+            actual = compiled.match(full_path, rel_path, filename)
+            self.assertEqual(
+                expected, actual,
+                f"compiled.match() disagreed with is_excluded() for {filename!r} ({full_path!r}): "
+                f"expected {expected}, got {actual}",
+            )
+
+        # Media-server presets alone must never exclude .mkv or .mp4 files.
+        # Use a preset-only compiled matcher (no user custom patterns) so that
+        # bareword rules like "Featurettes" don't confound the assertion.
+        preset_only = compile_exclusions(expand_exclusion_patterns({
+            "EXCLUSION_PATTERNS": [],
+            "MEDIA_SERVER_EXCLUSION_PRESETS": ["plex", "jellyfin", "emby", "kodi", "ums"],
+        }))
+        for full_path, rel_path, filename in corpus:
+            if filename.endswith((".mkv", ".mp4")):
+                self.assertFalse(
+                    preset_only.match(full_path, rel_path, filename),
+                    f"Media-server preset should not exclude {filename!r}",
+                )
 
 
 class ArrConnectionTests(unittest.TestCase):

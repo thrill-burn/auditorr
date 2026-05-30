@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 
 import sources
-from exclusions import is_excluded
+from exclusions import is_excluded, compile_exclusions
 from media_server_exclusions import expand_exclusion_patterns
 
 from db import (
@@ -51,7 +51,7 @@ def _is_excluded(rel_path, filename, patterns):
     return is_excluded(rel_path, rel_path, filename, patterns)
 
 
-def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None):
+def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None):
     records     = []
     scanned     = scanned_so_far
     stat_errors = 0
@@ -93,7 +93,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     "full_path": full_path, "rel_path": rel_path,
                     "size": size, "inode": inode, "file_key": file_key,
                     "nlink": nlink, "source": source_label,
-                    "excluded": is_excluded(full_path, rel_path, filename, exclusion_patterns),
+                    "excluded": compiled_exclusions.match(full_path, rel_path, filename) if compiled_exclusions is not None else is_excluded(full_path, rel_path, filename, exclusion_patterns),
                 })
             except Exception as e:
                 log.warning(f"Could not stat {full_path}: {e}")
@@ -575,13 +575,16 @@ def run_audit_process(trigger=None):
         set_state(total_files=0, status_message="Scanning torrent directory...", phase="disk")
         inode_map          = {}
         exclusion_patterns = expand_exclusion_patterns(cfg)
+        compiled_excl      = compile_exclusions(exclusion_patterns)
         torrent_records, scanned, torrent_errors = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
-            exclusion_patterns=exclusion_patterns, total_ref=total_ref)
+            exclusion_patterns=exclusion_patterns, total_ref=total_ref,
+            compiled_exclusions=compiled_excl)
         set_state(status_message="Scanning media directory...", phase="disk")
         media_records, _, media_errors = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
-            exclusion_patterns=exclusion_patterns, total_ref=total_ref)
+            exclusion_patterns=exclusion_patterns, total_ref=total_ref,
+            compiled_exclusions=compiled_excl)
         stat_errors = torrent_errors + media_errors
         set_state(status_message="Detecting duplicates...", phase="post")
         duplicate_map = _build_duplicate_map(torrent_records + media_records)

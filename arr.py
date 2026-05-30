@@ -4,6 +4,7 @@ import json
 import logging
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
 
@@ -206,12 +207,18 @@ def _fetch_radarr_media(conn):
 
 
 def _fetch_sonarr_media(conn):
-    rows = []
-    for series in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series'):
-        series_id = series.get('id')
-        if series_id is None:
-            continue
-        for episode_file in _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/episodefile?seriesId={series_id}'):
+    series_list = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series')
+    valid_series = [(s, s['id']) for s in series_list if s.get('id') is not None]
+    if not valid_series:
+        return []
+
+    base_url = conn['base_url']
+    api_key = conn['api_key']
+
+    def _fetch_episode_files(series, series_id):
+        episode_files = _arr_get(base_url, api_key, f'/api/v3/episodefile?seriesId={series_id}')
+        rows = []
+        for episode_file in episode_files:
             path = episode_file.get('path')
             if not path:
                 continue
@@ -227,7 +234,15 @@ def _fetch_sonarr_media(conn):
                 'file_id': episode_file.get('id'),
                 'episode_ids': episode_file.get('episodeIds') or [],
             })
-    return rows
+        return rows
+
+    all_rows = []
+    max_workers = min(8, len(valid_series))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch_episode_files, s, sid): sid for s, sid in valid_series}
+        for future in as_completed(futures):
+            all_rows.extend(future.result())
+    return all_rows
 
 
 def _slug(value):

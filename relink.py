@@ -1,7 +1,12 @@
+import logging
 import os
 import re
 import shlex
 
+
+log = logging.getLogger(__name__)
+
+RELINK_MAX_PAIRS = 25_000_000
 
 QUALITY_TOKENS = {
     "2160p", "1080p", "1080i", "720p", "480p", "bluray", "bdrip",
@@ -16,22 +21,40 @@ def find_relink_candidates(media_files, torrent_files, arr_media, cfg, min_confi
     arr_by_path = {_norm_path(item.get("path")): item for item in arr_media if item.get("path")}
     candidates = []
 
-    for media in media_files:
-        if media.get("excluded") or media.get("linked_paths"):
+    # Pre-build eligible torrents with scoring data computed once, not per media file.
+    eligible_torrents = []
+    for torrent in torrent_files:
+        if torrent.get("excluded") or torrent.get("linked_paths"):
             continue
+        if torrent.get("status") == "Orphaned":
+            continue
+        haystack = _token_text(torrent.get("path", ""))
+        token_set = set(_tokens(haystack))
+        eligible_torrents.append((torrent, haystack, token_set))
 
+    eligible_media = [
+        m for m in media_files
+        if not m.get("excluded") and not m.get("linked_paths")
+    ]
+
+    pair_count = len(eligible_media) * len(eligible_torrents)
+    max_pairs = cfg.get("RELINK_MAX_PAIRS", RELINK_MAX_PAIRS)
+    if pair_count > max_pairs:
+        log.warning(
+            "Relink scan skipped: %d media × %d torrents = %d pairs exceeds "
+            "RELINK_MAX_PAIRS (%d). Library is too large for a synchronous relink scan.",
+            len(eligible_media), len(eligible_torrents), pair_count, max_pairs,
+        )
+        return []
+
+    for media in eligible_media:
         media_abs = _abs_path(media_root, media.get("path", ""))
         arr_item = arr_by_path.get(_norm_path(media_abs))
         descriptor = _descriptor_for_media(media, media_abs, arr_item)
         ranked = []
 
-        for torrent in torrent_files:
-            if torrent.get("excluded") or torrent.get("linked_paths"):
-                continue
-            if torrent.get("status") == "Orphaned":
-                continue
-
-            score, reasons = _score_candidate(media, descriptor, torrent)
+        for torrent, haystack, token_set in eligible_torrents:
+            score, reasons = _score_candidate(media, descriptor, torrent, haystack, token_set)
             if score >= min_confidence:
                 ranked.append((score, torrent, reasons))
 
@@ -120,9 +143,12 @@ def _descriptor_for_media(media, media_abs, arr_item):
     }
 
 
-def _score_candidate(media, descriptor, torrent):
-    haystack = _token_text(torrent.get("path", ""))
-    torrent_tokens = set(_tokens(haystack))
+def _score_candidate(media, descriptor, torrent, haystack=None, token_set=None):
+    if haystack is None:
+        haystack = _token_text(torrent.get("path", ""))
+    if token_set is None:
+        token_set = set(_tokens(haystack))
+    torrent_tokens = token_set
     reasons = []
     score = 0.0
 
