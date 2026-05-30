@@ -200,6 +200,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
       setArrConnections((c.ARR_CONNECTIONS || []).map(conn => ({
         id: conn.id || '',
+        _original_id: conn.id || '',
+        _stored_api_key: conn.api_key === '__stored__',
         service: conn.service || 'sonarr',
         name: conn.name || '',
         base_url: conn.base_url || conn.url || '',
@@ -381,8 +383,22 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     } catch (e) { setSaveStatus({ ok: false, msg: e.message }) }
   }
 
-  const g2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }
-  const g3 = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }
+  const formGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }
+  const compactGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }
+  const ghostButton = {
+    padding: '6px 12px',
+    borderRadius: 'var(--r)',
+    border: '1px solid var(--border2)',
+    background: 'transparent',
+    color: 'var(--text-dim)',
+    fontSize: 12,
+    cursor: 'pointer',
+  }
+  const smallMonoButton = {
+    ...ghostButton,
+    fontFamily: 'var(--mono)',
+    fontSize: 11,
+  }
 
   const toggleMediaPreset = id => {
     setMediaServerPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
@@ -462,7 +478,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         {!isQui ? (
           <>
             <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={conf.QB_HOST} onChange={v => { set('QB_HOST')(v); setSourceInfo(null) }} style={{ marginBottom: 14 }} />
-            <div style={g2}>
+            <div style={formGrid}>
               <Field label="Username" placeholder="admin" value={conf.QB_USER} onChange={v => { set('QB_USER')(v); setSourceInfo(null) }} />
               <Field label="Password" type="password" placeholder="(unchanged — leave blank to keep current)"
                 value={conf.QB_PASS} onChange={v => { setPassChanged(true); set('QB_PASS')(v); setSourceInfo(null) }} />
@@ -528,7 +544,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
           {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
         </div>
-        <div style={g2}>
+        <div style={formGrid}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <Field label="Media Path"
               hint="Where your final media library lives inside this container — e.g. /data/media"
@@ -575,87 +591,6 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             />
           )}
         </div>
-        <div style={{ marginTop: 18 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Multiple Sonarr/Radarr instances</label>
-          <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 10 }}>
-            Add extra Sonarr or Radarr servers for 4K, anime, kids, or other split libraries. Leave this empty to use the single Sonarr/Radarr fields below.
-          </span>
-          {arrConnections.length === 0 ? (
-            <div style={{ padding: '10px 12px', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', color: 'var(--text-dim)', fontSize: 11, marginBottom: 10 }}>
-              No extra Arr instances configured.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
-              {arrConnections.map((conn, index) => {
-                const service = conn.service === 'radarr' ? 'radarr' : 'sonarr'
-                return (
-                  <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: 12, background: 'var(--surface2)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                        <div style={{ display: 'flex' }}>
-                          {ARR_SERVICES.map((opt, i) => (
-                            <button key={opt.id} onClick={() => setArrConnection(index, 'service', opt.id)} style={{
-                              padding: '5px 10px',
-                              borderRadius: i === 0 ? 'var(--r) 0 0 var(--r)' : '0 var(--r) var(--r) 0',
-                              border: `1px solid ${service === opt.id ? 'var(--accent)' : 'var(--border2)'}`,
-                              borderRight: i === 0 ? 'none' : undefined,
-                              background: service === opt.id ? 'var(--accent)18' : 'transparent',
-                              color: service === opt.id ? 'var(--accent)' : 'var(--text-dim)',
-                              fontSize: 11, cursor: 'pointer',
-                            }}>{opt.label}</button>
-                          ))}
-                        </div>
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {conn.id || `${service}-${index + 1}`}
-                        </span>
-                      </div>
-                      <button onClick={() => removeArrConnection(index)} style={{ padding: '5px 9px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 11, cursor: 'pointer' }}>
-                        Remove
-                      </button>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-                      <Field label="Label" placeholder={service === 'radarr' ? '4K Radarr' : 'Anime Sonarr'} value={conn.name} onChange={v => setArrConnection(index, 'name', v)} />
-                      <Field label="ID" placeholder={`${service}-4k`} value={conn.id} onChange={v => setArrConnection(index, 'id', v)} />
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-                      <Field label="URL" placeholder={`http://192.168.1.x:${ARR_SERVICES.find(s => s.id === service)?.port}`} value={conn.base_url} onChange={v => setArrConnection(index, 'base_url', v)} />
-                      <Field label="API Key" type="password" placeholder="(unchanged - leave blank to keep current)" value={conn.api_key} onChange={v => setArrConnection(index, 'api_key', v)} />
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                      <Field label="Arr Media Path" placeholder="/movies or /tv" hint="Path as this Arr instance sees its library." value={conn.media_path} onChange={v => setArrConnection(index, 'media_path', v)} />
-                      <Field label="Auditorr Media Path" placeholder="/data/media/movies" hint="Matching path inside auditorr. Leave blank when paths already match." value={conn.local_media_path} onChange={v => setArrConnection(index, 'local_media_path', v)} />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-            <button onClick={() => addArrConnection('sonarr')} style={{ padding: '6px 12px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
-              Add Sonarr
-            </button>
-            <button onClick={() => addArrConnection('radarr')} style={{ padding: '6px 12px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
-              Add Radarr
-            </button>
-            <button onClick={handleTestArrConnections} style={{ padding: '6px 12px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
-              {arrTestStatus?.loading ? 'Testing…' : 'Test Arr Connections'}
-            </button>
-            {arrTestStatus && !arrTestStatus.loading && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: arrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
-                {arrTestStatus.ok ? '✓ Connected' : `✗ ${arrTestStatus.msg || 'Connection check failed'}`}
-              </span>
-            )}
-          </div>
-          {arrTestStatus?.connections?.length > 0 && (
-            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {arrTestStatus.connections.map(conn => (
-                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: conn.ok ? 'var(--text-dim)' : 'var(--red)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {conn.ok ? '✓' : '✗'} {conn.name || conn.id} · {conn.service} · {conn.managed_file_count || 0} managed file{conn.managed_file_count === 1 ? '' : 's'}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </Card>
 
       {saveWarnings.length > 0 && (
@@ -674,7 +609,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       )}
 
       <Card title="Watchdog & Scheduled Audits">
-        <div style={{ ...g2 }}>
+        <div style={formGrid}>
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Filesystem Watchdog</label>
             <span style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 10, lineHeight: 1.45 }}>
@@ -711,7 +646,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
           Required for interactive search in the Media explorer. API keys found in each app under Settings → General.
         </p>
-        <div style={g2}>
+        <div style={formGrid}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Field label="Sonarr URL" placeholder="http://192.168.1.x:8989" value={conf.SONARR_URL} onChange={set('SONARR_URL')} />
             <Field label="Sonarr API Key" type="password" placeholder="paste API key…" value={conf.SONARR_API_KEY} onChange={set('SONARR_API_KEY')} />
@@ -725,7 +660,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                   {sonarrTestStatus.loading ? 'Testing…' : (sonarrTestStatus.ok ? '✓ ' : '✗ ') + sonarrTestStatus.msg}
                 </span>
               )}
-              <button onClick={handleTestSonarr} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+              <button onClick={handleTestSonarr} style={ghostButton}>
                 Test Sonarr
               </button>
             </div>
@@ -743,11 +678,101 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                   {radarrTestStatus.loading ? 'Testing…' : (radarrTestStatus.ok ? '✓ ' : '✗ ') + radarrTestStatus.msg}
                 </span>
               )}
-              <button onClick={handleTestRadarr} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
+              <button onClick={handleTestRadarr} style={ghostButton}>
                 Test Radarr
               </button>
             </div>
           </div>
+        </div>
+        <div style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Additional Sonarr/Radarr instances</label>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 10 }}>
+            Add extra Sonarr or Radarr servers for split libraries such as 4K, anime, or kids. Leave this empty to use only the primary Sonarr/Radarr fields above.
+          </span>
+          {arrConnections.length === 0 ? (
+            <div style={{ padding: '10px 12px', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', color: 'var(--text-dim)', fontSize: 11, marginBottom: 10 }}>
+              No additional Arr instances configured.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
+              {arrConnections.map((conn, index) => {
+                const service = conn.service === 'radarr' ? 'radarr' : 'sonarr'
+                const idChangedWithStoredKey = conn._stored_api_key && conn._original_id && conn.id !== conn._original_id && !conn.api_key
+                return (
+                  <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: 12, background: 'var(--surface2)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex' }}>
+                          {ARR_SERVICES.map((opt, i) => (
+                            <button key={opt.id} onClick={() => setArrConnection(index, 'service', opt.id)} style={{
+                              padding: '5px 10px',
+                              borderRadius: i === 0 ? 'var(--r) 0 0 var(--r)' : '0 var(--r) var(--r) 0',
+                              border: `1px solid ${service === opt.id ? 'var(--accent)' : 'var(--border2)'}`,
+                              borderRight: i === 0 ? 'none' : undefined,
+                              background: service === opt.id ? 'var(--accent)18' : 'transparent',
+                              color: service === opt.id ? 'var(--accent)' : 'var(--text-dim)',
+                              fontSize: 11, cursor: 'pointer',
+                            }}>{opt.label}</button>
+                          ))}
+                        </div>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {conn.id || `${service}-${index + 1}`}
+                        </span>
+                        {conn._stored_api_key && !conn.api_key && (
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--green)', border: '1px solid var(--green)35', borderRadius: 'var(--r)', padding: '1px 6px' }}>stored key</span>
+                        )}
+                      </div>
+                      <button onClick={() => removeArrConnection(index)} style={smallMonoButton}>
+                        Remove
+                      </button>
+                    </div>
+                    <div style={{ ...compactGrid, marginBottom: 10 }}>
+                      <Field label="Label" placeholder={service === 'radarr' ? '4K Radarr' : 'Anime Sonarr'} value={conn.name} onChange={v => setArrConnection(index, 'name', v)} />
+                      <Field label="ID" placeholder={`${service}-4k`} value={conn.id} onChange={v => setArrConnection(index, 'id', v)} />
+                    </div>
+                    <div style={{ ...compactGrid, marginBottom: 10 }}>
+                      <Field label="URL" placeholder={`http://192.168.1.x:${ARR_SERVICES.find(s => s.id === service)?.port}`} value={conn.base_url} onChange={v => setArrConnection(index, 'base_url', v)} />
+                      <Field label="API Key" type="password" placeholder={conn._stored_api_key ? '(stored - leave blank to keep current)' : 'paste API key...'} value={conn.api_key} onChange={v => setArrConnection(index, 'api_key', v)} />
+                    </div>
+                    {idChangedWithStoredKey && (
+                      <div style={{ fontSize: 11, color: 'var(--yellow)', marginBottom: 10 }}>
+                        Changing the ID requires re-entering this instance's API key before saving.
+                      </div>
+                    )}
+                    <div style={compactGrid}>
+                      <Field label="Arr Media Path" placeholder="/movies or /tv" hint="Path as this Arr instance sees its library." value={conn.media_path} onChange={v => setArrConnection(index, 'media_path', v)} />
+                      <Field label="Auditorr Media Path" placeholder="/data/media/movies" hint="Matching path inside auditorr. Leave blank when paths already match." value={conn.local_media_path} onChange={v => setArrConnection(index, 'local_media_path', v)} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => addArrConnection('sonarr')} style={smallMonoButton}>
+              Add Sonarr
+            </button>
+            <button onClick={() => addArrConnection('radarr')} style={smallMonoButton}>
+              Add Radarr
+            </button>
+            <button onClick={handleTestArrConnections} style={smallMonoButton}>
+              {arrTestStatus?.loading ? 'Testing...' : 'Test Arr Connections'}
+            </button>
+            {arrTestStatus && !arrTestStatus.loading && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: arrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                {arrTestStatus.ok ? 'Connected' : `${arrTestStatus.msg || 'Connection check failed'}`}
+              </span>
+            )}
+          </div>
+          {arrTestStatus?.connections?.length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {arrTestStatus.connections.map(conn => (
+                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: conn.ok ? 'var(--text-dim)' : 'var(--red)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {conn.ok ? 'ok' : 'error'} · {conn.name || conn.id} · {conn.service} · {conn.managed_file_count || 0} managed file{conn.managed_file_count === 1 ? '' : 's'}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </Card>
 
@@ -759,7 +784,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           you start losing points immediately if any problem data exists, and lose all 10 points once it reaches 1% of your library.
           Lower = stricter. Hardlinked Media accounts for 70 pts; each category below accounts for 10 pts.
         </p>
-        <div style={g3}>
+        <div style={formGrid}>
           <Field label="Orphaned Torrent Threshold" type="number"
             suffix="%"
             hint={thresholdHint('orphaned torrent')}
@@ -775,7 +800,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
 
         {/* Live score preview */}
-        <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        <div style={{ marginTop: 14, ...formGrid }}>
           {[
             { label: 'Orphaned', pct: orPct,  size: null },
             { label: 'Not Imported', pct: niPct,  size: null },
@@ -819,7 +844,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Media server sidecar presets</div>
           <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
-            Ignore metadata and artwork sidecars commonly written or read by media servers, such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>.plexmatch</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>.nfo</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>poster.jpg</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>fanart.jpg</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>folder.jpg</span>.
+            Ignore metadata and artwork sidecars commonly written or read by media servers, such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.plexmatch</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.nfo</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>poster.jpg</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>fanart.jpg</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>folder.jpg</span>.
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {MEDIA_SERVER_PRESETS.map(preset => {
