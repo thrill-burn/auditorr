@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { formatBytes, scoreColor } from '../utils'
+import { formatBytes, formatBytesCompact, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
 import FilterBar from './FilterBar'
 import { api } from '../api'
@@ -527,7 +527,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                       domain={chartTab === 'seeding' ? ['auto', 'auto'] : [0, 'auto']}
                       tickFormatter={chartTab === 'yield'
                         ? v => v != null ? v.toFixed(2) + '%' : ''
-                        : v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                        : formatBytesCompact}
                     />
                     <Tooltip
                       content={({ active, payload, label }) => {
@@ -943,7 +943,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                       <YAxis
                         tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
                         tickLine={false} axisLine={false}
-                        tickFormatter={v => v >= 1e12 ? (v/1e12).toFixed(1)+'T' : v >= 1e9 ? (v/1e9).toFixed(1)+'G' : v >= 1e6 ? (v/1e6).toFixed(0)+'M' : v}
+                        tickFormatter={formatBytesCompact}
                       />
                       <Tooltip content={<UploadActivityTooltip />} cursor={{ fill: 'var(--surface2)' }} />
                       {uploadChartData.activeTrackers.map((host, i) => (

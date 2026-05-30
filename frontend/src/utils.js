@@ -5,6 +5,15 @@ export function formatBytes(bytes) {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
 }
 
+export function formatBytesCompact(bytes) {
+  if (!+bytes) return '0 B'
+  const k = 1024, sizes = ['B', 'K', 'M', 'G', 'T']
+  const i = Math.min(Math.floor(Math.log(Math.abs(bytes)) / Math.log(k)), sizes.length - 1)
+  const value = bytes / Math.pow(k, i)
+  const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2
+  return `${value.toFixed(precision)}${sizes[i]}`
+}
+
 export function scoreColor(score) {
   if (score >= 90) return 'var(--green)'
   if (score >= 75) return 'var(--yellow)'
