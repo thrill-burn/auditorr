@@ -792,10 +792,13 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
       </Card>
 
-      <Card title="Exclusion Folders & Patterns">
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Ignored folders or files</label>
+      <Card title="Excluded Files & Folders">
+        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Paths or patterns to ignore</label>
         <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
-          One rule per line. Add unmanaged torrent folders here to keep books, music, games, or other categories out of Not Imported reporting. Plain folder paths work; <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>data/torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>/data/torrents/books</span>, and <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>/mnt/user/data/torrents/books</span> all target the same TRaSH-style folder. File names, directory names, and legacy globs still work.
+          One rule per line. Use this for torrent categories you do not manage with Sonarr/Radarr, such as books, music, games, or other non-library downloads. Excluded items are ignored for scoring and Not Imported reporting.
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
+          Folder paths can be written however you recognize them: <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/data/torrents/books</span>, or <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/mnt/user/data/torrents/books</span>. File names, directory names, extensions, and glob patterns work too.
         </span>
         <textarea
           value={exclusionPatterns}
