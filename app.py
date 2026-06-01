@@ -515,9 +515,10 @@ def get_action_script(script_type):
     cfg = db_load_config()
     results = db_load_results()
     results['torrent_files'] = db_load_file_results('torrents')
+    if script_type in ('relink_media_hardlinks', 'dedupe'):
+        results['media_files'] = db_load_file_results('media')
     if script_type == 'relink_media_hardlinks':
-        media_files = db_load_file_results('media')
-        results['media_files'] = media_files
+        media_files = results['media_files']
         results['relink_candidates'] = find_relink_candidates(
             media_files,
             results['torrent_files'],

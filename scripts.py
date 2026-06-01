@@ -30,30 +30,38 @@ def _compute_script_root(local_path, media_path):
     return common
 
 
-def _build_dup_groups(torrent_files, local_path, media_path=''):
-    """Group torrent files with duplicate_paths into structured groups for the Actions page."""
-    script_root = _compute_script_root(local_path, media_path)
-    groups      = []
-    seen_files = set()
-    for f in torrent_files:
+def _build_dup_groups(all_files, local_path, media_path=''):
+    """Group files with duplicate_paths into structured groups for the Actions page."""
+    script_root   = _compute_script_root(local_path, media_path)
+    groups        = []
+    seen_file_ids = set()
+    covered_paths = set()  # absolute paths already assigned to any group slot
+
+    for f in all_files:
         if not f.get('duplicate_paths'):
             continue
-        inode = f['inode']
+        inode   = f['inode']
         file_id = f.get('file_id', inode)
-        if file_id in seen_files:
+        if file_id in seen_file_ids:
             continue
-        seen_files.add(file_id)
-        torrent_full = posixpath.join(local_path, f['path']) if local_path else f['path']
-        torrent_rel  = posixpath.relpath(torrent_full, script_root)
+        file_root  = f.get('_file_root', local_path)
+        canon_full = posixpath.join(file_root, f['path']) if file_root else f['path']
+        if canon_full in covered_paths:
+            continue
+        seen_file_ids.add(file_id)
+        covered_paths.add(canon_full)
+
+        canon_rel = posixpath.relpath(canon_full, script_root)
         try:
-            torrent_dev = os.stat(torrent_full).st_dev
+            canon_dev = os.stat(canon_full).st_dev
         except OSError:
-            torrent_dev = None
-        group_files = [{"path": torrent_rel, "size": f['size'], "inode": inode, "canonical": True, "same_fs": True}]
+            canon_dev = None
+        group_files = [{"path": canon_rel, "size": f['size'], "inode": inode, "canonical": True, "same_fs": True}]
         is_cross_fs = False
         for dup_path in f.get('duplicate_paths', []):
+            covered_paths.add(dup_path)
             try:
-                same_fs = (torrent_dev is not None and os.stat(dup_path).st_dev == torrent_dev)
+                same_fs = (canon_dev is not None and os.stat(dup_path).st_dev == canon_dev)
             except OSError:
                 same_fs = False
             if not same_fs:
@@ -233,7 +241,10 @@ def generate_script(script_type, results, cfg):
         return '\n'.join(lines)
 
     elif script_type == 'dedupe':
-        dup_result         = _build_dup_groups(torrent_files, local_path, media_path)
+        media_files    = results.get('media_files', [])
+        tagged_torrent = [{**f, '_file_root': local_path} for f in torrent_files]
+        tagged_media   = [{**f, '_file_root': media_path}  for f in media_files]
+        dup_result         = _build_dup_groups(tagged_torrent + tagged_media, local_path, media_path)
         groups             = dup_result['groups']
         script_root        = dup_result['script_root']
         total_recoverable  = sum(g['recoverable_size'] for g in groups)

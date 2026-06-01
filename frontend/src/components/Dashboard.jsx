@@ -659,8 +659,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--blue)',
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
-        [{ type: 'script', label: 'Generate Relink Script', scriptType: 'relink_media_hardlinks', title: 'Media Relink Script',
-           subtitle: 'Matches unlinked media to qBittorrent/qui torrent files using Sonarr/Radarr metadata, then creates reviewable hardlink commands.' }],
+        [{ type: 'script', label: 'View Relink Candidates', scriptType: 'relink_preview' }],
         [],
       ],
     },
