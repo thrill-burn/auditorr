@@ -449,7 +449,7 @@ function AppInner() {
             />
           )}
           {tab === 'changes' && (
-            <ChangeLog />
+            <ChangeLog onNavigate={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }} />
           )}
           {tab === 'config' && (
             <Config

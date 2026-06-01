@@ -51,6 +51,7 @@ function fmtDuration(s) {
 
 function ChangeRow({ index, style, data }) {
   const row = data.rows[index]
+  const { onNavigate } = data
   return (
     <div style={{
       ...style,
@@ -101,10 +102,18 @@ function ChangeRow({ index, style, data }) {
       </div>
       {/* Path */}
       <div style={{ overflow: 'hidden', paddingRight: 8 }}>
-        <span style={{
-          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
-          display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
+        <span
+          title={row.path}
+          onClick={() => onNavigate && onNavigate(row.path, row.tab)}
+          style={{
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
+            display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            cursor: onNavigate ? 'pointer' : 'default',
+            textDecoration: 'none',
+          }}
+          onMouseEnter={e => { if (onNavigate) e.currentTarget.style.color = 'var(--text)' }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)' }}
+        >
           {row.path}
         </span>
       </div>
@@ -122,7 +131,7 @@ function ChangeRow({ index, style, data }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function ChangeLog() {
+export default function ChangeLog({ onNavigate }) {
   const [entries,   setEntries]   = useState(null)
   const [error,     setError]     = useState(null)
   const [catFilter, setCatFilter] = useState(null)
@@ -154,6 +163,7 @@ export default function ChangeLog() {
             duration_seconds: entry.duration_seconds ?? null,
             cat,
             path: item.path,
+            tab:  item.tab,
             size: item.size ?? null,
           })
         }
@@ -201,7 +211,7 @@ export default function ChangeLog() {
     return c
   }, [allRows])
 
-  const itemData = useMemo(() => ({ rows }), [rows])
+  const itemData = useMemo(() => ({ rows, onNavigate }), [rows, onNavigate])
 
   return (
     <div className="fade-in" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
