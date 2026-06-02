@@ -762,6 +762,29 @@ def workflows_acquire_candidates():
     })
 
 
+_release_jobs = {}   # job_key -> {status, releases, message, ts}
+_RELEASE_JOB_TTL = 600  # 10 minutes
+
+def _release_job_key(service, connection_id, arr_id, episode_id, season_number, file_path):
+    parts = (service, connection_id, str(arr_id), str(episode_id), str(season_number), file_path or '')
+    return ':'.join(parts)
+
+def _apply_release_filters(rows, download_from, seeding_on):
+    groups = {}
+    for r in rows:
+        key = (r['title'].lower().strip(), r['size'])
+        groups.setdefault(key, []).append(r)
+    if seeding_on:
+        groups = {k: v for k, v in groups.items() if any(r['indexer'] in seeding_on for r in v)}
+    filtered = []
+    for v in groups.values():
+        for r in v:
+            if download_from and r['indexer'] not in download_from:
+                continue
+            filtered.append(r)
+    return filtered
+
+
 @app.route('/api/workflows/acquire_releases')
 @require_auth
 def workflows_acquire_releases():
@@ -769,42 +792,48 @@ def workflows_acquire_releases():
     connection_id = request.args.get('connection_id', '')
     arr_id = request.args.get('arr_id', type=int)
     episode_id = request.args.get('episode_id', type=int)
+    season_number = request.args.get('season_number', type=int)
     file_path = request.args.get('path', '') or None
     if not service or not connection_id or arr_id is None:
         return jsonify({"status": "error", "message": "service, connection_id, and arr_id are required"}), 400
+
+    # Expire old jobs
+    now = time.time()
+    expired = [k for k, v in _release_jobs.items() if now - v['ts'] > _RELEASE_JOB_TTL]
+    for k in expired:
+        del _release_jobs[k]
+
+    job_key = _release_job_key(service, connection_id, arr_id, episode_id, season_number, file_path)
+
+    if job_key in _release_jobs:
+        job = _release_jobs[job_key]
+        if job['status'] == 'done':
+            cfg = db_load_config()
+            releases = _apply_release_filters(
+                job['releases'],
+                cfg.get('ACQUIRE_DOWNLOAD_FROM') or [],
+                cfg.get('ACQUIRE_SEEDING_ON') or [],
+            )
+            return jsonify({"status": "done", "releases": releases})
+        return jsonify({"status": job['status'], "message": job.get('message', '')})
+
+    # Start a new background search
     cfg = db_load_config()
-    download_from = cfg.get('ACQUIRE_DOWNLOAD_FROM') or []
-    seeding_on = cfg.get('ACQUIRE_SEEDING_ON') or []
-    try:
-        rows = fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=episode_id, file_path=file_path)
-    except ValueError as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
-    except Exception as e:
-        log.exception("Error fetching release matrix")
-        return jsonify({"status": "error", "message": str(e)}), 400
+    _release_jobs[job_key] = {'status': 'searching', 'releases': None, 'ts': time.time()}
 
-    # Group by normalized (title, size) to identify release identity across indexers
-    groups = {}
-    for r in rows:
-        key = (r['title'].lower().strip(), r['size'])
-        groups.setdefault(key, []).append(r)
+    def do_search():
+        try:
+            rows = fetch_release_matrix(
+                cfg, service, connection_id, arr_id,
+                episode_id=episode_id, season_number=season_number, file_path=file_path,
+            )
+            _release_jobs[job_key] = {'status': 'done', 'releases': rows, 'ts': time.time()}
+        except Exception as e:
+            log.warning("Release search failed for %s: %s", job_key, e)
+            _release_jobs[job_key] = {'status': 'error', 'message': str(e), 'releases': None, 'ts': time.time()}
 
-    # If SEEDING_ON filter set, only keep release groups that appear on those indexers
-    if seeding_on:
-        groups = {
-            k: v for k, v in groups.items()
-            if any(r['indexer'] in seeding_on for r in v)
-        }
-
-    # Flatten and apply DOWNLOAD_FROM filter
-    filtered = []
-    for v in groups.values():
-        for r in v:
-            if download_from and r['indexer'] not in download_from:
-                continue
-            filtered.append(r)
-
-    return jsonify({"status": "success", "releases": filtered})
+    threading.Thread(target=do_search, daemon=True).start()
+    return jsonify({'status': 'searching'})
 
 
 @app.route('/', defaults={'path': ''})

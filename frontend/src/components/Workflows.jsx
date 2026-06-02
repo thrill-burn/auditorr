@@ -1,61 +1,81 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from '../api'
 import { formatBytes } from '../utils'
 
-// ── Multi-select filter pill ──────────────────────────────────────────────────
-function MultiSelect({ label, options, value, onChange }) {
-  const [open, setOpen] = useState(false)
-  const toggle = (opt) => {
-    onChange(value.includes(opt) ? value.filter(v => v !== opt) : [...value, opt])
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function parseSeason(path) {
+  const m = (path || '').match(/[Ss](\d{1,2})[Ee]/i)
+  return m ? parseInt(m[1], 10) : null
+}
+
+// Group flat candidate list: resolved Sonarr rows → one row per (arr_id, season)
+// with season_number so we can use Sonarr's season pack search endpoint.
+function groupCandidates(candidates) {
+  const groups = []
+  const sonarrMap = {}
+  for (const c of candidates) {
+    if (c.resolved && c.arr_service === 'sonarr') {
+      const season = parseSeason(c.path)
+      const key = `${c.arr_id}_S${season ?? 'x'}`
+      if (key in sonarrMap) {
+        const g = groups[sonarrMap[key]]
+        g.file_count++
+        g.total_size += c.size || 0
+        if (!g.episode_id && c.episode_id) g.episode_id = c.episode_id
+        if (!g.rep_path) g.rep_path = c.path
+      } else {
+        sonarrMap[key] = groups.length
+        groups.push({
+          ...c,
+          season,
+          season_number: season,
+          file_count: 1,
+          total_size: c.size || 0,
+          rep_path: c.path,
+        })
+      }
+    } else {
+      groups.push({ ...c, season: null, season_number: null, file_count: 1, total_size: c.size || 0, rep_path: c.path })
+    }
   }
+  return groups
+}
+
+// ── Indexer chip filter ───────────────────────────────────────────────────────
+function IndexerChips({ options, value, onChange }) {
+  const allSelected = value.length === 0
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => onChange([])}
         style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '6px 10px', borderRadius: 7,
-          border: '1px solid var(--border2)', background: 'var(--surface2)',
-          color: value.length ? 'var(--text)' : 'var(--text-dim)',
-          fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap',
+          padding: '3px 10px', borderRadius: 99, fontSize: 11, cursor: 'pointer',
+          border: `1px solid ${allSelected ? 'var(--accent)' : 'var(--border2)'}`,
+          background: allSelected ? 'var(--accent)18' : 'transparent',
+          color: allSelected ? 'var(--accent)' : 'var(--text-dim)',
+          fontWeight: allSelected ? 600 : 400,
         }}
       >
-        {label}{value.length > 0 && <span style={{ color: 'var(--accent)', fontWeight: 600 }}> ({value.length})</span>}
-        <span style={{ fontSize: 10, color: 'var(--text-dim)', marginLeft: 2 }}>▾</span>
+        All
       </button>
-      {open && (
-        <>
-          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 49 }} />
-          <div style={{
-            position: 'absolute', top: '100%', left: 0, zIndex: 50, marginTop: 4,
-            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
-            padding: '6px 0', minWidth: 180, maxHeight: 240, overflowY: 'auto',
-          }}>
-            {options.length === 0 && (
-              <div style={{ padding: '8px 14px', fontSize: 12, color: 'var(--text-dim)' }}>No indexers found</div>
-            )}
-            {options.map(opt => (
-              <label key={opt} style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '6px 14px', cursor: 'pointer', fontSize: 12,
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-              >
-                <input type="checkbox" checked={value.includes(opt)} onChange={() => toggle(opt)} style={{ accentColor: 'var(--accent)' }} />
-                <span style={{ color: 'var(--text)' }}>{opt}</span>
-              </label>
-            ))}
-            {value.length > 0 && (
-              <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, padding: '4px 14px 2px' }}>
-                <button onClick={() => { onChange([]); setOpen(false) }} style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: 'var(--text-dim)', cursor: 'pointer' }}>
-                  Clear all
-                </button>
-              </div>
-            )}
-          </div>
-        </>
-      )}
+      {options.map(opt => {
+        const active = value.includes(opt)
+        return (
+          <button
+            key={opt}
+            onClick={() => onChange(active ? value.filter(v => v !== opt) : [...value, opt])}
+            style={{
+              padding: '3px 10px', borderRadius: 99, fontSize: 11, cursor: 'pointer',
+              border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
+              background: active ? 'var(--accent)18' : 'transparent',
+              color: active ? 'var(--accent)' : 'var(--text-dim)',
+              fontWeight: active ? 600 : 400,
+            }}
+          >
+            {opt}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -76,90 +96,114 @@ function ReleaseRow({ r }) {
   )
 }
 
-// ── Candidate row ─────────────────────────────────────────────────────────────
-function CandidateRow({ c, downloadFrom, seedingOn }) {
-  const [expanded, setExpanded] = useState(false)
-  const [releases, setReleases] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
+// ── Candidate row (supports polling) ─────────────────────────────────────────
+function CandidateRow({ c }) {
+  const [expanded, setExpanded]   = useState(false)
+  const [searchStatus, setStatus] = useState('idle')   // idle | searching | done | error
+  const [releases, setReleases]   = useState(null)
+  const [errorMsg, setErrorMsg]   = useState(null)
+  const [elapsed, setElapsed]     = useState(0)
+  const pollRef    = useRef(null)
+  const startRef   = useRef(null)
+  const mountedRef = useRef(true)
 
-  const handleExpand = useCallback(async () => {
-    if (!c.resolved) return
-    setExpanded(e => !e)
-    if (releases !== null) return
-    setLoading(true)
-    try {
-      const params = {
-        service: c.arr_service,
-        connection_id: c.arr_connection_id,
-        arr_id: c.arr_id,
-        path: c.path,
-      }
-      if (c.episode_id) params.episode_id = c.episode_id
-      const data = await api.acquireReleases(params)
-      setReleases(data.releases || [])
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
+  useEffect(() => () => { mountedRef.current = false; clearTimeout(pollRef.current) }, [])
+
+  const startSearch = useCallback(() => {
+    if (searchStatus !== 'idle') return
+    setStatus('searching')
+    startRef.current = Date.now()
+
+    const params = {
+      service:       c.arr_service,
+      connection_id: c.arr_connection_id,
+      arr_id:        c.arr_id,
+      path:          c.rep_path || c.path,
     }
-  }, [c, releases])
+    // Use season pack search for grouped Sonarr rows; fall back to episodeId for single files
+    if (c.arr_service === 'sonarr' && c.season_number != null) {
+      params.season_number = c.season_number
+    } else if (c.episode_id) {
+      params.episode_id = c.episode_id
+    }
+
+    const poll = async () => {
+      try {
+        const data = await api.acquireReleases(params)
+        if (!mountedRef.current) return
+        if (data.status === 'searching') {
+          setElapsed(Math.round((Date.now() - startRef.current) / 1000))
+          pollRef.current = setTimeout(poll, 3000)
+          return
+        }
+        if (data.status === 'error') {
+          setErrorMsg(data.message || 'Search failed')
+          setStatus('error')
+        } else {
+          setReleases(data.releases || [])
+          setStatus('done')
+        }
+      } catch (e) {
+        if (mountedRef.current) { setErrorMsg(e.message); setStatus('error') }
+      }
+    }
+    poll()
+  }, [c, searchStatus])
+
+  const handleExpand = useCallback(() => {
+    if (!c.resolved) return
+    const next = !expanded
+    setExpanded(next)
+    if (next && searchStatus === 'idle') startSearch()
+  }, [c.resolved, expanded, searchStatus, startSearch])
 
   const filename = (c.path || '').split('/').pop()
-  const title = c.arr_title || filename
+  const title    = c.arr_title || filename
+  const subtitle = c.arr_service === 'sonarr' && c.file_count > 1
+    ? `Season ${c.season_number ?? '?'} · ${c.file_count} episodes · ${formatBytes(c.total_size)}`
+    : formatBytes(c.total_size || c.size || 0)
 
   return (
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9,
-      overflow: 'hidden',
-      opacity: c.resolved ? 1 : 0.65,
+      overflow: 'hidden', opacity: c.resolved ? 1 : 0.65,
     }}>
       <div
-        onClick={c.resolved ? handleExpand : undefined}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
-          cursor: c.resolved ? 'pointer' : 'default',
-        }}
+        onClick={handleExpand}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: c.resolved ? 'pointer' : 'default' }}
       >
-        {/* Expand chevron */}
         <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0, width: 12, textAlign: 'center' }}>
           {c.resolved ? (expanded ? '▾' : '▸') : '—'}
         </span>
 
-        {/* Title */}
-        <span style={{ flex: 1, fontSize: 13, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.path}>
-          {title}
-        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.path}>
+            {title}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 1 }}>
+            {subtitle}
+          </div>
+        </div>
 
-        {/* Size */}
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-          {formatBytes(c.size || 0)}
-        </span>
-
-        {/* Service badge */}
         {c.arr_service && (
           <span style={{
-            fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4,
+            fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
             background: c.arr_service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
-            color: c.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)',
-            border: `1px solid ${c.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
-            flexShrink: 0,
+            color:      c.arr_service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
+            border:     `1px solid ${c.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
           }}>
-            {c.arr_service}
+            {c.arr_service === 'sonarr' && c.file_count > 1 ? `sonarr S${String(c.season_number ?? '?').padStart(2,'0')}` : c.arr_service}
           </span>
         )}
 
-        {/* Open in Arr link */}
         {c.arr_url && (
           <a
-            href={c.arr_url}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={c.arr_url} target="_blank" rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
             style={{
               fontSize: 11, color: 'var(--accent)', textDecoration: 'none', flexShrink: 0,
-              padding: '2px 8px', borderRadius: 5, border: '1px solid var(--accent)40',
-              background: 'var(--accent)10',
+              padding: '2px 8px', borderRadius: 5,
+              border: '1px solid var(--accent)40', background: 'var(--accent)10',
             }}
           >
             {c.resolved ? 'Open ↗' : 'Search ↗'}
@@ -169,18 +213,21 @@ function CandidateRow({ c, downloadFrom, seedingOn }) {
 
       {expanded && (
         <div style={{ borderTop: '1px solid var(--border)' }}>
-          {loading && (
-            <div style={{ padding: '20px 14px', color: 'var(--text-dim)', fontSize: 12 }}>Loading releases…</div>
+          {searchStatus === 'searching' && (
+            <div style={{ padding: '16px 14px', color: 'var(--text-dim)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+              Querying indexers… {elapsed > 0 && `(${elapsed}s)`}
+            </div>
           )}
-          {error && (
-            <div style={{ padding: '12px 14px', color: 'var(--red)', fontSize: 12 }}>{error}</div>
+          {searchStatus === 'error' && (
+            <div style={{ padding: '12px 14px', color: 'var(--red)', fontSize: 12 }}>{errorMsg}</div>
           )}
-          {!loading && !error && releases !== null && releases.length === 0 && (
+          {searchStatus === 'done' && releases !== null && releases.length === 0 && (
             <div style={{ padding: '16px 14px', color: 'var(--text-dim)', fontSize: 12 }}>
               No releases found — try opening directly in {c.arr_service}.
             </div>
           )}
-          {!loading && !error && releases !== null && releases.length > 0 && (
+          {searchStatus === 'done' && releases !== null && releases.length > 0 && (
             <>
               <div style={{
                 display: 'grid', gridTemplateColumns: '1fr 140px 60px 90px',
@@ -188,14 +235,13 @@ function CandidateRow({ c, downloadFrom, seedingOn }) {
                 color: 'var(--text-dim)', fontFamily: 'var(--mono)', letterSpacing: 1,
                 textTransform: 'uppercase', background: 'var(--surface2)',
               }}>
-                <span>Release</span>
-                <span>Indexer</span>
+                <span>Release</span><span>Indexer</span>
                 <span style={{ textAlign: 'right' }}>Seeds</span>
                 <span style={{ textAlign: 'right' }}>Size</span>
               </div>
               {releases.map((r, i) => <ReleaseRow key={i} r={r} />)}
               <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)' }}>
-                Grab releases inside {c.arr_service} — {' '}
+                Grab releases inside {c.arr_service} —{' '}
                 <a href={c.arr_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
                   Open {c.arr_title} ↗
                 </a>
@@ -208,17 +254,17 @@ function CandidateRow({ c, downloadFrom, seedingOn }) {
   )
 }
 
-// ── Main Workflows component ──────────────────────────────────────────────────
-export default function Workflows({ onNavigate }) {
+// ── Main component ────────────────────────────────────────────────────────────
+export default function Workflows() {
   const [candidates, setCandidates] = useState(null)
-  const [resolvedCount, setResolvedCount] = useState(0)
+  const [resolvedCount, setResolvedCount]     = useState(0)
   const [unresolvedCount, setUnresolvedCount] = useState(0)
-  const [indexers, setIndexers] = useState([])
+  const [indexers, setIndexers]     = useState([])
   const [downloadFrom, setDownloadFrom] = useState([])
-  const [seedingOn, setSeedingOn] = useState([])
+  const [seedingOn, setSeedingOn]       = useState([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [saving, setSaving] = useState(false)
+  const [error, setError]     = useState(null)
+  const [saving, setSaving]   = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -235,56 +281,59 @@ export default function Workflows({ onNavigate }) {
     }).catch(e => setError(e.message)).finally(() => setLoading(false))
   }, [])
 
-  const saveFilters = useCallback(async (nextDownloadFrom, nextSeedingOn) => {
+  const saveFilters = useCallback(async (df, so) => {
     setSaving(true)
-    try {
-      await api.saveConfig({ ACQUIRE_DOWNLOAD_FROM: nextDownloadFrom, ACQUIRE_SEEDING_ON: nextSeedingOn })
-    } catch (_) {}
+    try { await api.saveConfig({ ACQUIRE_DOWNLOAD_FROM: df, ACQUIRE_SEEDING_ON: so }) } catch (_) {}
     setSaving(false)
   }, [])
 
-  const handleDownloadFromChange = (val) => {
-    setDownloadFrom(val)
-    saveFilters(val, seedingOn)
-  }
+  const handleDownloadFromChange = v => { setDownloadFrom(v); saveFilters(v, seedingOn) }
+  const handleSeedingOnChange    = v => { setSeedingOn(v);    saveFilters(downloadFrom, v) }
 
-  const handleSeedingOnChange = (val) => {
-    setSeedingOn(val)
-    saveFilters(downloadFrom, val)
-  }
+  const grouped = useMemo(() => candidates ? groupCandidates(candidates) : [], [candidates])
 
   return (
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>
-            Workflows
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Acquire Candidates</div>
-          <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 560 }}>
-            Media files with no active tracker — fully unseeded. Expand a resolved row to see available releases, then grab inside Sonarr or Radarr.
-          </p>
+      <div>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>
+          Workflows
         </div>
-
-        {/* Filter bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {saving && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Saving…</span>}
-          <MultiSelect
-            label="Download from"
-            options={indexers}
-            value={downloadFrom}
-            onChange={handleDownloadFromChange}
-          />
-          <MultiSelect
-            label="Seeding on"
-            options={indexers}
-            value={seedingOn}
-            onChange={handleSeedingOnChange}
-          />
-        </div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Acquire Candidates</div>
+        <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 560 }}>
+          Media files with no active tracker — fully unseeded. Expand a resolved row to search for releases, then grab inside Sonarr or Radarr.
+          Season rows use Sonarr's season pack search. Release searches run in the background and may take 30–90 seconds.
+        </p>
       </div>
+
+      {/* Indexer strategy card */}
+      {!loading && !error && indexers.length > 0 && (
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
+              Indexer Strategy
+            </span>
+            {saving && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Saving…</span>}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>Download from</div>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>
+                Only show releases from these indexers. <em>All</em> = no restriction.
+              </div>
+              <IndexerChips options={indexers} value={downloadFrom} onChange={handleDownloadFromChange} />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>Must also be seeding on</div>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>
+                Only show release groups that appear on ALL of these indexers too. <em>All</em> = no restriction.
+              </div>
+              <IndexerChips options={indexers} value={seedingOn} onChange={handleSeedingOnChange} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary chips */}
       {!loading && !error && candidates !== null && (
@@ -301,11 +350,7 @@ export default function Workflows({ onNavigate }) {
           }}>
             {unresolvedCount} unresolved
           </span>
-          {downloadFrom.length > 0 && (
-            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-              · releases filtered to: {downloadFrom.join(', ')}
-            </span>
-          )}
+          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>· {grouped.length} rows after grouping</span>
         </div>
       )}
 
@@ -320,23 +365,20 @@ export default function Workflows({ onNavigate }) {
           {error}
         </div>
       )}
-      {!loading && !error && candidates !== null && candidates.length === 0 && (
+      {!loading && !error && grouped.length === 0 && (
         <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-dim)', fontSize: 13 }}>
           No unseeded files found — everything is actively seeding.
         </div>
       )}
-      {!loading && !error && candidates !== null && candidates.length > 0 && (
+      {!loading && !error && grouped.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {candidates.map((c, i) => (
-            <CandidateRow
-              key={i}
-              c={c}
-              downloadFrom={downloadFrom}
-              seedingOn={seedingOn}
-            />
-          ))}
+          {grouped.map((c, i) => <CandidateRow key={i} c={c} />)}
         </div>
       )}
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   )
 }

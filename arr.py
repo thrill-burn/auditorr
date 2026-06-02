@@ -131,28 +131,33 @@ def _episode_id_from_path(conn, arr_id, file_path):
     return None
 
 
-def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, file_path=None):
+def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None, file_path=None):
     """Fetch the interactive release search for a single Arr item.
 
     Returns a list of {title, indexer, seeders, leechers, size, guid} dicts.
-    Radarr: /api/v3/release?movieId={arr_id}
-    Sonarr: /api/v3/release?episodeId={episode_id}
+    Radarr:  /api/v3/release?movieId={arr_id}
+    Sonarr season pack: /api/v3/release?seriesId={arr_id}&seasonNumber={season_number}
+    Sonarr episode:     /api/v3/release?episodeId={episode_id}
 
-    If episode_id is missing for Sonarr, file_path is used to derive it via SxxExx parsing.
+    For Sonarr grouped (season) rows, pass season_number — this triggers Sonarr's
+    native season pack search. For single-episode rows, episode_id or file_path is used.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
         raise ValueError(f"Arr connection '{connection_id}' not found for service '{service}'")
     if service == 'radarr':
-        path = f'/api/v3/release?movieId={arr_id}'
+        api_path = f'/api/v3/release?movieId={arr_id}'
     else:
-        if not episode_id and file_path:
-            episode_id = _episode_id_from_path(conn, arr_id, file_path)
-        if not episode_id:
-            raise ValueError("Could not determine episode ID for Sonarr release search — open in Sonarr directly")
-        path = f'/api/v3/release?episodeId={episode_id}'
-    rows = _arr_get(conn['base_url'], conn['api_key'], path)
+        if season_number is not None:
+            api_path = f'/api/v3/release?seriesId={arr_id}&seasonNumber={season_number}'
+        else:
+            if not episode_id and file_path:
+                episode_id = _episode_id_from_path(conn, arr_id, file_path)
+            if not episode_id:
+                raise ValueError("Could not determine episode ID for Sonarr release search — open in Sonarr directly")
+            api_path = f'/api/v3/release?episodeId={episode_id}'
+    rows = _arr_get(conn['base_url'], conn['api_key'], api_path, timeout=90)
     return [
         {
             'title':    r.get('title', ''),
@@ -340,11 +345,11 @@ def _arr_command(base_url, api_key, command_name, path):
         resp.read()
 
 
-def _arr_get(base_url, api_key, path):
+def _arr_get(base_url, api_key, path, timeout=10):
     """GET from a *arr instance and return parsed JSON."""
     endpoint = base_url.rstrip('/') + path
     http_req = urllib.request.Request(endpoint, headers={"X-Api-Key": api_key})
-    with urllib.request.urlopen(http_req, timeout=10) as resp:
+    with urllib.request.urlopen(http_req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
 
