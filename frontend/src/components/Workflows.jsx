@@ -223,6 +223,8 @@ function ResultItem({ item }) {
     ? ` · S${String(item.season_number ?? '?').padStart(2, '0')} · ${item.file_count} ep`
     : ''
 
+  const filename = (item.path || '').replace(/\\/g, '/').split('/').pop()
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12,
@@ -245,17 +247,30 @@ function ResultItem({ item }) {
           {notFound   && 'No releases found'}
           {errored    && item.error}
         </div>
+        {filename && (
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            title={filename}>
+            {filename}
+          </div>
+        )}
       </div>
 
       {item.arr_service && (
-        <span style={{
-          fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-          background: item.arr_service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
-          color:      item.arr_service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-          border:     `1px solid ${item.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
-        }}>
-          {item.arr_service}
-        </span>
+        <a
+          href={item.arr_url || undefined}
+          target="_blank" rel="noopener noreferrer"
+          onClick={e => e.stopPropagation()}
+          title={`Open in ${item.arr_service}`}
+          style={{
+            fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+            textDecoration: 'none', cursor: item.arr_url ? 'pointer' : 'default',
+            background: item.arr_service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
+            color:      item.arr_service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
+            border:     `1px solid ${item.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
+          }}
+        >
+          {item.arr_service} ↗
+        </a>
       )}
 
       {found && item.best_release && (
@@ -283,13 +298,6 @@ function ResultItem({ item }) {
         </div>
       )}
 
-      {item.arr_url && (
-        <a href={item.arr_url} target="_blank" rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          style={{ fontSize: 12, color: 'var(--text-dim)', textDecoration: 'none', flexShrink: 0, opacity: 0.6 }}>
-          ↗
-        </a>
-      )}
     </div>
   )
 }
