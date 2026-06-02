@@ -181,33 +181,51 @@ function SectionLabel({ children }) {
   )
 }
 
+// ── Grab button (shared) ──────────────────────────────────────────────────────
+function GrabButton({ state, onGrab, onReset, errorMsg }) {
+  if (state === 'idle')     return <button onClick={onGrab} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)' }}>Grab</button>
+  if (state === 'grabbing') return <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
+  if (state === 'grabbed')  return <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
+  return <button onClick={onReset} title={errorMsg || 'Grab failed — click to retry'} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)' }}>Failed ↺</button>
+}
+
 // ── Result item ───────────────────────────────────────────────────────────────
 function ResultItem({ item }) {
-  const [grabStatus, setGrabStatus] = useState('idle')
-  const [grabError,  setGrabError]  = useState(null)
+  // grabStates: { [guid]: 'idle' | 'grabbing' | 'grabbed' | 'error' }
+  const [grabStates,  setGrabStates]  = useState({})
+  const [grabErrors,  setGrabErrors]  = useState({})
 
-  const handleGrab = useCallback(async e => {
+  const doGrab = useCallback(async (release, e) => {
     e.stopPropagation()
-    if (grabStatus !== 'idle' || !item.best_release) return
-    setGrabStatus('grabbing')
+    const key = release.guid || release.title
+    if (grabStates[key] && grabStates[key] !== 'error') return
+    setGrabStates(s => ({ ...s, [key]: 'grabbing' }))
     try {
       await api.grabRelease({
         service:       item.arr_service,
         connection_id: item.arr_connection_id,
-        guid:          item.best_release.guid,
-        indexer_id:    item.best_release.indexer_id,
+        guid:          release.guid,
+        indexer_id:    release.indexer_id,
       })
-      setGrabStatus('grabbed')
+      setGrabStates(s => ({ ...s, [key]: 'grabbed' }))
     } catch (err) {
-      setGrabError(err.message)
-      setGrabStatus('error')
+      setGrabErrors(s => ({ ...s, [key]: err.message }))
+      setGrabStates(s => ({ ...s, [key]: 'error' }))
     }
-  }, [grabStatus, item])
+  }, [grabStates, item])
 
-  const searching  = item.status === 'searching'
-  const found      = item.status === 'found'
-  const notFound   = item.status === 'not_found'
-  const errored    = item.status === 'error'
+  const resetGrab = useCallback((key, e) => {
+    e.stopPropagation()
+    setGrabStates(s => ({ ...s, [key]: 'idle' }))
+  }, [])
+
+  const searching = item.status === 'searching'
+  const found     = item.status === 'found'
+  const notFound  = item.status === 'not_found'
+  const errored   = item.status === 'error'
+
+  const releases  = (found && item.releases) || (item.best_release ? [item.best_release] : [])
+  const multi     = releases.length > 1
 
   const icon = searching ? (
     <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
@@ -225,79 +243,111 @@ function ResultItem({ item }) {
 
   const filename = (item.path || '').replace(/\\/g, '/').split('/').pop()
 
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 12,
-      padding: '10px 16px', borderBottom: '1px solid var(--border)',
-    }}>
-      <span style={{ width: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {icon}
-      </span>
+  // Single-release grab key
+  const singleKey = item.best_release?.guid || item.best_release?.title
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          color: notFound || errored ? 'var(--text-dim)' : 'var(--text)',
-        }}>
-          {item.arr_title}{seasonSuffix}
+  return (
+    <div style={{ borderBottom: '1px solid var(--border)' }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: multi ? '10px 16px 6px' : '10px 16px' }}>
+        <span style={{ width: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {icon}
+        </span>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            color: notFound || errored ? 'var(--text-dim)' : 'var(--text)',
+          }}>
+            {item.arr_title}{seasonSuffix}
+          </div>
+          {/* Single-release info line */}
+          {!multi && (
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+              {searching && 'Querying indexers…'}
+              {found && item.best_release && `${item.best_release.indexer} · ${item.best_release.seeders}S · ${formatBytes(item.best_release.size)}`}
+              {notFound  && 'No releases found'}
+              {errored   && item.error}
+            </div>
+          )}
+          {multi && (
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+              {releases.length} releases found
+            </div>
+          )}
+          {filename && (
+            <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2, opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={filename}>
+              {filename}
+            </div>
+          )}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
-          {searching  && 'Querying indexers…'}
-          {found && item.best_release && `${item.best_release.indexer} · ${item.best_release.seeders}S · ${formatBytes(item.best_release.size)}`}
-          {notFound   && 'No releases found'}
-          {errored    && item.error}
-        </div>
-        {filename && (
-          <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2, opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            title={filename}>
-            {filename}
+
+        {/* Service badge link */}
+        {item.arr_service && (
+          <a href={item.arr_url || undefined} target="_blank" rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()} title={`Open in ${item.arr_service}`}
+            style={{
+              fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+              textDecoration: 'none', cursor: item.arr_url ? 'pointer' : 'default',
+              background: item.arr_service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
+              color:      item.arr_service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
+              border:     `1px solid ${item.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
+            }}>
+            {item.arr_service} ↗
+          </a>
+        )}
+
+        {/* Single-release grab button */}
+        {found && !multi && item.best_release && (
+          <div style={{ flexShrink: 0 }}>
+            <GrabButton
+              state={grabStates[singleKey] || 'idle'}
+              errorMsg={grabErrors[singleKey]}
+              onGrab={e => doGrab(item.best_release, e)}
+              onReset={e => resetGrab(singleKey, e)}
+            />
           </div>
         )}
       </div>
 
-      {item.arr_service && (
-        <a
-          href={item.arr_url || undefined}
-          target="_blank" rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          title={`Open in ${item.arr_service}`}
-          style={{
-            fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-            textDecoration: 'none', cursor: item.arr_url ? 'pointer' : 'default',
-            background: item.arr_service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
-            color:      item.arr_service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-            border:     `1px solid ${item.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
-          }}
-        >
-          {item.arr_service} ↗
-        </a>
-      )}
-
-      {found && item.best_release && (
-        <div style={{ flexShrink: 0 }}>
-          {grabStatus === 'idle' && (
-            <button onClick={handleGrab} style={{
-              fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
-              border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)',
-            }}>Grab</button>
-          )}
-          {grabStatus === 'grabbing' && (
-            <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
-          )}
-          {grabStatus === 'grabbed' && (
-            <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
-          )}
-          {grabStatus === 'error' && (
-            <button onClick={() => { setGrabStatus('idle'); setGrabError(null) }}
-              title={grabError || 'Grab failed — click to retry'}
-              style={{
-                fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
-                border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)',
-              }}>Failed ↺</button>
-          )}
+      {/* Multi-release picker */}
+      {found && multi && (
+        <div style={{ paddingLeft: 42, paddingRight: 16, paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {releases.map((r, i) => {
+            const key   = r.guid || r.title
+            const gs    = grabStates[key] || 'idle'
+            const isBest = i === 0
+            return (
+              <div key={key} style={{
+                display: 'grid', gridTemplateColumns: '1fr 44px 70px 72px',
+                alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
+                background: isBest ? 'var(--accent)08' : 'transparent',
+                border: `1px solid ${isBest ? 'var(--accent)25' : 'transparent'}`,
+              }}>
+                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={r.indexer}>
+                  {r.indexer}
+                </span>
+                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: r.seeders > 0 ? 'var(--green)' : 'var(--text-dim)', textAlign: 'right' }}>
+                  {r.seeders}S
+                </span>
+                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
+                  {formatBytes(r.size)}
+                </span>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <GrabButton
+                    state={gs}
+                    errorMsg={grabErrors[key]}
+                    onGrab={e => doGrab(r, e)}
+                    onReset={e => resetGrab(key, e)}
+                  />
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
-
     </div>
   )
 }

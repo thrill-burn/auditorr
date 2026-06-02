@@ -1027,6 +1027,7 @@ def workflows_generate():
                 'file_count':        candidate.get('file_count', 1),
                 'total_size':        candidate.get('total_size', 0),
                 'status':            'searching',
+                'releases':          None,
                 'best_release':      None,
                 'error':             None,
             }
@@ -1041,6 +1042,7 @@ def workflows_generate():
                 filtered = _apply_release_filters(rows, download_from, seeding_on)
                 best = max(filtered, key=lambda r: r.get('seeders', 0)) if filtered else None
                 result['status']       = 'found' if best else 'not_found'
+                result['releases']     = filtered
                 result['best_release'] = best
             except Exception as e:
                 log.warning("Generate search failed for %s: %s", candidate.get('arr_title'), e)
