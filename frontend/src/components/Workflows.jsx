@@ -93,6 +93,7 @@ function CandidateRow({ c, downloadFrom, seedingOn }) {
         service: c.arr_service,
         connection_id: c.arr_connection_id,
         arr_id: c.arr_id,
+        path: c.path,
       }
       if (c.episode_id) params.episode_id = c.episode_id
       const data = await api.acquireReleases(params)

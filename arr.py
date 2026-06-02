@@ -115,12 +115,30 @@ def fetch_arr_indexers(cfg):
     return names
 
 
-def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None):
+def _episode_id_from_path(conn, arr_id, file_path):
+    """Derive a Sonarr episode ID by parsing SxxExx from file_path and matching against the series."""
+    m = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', os.path.basename(file_path))
+    if not m:
+        return None
+    season, ep_num = int(m.group(1)), int(m.group(2))
+    try:
+        episodes = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/episode?seriesId={arr_id}')
+        for ep in episodes:
+            if ep.get('seasonNumber') == season and ep.get('episodeNumber') == ep_num:
+                return ep.get('id')
+    except Exception as e:
+        log.warning("Could not look up episode from path %s: %s", file_path, e)
+    return None
+
+
+def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, file_path=None):
     """Fetch the interactive release search for a single Arr item.
 
     Returns a list of {title, indexer, seeders, leechers, size, guid} dicts.
     Radarr: /api/v3/release?movieId={arr_id}
     Sonarr: /api/v3/release?episodeId={episode_id}
+
+    If episode_id is missing for Sonarr, file_path is used to derive it via SxxExx parsing.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn = next((c for c in conns if c['id'] == connection_id), None)
@@ -129,8 +147,10 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None):
     if service == 'radarr':
         path = f'/api/v3/release?movieId={arr_id}'
     else:
+        if not episode_id and file_path:
+            episode_id = _episode_id_from_path(conn, arr_id, file_path)
         if not episode_id:
-            raise ValueError("episode_id is required for Sonarr release search")
+            raise ValueError("Could not determine episode ID for Sonarr release search — open in Sonarr directly")
         path = f'/api/v3/release?episodeId={episode_id}'
     rows = _arr_get(conn['base_url'], conn['api_key'], path)
     return [

@@ -769,13 +769,14 @@ def workflows_acquire_releases():
     connection_id = request.args.get('connection_id', '')
     arr_id = request.args.get('arr_id', type=int)
     episode_id = request.args.get('episode_id', type=int)
+    file_path = request.args.get('path', '') or None
     if not service or not connection_id or arr_id is None:
         return jsonify({"status": "error", "message": "service, connection_id, and arr_id are required"}), 400
     cfg = db_load_config()
     download_from = cfg.get('ACQUIRE_DOWNLOAD_FROM') or []
     seeding_on = cfg.get('ACQUIRE_SEEDING_ON') or []
     try:
-        rows = fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=episode_id)
+        rows = fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=episode_id, file_path=file_path)
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
