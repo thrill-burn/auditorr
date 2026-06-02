@@ -786,7 +786,9 @@ def _release_job_key(service, connection_id, arr_id, episode_id, season_number, 
     parts = (service, connection_id, str(arr_id), str(episode_id), str(season_number), file_path or '')
     return ':'.join(parts)
 
-def _apply_release_filters(rows, download_from, seeding_on):
+_RES_LABEL_MAP = {'2160p': 2160, '1080p': 1080, '720p': 720}
+
+def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, source_filter=None):
     groups = {}
     for r in rows:
         key = (r['title'].lower().strip(), r['size'])
@@ -799,6 +801,14 @@ def _apply_release_filters(rows, download_from, seeding_on):
             if download_from and r['indexer'] not in download_from:
                 continue
             filtered.append(r)
+    if res_filter:
+        target_resolutions = {_RES_LABEL_MAP[r] for r in res_filter if r in _RES_LABEL_MAP}
+        if target_resolutions:
+            filtered = [r for r in filtered if r.get('resolution') in target_resolutions]
+    if source_filter:
+        filtered = [r for r in filtered if r.get('source', '') in source_filter]
+    # Sort: custom format score desc, quality weight desc, seeders desc (matches Sonarr/Radarr interactive search order)
+    filtered.sort(key=lambda r: (r.get('custom_format_score', 0), r.get('quality_weight', 0), r.get('seeders', 0)), reverse=True)
     return filtered
 
 
@@ -977,7 +987,7 @@ def _sort_generate_candidates(groups, sort):
     elif sort == 'smallest':
         groups.sort(key=lambda g: g.get('total_size') or 0)
     elif sort == 'random':
-        random.shuffle(groups)
+        random.SystemRandom().shuffle(groups)
     elif sort == 'alpha':
         groups.sort(key=lambda g: (g.get('arr_title') or '').lower())
     return groups
@@ -992,6 +1002,8 @@ def workflows_generate():
     sort          = data.get('sort', 'largest')
     download_from = data.get('download_from') or []
     seeding_on    = data.get('seeding_on') or []
+    res_filter    = data.get('res_filter') or []
+    source_filter = data.get('source_filter') or []
 
     existing = _gen_state.get('job')
     if existing and existing.get('status') == 'running':
@@ -1039,8 +1051,8 @@ def workflows_generate():
                     season_number=candidate.get('season_number'),
                     file_path=candidate.get('rep_path') or candidate.get('path'),
                 )
-                filtered = _apply_release_filters(rows, download_from, seeding_on)
-                best = max(filtered, key=lambda r: r.get('seeders', 0)) if filtered else None
+                filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter)
+                best = filtered[0] if filtered else None
                 result['status']       = 'found' if best else 'not_found'
                 result['releases']     = filtered
                 result['best_release'] = best

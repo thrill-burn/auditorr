@@ -67,6 +67,38 @@ function Chip({ active, onClick, children }) {
   )
 }
 
+// ── Labeled chips (options with separate display labels) ─────────────────────
+const QUALITY_RES_OPTIONS = [
+  { value: '2160p', label: '2160p / 4K' },
+  { value: '1080p', label: '1080p'      },
+  { value: '720p',  label: '720p'       },
+]
+const QUALITY_SOURCE_OPTIONS = [
+  { value: 'remux',  label: 'Remux'  },
+  { value: 'bluray', label: 'Bluray' },
+  { value: 'webdl',  label: 'WEB-DL' },
+  { value: 'webrip', label: 'WEBRip' },
+  { value: 'hdtv',   label: 'HDTV'   },
+]
+
+function LabeledChips({ options, value, onChange, allLabel = 'Any' }) {
+  const noneSelected = value.length === 0
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      <Chip active={noneSelected} onClick={() => onChange([])}>{allLabel}</Chip>
+      {options.map(opt => {
+        const active = value.includes(opt.value)
+        return (
+          <Chip key={opt.value} active={active}
+            onClick={() => onChange(active ? value.filter(v => v !== opt.value) : [...value, opt.value])}>
+            {opt.label}
+          </Chip>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Indexer chips ─────────────────────────────────────────────────────────────
 function IndexerChips({ options, value, onChange, allLabel = 'All' }) {
   const noneSelected = value.length === 0
@@ -265,7 +297,12 @@ function ResultItem({ item }) {
           {!multi && (
             <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
               {searching && 'Querying indexers…'}
-              {found && item.best_release && `${item.best_release.indexer} · ${item.best_release.seeders}S · ${formatBytes(item.best_release.size)}`}
+              {found && item.best_release && (() => {
+                const r = item.best_release
+                const parts = [r.indexer, formatBytes(r.size), `${r.seeders}S`, r.quality_name].filter(Boolean)
+                if (r.custom_format_score) parts.push(`CF:${r.custom_format_score}`)
+                return parts.join(' · ')
+              })()}
               {notFound  && 'No releases found'}
               {errored   && item.error}
             </div>
@@ -314,26 +351,47 @@ function ResultItem({ item }) {
       {/* Multi-release picker */}
       {found && multi && (
         <div style={{ paddingLeft: 42, paddingRight: 16, paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {/* Column headers */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 65px 44px 95px 46px 72px', gap: 8, padding: '2px 10px' }}>
+            {['Title', 'Tracker', 'Size', 'Peers', 'Quality', 'Score', ''].map((h, i) => (
+              <span key={i} style={{
+                fontSize: 9, fontFamily: 'var(--mono)', letterSpacing: 1.5, textTransform: 'uppercase',
+                color: 'var(--text-dim)', opacity: 0.6,
+                textAlign: i >= 2 && i <= 5 ? 'right' : 'left',
+              }}>{h}</span>
+            ))}
+          </div>
           {releases.map((r, i) => {
-            const key   = r.guid || r.title
-            const gs    = grabStates[key] || 'idle'
+            const key    = r.guid || r.title
+            const gs     = grabStates[key] || 'idle'
             const isBest = i === 0
             return (
               <div key={key} style={{
-                display: 'grid', gridTemplateColumns: '1fr 44px 70px 72px',
+                display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 65px 44px 95px 46px 72px',
                 alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
                 background: isBest ? 'var(--accent)08' : 'transparent',
                 border: `1px solid ${isBest ? 'var(--accent)25' : 'transparent'}`,
               }}>
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={r.title}>
+                  {r.title}
+                </span>
+                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}
                   title={r.indexer}>
                   {r.indexer}
+                </span>
+                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
+                  {formatBytes(r.size)}
                 </span>
                 <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: r.seeders > 0 ? 'var(--green)' : 'var(--text-dim)', textAlign: 'right' }}>
                   {r.seeders}S
                 </span>
+                <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={r.quality_name}>
+                  {r.quality_name || '—'}
+                </span>
                 <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
-                  {formatBytes(r.size)}
+                  {r.custom_format_score ?? 0}
                 </span>
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <GrabButton
@@ -357,10 +415,11 @@ export default function Workflows() {
   const [phase, setPhase] = useState('config')  // config | running | done | stopped
 
   // Data loaded on mount
-  const [indexers,   setIndexers]   = useState([])
-  const [folders,    setFolders]    = useState([])   // [{name, count}]
-  const [loading,    setLoading]    = useState(true)
-  const [loadError,  setLoadError]  = useState(null)
+  const [indexers,      setIndexers]      = useState([])
+  const [folders,       setFolders]       = useState([])   // [{name, count}]
+  const [totalUnseeded, setTotalUnseeded] = useState(0)
+  const [loading,       setLoading]       = useState(true)
+  const [loadError,     setLoadError]     = useState(null)
 
   // Config
   const [downloadFrom,    setDownloadFrom]    = useState([])
@@ -368,6 +427,8 @@ export default function Workflows() {
   const [selectedFolders, setSelectedFolders] = useState([])
   const [searchCount,     setSearchCount]     = useState(10)
   const [sort,            setSort]            = useState('largest')
+  const [resFilter,       setResFilter]       = useState([])
+  const [sourceFilter,    setSourceFilter]    = useState([])
   const [saving,          setSaving]          = useState(false)
 
   // Job
@@ -387,6 +448,7 @@ export default function Workflows() {
         const grouped  = groupCandidates(cdata.candidates || [])
         const resolved = grouped.filter(c => c.resolved)
         setFolders(groupByFolder(resolved).map(([name, items]) => ({ name, count: items.length })))
+        setTotalUnseeded((cdata.resolved_count || 0) + (cdata.unresolved_count || 0))
         setIndexers(idata.indexers || [])
         setDownloadFrom(cfg.ACQUIRE_DOWNLOAD_FROM || [])
         setSeedingOn(cfg.ACQUIRE_SEEDING_ON || [])
@@ -437,6 +499,8 @@ export default function Workflows() {
         folders:       selectedFolders,
         count:         searchCount,
         sort,
+        res_filter:    resFilter,
+        source_filter: sourceFilter,
         download_from: downloadFrom,
         seeding_on:    seedingOn,
       })
@@ -446,7 +510,7 @@ export default function Workflows() {
       setPhase('config')
       setLoadError(e.message)
     }
-  }, [selectedFolders, searchCount, downloadFrom, seedingOn, startPoll])
+  }, [selectedFolders, searchCount, sort, resFilter, sourceFilter, downloadFrom, seedingOn, startPoll])
 
   const handleStop = useCallback(async () => {
     if (jobId) { try { await api.stopGenerate(jobId) } catch (_) {} }
@@ -514,6 +578,23 @@ export default function Workflows() {
             )}
 
             <div>
+              <SectionLabel>Quality Filter</SectionLabel>
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
+                Restrict results by resolution and/or source, exactly like a Sonarr/Radarr quality profile. <em>Any</em> = no restriction.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
+                  <LabeledChips options={QUALITY_RES_OPTIONS} value={resFilter} onChange={setResFilter} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
+                  <LabeledChips options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
+                </div>
+              </div>
+            </div>
+
+            <div>
               <SectionLabel>Priority</SectionLabel>
               <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                 How to order candidates when there are more than the search limit.
@@ -525,7 +606,7 @@ export default function Workflows() {
               <SectionLabel>Search Depth</SectionLabel>
               <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
                 Each release search takes 30–90 s while Radarr/Sonarr queries your indexers.
-                {availableCount > 0 && ` ${availableCount} candidate${availableCount !== 1 ? 's' : ''} available.`}
+                {availableCount > 0 && ` ${availableCount} searchable candidate${availableCount !== 1 ? 's' : ''}${totalUnseeded > availableCount ? ` (${totalUnseeded} total unseeded)` : ''}.`}
               </div>
               <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount || 999} />
             </div>

@@ -158,18 +158,25 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
                 raise ValueError("Could not determine episode ID for Sonarr release search — open in Sonarr directly")
             api_path = f'/api/v3/release?episodeId={episode_id}'
     rows = _arr_get(conn['base_url'], conn['api_key'], api_path, timeout=90)
-    return [
-        {
-            'title':      r.get('title', ''),
-            'indexer':    r.get('indexer', ''),
-            'indexer_id': r.get('indexerId', 0),
-            'seeders':    r.get('seeders', 0),
-            'leechers':   r.get('leechers', 0),
-            'size':       r.get('size', 0),
-            'guid':       r.get('guid', ''),
-        }
-        for r in rows
-    ]
+    result = []
+    for r in rows:
+        q_outer = r.get('quality') or {}
+        q_inner = q_outer.get('quality') or {}
+        result.append({
+            'title':               r.get('title', ''),
+            'indexer':             r.get('indexer', ''),
+            'indexer_id':          r.get('indexerId', 0),
+            'seeders':             r.get('seeders', 0),
+            'leechers':            r.get('leechers', 0),
+            'size':                r.get('size', 0),
+            'guid':                r.get('guid', ''),
+            'quality_name':        q_inner.get('name', ''),
+            'resolution':          q_inner.get('resolution', 0),
+            'source':              q_inner.get('source', ''),
+            'custom_format_score': r.get('customFormatScore', 0),
+            'quality_weight':      r.get('qualityWeight', 0),
+        })
+    return result
 
 
 def grab_release(cfg, service, connection_id, guid, indexer_id):
@@ -303,6 +310,7 @@ def _fetch_radarr_media(conn):
             'relative_path': movie_file.get('relativePath'),
             'arr_id': movie.get('id'),
             'file_id': movie_file.get('id'),
+            'title_slug': movie.get('titleSlug') or '',
         })
     return rows
 
@@ -334,6 +342,7 @@ def _fetch_sonarr_media(conn):
                 'arr_id': series_id,
                 'file_id': episode_file.get('id'),
                 'episode_ids': episode_file.get('episodeIds') or [],
+                'title_slug': series.get('titleSlug') or '',
             })
         return rows
 
