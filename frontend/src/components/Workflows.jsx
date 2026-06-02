@@ -41,6 +41,56 @@ function groupCandidates(candidates) {
   return groups
 }
 
+function getRootFolder(path) {
+  if (!path) return 'Other'
+  const normalized = path.replace(/\\/g, '/').replace(/^\//, '')
+  const first = normalized.split('/')[0]
+  return first || 'Other'
+}
+
+function groupByFolder(candidates) {
+  const map = {}
+  for (const c of candidates) {
+    const folder = getRootFolder(c.rep_path || c.path)
+    if (!map[folder]) map[folder] = []
+    map[folder].push(c)
+  }
+  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+}
+
+// ── Folder group ──────────────────────────────────────────────────────────────
+function FolderGroup({ name, candidates }) {
+  const [expanded, setExpanded] = useState(true)
+  const resolvedCount = candidates.filter(c => c.resolved).length
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div
+        onClick={() => setExpanded(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+          padding: '6px 2px', userSelect: 'none',
+        }}
+      >
+        <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 10, textAlign: 'center', flexShrink: 0 }}>
+          {expanded ? '▾' : '▸'}
+        </span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)' }}>
+          {name}
+        </span>
+        <span style={{
+          fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 7px', borderRadius: 99,
+          background: 'var(--surface2)', border: '1px solid var(--border)',
+          color: 'var(--text-dim)',
+        }}>
+          {resolvedCount}/{candidates.length}
+        </span>
+        <div style={{ flex: 1, height: 1, background: 'var(--border)', marginLeft: 4 }} />
+      </div>
+      {expanded && candidates.map(c => <CandidateRow key={c.rep_path || c.path} c={c} />)}
+    </div>
+  )
+}
+
 // ── Indexer chip filter ───────────────────────────────────────────────────────
 function IndexerChips({ options, value, onChange }) {
   const allSelected = value.length === 0
@@ -81,10 +131,26 @@ function IndexerChips({ options, value, onChange }) {
 }
 
 // ── Release matrix row ────────────────────────────────────────────────────────
-function ReleaseRow({ r }) {
+function ReleaseRow({ r, service, connectionId }) {
+  const [grabStatus, setGrabStatus] = useState('idle')  // idle | grabbing | grabbed | error
+  const [grabError, setGrabError]   = useState(null)
+
+  const handleGrab = useCallback(async (e) => {
+    e.stopPropagation()
+    if (grabStatus !== 'idle') return
+    setGrabStatus('grabbing')
+    try {
+      await api.grabRelease({ service, connection_id: connectionId, guid: r.guid, indexer_id: r.indexer_id })
+      setGrabStatus('grabbed')
+    } catch (err) {
+      setGrabError(err.message)
+      setGrabStatus('error')
+    }
+  }, [grabStatus, service, connectionId, r.guid, r.indexer_id])
+
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: '1fr 140px 60px 90px',
+      display: 'grid', gridTemplateColumns: '1fr 140px 60px 90px 72px',
       gap: 8, padding: '7px 12px', fontSize: 12, alignItems: 'center',
       borderBottom: '1px solid var(--border)',
     }}>
@@ -92,6 +158,43 @@ function ReleaseRow({ r }) {
       <span style={{ color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.indexer}>{r.indexer}</span>
       <span style={{ color: r.seeders > 0 ? 'var(--green)' : 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, textAlign: 'right' }}>{r.seeders}S</span>
       <span style={{ color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, textAlign: 'right' }}>{formatBytes(r.size)}</span>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        {grabStatus === 'idle' && (
+          <button
+            onClick={handleGrab}
+            title={r.guid ? undefined : 'No GUID — cannot grab'}
+            disabled={!r.guid}
+            style={{
+              fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: r.guid ? 'pointer' : 'not-allowed',
+              border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)',
+              opacity: r.guid ? 1 : 0.4,
+            }}
+          >
+            Grab
+          </button>
+        )}
+        {grabStatus === 'grabbing' && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+            Grabbing
+          </span>
+        )}
+        {grabStatus === 'grabbed' && (
+          <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--green)', padding: '2px 8px' }}>✓ Grabbed</span>
+        )}
+        {grabStatus === 'error' && (
+          <button
+            onClick={() => { setGrabStatus('idle'); setGrabError(null) }}
+            title={grabError || 'Grab failed — click to retry'}
+            style={{
+              fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
+              border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)',
+            }}
+          >
+            Failed ↺
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -230,7 +333,7 @@ function CandidateRow({ c }) {
           {searchStatus === 'done' && releases !== null && releases.length > 0 && (
             <>
               <div style={{
-                display: 'grid', gridTemplateColumns: '1fr 140px 60px 90px',
+                display: 'grid', gridTemplateColumns: '1fr 140px 60px 90px 72px',
                 gap: 8, padding: '6px 12px', fontSize: 10,
                 color: 'var(--text-dim)', fontFamily: 'var(--mono)', letterSpacing: 1,
                 textTransform: 'uppercase', background: 'var(--surface2)',
@@ -238,14 +341,18 @@ function CandidateRow({ c }) {
                 <span>Release</span><span>Indexer</span>
                 <span style={{ textAlign: 'right' }}>Seeds</span>
                 <span style={{ textAlign: 'right' }}>Size</span>
+                <span />
               </div>
-              {releases.map((r, i) => <ReleaseRow key={i} r={r} />)}
-              <div style={{ padding: '10px 14px', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)' }}>
-                Grab releases inside {c.arr_service} —{' '}
-                <a href={c.arr_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
-                  Open {c.arr_title} ↗
-                </a>
-              </div>
+              {releases.map((r, i) => (
+                <ReleaseRow key={i} r={r} service={c.arr_service} connectionId={c.arr_connection_id} />
+              ))}
+              {c.arr_url && (
+                <div style={{ padding: '8px 14px', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)', borderTop: '1px solid var(--border)' }}>
+                  <a href={c.arr_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
+                    Open {c.arr_title} in {c.arr_service} ↗
+                  </a>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -283,14 +390,15 @@ export default function Workflows() {
 
   const saveFilters = useCallback(async (df, so) => {
     setSaving(true)
-    try { await api.saveConfig({ ACQUIRE_DOWNLOAD_FROM: df, ACQUIRE_SEEDING_ON: so }) } catch (_) {}
+    try { await api.saveAcquirePrefs({ ACQUIRE_DOWNLOAD_FROM: df, ACQUIRE_SEEDING_ON: so }) } catch (_) {}
     setSaving(false)
   }, [])
 
   const handleDownloadFromChange = v => { setDownloadFrom(v); saveFilters(v, seedingOn) }
   const handleSeedingOnChange    = v => { setSeedingOn(v);    saveFilters(downloadFrom, v) }
 
-  const grouped = useMemo(() => candidates ? groupCandidates(candidates) : [], [candidates])
+  const grouped       = useMemo(() => candidates ? groupCandidates(candidates) : [], [candidates])
+  const folderGroups  = useMemo(() => groupByFolder(grouped), [grouped])
 
   return (
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -350,7 +458,7 @@ export default function Workflows() {
           }}>
             {unresolvedCount} unresolved
           </span>
-          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>· {grouped.length} rows after grouping</span>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>· {grouped.length} rows in {folderGroups.length} folder{folderGroups.length !== 1 ? 's' : ''}</span>
         </div>
       )}
 
@@ -370,9 +478,11 @@ export default function Workflows() {
           No unseeded files found — everything is actively seeding.
         </div>
       )}
-      {!loading && !error && grouped.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {grouped.map((c, i) => <CandidateRow key={i} c={c} />)}
+      {!loading && !error && folderGroups.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {folderGroups.map(([folder, candidates]) => (
+            <FolderGroup key={folder} name={folder} candidates={candidates} />
+          ))}
         </div>
       )}
 

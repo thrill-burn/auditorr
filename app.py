@@ -6,6 +6,7 @@ import logging
 import secrets
 import functools
 import urllib.parse
+import urllib.error
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -27,7 +28,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, normalize_arr_connections
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections
 from scripts import generate_script
 from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -657,6 +658,19 @@ def delete_upload_snapshots():
     return jsonify({"status": "success", "deleted": snap_count, "audit_runs_deleted": run_count})
 
 
+@app.route('/api/workflows/acquire_prefs', methods=['POST'])
+@require_auth
+def workflows_acquire_prefs():
+    data = request.json or {}
+    cfg = db_load_config()
+    if 'ACQUIRE_DOWNLOAD_FROM' in data:
+        cfg['ACQUIRE_DOWNLOAD_FROM'] = [s for s in data['ACQUIRE_DOWNLOAD_FROM'] if isinstance(s, str)]
+    if 'ACQUIRE_SEEDING_ON' in data:
+        cfg['ACQUIRE_SEEDING_ON'] = [s for s in data['ACQUIRE_SEEDING_ON'] if isinstance(s, str)]
+    db_save_config(cfg)
+    return jsonify({"status": "success"})
+
+
 @app.route('/api/workflows/indexers')
 @require_auth
 def workflows_indexers():
@@ -834,6 +848,34 @@ def workflows_acquire_releases():
 
     threading.Thread(target=do_search, daemon=True).start()
     return jsonify({'status': 'searching'})
+
+
+@app.route('/api/workflows/grab_release', methods=['POST'])
+@require_auth
+def workflows_grab_release():
+    data = request.json or {}
+    service      = data.get('service', '')
+    connection_id = data.get('connection_id', '')
+    guid         = data.get('guid', '')
+    indexer_id   = data.get('indexer_id')
+    if not service or not connection_id or not guid or indexer_id is None:
+        return jsonify({"status": "error", "message": "service, connection_id, guid, and indexer_id are required"}), 400
+    cfg = db_load_config()
+    try:
+        grab_release(cfg, service, connection_id, guid, indexer_id)
+        return jsonify({"status": "success"})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors='replace')
+        msg = f"HTTP {e.code}: {e.reason}"
+        try:
+            msg = json.loads(body).get('message') or msg
+        except Exception:
+            pass
+        log.warning("Grab failed for %s/%s: %s", service, guid, msg)
+        return jsonify({"status": "error", "message": msg}), 400
+    except Exception as e:
+        log.warning("Grab failed for %s/%s: %s", service, guid, e)
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 
 @app.route('/', defaults={'path': ''})

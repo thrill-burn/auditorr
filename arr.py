@@ -160,15 +160,33 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
     rows = _arr_get(conn['base_url'], conn['api_key'], api_path, timeout=90)
     return [
         {
-            'title':    r.get('title', ''),
-            'indexer':  r.get('indexer', ''),
-            'seeders':  r.get('seeders', 0),
-            'leechers': r.get('leechers', 0),
-            'size':     r.get('size', 0),
-            'guid':     r.get('guid', ''),
+            'title':      r.get('title', ''),
+            'indexer':    r.get('indexer', ''),
+            'indexer_id': r.get('indexerId', 0),
+            'seeders':    r.get('seeders', 0),
+            'leechers':   r.get('leechers', 0),
+            'size':       r.get('size', 0),
+            'guid':       r.get('guid', ''),
         }
         for r in rows
     ]
+
+
+def grab_release(cfg, service, connection_id, guid, indexer_id):
+    """Trigger a release grab on the given Arr instance (equivalent to clicking Grab in the UI)."""
+    conns = normalize_arr_connections(cfg, service=service)
+    conn = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        raise ValueError(f"Arr connection '{connection_id}' not found for service '{service}'")
+    body = json.dumps({"guid": guid, "indexerId": indexer_id}).encode()
+    http_req = urllib.request.Request(
+        conn['base_url'].rstrip('/') + '/api/v3/release',
+        data=body,
+        headers={"X-Api-Key": conn['api_key'], "Content-Type": "application/json"},
+        method='POST',
+    )
+    with urllib.request.urlopen(http_req, timeout=30) as resp:
+        return json.loads(resp.read())
 
 
 def test_arr_connections(cfg):
