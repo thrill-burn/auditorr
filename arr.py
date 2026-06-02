@@ -2,11 +2,15 @@ import os
 import re
 import json
 import logging
+import time
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
+
+_arr_media_index_cache = {'data': None, 'ts': 0}
+_ARR_MEDIA_INDEX_TTL = 120
 
 # Service config map: url_key, api_key_key, remote_path_key, command, list_path, slug_prefix, display_name
 _SERVICE_MAP = {
@@ -73,8 +77,14 @@ def normalize_arr_connections(cfg, service=None):
     return deduped
 
 
-def fetch_arr_media_index(cfg):
-    """Fetch managed media-file paths from every configured Arr instance."""
+def fetch_arr_media_index(cfg, force=False):
+    """Fetch managed media-file paths from every configured Arr instance.
+
+    Results are cached for _ARR_MEDIA_INDEX_TTL seconds. Pass force=True to bypass.
+    """
+    now = time.monotonic()
+    if not force and _arr_media_index_cache['data'] is not None and (now - _arr_media_index_cache['ts']) < _ARR_MEDIA_INDEX_TTL:
+        return _arr_media_index_cache['data']
     media = []
     for conn in normalize_arr_connections(cfg):
         try:
@@ -85,7 +95,55 @@ def fetch_arr_media_index(cfg):
             media.extend(_apply_arr_media_path_mapping(rows, conn, cfg))
         except Exception as e:
             log.warning("Could not fetch %s media from %s: %s", conn['service'], conn['id'], e)
+    _arr_media_index_cache['data'] = media
+    _arr_media_index_cache['ts'] = now
     return media
+
+
+def fetch_arr_indexers(cfg):
+    """Return a deduped list of indexer names seen across all configured Arr instances."""
+    names = []
+    for conn in normalize_arr_connections(cfg):
+        try:
+            indexers = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/indexer')
+            for idx in indexers:
+                name = idx.get('name')
+                if name and name not in names:
+                    names.append(name)
+        except Exception as e:
+            log.warning("Could not fetch indexers from %s: %s", conn['id'], e)
+    return names
+
+
+def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None):
+    """Fetch the interactive release search for a single Arr item.
+
+    Returns a list of {title, indexer, seeders, leechers, size, guid} dicts.
+    Radarr: /api/v3/release?movieId={arr_id}
+    Sonarr: /api/v3/release?episodeId={episode_id}
+    """
+    conns = normalize_arr_connections(cfg, service=service)
+    conn = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        raise ValueError(f"Arr connection '{connection_id}' not found for service '{service}'")
+    if service == 'radarr':
+        path = f'/api/v3/release?movieId={arr_id}'
+    else:
+        if not episode_id:
+            raise ValueError("episode_id is required for Sonarr release search")
+        path = f'/api/v3/release?episodeId={episode_id}'
+    rows = _arr_get(conn['base_url'], conn['api_key'], path)
+    return [
+        {
+            'title':    r.get('title', ''),
+            'indexer':  r.get('indexer', ''),
+            'seeders':  r.get('seeders', 0),
+            'leechers': r.get('leechers', 0),
+            'size':     r.get('size', 0),
+            'guid':     r.get('guid', ''),
+        }
+        for r in rows
+    ]
 
 
 def test_arr_connections(cfg):

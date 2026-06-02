@@ -4,8 +4,6 @@ import shlex
 import logging
 from datetime import datetime
 
-from relink import generate_relink_script
-
 log = logging.getLogger(__name__)
 
 
@@ -344,9 +342,6 @@ def generate_script(script_type, results, cfg):
             "echo \"Run 'df -h' to verify space reclaimed.\"",
         ])
         return '\n'.join(lines)
-
-    elif script_type == 'relink_media_hardlinks':
-        return generate_relink_script(results.get('relink_candidates', []))
 
     else:
         raise ValueError("Unknown script type")

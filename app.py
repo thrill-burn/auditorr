@@ -5,6 +5,7 @@ import threading
 import logging
 import secrets
 import functools
+import urllib.parse
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -26,9 +27,8 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, normalize_arr_connections
 from scripts import generate_script
-from relink import find_relink_candidates
 from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
 
@@ -264,6 +264,8 @@ def handle_config():
                     data.get('ARR_CONNECTIONS', existing.get('ARR_CONNECTIONS', [])),
                     existing.get('ARR_CONNECTIONS', []),
                 ),
+                'ACQUIRE_DOWNLOAD_FROM': [s for s in data.get('ACQUIRE_DOWNLOAD_FROM', existing.get('ACQUIRE_DOWNLOAD_FROM', [])) if isinstance(s, str)],
+                'ACQUIRE_SEEDING_ON':    [s for s in data.get('ACQUIRE_SEEDING_ON',    existing.get('ACQUIRE_SEEDING_ON',    [])) if isinstance(s, str)],
             }
         except (ValueError, TypeError) as e:
             return jsonify({"status": "error", "message": f"Invalid value: {e}"}), 400
@@ -515,32 +517,13 @@ def get_action_script(script_type):
     cfg = db_load_config()
     results = db_load_results()
     results['torrent_files'] = db_load_file_results('torrents')
-    if script_type in ('relink_media_hardlinks', 'dedupe'):
+    if script_type == 'dedupe':
         results['media_files'] = db_load_file_results('media')
-    if script_type == 'relink_media_hardlinks':
-        media_files = results['media_files']
-        results['relink_candidates'] = find_relink_candidates(
-            media_files,
-            results['torrent_files'],
-            fetch_arr_media_index(cfg),
-            cfg,
-        )
     try:
         script = generate_script(script_type, results, cfg)
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     return app.response_class(script, mimetype='text/plain; charset=utf-8')
-
-
-@app.route('/api/actions/relink_candidates')
-@require_auth
-def actions_relink_candidates():
-    cfg = db_load_config()
-    media_files = db_load_file_results('media')
-    torrent_files = db_load_file_results('torrents')
-    arr_media = fetch_arr_media_index(cfg)
-    candidates = find_relink_candidates(media_files, torrent_files, arr_media, cfg)
-    return jsonify({"status": "success", "candidates": candidates})
 
 
 @app.route('/api/actions/sonarr_rescan', methods=['POST'])
@@ -672,6 +655,155 @@ def delete_upload_snapshots():
         return jsonify({"status": "error", "message": "At least one of 'from' or 'to' is required"}), 400
     snap_count, run_count = db_delete_upload_snapshots(from_date, to_date_str=to_date)
     return jsonify({"status": "success", "deleted": snap_count, "audit_runs_deleted": run_count})
+
+
+@app.route('/api/workflows/indexers')
+@require_auth
+def workflows_indexers():
+    cfg = db_load_config()
+    try:
+        indexers = fetch_arr_indexers(cfg)
+    except Exception as e:
+        log.exception("Error fetching Arr indexers")
+        return jsonify({"status": "error", "message": str(e)}), 400
+    return jsonify({"status": "success", "indexers": indexers})
+
+
+@app.route('/api/workflows/acquire_candidates')
+@require_auth
+def workflows_acquire_candidates():
+    cfg = db_load_config()
+    media_files = db_load_file_results('media')
+
+    candidates_raw = [
+        f for f in media_files
+        if not f.get('excluded') and not [t for t in (f.get('trackers') or []) if t != 'None']
+    ]
+
+    arr_media = fetch_arr_media_index(cfg)
+    media_root = cfg.get('MEDIA_PATH', '')
+
+    def _norm(p):
+        return os.path.normpath(str(p or '')).replace('\\', '/')
+
+    arr_index = {}
+    for item in arr_media:
+        key = _norm(item.get('path', ''))
+        if key:
+            arr_index[key] = item
+
+    svc_map = {
+        'sonarr': {'slug_prefix': '/series/'},
+        'radarr': {'slug_prefix': '/movie/'},
+    }
+
+    all_conns = normalize_arr_connections(cfg)
+    conn_by_id = {c['id']: c for c in all_conns}
+    fallback_base_url = all_conns[0]['base_url'] if all_conns else ''
+
+    candidates = []
+    resolved_count = 0
+    unresolved_count = 0
+
+    for f in candidates_raw:
+        rel_path = f.get('path', '')
+        abs_path = _norm(os.path.join(media_root, rel_path) if not os.path.isabs(rel_path) else rel_path)
+        arr_item = arr_index.get(abs_path)
+
+        if arr_item:
+            service = arr_item.get('service', '')
+            conn_id = arr_item.get('connection_id', '')
+            arr_id = arr_item.get('arr_id')
+            title = arr_item.get('title', '')
+            episode_ids = arr_item.get('episode_ids') or []
+            episode_id = episode_ids[0] if episode_ids else None
+            slug_prefix = svc_map.get(service, {}).get('slug_prefix', '/')
+            title_slug = arr_item.get('titleSlug') or arr_item.get('title_slug')
+            conn = conn_by_id.get(conn_id)
+            base_url = conn['base_url'] if conn else ''
+            if title_slug:
+                arr_url = base_url.rstrip('/') + slug_prefix + title_slug
+            else:
+                arr_url = base_url.rstrip('/') + slug_prefix + str(arr_id) if arr_id else base_url
+            candidates.append({
+                **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
+                'resolved': True,
+                'arr_service': service,
+                'arr_connection_id': conn_id,
+                'arr_id': arr_id,
+                'arr_title': title,
+                'episode_id': episode_id,
+                'arr_url': arr_url,
+            })
+            resolved_count += 1
+        else:
+            filename = os.path.basename(rel_path)
+            search_url = ''
+            if fallback_base_url:
+                term = os.path.splitext(filename)[0]
+                search_url = fallback_base_url.rstrip('/') + '/add/new?term=' + urllib.parse.quote(term)
+            candidates.append({
+                **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
+                'resolved': False,
+                'arr_service': None,
+                'arr_connection_id': None,
+                'arr_id': None,
+                'arr_title': None,
+                'episode_id': None,
+                'arr_url': search_url,
+            })
+            unresolved_count += 1
+
+    return jsonify({
+        "status": "success",
+        "candidates": candidates,
+        "resolved_count": resolved_count,
+        "unresolved_count": unresolved_count,
+    })
+
+
+@app.route('/api/workflows/acquire_releases')
+@require_auth
+def workflows_acquire_releases():
+    service = request.args.get('service', '')
+    connection_id = request.args.get('connection_id', '')
+    arr_id = request.args.get('arr_id', type=int)
+    episode_id = request.args.get('episode_id', type=int)
+    if not service or not connection_id or arr_id is None:
+        return jsonify({"status": "error", "message": "service, connection_id, and arr_id are required"}), 400
+    cfg = db_load_config()
+    download_from = cfg.get('ACQUIRE_DOWNLOAD_FROM') or []
+    seeding_on = cfg.get('ACQUIRE_SEEDING_ON') or []
+    try:
+        rows = fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=episode_id)
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        log.exception("Error fetching release matrix")
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+    # Group by normalized (title, size) to identify release identity across indexers
+    groups = {}
+    for r in rows:
+        key = (r['title'].lower().strip(), r['size'])
+        groups.setdefault(key, []).append(r)
+
+    # If SEEDING_ON filter set, only keep release groups that appear on those indexers
+    if seeding_on:
+        groups = {
+            k: v for k, v in groups.items()
+            if any(r['indexer'] in seeding_on for r in v)
+        }
+
+    # Flatten and apply DOWNLOAD_FROM filter
+    filtered = []
+    for v in groups.values():
+        for r in v:
+            if download_from and r['indexer'] not in download_from:
+                continue
+            filtered.append(r)
+
+    return jsonify({"status": "success", "releases": filtered})
 
 
 @app.route('/', defaults={'path': ''})

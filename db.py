@@ -35,6 +35,8 @@ DEFAULT_CONFIG = {
     'SONARR_REMOTE_PATH': '',  # Path as Sonarr sees it (inside its container)
     'RADARR_REMOTE_PATH': '',  # Path as Radarr sees it (inside its container)
     'ARR_CONNECTIONS':    [],  # Optional multi-instance Sonarr/Radarr connections
+    'ACQUIRE_DOWNLOAD_FROM': [],  # Indexer names to download from (Workflows)
+    'ACQUIRE_SEEDING_ON':    [],  # Indexer names the file must also be on (Workflows)
 }
 
 

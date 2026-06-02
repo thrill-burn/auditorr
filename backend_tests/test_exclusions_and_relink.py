@@ -5,7 +5,6 @@ from arr import arr_search, fetch_arr_media_index, normalize_arr_connections, te
 from audit import _compute_tracker_file_stats, _not_imported_paths, process_health_metrics
 from exclusions import compile_exclusions, is_excluded
 from media_server_exclusions import expand_exclusion_patterns
-from relink import find_relink_candidates
 
 
 class ExclusionRuleTests(unittest.TestCase):
@@ -457,53 +456,6 @@ class ArrConnectionTests(unittest.TestCase):
         self.assertEqual(by_id["sonarr-main"]["path"], "/data/media/tv/Example Show/S01E01.mkv")
         self.assertEqual(by_id["sonarr-anime"]["path"], "/data/media/anime/Example Anime/S01E01.mkv")
         self.assertEqual(by_id["sonarr-anime"]["arr_path"], "/anime/Example Anime/S01E01.mkv")
-
-
-class RelinkCandidateTests(unittest.TestCase):
-    def test_arr_metadata_matches_plex_friendly_media_name_to_torrent_release(self):
-        media_files = [
-            {
-                "path": "Movies/Sci-Fi Classic (1999)/Feature.mkv",
-                "size": 1000,
-                "linked_paths": [],
-                "status": "Orphaned",
-            }
-        ]
-        torrent_files = [
-            {
-                "path": "movies/The.Matrix.1999.1080p.BluRay-GRP/The.Matrix.1999.1080p.BluRay-GRP.mkv",
-                "size": 1000,
-                "status": "Seeding",
-                "imported": False,
-                "category": "radarr",
-                "hash": "abc",
-                "instance_id": "qbit-1",
-                "instance_name": "qBit 1",
-                "linked_paths": [],
-            }
-        ]
-        arr_media = [
-            {
-                "connection_id": "radarr-main",
-                "service": "radarr",
-                "title": "The Matrix",
-                "year": 1999,
-                "path": "/data/media/Movies/Sci-Fi Classic (1999)/Feature.mkv",
-            }
-        ]
-        cfg = {
-            "MEDIA_PATH": "/data/media",
-            "LOCAL_PATH": "/data/torrents",
-        }
-
-        candidates = find_relink_candidates(media_files, torrent_files, arr_media, cfg)
-
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["media_path"], "/data/media/Movies/Sci-Fi Classic (1999)/Feature.mkv")
-        self.assertEqual(candidates[0]["torrent_path"], "/data/torrents/movies/The.Matrix.1999.1080p.BluRay-GRP/The.Matrix.1999.1080p.BluRay-GRP.mkv")
-        self.assertEqual(candidates[0]["arr_connection_id"], "radarr-main")
-        self.assertGreaterEqual(candidates[0]["confidence"], 0.75)
-        self.assertIn("arr title match: The Matrix", candidates[0]["reasons"])
 
 
 if __name__ == "__main__":

@@ -53,6 +53,17 @@ const NAV = [
     ),
   },
   {
+    id: 'workflows', label: 'Workflows',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/>
+        <line x1="7" y1="6" x2="17" y2="6"/>
+        <line x1="5.5" y1="7.8" x2="11" y2="16.2"/>
+        <line x1="18.5" y1="7.8" x2="13" y2="16.2"/>
+      </svg>
+    ),
+  },
+  {
     id: 'config', label: 'Config',
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

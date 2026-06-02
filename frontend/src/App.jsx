@@ -6,12 +6,13 @@ import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
 import Trackers     from './components/Trackers'
+import Workflows    from './components/Workflows'
 import ScanProgress from './components/ScanProgress'
 import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
 import { api } from './api'
-import { formatBytes } from './utils'
+
 
 // ── Script Modal ──────────────────────────────────────────────────────────────
 function _btnStyle(bg, color) {
@@ -110,78 +111,10 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
   )
 }
 
-// ── Relink Candidates Modal ───────────────────────────────────────────────────
-function RelinkCandidatesModal({ onClose, onScript }) {
-  const [candidates, setCandidates] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    api.relinkCandidates()
-      .then(d => { setCandidates(d.candidates || []); setLoading(false) })
-      .catch(e => { setError(e.message); setLoading(false) })
-  }, [])
-
-  const confColor = (c) => c >= 0.8 ? 'var(--green)' : c >= 0.6 ? 'var(--yellow)' : 'var(--red)'
-
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 720, maxHeight: '85vh', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>Relink Candidates</div>
-            <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 3 }}>Media files that appear unlinked from their torrent source, matched by name and size. Run the Dedupe Script to fix identical pairs.</div>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
-        </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-          {loading ? (
-            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
-          ) : error ? (
-            <div style={{ color: 'var(--red)', fontSize: 13, padding: '20px 0' }}>{error}</div>
-          ) : candidates.length === 0 ? (
-            <div style={{ color: 'var(--text-dim)', fontSize: 13, textAlign: 'center', padding: '40px 0' }}>No relink candidates found — your media is fully hardlinked.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {candidates.map((c, i) => (
-                <div key={i} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 5 }}>
-                    <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {c.arr_title || c.media_path.split('/').pop()}
-                    </span>
-                    <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-                      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{formatBytes(c.size)}</span>
-                      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: confColor(c.confidence), background: confColor(c.confidence) + '1a', border: '1px solid ' + confColor(c.confidence) + '40', borderRadius: 4, padding: '1px 6px' }}>{Math.round(c.confidence * 100)}% match</span>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.media_path}>{c.media_path}</div>
-                  <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.torrent_path}>→ {c.torrent_path}</div>
-                  {c.reasons.length > 0 && <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>{c.reasons.join(' · ')}</div>}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-            {candidates && candidates.length > 0 && `${candidates.length} candidate${candidates.length !== 1 ? 's' : ''} — identical pairs are fixed by the Dedupe Script`}
-          </span>
-          <div style={{ display: 'flex', gap: 10 }}>
-            {candidates && candidates.length > 0 && (
-              <button onClick={() => { onClose(); onScript({ scriptType: 'dedupe', title: 'Dedupe Script' }) }} style={_btnStyle('var(--blue)', 'var(--bg)')}>Open Dedupe Script</button>
-            )}
-            <button onClick={onClose} style={_btnStyle('var(--surface2)', 'var(--text-dim)')}>Close</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // Hash-based routing helpers
 function getHashTab() {
   const hash = window.location.hash.replace('#', '') || 'dashboard'
-  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config']
+  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config', 'workflows']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -203,7 +136,6 @@ function AppInner() {
   const [isRefreshing,       setIsRefreshing]       = useState(false)
   const [theme,              setTheme]              = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
   const [scriptModal,        setScriptModal]        = useState(null)
-  const [relinkModal,        setRelinkModal]        = useState(false)
   const [timeRange,          setTimeRange]          = useState(() => {
     const stored = localStorage.getItem('auditorr_chart_days')
     return stored !== null ? parseInt(stored) : 30
@@ -416,7 +348,7 @@ function AppInner() {
               changes={changes}
               onNavigate={handleNavigate}
               isRefreshing={isRefreshing}
-              onScript={a => a.scriptType === 'relink_preview' ? setRelinkModal(true) : setScriptModal(a)}
+              onScript={setScriptModal}
               timeRange={timeRange}
               setTimeRange={setTimeRange}
               selectedTrackers={selectedTrackers}
@@ -461,6 +393,9 @@ function AppInner() {
               onThemeChange={setTheme}
             />
           )}
+          {tab === 'workflows' && (
+            <Workflows onNavigate={handleNavigate} />
+          )}
         </div>
       </div>
       {scriptModal && (
@@ -469,12 +404,6 @@ function AppInner() {
           title={scriptModal.title || scriptModal.label}
           subtitle={scriptModal.subtitle}
           onClose={() => setScriptModal(null)}
-        />
-      )}
-      {relinkModal && (
-        <RelinkCandidatesModal
-          onClose={() => setRelinkModal(false)}
-          onScript={a => { setRelinkModal(false); setScriptModal(a) }}
         />
       )}
       <ScanProgress
