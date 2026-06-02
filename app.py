@@ -1,5 +1,8 @@
 import os
+import re
+import json
 import time
+import random
 import socket
 import threading
 import logging
@@ -876,6 +879,201 @@ def workflows_grab_release():
     except Exception as e:
         log.warning("Grab failed for %s/%s: %s", service, guid, e)
         return jsonify({"status": "error", "message": str(e)}), 400
+
+
+_gen_state = {'job': None}
+
+
+def _gen_root_folder(path):
+    if not path:
+        return 'Other'
+    normalized = path.replace('\\', '/').lstrip('/')
+    parts = normalized.split('/')
+    return parts[0] if parts else 'Other'
+
+
+def _gen_parse_season(path):
+    m = re.search(r'[Ss](\d{1,2})[Ee]', os.path.basename(str(path or '')))
+    return int(m.group(1)) if m else None
+
+
+def _build_generate_candidates(cfg, folders=None, limit=20):
+    """Resolved, season-grouped candidates for the generate workflow."""
+    media_files = db_load_file_results('media')
+    candidates_raw = [
+        f for f in media_files
+        if not f.get('excluded') and not [t for t in (f.get('trackers') or []) if t != 'None']
+    ]
+    arr_media = fetch_arr_media_index(cfg)
+    media_root = cfg.get('MEDIA_PATH', '')
+
+    def _norm(p):
+        return os.path.normpath(str(p or '')).replace('\\', '/')
+
+    arr_index = {}
+    for item in arr_media:
+        key = _norm(item.get('path', ''))
+        if key:
+            arr_index[key] = item
+
+    svc_slug = {'sonarr': '/series/', 'radarr': '/movie/'}
+    conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
+
+    flat = []
+    for f in candidates_raw:
+        rel_path = f.get('path', '')
+        abs_path = _norm(os.path.join(media_root, rel_path) if not os.path.isabs(rel_path) else rel_path)
+        arr_item = arr_index.get(abs_path)
+        if not arr_item:
+            continue
+        service  = arr_item.get('service', '')
+        conn_id  = arr_item.get('connection_id', '')
+        arr_id   = arr_item.get('arr_id')
+        title    = arr_item.get('title', '')
+        ep_ids   = arr_item.get('episode_ids') or []
+        t_slug   = arr_item.get('titleSlug') or arr_item.get('title_slug')
+        conn     = conn_by_id.get(conn_id)
+        base_url = conn['base_url'] if conn else ''
+        slug     = svc_slug.get(service, '/')
+        arr_url  = (base_url.rstrip('/') + slug + t_slug) if t_slug else (base_url.rstrip('/') + slug + str(arr_id) if arr_id else base_url)
+        flat.append({
+            'path': rel_path, 'size': f.get('size', 0),
+            'arr_service': service, 'arr_connection_id': conn_id,
+            'arr_id': arr_id, 'arr_title': title,
+            'episode_id': ep_ids[0] if ep_ids else None,
+            'arr_url': arr_url,
+        })
+
+    # Group Sonarr episodes by (arr_id, season)
+    groups = []
+    sonarr_map = {}
+    for c in flat:
+        if c['arr_service'] == 'sonarr':
+            season = _gen_parse_season(c['path'])
+            key = f"{c['arr_id']}_S{season}"
+            if key in sonarr_map:
+                g = groups[sonarr_map[key]]
+                g['file_count'] += 1
+                g['total_size'] = g.get('total_size', 0) + (c.get('size') or 0)
+                if not g.get('episode_id') and c.get('episode_id'):
+                    g['episode_id'] = c['episode_id']
+            else:
+                sonarr_map[key] = len(groups)
+                groups.append({**c, 'season_number': season, 'file_count': 1,
+                                'total_size': c.get('size') or 0, 'rep_path': c['path']})
+        else:
+            groups.append({**c, 'season_number': None, 'file_count': 1,
+                           'total_size': c.get('size') or 0, 'rep_path': c['path']})
+
+    if folders:
+        groups = [g for g in groups if _gen_root_folder(g.get('rep_path') or g.get('path', '')) in folders]
+
+    return groups[:limit]
+
+
+def _sort_generate_candidates(groups, sort):
+    if sort == 'largest':
+        groups.sort(key=lambda g: g.get('total_size') or 0, reverse=True)
+    elif sort == 'smallest':
+        groups.sort(key=lambda g: g.get('total_size') or 0)
+    elif sort == 'random':
+        random.shuffle(groups)
+    elif sort == 'alpha':
+        groups.sort(key=lambda g: (g.get('arr_title') or '').lower())
+    return groups
+
+
+@app.route('/api/workflows/generate', methods=['POST'])
+@require_auth
+def workflows_generate():
+    data          = request.json or {}
+    folders       = data.get('folders') or []
+    count         = max(1, min(int(data.get('count', 10) or 10), 20))
+    sort          = data.get('sort', 'largest')
+    download_from = data.get('download_from') or []
+    seeding_on    = data.get('seeding_on') or []
+
+    existing = _gen_state.get('job')
+    if existing and existing.get('status') == 'running':
+        existing['stop_flag'] = True
+
+    cfg = db_load_config()
+    try:
+        candidates = _sort_generate_candidates(
+            _build_generate_candidates(cfg, folders=folders or None, limit=None),
+            sort,
+        )[:count]
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+    job_id = secrets.token_hex(8)
+    job = {'id': job_id, 'status': 'running', 'total': len(candidates),
+           'completed': 0, 'stop_flag': False, 'results': []}
+    _gen_state['job'] = job
+
+    def do_generate():
+        for candidate in candidates:
+            if job['stop_flag']:
+                job['status'] = 'stopped'
+                return
+            result = {
+                'arr_title':         candidate.get('arr_title', ''),
+                'arr_service':       candidate.get('arr_service'),
+                'arr_connection_id': candidate.get('arr_connection_id'),
+                'arr_id':            candidate.get('arr_id'),
+                'arr_url':           candidate.get('arr_url'),
+                'path':              candidate.get('rep_path') or candidate.get('path'),
+                'season_number':     candidate.get('season_number'),
+                'file_count':        candidate.get('file_count', 1),
+                'total_size':        candidate.get('total_size', 0),
+                'status':            'searching',
+                'best_release':      None,
+                'error':             None,
+            }
+            job['results'].append(result)
+            try:
+                rows = fetch_release_matrix(
+                    cfg, candidate['arr_service'], candidate['arr_connection_id'], candidate['arr_id'],
+                    episode_id=candidate.get('episode_id'),
+                    season_number=candidate.get('season_number'),
+                    file_path=candidate.get('rep_path') or candidate.get('path'),
+                )
+                filtered = _apply_release_filters(rows, download_from, seeding_on)
+                best = max(filtered, key=lambda r: r.get('seeders', 0)) if filtered else None
+                result['status']       = 'found' if best else 'not_found'
+                result['best_release'] = best
+            except Exception as e:
+                log.warning("Generate search failed for %s: %s", candidate.get('arr_title'), e)
+                result['status'] = 'error'
+                result['error']  = str(e)
+            job['completed'] += 1
+
+        job['status'] = 'done'
+
+    threading.Thread(target=do_generate, daemon=True).start()
+    return jsonify({'job_id': job_id, 'total': len(candidates)})
+
+
+@app.route('/api/workflows/generate/status')
+@require_auth
+def workflows_generate_status():
+    job_id = request.args.get('job_id', '')
+    job = _gen_state.get('job')
+    if not job or job['id'] != job_id:
+        return jsonify({'status': 'error', 'message': 'Job not found'}), 404
+    return jsonify({'status': job['status'], 'total': job['total'],
+                    'completed': job['completed'], 'results': list(job['results'])})
+
+
+@app.route('/api/workflows/generate/stop', methods=['POST'])
+@require_auth
+def workflows_generate_stop():
+    data   = request.json or {}
+    job_id = data.get('job_id', '')
+    job    = _gen_state.get('job')
+    if job and job['id'] == job_id and job['status'] == 'running':
+        job['stop_flag'] = True
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/', defaults={'path': ''})
