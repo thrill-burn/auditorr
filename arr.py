@@ -203,26 +203,36 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
     conn  = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
         return
-    queue_path = (
-        f'/api/v3/queue?movieId={arr_id}&pageSize=50'
-        if service == 'radarr' else
-        f'/api/v3/queue?seriesId={arr_id}&pageSize=50'
-    )
-    deadline     = time.monotonic() + timeout
-    notified     = False
+    # Fetch the full queue and filter client-side — the ?movieId= URL param is unreliable
+    # across Radarr versions and may silently return empty rather than the full list
+    id_field       = 'movieId' if service == 'radarr' else 'seriesId'
+    deadline       = time.monotonic() + timeout
+    notified       = False
+    ever_seen      = False   # did we ever find this item in the queue?
+    not_found_ticks = 0      # consecutive polls with item absent
     while time.monotonic() < deadline:
         try:
-            result  = _arr_get(conn['base_url'], conn['api_key'], queue_path, timeout=10)
-            records = result.get('records', result) if isinstance(result, dict) else result
-            # 'completed' means download done but Radarr/Sonarr hasn't processed the import yet —
-            # keep polling until the item fully disappears or reaches a terminal error state
-            active  = [r for r in records if r.get('status') not in ('warning', 'error', 'failed')]
+            result   = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/queue?pageSize=500', timeout=10)
+            records  = result.get('records', result) if isinstance(result, dict) else result
+            relevant = [r for r in records if r.get(id_field) == arr_id]
+            # 'completed' means download done but import not yet processed — keep polling
+            # until the item fully disappears or hits a terminal error state
+            active   = [r for r in relevant if r.get('status') not in ('warning', 'error', 'failed')]
             if active:
+                ever_seen = True
+                not_found_ticks = 0
                 if not notified and on_downloading:
                     on_downloading()
                     notified = True
+            elif relevant:
+                return  # item is in queue but only in terminal states
             else:
-                return
+                not_found_ticks += 1
+                # If we never saw it and it's absent for the first few polls, give it more
+                # time to appear (Radarr can be slow to register the grab).
+                # Once we've seen it, its absence means it was processed — return.
+                if ever_seen or not_found_ticks >= 4:
+                    return
         except Exception:
             pass
         time.sleep(5)
