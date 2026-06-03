@@ -267,8 +267,15 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id):
         headers={'X-Api-Key': conn['api_key'], 'Content-Type': 'application/json'},
         method='POST',
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 404):
+            # Radarr/Sonarr returns 4xx when files are already imported via normal queue flow
+            log.info("Manual import POST returned %s for %s %s — likely already imported", e.code, service, arr_id)
+            return []
+        raise
 
 
 def test_arr_connections(cfg):
