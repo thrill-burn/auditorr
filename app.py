@@ -788,7 +788,7 @@ def _release_job_key(service, connection_id, arr_id, episode_id, season_number, 
 
 _RES_LABEL_MAP = {'2160p': 2160, '1080p': 1080, '720p': 720}
 
-def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, source_filter=None):
+def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, source_filter=None, hdr_filter=None):
     groups = {}
     for r in rows:
         key = (r['title'].lower().strip(), r['size'])
@@ -807,6 +807,10 @@ def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, sou
             filtered = [r for r in filtered if r.get('resolution') in target_resolutions]
     if source_filter:
         filtered = [r for r in filtered if r.get('source', '') in source_filter]
+    if hdr_filter:
+        # 'SDR' maps to empty string (no HDR detected); other values match hdr field directly
+        target_hdr = {'' if h == 'SDR' else h for h in hdr_filter}
+        filtered = [r for r in filtered if r.get('hdr', '') in target_hdr]
     # Sort: custom format score desc, quality weight desc, seeders desc (matches Sonarr/Radarr interactive search order)
     filtered.sort(key=lambda r: (r.get('custom_format_score', 0), r.get('quality_weight', 0), r.get('seeders', 0)), reverse=True)
     return filtered
@@ -998,12 +1002,13 @@ def _sort_generate_candidates(groups, sort):
 def workflows_generate():
     data          = request.json or {}
     folders       = data.get('folders') or []
-    count         = max(1, min(int(data.get('count', 10) or 10), 20))
+    count         = max(1, min(int(data.get('count', 10) or 10), 500))
     sort          = data.get('sort', 'largest')
     download_from = data.get('download_from') or []
     seeding_on    = data.get('seeding_on') or []
     res_filter    = data.get('res_filter') or []
     source_filter = data.get('source_filter') or []
+    hdr_filter    = data.get('hdr_filter') or []
 
     existing = _gen_state.get('job')
     if existing and existing.get('status') == 'running':
@@ -1051,7 +1056,7 @@ def workflows_generate():
                     season_number=candidate.get('season_number'),
                     file_path=candidate.get('rep_path') or candidate.get('path'),
                 )
-                filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter)
+                filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter, hdr_filter=hdr_filter)
                 best = filtered[0] if filtered else None
                 result['status']       = 'found' if best else 'not_found'
                 result['releases']     = filtered

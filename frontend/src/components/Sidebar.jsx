@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { scoreColor } from '../utils'
 
 const NAV = [
@@ -62,6 +62,9 @@ const NAV = [
         <line x1="18.5" y1="7.8" x2="13" y2="16.2"/>
       </svg>
     ),
+    children: [
+      { id: 'workflows', label: 'Backfill' },
+    ],
   },
   {
     id: 'config', label: 'Config',
@@ -77,6 +80,26 @@ const NAV = [
 export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier }) {
   const scoreC = score != null ? scoreColor(score) : 'var(--text-dim)'
   const csDisplay = crossSeedMultiplier != null ? crossSeedMultiplier.toFixed(2) : null
+
+  const [openGroups, setOpenGroups] = useState(() => {
+    const s = new Set()
+    if (active === 'workflows') s.add('workflows')
+    return s
+  })
+
+  useEffect(() => {
+    if (active === 'workflows') setOpenGroups(s => new Set([...s, 'workflows']))
+  }, [active])
+
+  function handleGroupClick(groupId) {
+    const isOpen = openGroups.has(groupId)
+    setOpenGroups(prev => {
+      const next = new Set(prev)
+      isOpen ? next.delete(groupId) : next.add(groupId)
+      return next
+    })
+    if (!isOpen) onChange(groupId)
+  }
 
   const triggerLabel = {
     startup:   '⚡ startup',
@@ -131,7 +154,60 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
 
       {/* Nav */}
       <nav style={{ flex: 1, padding: '10px 10px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {NAV.map(({ id, label, icon }) => {
+        {NAV.map(({ id, label, icon, children }) => {
+          if (children) {
+            const isGroupActive = active === id
+            const isOpen = openGroups.has(id)
+            return (
+              <React.Fragment key={id}>
+                <button onClick={() => handleGroupClick(id)} style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '9px 10px', borderRadius: 7, border: 'none',
+                  background: isGroupActive ? 'var(--accent)18' : 'transparent',
+                  color: isGroupActive ? 'var(--accent)' : 'var(--text-dim)',
+                  fontSize: 13, fontWeight: isGroupActive ? 600 : 400,
+                  cursor: 'pointer', transition: 'all 0.12s',
+                  textAlign: 'left', width: '100%',
+                  borderLeft: `2px solid ${isGroupActive ? 'var(--accent)' : 'transparent'}`,
+                }}
+                onMouseEnter={e => { if (!isGroupActive) e.currentTarget.style.color = 'var(--text)' }}
+                onMouseLeave={e => { if (!isGroupActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
+                  <span style={{ flexShrink: 0, opacity: isGroupActive ? 1 : 0.7 }}>{icon}</span>
+                  <span style={{ flex: 1 }}>{label}</span>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+                    strokeLinecap="round" strokeLinejoin="round"
+                    style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, flexShrink: 0 }}>
+                    <polyline points="9 18 15 12 9 6"/>
+                  </svg>
+                </button>
+                {isOpen && children.map(child => {
+                  const childActive = active === child.id
+                  return (
+                    <button key={child.label} onClick={() => onChange(child.id)} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '6px 10px 6px 34px', borderRadius: 7, border: 'none',
+                      background: childActive ? 'var(--accent)12' : 'transparent',
+                      color: childActive ? 'var(--accent)' : 'var(--text-dim)',
+                      fontSize: 12, fontWeight: childActive ? 600 : 400,
+                      cursor: 'pointer', transition: 'all 0.12s',
+                      textAlign: 'left', width: '100%',
+                      borderLeft: '2px solid transparent',
+                    }}
+                    onMouseEnter={e => { if (!childActive) e.currentTarget.style.color = 'var(--text)' }}
+                    onMouseLeave={e => { if (!childActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
+                      <span style={{
+                        width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+                        background: childActive ? 'var(--accent)' : 'currentColor',
+                        opacity: childActive ? 1 : 0.35,
+                      }} />
+                      {child.label}
+                    </button>
+                  )
+                })}
+              </React.Fragment>
+            )
+          }
+
           const isActive = active === id
           return (
             <button key={id} onClick={() => onChange(id)} style={{
@@ -145,8 +221,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               borderLeft: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
             }}
             onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text)' }}
-            onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-dim)' }}
-            >
+            onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
               <span style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7 }}>{icon}</span>
               <span>{label}</span>
             </button>

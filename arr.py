@@ -173,6 +173,7 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'quality_name':        q_inner.get('name', ''),
             'resolution':          q_inner.get('resolution', 0),
             'source':              q_inner.get('source', ''),
+            'hdr':                 _detect_hdr(r.get('title', '')),
             'custom_format_score': r.get('customFormatScore', 0),
             'quality_weight':      r.get('qualityWeight', 0),
         })
@@ -353,6 +354,22 @@ def _fetch_sonarr_media(conn):
         for future in as_completed(futures):
             all_rows.extend(future.result())
     return all_rows
+
+
+def _detect_hdr(title):
+    """Detect the highest HDR format present in a release title."""
+    t = re.sub(r'[.\-_]', ' ', title.upper())
+    if re.search(r'\bDOLBY\s+VISION\b|\bDOVI\b|\bDV\b', t):
+        return 'DV'
+    if re.search(r'\bHDR10\+|\bHDR10PLUS\b', t):
+        return 'HDR10+'
+    if re.search(r'\bHDR10\b', t):
+        return 'HDR10'
+    if re.search(r'\bHLG\b', t):
+        return 'HLG'
+    if re.search(r'\bHDR\b', t):
+        return 'HDR'
+    return ''
 
 
 def _slug(value):

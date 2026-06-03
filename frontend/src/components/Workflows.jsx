@@ -80,6 +80,21 @@ const QUALITY_SOURCE_OPTIONS = [
   { value: 'webrip', label: 'WEBRip' },
   { value: 'hdtv',   label: 'HDTV'   },
 ]
+const HDR_OPTIONS = [
+  { value: 'DV',    label: 'Dolby Vision' },
+  { value: 'HDR10+', label: 'HDR10+' },
+  { value: 'HDR10', label: 'HDR10'   },
+  { value: 'HDR',   label: 'HDR'     },
+  { value: 'HLG',   label: 'HLG'     },
+  { value: 'SDR',   label: 'SDR'     },
+]
+const HDR_STYLE = {
+  'DV':     { bg: '#7c3aed20', color: '#a78bfa' },
+  'HDR10+': { bg: '#1d4ed820', color: '#60a5fa' },
+  'HDR10':  { bg: '#0e749820', color: '#38bdf8' },
+  'HDR':    { bg: '#05966920', color: '#34d399' },
+  'HLG':    { bg: '#0f766e20', color: '#2dd4bf' },
+}
 
 function LabeledChips({ options, value, onChange, allLabel = 'Any' }) {
   const noneSelected = value.length === 0
@@ -169,21 +184,26 @@ function SortPicker({ value, onChange }) {
 }
 
 // ── Count picker ──────────────────────────────────────────────────────────────
-const COUNT_OPTIONS = [
-  { value: 5,  est: '~5 min' },
-  { value: 10, est: '~10 min' },
-  { value: 20, est: '~20 min' },
+// null means "all available"
+const FIXED_COUNT_OPTIONS = [
+  { value: 5,  est: '~5 min'  },
+  { value: 15, est: '~15 min' },
 ]
 
 function CountPicker({ value, onChange, max }) {
+  const options = [
+    ...FIXED_COUNT_OPTIONS,
+    { value: null, est: max > 0 ? `~${max} min` : '—' },
+  ]
   return (
     <div style={{ display: 'flex', gap: 10 }}>
-      {COUNT_OPTIONS.map(opt => {
-        const active = value === opt.value
-        const disabled = opt.value > max
+      {options.map(opt => {
+        const active   = value === opt.value
+        const disabled = opt.value !== null && opt.value > max
+        const display  = opt.value ?? max
         return (
           <button
-            key={opt.value}
+            key={String(opt.value)}
             onClick={() => !disabled && onChange(opt.value)}
             disabled={disabled}
             style={{
@@ -195,8 +215,10 @@ function CountPicker({ value, onChange, max }) {
               opacity: disabled ? 0.4 : 1, minWidth: 80,
             }}
           >
-            <span style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: 1.1 }}>{opt.value}</span>
-            <span style={{ fontSize: 10, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }}>{opt.est}</span>
+            <span style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: 1.1 }}>{display}</span>
+            <span style={{ fontSize: 10, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }}>
+              {opt.value === null ? 'all' : opt.est}
+            </span>
           </button>
         )
       })}
@@ -299,7 +321,7 @@ function ResultItem({ item }) {
               {searching && 'Querying indexers…'}
               {found && item.best_release && (() => {
                 const r = item.best_release
-                const parts = [r.indexer, formatBytes(r.size), `${r.seeders}S`, r.quality_name].filter(Boolean)
+                const parts = [r.indexer, formatBytes(r.size), `${r.seeders}S`, r.quality_name, r.hdr || null].filter(Boolean)
                 if (r.custom_format_score) parts.push(`CF:${r.custom_format_score}`)
                 return parts.join(' · ')
               })()}
@@ -352,8 +374,8 @@ function ResultItem({ item }) {
       {found && multi && (
         <div style={{ paddingLeft: 42, paddingRight: 16, paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
           {/* Column headers */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 65px 44px 95px 46px 72px', gap: 8, padding: '2px 10px' }}>
-            {['Title', 'Tracker', 'Size', 'Peers', 'Quality', 'Score', ''].map((h, i) => (
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 65px 44px 90px 46px 46px 72px', gap: 8, padding: '2px 10px' }}>
+            {['Title', 'Tracker', 'Size', 'Peers', 'Quality', 'Score', 'HDR', ''].map((h, i) => (
               <span key={i} style={{
                 fontSize: 9, fontFamily: 'var(--mono)', letterSpacing: 1.5, textTransform: 'uppercase',
                 color: 'var(--text-dim)', opacity: 0.6,
@@ -362,12 +384,13 @@ function ResultItem({ item }) {
             ))}
           </div>
           {releases.map((r, i) => {
-            const key    = r.guid || r.title
-            const gs     = grabStates[key] || 'idle'
-            const isBest = i === 0
+            const key     = r.guid || r.title
+            const gs      = grabStates[key] || 'idle'
+            const isBest  = i === 0
+            const hdrInfo = HDR_STYLE[r.hdr]
             return (
               <div key={key} style={{
-                display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 65px 44px 95px 46px 72px',
+                display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 65px 44px 90px 46px 46px 72px',
                 alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
                 background: isBest ? 'var(--accent)08' : 'transparent',
                 border: `1px solid ${isBest ? 'var(--accent)25' : 'transparent'}`,
@@ -393,6 +416,18 @@ function ResultItem({ item }) {
                 <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
                   {r.custom_format_score ?? 0}
                 </span>
+                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                  {hdrInfo ? (
+                    <span style={{
+                      fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700,
+                      padding: '2px 5px', borderRadius: 4,
+                      background: hdrInfo.bg, color: hdrInfo.color,
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {r.hdr}
+                    </span>
+                  ) : null}
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <GrabButton
                     state={gs}
@@ -410,6 +445,13 @@ function ResultItem({ item }) {
   )
 }
 
+// ── Prefs persistence ─────────────────────────────────────────────────────────
+const PREFS_KEY = 'auditorr_backfill_prefs'
+function loadPref(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')[key] ?? fallback }
+  catch { return fallback }
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Workflows() {
   const [phase, setPhase] = useState('config')  // config | running | done | stopped
@@ -421,15 +463,17 @@ export default function Workflows() {
   const [loading,       setLoading]       = useState(true)
   const [loadError,     setLoadError]     = useState(null)
 
-  // Config
+  // Config — indexer strategy (persisted server-side via saveAcquirePrefs)
   const [downloadFrom,    setDownloadFrom]    = useState([])
   const [seedingOn,       setSeedingOn]       = useState([])
-  const [selectedFolders, setSelectedFolders] = useState([])
-  const [searchCount,     setSearchCount]     = useState(10)
-  const [sort,            setSort]            = useState('largest')
-  const [resFilter,       setResFilter]       = useState([])
-  const [sourceFilter,    setSourceFilter]    = useState([])
   const [saving,          setSaving]          = useState(false)
+  // Config — quality / sort / depth (persisted in localStorage)
+  const [selectedFolders, setSelectedFolders] = useState(() => loadPref('selectedFolders', []))
+  const [searchCount,     setSearchCount]     = useState(() => loadPref('searchCount', 5))
+  const [sort,            setSort]            = useState(() => loadPref('sort', 'largest'))
+  const [resFilter,       setResFilter]       = useState(() => loadPref('resFilter', []))
+  const [sourceFilter,    setSourceFilter]    = useState(() => loadPref('sourceFilter', []))
+  const [hdrFilter,       setHdrFilter]       = useState(() => loadPref('hdrFilter', []))
 
   // Job
   const [jobId,    setJobId]    = useState(null)
@@ -441,6 +485,15 @@ export default function Workflows() {
     mountedRef.current = false
     clearTimeout(pollRef.current)
   }, [])
+
+  // Persist filter prefs to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({
+        sort, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders,
+      }))
+    } catch {}
+  }, [sort, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders])
 
   useEffect(() => {
     Promise.all([api.acquireCandidates(), api.workflowIndexers(), api.getConfig()])
@@ -471,7 +524,7 @@ export default function Workflows() {
     return folders.filter(f => selectedFolders.includes(f.name)).reduce((s, f) => s + f.count, 0)
   }, [folders, selectedFolders])
 
-  const willSearch = Math.min(availableCount, searchCount)
+  const willSearch = searchCount === null ? availableCount : Math.min(availableCount, searchCount)
 
   const startPoll = useCallback((id) => {
     const poll = async () => {
@@ -491,16 +544,17 @@ export default function Workflows() {
     poll()
   }, [])
 
-  const handleGenerate = useCallback(async () => {
+  async function handleGenerate() {
     setPhase('running')
     setJobData(null)
     try {
       const resp = await api.startGenerate({
         folders:       selectedFolders,
-        count:         searchCount,
+        count:         searchCount ?? availableCount,
         sort,
         res_filter:    resFilter,
         source_filter: sourceFilter,
+        hdr_filter:    hdrFilter,
         download_from: downloadFrom,
         seeding_on:    seedingOn,
       })
@@ -510,7 +564,7 @@ export default function Workflows() {
       setPhase('config')
       setLoadError(e.message)
     }
-  }, [selectedFolders, searchCount, sort, resFilter, sourceFilter, downloadFrom, seedingOn, startPoll])
+  }
 
   const handleStop = useCallback(async () => {
     if (jobId) { try { await api.stopGenerate(jobId) } catch (_) {} }
@@ -530,7 +584,7 @@ export default function Workflows() {
       <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 740 }}>
         <div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>Workflows</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Acquire Candidates</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Backfill</div>
           <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 520 }}>
             Unseeded files in your library. Configure your strategy, pick folders, choose how deep to search, then generate a grab list one by one.
           </p>
@@ -590,6 +644,10 @@ export default function Workflows() {
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
                   <LabeledChips options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
+                  <LabeledChips options={HDR_OPTIONS} value={hdrFilter} onChange={setHdrFilter} />
                 </div>
               </div>
             </div>
