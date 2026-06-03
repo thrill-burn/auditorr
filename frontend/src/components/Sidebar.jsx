@@ -190,7 +190,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                       padding: '6px 10px 6px 34px', borderRadius: 7, border: 'none',
                       background: childActive ? 'var(--accent)12' : 'transparent',
                       color: childActive ? 'var(--accent)' : 'var(--text-dim)',
-                      fontSize: 12, fontWeight: childActive ? 600 : 400,
+                      fontSize: 13, fontWeight: childActive ? 600 : 400,
                       cursor: 'pointer', transition: 'all 0.12s',
                       textAlign: 'left', width: '100%',
                       borderLeft: '2px solid transparent',
@@ -198,7 +198,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                     onMouseEnter={e => { if (!childActive) e.currentTarget.style.color = 'var(--text)' }}
                     onMouseLeave={e => { if (!childActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
                       <span style={{
-                        width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+                        width: 8, height: 1.5, borderRadius: 1, flexShrink: 0,
                         background: childActive ? 'var(--accent)' : 'currentColor',
                         opacity: childActive ? 1 : 0.35,
                       }} />

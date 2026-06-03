@@ -55,7 +55,7 @@ function Chip({ active, onClick, children }) {
     <button
       onClick={onClick}
       style={{
-        padding: '3px 10px', borderRadius: 99, fontSize: 11, cursor: 'pointer',
+        padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
         border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
         background: active ? 'var(--accent)18' : 'transparent',
         color: active ? 'var(--accent)' : 'var(--text-dim)',
@@ -174,8 +174,8 @@ function SortPicker({ value, onChange }) {
               color: active ? 'var(--accent)' : 'var(--text)',
             }}
           >
-            <span style={{ fontSize: 12, fontWeight: 600 }}>{opt.label}</span>
-            <span style={{ fontSize: 10, marginTop: 2, opacity: 0.6, fontFamily: 'var(--mono)' }}>{opt.sub}</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{opt.label}</span>
+            <span style={{ fontSize: 11, marginTop: 2, opacity: 0.6, fontFamily: 'var(--mono)' }}>{opt.sub}</span>
           </button>
         )
       })}
@@ -185,43 +185,89 @@ function SortPicker({ value, onChange }) {
 
 // ── Count picker ──────────────────────────────────────────────────────────────
 // null means "all available"
-const FIXED_COUNT_OPTIONS = [
-  { value: 5,  est: '~5 min'  },
-  { value: 15, est: '~15 min' },
-]
-
 function CountPicker({ value, onChange, max }) {
-  const options = [
-    ...FIXED_COUNT_OPTIONS,
-    { value: null, est: max > 0 ? `~${max} min` : '—' },
-  ]
+  const inputRef = useRef(null)
+  const [inputVal, setInputVal] = useState(() =>
+    value !== null && value !== 5 ? String(value) : ''
+  )
+
+  const customActive = value !== null && value !== 5
+  const allActive    = value === null
+  const fiveActive   = value === 5
+
+  function handleFive() {
+    setInputVal('')
+    onChange(5)
+  }
+
+  function handleAll() {
+    setInputVal('')
+    onChange(null)
+  }
+
+  function handleInput(e) {
+    const raw = e.target.value
+    setInputVal(raw)
+    if (raw === '') { onChange(5); return }
+    const n = parseInt(raw, 10)
+    if (!isNaN(n) && n >= 1) onChange(max > 0 ? Math.min(n, max) : n)
+  }
+
+  const cardStyle = (active) => ({
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    padding: '10px 22px', borderRadius: 8, minWidth: 90,
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    background: active ? 'var(--accent)12' : 'var(--surface)',
+    color: active ? 'var(--accent)' : 'var(--text)',
+  })
+
+  const numStyle = (active) => ({
+    fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: 1.1,
+    color: active ? 'var(--accent)' : 'inherit',
+  })
+
+  const subStyle = { fontSize: 11, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }
+
   return (
     <div style={{ display: 'flex', gap: 10 }}>
-      {options.map(opt => {
-        const active   = value === opt.value
-        const disabled = opt.value !== null && opt.value > max
-        const display  = opt.value ?? max
-        return (
-          <button
-            key={String(opt.value)}
-            onClick={() => !disabled && onChange(opt.value)}
-            disabled={disabled}
-            style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              padding: '10px 22px', borderRadius: 8, cursor: disabled ? 'not-allowed' : 'pointer',
-              border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-              background: active ? 'var(--accent)12' : 'var(--surface)',
-              color: disabled ? 'var(--text-dim)' : active ? 'var(--accent)' : 'var(--text)',
-              opacity: disabled ? 0.4 : 1, minWidth: 80,
-            }}
-          >
-            <span style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: 1.1 }}>{display}</span>
-            <span style={{ fontSize: 10, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }}>
-              {opt.value === null ? 'all' : opt.est}
-            </span>
-          </button>
-        )
-      })}
+      <button onClick={handleFive} style={{ ...cardStyle(fiveActive), cursor: 'pointer', border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: fiveActive ? 'var(--accent)' : 'var(--border)' }}>
+        <span style={numStyle(fiveActive)}>5</span>
+        <span style={subStyle}>quick</span>
+      </button>
+
+      <div style={{ ...cardStyle(customActive), cursor: 'text' }} onClick={() => inputRef.current?.focus()}>
+        <input
+          ref={inputRef}
+          type="number"
+          min={1}
+          max={max || undefined}
+          value={inputVal}
+          onChange={handleInput}
+          placeholder="—"
+          style={{
+            ...numStyle(customActive),
+            width: 54, textAlign: 'center',
+            background: 'none', border: 'none', outline: 'none',
+            padding: 0, margin: 0, fontWeight: 700,
+          }}
+        />
+        <span style={subStyle}>custom</span>
+      </div>
+
+      <button
+        onClick={handleAll}
+        disabled={max === 0}
+        style={{ ...cardStyle(allActive), cursor: max === 0 ? 'not-allowed' : 'pointer', opacity: max === 0 ? 0.4 : 1, border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: allActive ? 'var(--accent)' : 'var(--border)' }}
+      >
+        <span style={numStyle(allActive)}>{max > 0 ? max : '—'}</span>
+        <span style={subStyle}>all</span>
+      </button>
+
+      <style>{`
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+      `}</style>
     </div>
   )
 }
@@ -229,7 +275,7 @@ function CountPicker({ value, onChange, max }) {
 // ── Section label ─────────────────────────────────────────────────────────────
 function SectionLabel({ children }) {
   return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 8 }}>
+    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 8 }}>
       {children}
     </div>
   )
@@ -677,13 +723,13 @@ export default function Workflows() {
         <div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>Workflows</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Backfill</div>
-          <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 520 }}>
-            Convert media files with no seeding torrent file partner into a hardlinked seeding pair.
+          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 520 }}>
+            Convert your orphaned media files into active seeds by grabbing matching releases from your trackers.
           </p>
         </div>
 
         {loadError && (
-          <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 8, color: 'var(--red)', fontSize: 12 }}>
+          <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 8, color: 'var(--red)', fontSize: 13 }}>
             {loadError}
           </div>
         )}
@@ -700,13 +746,13 @@ export default function Workflows() {
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Download from</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = no restriction.</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Download from</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = no restriction.</div>
                     <IndexerChips options={indexers} value={downloadFrom} onChange={handleDownloadFromChange} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Must also be seeding on</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Release must also appear on these. <em>Any</em> = no restriction.</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Must also be seeding on</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Release must also appear on these. <em>Any</em> = no restriction.</div>
                     <IndexerChips options={indexers} value={seedingOn} onChange={handleSeedingOnChange} allLabel="Any" />
                   </div>
                 </div>
@@ -716,7 +762,7 @@ export default function Workflows() {
             {folders.length > 0 && (
               <div>
                 <SectionLabel>Root Folders</SectionLabel>
-                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                   Limit search to specific folders. <em>All</em> = search everything.
                 </div>
                 <FolderChips folders={folders} selected={selectedFolders} onChange={setSelectedFolders} />
@@ -725,20 +771,20 @@ export default function Workflows() {
 
             <div>
               <SectionLabel>Quality Filter</SectionLabel>
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
                 Restrict results by resolution and/or source, exactly like a Sonarr/Radarr quality profile. <em>Any</em> = no restriction.
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
                   <LabeledChips options={QUALITY_RES_OPTIONS} value={resFilter} onChange={setResFilter} />
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
                   <LabeledChips options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
                   <LabeledChips options={HDR_OPTIONS} value={hdrFilter} onChange={setHdrFilter} />
                 </div>
               </div>
@@ -746,7 +792,7 @@ export default function Workflows() {
 
             <div>
               <SectionLabel>Priority</SectionLabel>
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                 How to order candidates when there are more than the search limit.
               </div>
               <SortPicker value={sort} onChange={setSort} />
@@ -757,7 +803,7 @@ export default function Workflows() {
                   onChange={e => setTitleSearch(e.target.value)}
                   placeholder="Filter by title…"
                   style={{
-                    padding: '6px 10px', borderRadius: 6, fontSize: 12,
+                    padding: '6px 10px', borderRadius: 6, fontSize: 13,
                     border: '1px solid var(--border)',
                     background: 'var(--surface2)',
                     color: 'var(--text)',
@@ -771,8 +817,8 @@ export default function Workflows() {
 
             <div>
               <SectionLabel>Search Depth</SectionLabel>
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
-                Each release search takes 30–90 s while Radarr/Sonarr queries your indexers.
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
+                Each candidate queries your indexers — expect 10–90s per search depending on your setup.
                 {availableCount > 0 && ` ${availableCount} searchable candidate${availableCount !== 1 ? 's' : ''}${totalUnseeded > availableCount ? ` (${totalUnseeded} total unseeded)` : ''}.`}
               </div>
               <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount || 999} />
@@ -793,7 +839,7 @@ export default function Workflows() {
                 Generate {willSearch > 0 ? `${willSearch} ` : ''}Releases →
               </button>
               {availableCount === 0 && (
-                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-dim)' }}>
+                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-dim)' }}>
                   No resolved candidates — check that Radarr/Sonarr is configured.
                 </div>
               )}
