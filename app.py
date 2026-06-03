@@ -961,6 +961,8 @@ def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
             'arr_id': arr_id, 'arr_title': title,
             'episode_id': ep_ids[0] if ep_ids else None,
             'arr_url': arr_url,
+            'file_quality': arr_item.get('file_quality_name', ''),
+            'file_hdr':     arr_item.get('file_hdr', ''),
         })
 
     # Group Sonarr episodes by (arr_id, season)
@@ -1052,6 +1054,8 @@ def workflows_generate():
                 'season_number':     candidate.get('season_number'),
                 'file_count':        candidate.get('file_count', 1),
                 'total_size':        candidate.get('total_size', 0),
+                'file_quality':      candidate.get('file_quality', ''),
+                'file_hdr':          candidate.get('file_hdr', ''),
                 'status':            'searching',
                 'releases':          None,
                 'best_release':      None,

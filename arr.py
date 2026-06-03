@@ -301,6 +301,8 @@ def _fetch_radarr_media(conn):
         path = movie_file.get('path')
         if not path:
             continue
+        q_outer = movie_file.get('quality') or {}
+        q_inner = q_outer.get('quality') or {}
         rows.append({
             'connection_id': conn['id'],
             'connection_name': conn['name'],
@@ -312,6 +314,8 @@ def _fetch_radarr_media(conn):
             'arr_id': movie.get('id'),
             'file_id': movie_file.get('id'),
             'title_slug': movie.get('titleSlug') or '',
+            'file_quality_name': q_inner.get('name', ''),
+            'file_hdr': _detect_hdr(path),
         })
     return rows
 
@@ -332,6 +336,8 @@ def _fetch_sonarr_media(conn):
             path = episode_file.get('path')
             if not path:
                 continue
+            q_outer = episode_file.get('quality') or {}
+            q_inner = q_outer.get('quality') or {}
             rows.append({
                 'connection_id': conn['id'],
                 'connection_name': conn['name'],
@@ -344,6 +350,8 @@ def _fetch_sonarr_media(conn):
                 'file_id': episode_file.get('id'),
                 'episode_ids': episode_file.get('episodeIds') or [],
                 'title_slug': series.get('titleSlug') or '',
+                'file_quality_name': q_inner.get('name', ''),
+                'file_hdr': _detect_hdr(path),
             })
         return rows
 

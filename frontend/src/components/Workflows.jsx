@@ -239,7 +239,12 @@ function SectionLabel({ children }) {
 function GrabButton({ state, onGrab, onReset, errorMsg }) {
   if (state === 'idle')     return <button onClick={onGrab} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)' }}>Grab</button>
   if (state === 'grabbing') return <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
-  if (state === 'grabbed')  return <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
+  if (state === 'grabbed')  return (
+    <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+      <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
+      <span style={{ fontSize: 9, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.6, whiteSpace: 'nowrap' }}>force import may be needed</span>
+    </span>
+  )
   return <button onClick={onReset} title={errorMsg || 'Grab failed — click to retry'} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)' }}>Failed ↺</button>
 }
 
@@ -335,9 +340,26 @@ function ResultItem({ item }) {
             </div>
           )}
           {filename && (
-            <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2, opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              title={filename}>
-              {filename}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, minWidth: 0 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 0', minWidth: 0 }}
+                title={filename}>
+                {filename}
+              </span>
+              {item.file_quality && (
+                <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.65, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {item.file_quality}
+                </span>
+              )}
+              {item.file_hdr && HDR_STYLE[item.file_hdr] && (
+                <span style={{ fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap', flexShrink: 0, background: HDR_STYLE[item.file_hdr].bg, color: HDR_STYLE[item.file_hdr].color }}>
+                  {item.file_hdr}
+                </span>
+              )}
+              {item.total_size > 0 && (
+                <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.65, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {formatBytes(item.total_size)}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -600,6 +622,9 @@ export default function Workflows() {
           <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Backfill</div>
           <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 520 }}>
             Unseeded files in your library. Configure your strategy, pick folders, choose how deep to search, then generate a grab list one by one.
+          </p>
+          <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4, lineHeight: 1.6, maxWidth: 520, opacity: 0.7 }}>
+            ⓘ Since you already have these files, Sonarr/Radarr will likely block the import as a quality cutoff duplicate. After grabbing, you may need to trigger a <strong style={{ fontWeight: 600, color: 'var(--text-dim)' }}>force import</strong> from the queue.
           </p>
         </div>
 
