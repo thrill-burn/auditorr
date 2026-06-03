@@ -916,7 +916,7 @@ def _gen_parse_season(path):
     return int(m.group(1)) if m else None
 
 
-def _build_generate_candidates(cfg, folders=None, limit=20):
+def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
     """Resolved, season-grouped candidates for the generate workflow."""
     media_files = db_load_file_results('media')
     candidates_raw = [
@@ -986,6 +986,9 @@ def _build_generate_candidates(cfg, folders=None, limit=20):
 
     if folders:
         groups = [g for g in groups if _gen_root_folder(g.get('rep_path') or g.get('path', '')) in folders]
+    if title_search:
+        term = title_search.strip().lower()
+        groups = [g for g in groups if term in (g.get('arr_title') or '').lower()]
 
     return groups[:limit]
 
@@ -1014,6 +1017,7 @@ def workflows_generate():
     res_filter    = data.get('res_filter') or []
     source_filter = data.get('source_filter') or []
     hdr_filter    = data.get('hdr_filter') or []
+    title_search  = (data.get('title_search') or '').strip()
 
     existing = _gen_state.get('job')
     if existing and existing.get('status') == 'running':
@@ -1022,7 +1026,7 @@ def workflows_generate():
     cfg = db_load_config()
     try:
         candidates = _sort_generate_candidates(
-            _build_generate_candidates(cfg, folders=folders or None, limit=None),
+            _build_generate_candidates(cfg, folders=folders or None, limit=None, title_search=title_search or None),
             sort,
         )[:count]
     except Exception as e:

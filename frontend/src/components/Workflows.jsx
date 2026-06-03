@@ -458,7 +458,7 @@ export default function Workflows() {
 
   // Data loaded on mount
   const [indexers,      setIndexers]      = useState([])
-  const [folders,       setFolders]       = useState([])   // [{name, count}]
+  const [allGroups,     setAllGroups]     = useState([])   // resolved+grouped candidates, raw
   const [totalUnseeded, setTotalUnseeded] = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [loadError,     setLoadError]     = useState(null)
@@ -469,6 +469,7 @@ export default function Workflows() {
   const [saving,          setSaving]          = useState(false)
   // Config — quality / sort / depth (persisted in localStorage)
   const [selectedFolders, setSelectedFolders] = useState(() => loadPref('selectedFolders', []))
+  const [titleSearch,     setTitleSearch]     = useState('')  // not persisted — ephemeral per-session
   const [searchCount,     setSearchCount]     = useState(() => loadPref('searchCount', 5))
   const [sort,            setSort]            = useState(() => loadPref('sort', 'largest'))
   const [resFilter,       setResFilter]       = useState(() => loadPref('resFilter', []))
@@ -500,7 +501,7 @@ export default function Workflows() {
       .then(([cdata, idata, cfg]) => {
         const grouped  = groupCandidates(cdata.candidates || [])
         const resolved = grouped.filter(c => c.resolved)
-        setFolders(groupByFolder(resolved).map(([name, items]) => ({ name, count: items.length })))
+        setAllGroups(resolved)
         setTotalUnseeded((cdata.resolved_count || 0) + (cdata.unresolved_count || 0))
         setIndexers(idata.indexers || [])
         setDownloadFrom(cfg.ACQUIRE_DOWNLOAD_FROM || [])
@@ -518,6 +519,17 @@ export default function Workflows() {
 
   const handleDownloadFromChange = v => { setDownloadFrom(v); saveFilters(v, seedingOn) }
   const handleSeedingOnChange    = v => { setSeedingOn(v);    saveFilters(downloadFrom, v) }
+
+  // Filter raw groups by title search, then derive folder chips + count reactively
+  const filteredGroups = useMemo(() => {
+    if (!titleSearch.trim()) return allGroups
+    const term = titleSearch.trim().toLowerCase()
+    return allGroups.filter(g => (g.arr_title || '').toLowerCase().includes(term))
+  }, [allGroups, titleSearch])
+
+  const folders = useMemo(() =>
+    groupByFolder(filteredGroups).map(([name, items]) => ({ name, count: items.length }))
+  , [filteredGroups])
 
   const availableCount = useMemo(() => {
     if (selectedFolders.length === 0) return folders.reduce((s, f) => s + f.count, 0)
@@ -555,6 +567,7 @@ export default function Workflows() {
         res_filter:    resFilter,
         source_filter: sourceFilter,
         hdr_filter:    hdrFilter,
+        title_search:  titleSearch.trim() || undefined,
         download_from: downloadFrom,
         seeding_on:    seedingOn,
       })
@@ -658,6 +671,23 @@ export default function Workflows() {
                 How to order candidates when there are more than the search limit.
               </div>
               <SortPicker value={sort} onChange={setSort} />
+              <div style={{ marginTop: 12 }}>
+                <input
+                  type="text"
+                  value={titleSearch}
+                  onChange={e => setTitleSearch(e.target.value)}
+                  placeholder="Filter by title…"
+                  style={{
+                    padding: '6px 10px', borderRadius: 6, fontSize: 12,
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface2)',
+                    color: 'var(--text)',
+                    fontFamily: 'inherit',
+                    width: 220, outline: 'none',
+                    opacity: titleSearch ? 1 : 0.7,
+                  }}
+                />
+              </div>
             </div>
 
             <div>
