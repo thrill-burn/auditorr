@@ -61,7 +61,7 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 
 ---
 
-## v1.5 — In Progress 🚧
+## v1.5 — Shipped ✅
 
 ### v1.5.0 — Large-library memory optimizations & tracker analytics
 
@@ -78,8 +78,23 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 
 ---
 
-## v1.6 — Future Ideas
+## v1.6 — Workflows / Backfill ✅
 
+### Shipped in v1.6.0
+- **Workflows sidebar group** — expandable nav group with chevron; future workflows slot in as additional children
+- **Backfill workflow** — surfaces unseeded media files matched to the Sonarr/Radarr library and queries interactive release search for each candidate
+- **Quality filtering** — Resolution / Source / HDR multi-select chips matching Sonarr/Radarr quality profile terminology; filter persistence in `localStorage`
+- **Interactive release table** — Title / Tracker / Size / Peers / Quality / Score / HDR columns; HDR auto-detected from release title with coloured badges; sorted by custom format score → quality weight → seeders
+- **One-click grab** — Grab button POSTs directly to Sonarr/Radarr `/api/v3/release`
+- **Season-pack grouping** — Sonarr episode files grouped by (series, season) and searched as a season pack
+- **Sort options** — Largest / Smallest / Random (OS-entropy) / A → Z
+- **Search depth** — 5 / 15 / All with estimated time; backend cap raised to 500
+
+---
+
+## v1.7 — Future Ideas
+
+- **Additional workflows** — Upgrade workflow (find candidates currently seeded at a lower quality and search for an upgrade); potential others
 - **Webhook / notification support** — alert when health score drops below threshold (Discord, ntfy.sh, Gotify)
 - **Per-tracker import success rate** — of files downloaded from each tracker, what % got imported by Sonarr/Radarr
 - **Lidarr / Readarr support** — extend `_SERVICE_MAP` in `arr.py` with Lidarr/Readarr endpoints

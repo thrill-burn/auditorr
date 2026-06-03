@@ -144,7 +144,7 @@ threading.Thread(target=startup, daemon=True).start()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "version": "1.5.1"}), 200
+    return jsonify({"status": "ok", "version": "1.6.0"}), 200
 
 
 @app.route('/api/results')
@@ -806,7 +806,12 @@ def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, sou
         if target_resolutions:
             filtered = [r for r in filtered if r.get('resolution') in target_resolutions]
     if source_filter:
-        filtered = [r for r in filtered if r.get('source', '') in source_filter]
+        def _source_match(r):
+            # Sonarr uses source="bluray" for both Remux and Bluray encodes.
+            # Distinguish them by quality name so the two chips are independent.
+            is_remux = 'remux' in (r.get('quality_name') or '').lower()
+            return ('remux' if is_remux else r.get('source', '')) in source_filter
+        filtered = [r for r in filtered if _source_match(r)]
     if hdr_filter:
         # 'SDR' maps to empty string (no HDR detected); other values match hdr field directly
         target_hdr = {'' if h == 'SDR' else h for h in hdr_filter}

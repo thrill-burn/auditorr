@@ -1,4 +1,26 @@
 # Changelog
+
+## v1.6.0 — 2026-06-02
+
+### Features
+- **Backfill workflow** — new Workflows section in the sidebar (expandable group, ready for future workflows). The Backfill workflow surfaces unseeded media files from your library that match a Sonarr/Radarr entry and have no active torrent. Configure an indexer strategy (download-from and must-also-be-seeding-on indexer filters), root folder scope, quality filters, sort order, and search depth, then generate a grab list that queries Sonarr/Radarr's interactive release search for each candidate one by one.
+- **Quality filtering** — Backfill release results can be filtered by Resolution (2160p / 1080p / 720p), Source (Remux / Bluray / WEB-DL / WEBRip / HDTV), and HDR format (Dolby Vision / HDR10+ / HDR10 / HDR / HLG / SDR), matching Sonarr/Radarr quality profile terminology. All three filters are multi-select chips; empty = no restriction. Filters are persisted in `localStorage` and restored on every page load.
+- **Interactive release table** — search results show a per-candidate release list with columns matching Sonarr/Radarr interactive search: Title, Tracker, Size, Peers, Quality, Score, HDR. HDR format is auto-detected from the release title (DV/HDR10+/HDR10/HDR/HLG) and shown as a coloured badge (purple → blue → cyan → green → teal). Releases are sorted by custom format score → quality weight → seeders, exactly as Sonarr/Radarr ranks them.
+- **One-click grab** — each release row has a Grab button that POSTs directly to the Sonarr/Radarr `/api/v3/release` endpoint, equivalent to clicking Grab in the interactive search UI. Shows grabbing → grabbed / failed states with retry.
+- **Season-pack grouping** — Sonarr episode files from the same series and season are collapsed into a single candidate row and searched as a season pack (using Sonarr's `?seriesId=&seasonNumber=` endpoint), reducing redundant searches and favouring complete-season releases.
+- **Sort options** — Largest (biggest files first), Smallest (quickest wins first), Random (OS-entropy shuffle via `SystemRandom`), A → Z.
+- **Search depth** — 5 / 15 / All candidates, with estimated wall-clock time per option. "All" resolves to the full available candidate count.
+
+### Bug Fixes
+- **Sonarr/Radarr open link broken** — the "open in Sonarr/Radarr" badge link was building URLs using the numeric internal ID (e.g. `/series/123`) because `titleSlug` was not being extracted from the Sonarr `/api/v3/episodefile` and Radarr `/api/v3/movie` responses. The slug is now stored alongside each media record and used to build correct deep links (e.g. `/series/breaking-bad`).
+- **Quality filters not applied on first search** — `handleGenerate` was wrapped in `useCallback` with filter values in its dependency array; on the first click the initial closure (with empty filter arrays) could fire before React had swapped in the updated callback. Converted to a plain `async` function defined in the render body, which always closes over the current render's filter state.
+- **Best release selected by seeder count** — the auto-selected "best" release was chosen with `max(filtered, key=seeders)`, ignoring Sonarr/Radarr's own quality scoring. Changed to `filtered[0]` after sorting by `(customFormatScore, qualityWeight, seeders)` desc, matching the order shown in interactive search.
+
+### Improvements
+- **Backfill filter persistence** — Resolution, Source, HDR, sort order, search count, and selected folders are all saved to `localStorage` under `auditorr_backfill_prefs` and restored on page load. Indexer strategy (download-from / seeding-on) continues to be persisted server-side via the config API.
+- **Sidebar Workflows group** — "Workflows" is now an expandable nav group with a chevron. Clicking it expands and navigates to the Backfill workflow. Future workflows can be added as additional children without sidebar restructuring.
+- **Candidate count diagnostic** — the Search Depth section now shows both the searchable candidate count (files matched to the Sonarr/Radarr library) and the total unseeded file count, making path-mapping gaps visible (e.g. "194 searchable candidates (820 total unseeded)").
+
 ## v1.5.1 — 2026-05-29
 
 ### Features
