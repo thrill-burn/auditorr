@@ -250,7 +250,15 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id):
                        f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
                        timeout=30)
     if not files:
-        raise ValueError("No importable files found in folder")
+        # Retry once after a delay — handles timing race where qBit finishes but files
+        # aren't importable yet from Sonarr/Radarr's perspective
+        log.info("No importable files for %s %s on first attempt, retrying in 15s…", service, arr_id)
+        time.sleep(15)
+        files = _arr_get(conn['base_url'], conn['api_key'],
+                         f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
+                         timeout=30)
+    if not files:
+        raise ValueError(f"No importable files found — check {service} queue manually")
 
     body = json.dumps({'files': files, 'importMode': 'Auto'}).encode()
     req  = urllib.request.Request(

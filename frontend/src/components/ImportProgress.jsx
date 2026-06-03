@@ -27,7 +27,7 @@ function StageIcon({ type, color }) {
 }
 
 export default function ImportProgress({ open, jobs, onClose }) {
-  if (!open || jobs.length === 0) return null
+  if (!open) return null
 
   const activeCount = jobs.filter(j => !['done', 'error'].includes(j.status)).length
 
@@ -72,6 +72,11 @@ export default function ImportProgress({ open, jobs, onClose }) {
 
       {/* Job list */}
       <div style={{ overflowY: 'auto', flex: 1 }}>
+        {jobs.length === 0 && (
+          <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 12, fontFamily: 'var(--mono)' }}>
+            No active import jobs
+          </div>
+        )}
         {sorted.map(job => {
           const cfg = STAGE_CONFIG[job.status] || STAGE_CONFIG.queued
           return (

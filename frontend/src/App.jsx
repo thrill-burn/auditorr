@@ -264,7 +264,17 @@ function AppInner() {
       } catch (_) {}
     }
     importIntervalRef.current = setInterval(pollImports, 5000)
-    return () => clearInterval(importIntervalRef.current)
+
+    const onImportStarted = () => {
+      setImportPanelOpen(true)
+      pollImports()
+    }
+    window.addEventListener('auditorr:import_started', onImportStarted)
+
+    return () => {
+      clearInterval(importIntervalRef.current)
+      window.removeEventListener('auditorr:import_started', onImportStarted)
+    }
   }, [])
 
   useEffect(() => {
@@ -433,7 +443,7 @@ function AppInner() {
         isLoadingResults={isLoadingResults}
       />
       <ImportProgress
-        open={importPanelOpen && activeImports.length > 0}
+        open={importPanelOpen}
         jobs={activeImports}
         onClose={() => setImportPanelOpen(false)}
       />

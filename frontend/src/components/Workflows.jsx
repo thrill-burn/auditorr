@@ -274,15 +274,16 @@ function ResultItem({ item }) {
         arr_id:        item.arr_id,
         title:         item.arr_title || '',
       })
+      window.dispatchEvent(new CustomEvent('auditorr:import_started'))
       if (!mountedRef.current) return
-      setImportStatus('watching')
+      setImportStatus('queued')
       const poll = async () => {
         try {
           const data = await api.watchImportStatus(resp.job_id)
           if (!mountedRef.current) return
           setImportStatus(data.status)
           setImportMessage(data.message)
-          if (data.status === 'watching' || data.status === 'importing') {
+          if (['queued', 'downloading', 'importing'].includes(data.status)) {
             importPollRef.current = setTimeout(poll, 3000)
           }
         } catch (_) {}
@@ -425,16 +426,17 @@ function ResultItem({ item }) {
         {/* Import status (auto-starts after any grab) */}
         {importStatus && (
           <span style={{ fontSize: 10, fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {(importStatus === 'watching' || importStatus === 'importing') && (
+            {['queued', 'downloading', 'importing'].includes(importStatus) && (
               <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
             )}
             <span style={{
               color: importStatus === 'done' ? 'var(--green)' : importStatus === 'error' ? 'var(--red)' : 'var(--text-dim)',
             }} title={importMessage}>
-              {importStatus === 'watching'  && 'Waiting…'}
-              {importStatus === 'importing' && 'Importing…'}
-              {importStatus === 'done'      && '✓ Imported'}
-              {importStatus === 'error'     && 'Import failed'}
+              {importStatus === 'queued'      && 'Queued…'}
+              {importStatus === 'downloading' && 'Downloading…'}
+              {importStatus === 'importing'   && 'Importing…'}
+              {importStatus === 'done'        && '✓ Imported'}
+              {importStatus === 'error'       && 'Import failed'}
             </span>
           </span>
         )}

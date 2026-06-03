@@ -110,6 +110,8 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
   }[trigger] || null
 
   return (
+    <>
+    <style>{`@keyframes sidebarBadgePulse { 0%,100% { opacity:0.8 } 50% { opacity:1; box-shadow:0 0 6px var(--accent)60 } }`}</style>
     <aside style={{
       width: 220, flexShrink: 0,
       background: 'var(--surface)', borderRight: '1px solid var(--border)',
@@ -174,19 +176,6 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 onMouseLeave={e => { if (!isGroupActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
                   <span style={{ flexShrink: 0, opacity: isGroupActive ? 1 : 0.7 }}>{icon}</span>
                   <span style={{ flex: 1 }}>{label}</span>
-                  {id === 'workflows' && activeImportCount > 0 && (
-                    <button
-                      onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
-                      title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress`}
-                      style={{
-                        fontSize: 9, fontFamily: 'var(--mono)', padding: '1px 5px', borderRadius: 99,
-                        background: 'var(--accent)20', color: 'var(--accent)', border: '1px solid var(--accent)40',
-                        cursor: 'pointer', flexShrink: 0, lineHeight: 1.6,
-                      }}
-                    >
-                      {activeImportCount}
-                    </button>
-                  )}
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
                     strokeLinecap="round" strokeLinejoin="round"
                     style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, flexShrink: 0 }}>
@@ -213,7 +202,21 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                         background: childActive ? 'var(--accent)' : 'currentColor',
                         opacity: childActive ? 1 : 0.35,
                       }} />
-                      {child.label}
+                      <span style={{ flex: 1 }}>{child.label}</span>
+                      {child.id === 'workflows' && activeImportCount > 0 && (
+                        <span
+                          onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
+                          title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
+                          style={{
+                            fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 99,
+                            background: 'var(--accent)', color: '#fff',
+                            flexShrink: 0, lineHeight: 1.5, cursor: 'pointer',
+                            animation: 'sidebarBadgePulse 2s ease-in-out infinite',
+                          }}
+                        >
+                          ↓ {activeImportCount}
+                        </span>
+                      )}
                     </button>
                   )
                 })}
@@ -312,5 +315,6 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
         )}
       </div>
     </aside>
+    </>
   )
 }

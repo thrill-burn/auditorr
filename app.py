@@ -1135,6 +1135,8 @@ def workflows_watch_import():
 
     def do_watch():
         try:
+            # Brief delay so qBit + Sonarr/Radarr have time to register the grab before we poll
+            time.sleep(8)
             def on_downloading():
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — verifying in qBittorrent'
