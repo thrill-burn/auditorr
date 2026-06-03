@@ -54,7 +54,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
         padding: '10px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>Import Jobs</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>Backfill Jobs</span>
           {activeCount > 0 && (
             <span style={{
               fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,

@@ -659,7 +659,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--blue)',
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
-        [{ type: 'navigate', label: 'Find Acquire Candidates', tab: 'workflows' }],
+        [{ type: 'script', label: 'Backfill Orphaned Media', scriptType: 'relink_preview' }],
         [],
       ],
     },

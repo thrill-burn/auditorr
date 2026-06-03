@@ -214,7 +214,9 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
         try:
             result  = _arr_get(conn['base_url'], conn['api_key'], queue_path, timeout=10)
             records = result.get('records', result) if isinstance(result, dict) else result
-            active  = [r for r in records if r.get('status') not in ('completed', 'warning', 'error', 'failed')]
+            # 'completed' means download done but Radarr/Sonarr hasn't processed the import yet —
+            # keep polling until the item fully disappears or reaches a terminal error state
+            active  = [r for r in records if r.get('status') not in ('warning', 'error', 'failed')]
             if active:
                 if not notified and on_downloading:
                     on_downloading()
