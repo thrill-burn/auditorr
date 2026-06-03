@@ -251,8 +251,50 @@ function GrabButton({ state, onGrab, onReset, errorMsg }) {
 // ── Result item ───────────────────────────────────────────────────────────────
 function ResultItem({ item }) {
   // grabStates: { [guid]: 'idle' | 'grabbing' | 'grabbed' | 'error' }
-  const [grabStates,  setGrabStates]  = useState({})
-  const [grabErrors,  setGrabErrors]  = useState({})
+  const [grabStates,    setGrabStates]    = useState({})
+  const [grabErrors,    setGrabErrors]    = useState({})
+  const [importStatus,  setImportStatus]  = useState(null)   // null | watching | importing | done | error
+  const [importMessage, setImportMessage] = useState(null)
+  const importPollRef    = useRef(null)
+  const importStartedRef = useRef(false)
+  const mountedRef       = useRef(true)
+
+  useEffect(() => () => {
+    mountedRef.current = false
+    clearTimeout(importPollRef.current)
+  }, [])
+
+  const startImportWatch = useCallback(async () => {
+    if (importStartedRef.current || !item.arr_id) return
+    importStartedRef.current = true
+    try {
+      const resp = await api.watchImport({
+        service:       item.arr_service,
+        connection_id: item.arr_connection_id,
+        arr_id:        item.arr_id,
+        title:         item.arr_title || '',
+      })
+      if (!mountedRef.current) return
+      setImportStatus('watching')
+      const poll = async () => {
+        try {
+          const data = await api.watchImportStatus(resp.job_id)
+          if (!mountedRef.current) return
+          setImportStatus(data.status)
+          setImportMessage(data.message)
+          if (data.status === 'watching' || data.status === 'importing') {
+            importPollRef.current = setTimeout(poll, 3000)
+          }
+        } catch (_) {}
+      }
+      poll()
+    } catch (err) {
+      if (mountedRef.current) {
+        setImportStatus('error')
+        setImportMessage(err.message)
+      }
+    }
+  }, [item])
 
   const doGrab = useCallback(async (release, e) => {
     e.stopPropagation()
@@ -267,11 +309,12 @@ function ResultItem({ item }) {
         indexer_id:    release.indexer_id,
       })
       setGrabStates(s => ({ ...s, [key]: 'grabbed' }))
+      startImportWatch()
     } catch (err) {
       setGrabErrors(s => ({ ...s, [key]: err.message }))
       setGrabStates(s => ({ ...s, [key]: 'error' }))
     }
-  }, [grabStates, item])
+  }, [grabStates, item, startImportWatch])
 
   const resetGrab = useCallback((key, e) => {
     e.stopPropagation()
@@ -377,6 +420,23 @@ function ResultItem({ item }) {
             }}>
             {item.arr_service} ↗
           </a>
+        )}
+
+        {/* Import status (auto-starts after any grab) */}
+        {importStatus && (
+          <span style={{ fontSize: 10, fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+            {(importStatus === 'watching' || importStatus === 'importing') && (
+              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+            )}
+            <span style={{
+              color: importStatus === 'done' ? 'var(--green)' : importStatus === 'error' ? 'var(--red)' : 'var(--text-dim)',
+            }} title={importMessage}>
+              {importStatus === 'watching'  && 'Waiting…'}
+              {importStatus === 'importing' && 'Importing…'}
+              {importStatus === 'done'      && '✓ Imported'}
+              {importStatus === 'error'     && 'Import failed'}
+            </span>
+          </span>
         )}
 
         {/* Single-release grab button */}

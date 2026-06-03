@@ -197,6 +197,72 @@ def grab_release(cfg, service, connection_id, guid, indexer_id):
         return json.loads(resp.read())
 
 
+def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None):
+    """Poll Sonarr/Radarr queue for arr_id until the item clears or timeout (seconds)."""
+    conns = normalize_arr_connections(cfg, service=service)
+    conn  = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        return
+    queue_path = (
+        f'/api/v3/queue?movieId={arr_id}&pageSize=50'
+        if service == 'radarr' else
+        f'/api/v3/queue?seriesId={arr_id}&pageSize=50'
+    )
+    deadline     = time.monotonic() + timeout
+    notified     = False
+    while time.monotonic() < deadline:
+        try:
+            result  = _arr_get(conn['base_url'], conn['api_key'], queue_path, timeout=10)
+            records = result.get('records', result) if isinstance(result, dict) else result
+            active  = [r for r in records if r.get('status') not in ('completed', 'warning', 'error', 'failed')]
+            if active:
+                if not notified and on_downloading:
+                    on_downloading()
+                    notified = True
+            else:
+                return
+        except Exception:
+            pass
+        time.sleep(5)
+
+
+def force_manual_import_by_id(cfg, service, connection_id, arr_id):
+    """Force manual import of a movie or series, bypassing quality cutoff."""
+    conns = normalize_arr_connections(cfg, service=service)
+    conn  = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        raise ValueError(f"Arr connection '{connection_id}' not found for service '{service}'")
+
+    if service == 'radarr':
+        info     = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}')
+        folder   = info.get('path', '')
+        id_param = f'movieId={arr_id}'
+    else:
+        info     = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/series/{arr_id}')
+        folder   = info.get('path', '')
+        id_param = f'seriesId={arr_id}'
+
+    if not folder:
+        raise ValueError(f"No folder returned by {service} for id {arr_id}")
+
+    encoded = urllib.parse.quote(folder, safe='')
+    files   = _arr_get(conn['base_url'], conn['api_key'],
+                       f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
+                       timeout=30)
+    if not files:
+        raise ValueError("No importable files found in folder")
+
+    body = json.dumps({'files': files, 'importMode': 'Auto'}).encode()
+    req  = urllib.request.Request(
+        conn['base_url'].rstrip('/') + '/api/v3/manualimport',
+        data=body,
+        headers={'X-Api-Key': conn['api_key'], 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
 def test_arr_connections(cfg):
     """Probe configured Arr instances and confirm managed file metadata is readable."""
     connections = normalize_arr_connections(cfg)

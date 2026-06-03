@@ -7,7 +7,8 @@ import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
 import Trackers     from './components/Trackers'
 import Workflows    from './components/Workflows'
-import ScanProgress from './components/ScanProgress'
+import ScanProgress    from './components/ScanProgress'
+import ImportProgress  from './components/ImportProgress'
 import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
@@ -144,9 +145,12 @@ function AppInner() {
   const [revealPath,         setRevealPath]         = useState(null)
   const [showWizard,         setShowWizard]         = useState(false)
   const [isLoadingResults,   setIsLoadingResults]   = useState(false)
-  const prevScanRef      = useRef(false)
-  const intervalRef      = useRef(null)
-  const filesFetchingRef = useRef({ media: false, torrents: false })
+  const [activeImports,      setActiveImports]      = useState([])
+  const [importPanelOpen,    setImportPanelOpen]    = useState(false)
+  const prevScanRef        = useRef(false)
+  const intervalRef        = useRef(null)
+  const filesFetchingRef   = useRef({ media: false, torrents: false })
+  const importIntervalRef  = useRef(null)
 
   useEffect(() => {
     if (tab !== 'media' && tab !== 'torrents') setRevealPath(null)
@@ -253,6 +257,17 @@ function AppInner() {
   }, [fetchResults, pollOnce])
 
   useEffect(() => {
+    const pollImports = async () => {
+      try {
+        const data = await api.watchImportActive()
+        setActiveImports(data.jobs || [])
+      } catch (_) {}
+    }
+    importIntervalRef.current = setInterval(pollImports, 5000)
+    return () => clearInterval(importIntervalRef.current)
+  }, [])
+
+  useEffect(() => {
     const rate = scanState.is_scanning ? 500 : 5000
     clearInterval(intervalRef.current)
     intervalRef.current = setInterval(pollOnce, rate)
@@ -326,6 +341,8 @@ function AppInner() {
         statusMessage={scanState.status_message}
         score={results?.dashboard?.score}
         crossSeedMultiplier={crossSeedMultiplier}
+        activeImportCount={activeImports.filter(j => !['done', 'error'].includes(j.status)).length}
+        onOpenImportPanel={() => setImportPanelOpen(true)}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {!showWizard && <ErrorBanner message={results?.status} />}
@@ -414,6 +431,11 @@ function AppInner() {
         scannedFiles={scanState.scanned_files}
         totalFiles={scanState.total_files}
         isLoadingResults={isLoadingResults}
+      />
+      <ImportProgress
+        open={importPanelOpen && activeImports.length > 0}
+        jobs={activeImports}
+        onClose={() => setImportPanelOpen(false)}
       />
     </div>
   )

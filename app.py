@@ -31,7 +31,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id
 from scripts import generate_script
 from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -1106,6 +1106,80 @@ def workflows_generate_stop():
     if job and job['id'] == job_id and job['status'] == 'running':
         job['stop_flag'] = True
     return jsonify({'status': 'ok'})
+
+
+_import_watches = {}  # job_id -> {status, message, title, service, completed_at}
+
+
+@app.route('/api/workflows/watch_import', methods=['POST'])
+@require_auth
+def workflows_watch_import():
+    data          = request.json or {}
+    service       = data.get('service', '')
+    connection_id = data.get('connection_id', '')
+    arr_id        = data.get('arr_id')
+    title         = data.get('title', '') or ''
+    if not service or not connection_id or arr_id is None:
+        return jsonify({'status': 'error', 'message': 'Missing parameters'}), 400
+
+    job_id = secrets.token_hex(8)
+    watch  = {
+        'status':       'queued',
+        'message':      'Queued — waiting for download client',
+        'title':        title,
+        'service':      service,
+        'completed_at': None,
+    }
+    _import_watches[job_id] = watch
+    cfg = db_load_config()
+
+    def do_watch():
+        try:
+            def on_downloading():
+                watch['status']  = 'downloading'
+                watch['message'] = 'Downloading — verifying in qBittorrent'
+            poll_queue_until_clear(cfg, service, connection_id, arr_id, on_downloading=on_downloading)
+            watch['status']  = 'importing'
+            watch['message'] = 'Importing — triggering manual import'
+            force_manual_import_by_id(cfg, service, connection_id, arr_id)
+            watch['status']       = 'done'
+            watch['message']      = 'Imported successfully'
+            watch['completed_at'] = time.time()
+        except Exception as e:
+            log.warning("Auto-import failed for %s/%s: %s", service, arr_id, e)
+            watch['status']       = 'error'
+            watch['message']      = str(e)
+            watch['completed_at'] = time.time()
+
+    threading.Thread(target=do_watch, daemon=True).start()
+    return jsonify({'job_id': job_id})
+
+
+@app.route('/api/workflows/watch_import/status')
+@require_auth
+def workflows_watch_import_status():
+    job_id = request.args.get('job_id', '')
+    watch  = _import_watches.get(job_id)
+    if not watch:
+        return jsonify({'status': 'error', 'message': 'Watch not found'}), 404
+    return jsonify(watch)
+
+
+@app.route('/api/workflows/watch_import/active')
+@require_auth
+def workflows_watch_import_active():
+    now = time.time()
+    # Expire jobs completed more than 5 minutes ago
+    expired = [k for k, v in _import_watches.items() if v.get('completed_at') and now - v['completed_at'] > 300]
+    for k in expired:
+        del _import_watches[k]
+    # Return active jobs + jobs completed within the last 60s (so Done/Error states are briefly visible)
+    jobs = []
+    for job_id, watch in _import_watches.items():
+        ct = watch.get('completed_at')
+        if watch['status'] not in ('done', 'error') or (ct and now - ct < 60):
+            jobs.append({'job_id': job_id, **{k: v for k, v in watch.items() if k != 'completed_at'}})
+    return jsonify({'jobs': jobs})
 
 
 @app.route('/', defaults={'path': ''})
