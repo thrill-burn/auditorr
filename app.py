@@ -1140,10 +1140,36 @@ def workflows_watch_import():
             def on_downloading():
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — verifying in qBittorrent'
-            poll_queue_until_clear(cfg, service, connection_id, arr_id, on_downloading=on_downloading)
+            last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, on_downloading=on_downloading)
+
+            # Extract downloadId and outputPath from the last seen queue record.
+            # downloadId (qBit hash) is the precise key for finding download-client-
+            # tracked files via manualimport — necessary for same-quality grabs where
+            # Radarr won't auto-import and the file sits in importPending state.
+            download_id     = None
+            download_folder = None
+            if last_active:
+                rec = last_active[0]
+                download_id = rec.get('downloadId') or ''
+                output_path = rec.get('outputPath') or ''
+                if output_path:
+                    import os as _os
+                    # outputPath may be the file itself (single-file torrent) or a folder
+                    download_folder = _os.path.dirname(output_path) if '.' in _os.path.basename(output_path) else output_path
+                if download_id:
+                    log.info("Manual import will use downloadId %s", download_id)
+                elif download_folder:
+                    log.info("Manual import will use download folder %s", download_folder)
+
             watch['status']  = 'importing'
             watch['message'] = 'Importing — triggering manual import'
-            force_manual_import_by_id(cfg, service, connection_id, arr_id)
+            force_manual_import_by_id(cfg, service, connection_id, arr_id,
+                                      download_id=download_id, download_folder=download_folder)
+
+            # Short follow-up poll: confirm the queue entry actually cleared after the
+            # manual import command was submitted (Radarr processes imports asynchronously).
+            poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=120)
+
             watch['status']       = 'done'
             watch['message']      = 'Imported successfully'
             watch['completed_at'] = time.time()

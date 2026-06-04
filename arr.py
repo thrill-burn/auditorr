@@ -198,18 +198,24 @@ def grab_release(cfg, service, connection_id, guid, indexer_id):
 
 
 def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None):
-    """Poll Sonarr/Radarr queue for arr_id until the item clears or timeout (seconds)."""
+    """Poll Sonarr/Radarr queue for arr_id until the item clears or timeout (seconds).
+
+    Returns the last seen list of active queue records so the caller can extract
+    outputPath for a manual import when the timeout expires with items still present.
+    Returns [] when the item cleared cleanly or was never seen.
+    """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
-        return
+        return []
     # Fetch the full queue and filter client-side — the ?movieId= URL param is unreliable
     # across Radarr versions and may silently return empty rather than the full list
-    id_field       = 'movieId' if service == 'radarr' else 'seriesId'
-    deadline       = time.monotonic() + timeout
-    notified       = False
-    ever_seen      = False   # did we ever find this item in the queue?
-    not_found_ticks = 0      # consecutive polls with item absent
+    id_field        = 'movieId' if service == 'radarr' else 'seriesId'
+    deadline        = time.monotonic() + timeout
+    notified        = False
+    ever_seen       = False   # did we ever find this item in the queue?
+    not_found_ticks = 0       # consecutive polls with item absent
+    last_active     = []      # last snapshot of active records (for outputPath extraction)
     while time.monotonic() < deadline:
         try:
             result   = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/queue?pageSize=500', timeout=10)
@@ -221,13 +227,14 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
             # and must NOT be treated as terminal.
             active   = [r for r in relevant if r.get('status') not in ('error', 'failed')]
             if active:
-                ever_seen = True
+                ever_seen   = True
+                last_active = active
                 not_found_ticks = 0
                 if not notified and on_downloading:
                     on_downloading()
                     notified = True
             elif relevant:
-                return  # item is only in hard terminal states (error/failed)
+                return []  # item is only in hard terminal states (error/failed)
             else:
                 not_found_ticks += 1
                 # Radarr's download-client check interval defaults to ~60 s, so the
@@ -235,50 +242,105 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
                 # Wait up to 12 consecutive empty polls (~60 s) before concluding the
                 # item was never registered.  Once seen, its absence means processed.
                 if ever_seen or not_found_ticks >= 12:
-                    return
+                    return []
         except Exception:
             pass
         time.sleep(5)
+    return last_active  # timeout — caller can use outputPath to locate the download
 
 
-def force_manual_import_by_id(cfg, service, connection_id, arr_id):
-    """Force manual import of a movie or series, bypassing quality cutoff."""
+def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=None, download_folder=None):
+    """Force manual import of a movie or series, bypassing quality cutoff.
+
+    download_id:     the downloadId from the Radarr/Sonarr queue record (qBittorrent hash).
+                     When provided it is used for the GET query so the download-client-
+                     tracked file is found directly.  This is the correct path for same-
+                     quality grabs that sit in importPending state.
+    download_folder: fallback — parent directory of outputPath from the queue record.
+                     Used when download_id is unavailable.  Falls back further to the
+                     media folder for hardlink/backfill cases where the file is already
+                     at its final location.
+    """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
         raise ValueError(f"Arr connection '{connection_id}' not found for service '{service}'")
 
     if service == 'radarr':
-        info     = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}')
-        folder   = info.get('path', '')
-        id_param = f'movieId={arr_id}'
+        info         = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}')
+        media_folder = info.get('path', '')
+        id_param     = f'movieId={arr_id}'
     else:
-        info     = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/series/{arr_id}')
-        folder   = info.get('path', '')
-        id_param = f'seriesId={arr_id}'
+        info         = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/series/{arr_id}')
+        media_folder = info.get('path', '')
+        id_param     = f'seriesId={arr_id}'
 
-    if not folder:
-        raise ValueError(f"No folder returned by {service} for id {arr_id}")
+    def _query_by_download_id(dl_id):
+        encoded = urllib.parse.quote(dl_id, safe='')
+        return _arr_get(conn['base_url'], conn['api_key'],
+                        f'/api/v3/manualimport?downloadId={encoded}&{id_param}',
+                        timeout=30)
 
-    encoded = urllib.parse.quote(folder, safe='')
-    files   = _arr_get(conn['base_url'], conn['api_key'],
-                       f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
-                       timeout=30)
+    def _query_by_folder(folder):
+        encoded = urllib.parse.quote(folder, safe='')
+        return _arr_get(conn['base_url'], conn['api_key'],
+                        f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
+                        timeout=30)
+
+    # Try downloadId first (finds download-client-tracked files), then folder fallbacks.
+    files = []
+    if download_id:
+        files = _query_by_download_id(download_id)
+        if files:
+            log.info("Found %d importable file(s) for %s %s via downloadId", len(files), service, arr_id)
+
+    if not files:
+        folders_to_try = [f for f in [download_folder, media_folder] if f]
+        for folder in folders_to_try:
+            files = _query_by_folder(folder)
+            if files:
+                log.info("Found %d importable file(s) for %s %s in %s", len(files), service, arr_id, folder)
+                break
+
     if not files:
         # Retry once after a delay — handles timing race where qBit finishes but files
         # aren't importable yet from Sonarr/Radarr's perspective
         log.info("No importable files for %s %s on first attempt, retrying in 15s…", service, arr_id)
         time.sleep(15)
-        files = _arr_get(conn['base_url'], conn['api_key'],
-                         f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
-                         timeout=30)
+        if download_id:
+            files = _query_by_download_id(download_id)
+        if not files:
+            for folder in [f for f in [download_folder, media_folder] if f]:
+                files = _query_by_folder(folder)
+                if files:
+                    break
+
     if not files:
         raise ValueError(f"No importable files found — check {service} queue manually")
 
-    body = json.dumps({'files': files, 'importMode': 'Auto'}).encode()
-    req  = urllib.request.Request(
+    # Build the POST body as a flat array (ManualImportReprocessResource[]).
+    # Key differences from the GET response:
+    #   - flat array, not {"files": [...], "importMode": "..."}
+    #   - movieId/seriesId as a top-level integer field
+    #   - importMode per item
+    #   - rejections cleared — the user (auditorr) is explicitly choosing to import,
+    #     mirroring what Radarr's own UI does when you confirm a manual import
+    id_key    = 'movieId'  if service == 'radarr' else 'seriesId'
+    post_body = [
+        {
+            **f,
+            id_key:       arr_id,
+            'movie':      {'id': arr_id} if service == 'radarr' else f.get('movie'),
+            'series':     {'id': arr_id} if service == 'sonarr' else f.get('series'),
+            'importMode': 'Auto',
+            'rejections': [],   # clear so Radarr doesn't refuse equal-quality imports
+        }
+        for f in files
+    ]
+
+    req = urllib.request.Request(
         conn['base_url'].rstrip('/') + '/api/v3/manualimport',
-        data=body,
+        data=json.dumps(post_body).encode(),
         headers={'X-Api-Key': conn['api_key'], 'Content-Type': 'application/json'},
         method='POST',
     )
