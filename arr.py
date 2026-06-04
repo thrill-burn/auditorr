@@ -216,8 +216,10 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
             records  = result.get('records', result) if isinstance(result, dict) else result
             relevant = [r for r in records if r.get(id_field) == arr_id]
             # 'completed' means download done but import not yet processed — keep polling
-            # until the item fully disappears or hits a terminal error state
-            active   = [r for r in relevant if r.get('status') not in ('warning', 'error', 'failed')]
+            # until the item fully disappears or hits a hard terminal state.
+            # 'warning' is transient (download client temporarily unreachable, etc.)
+            # and must NOT be treated as terminal.
+            active   = [r for r in relevant if r.get('status') not in ('error', 'failed')]
             if active:
                 ever_seen = True
                 not_found_ticks = 0
@@ -225,13 +227,14 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
                     on_downloading()
                     notified = True
             elif relevant:
-                return  # item is in queue but only in terminal states
+                return  # item is only in hard terminal states (error/failed)
             else:
                 not_found_ticks += 1
-                # If we never saw it and it's absent for the first few polls, give it more
-                # time to appear (Radarr can be slow to register the grab).
-                # Once we've seen it, its absence means it was processed — return.
-                if ever_seen or not_found_ticks >= 4:
+                # Radarr's download-client check interval defaults to ~60 s, so the
+                # queue entry may not appear until a full minute after the grab.
+                # Wait up to 12 consecutive empty polls (~60 s) before concluding the
+                # item was never registered.  Once seen, its absence means processed.
+                if ever_seen or not_found_ticks >= 12:
                     return
         except Exception:
             pass

@@ -720,7 +720,7 @@ export default function Workflows() {
   // ── Config phase ──────────────────────────────────────────────────────────────
   if (phase === 'config') {
     return (
-      <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 28, maxWidth: 740 }}>
+      <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 28 }}>
         <div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>Workflows</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Backfill</div>

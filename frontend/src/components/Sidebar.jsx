@@ -170,7 +170,6 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                   fontSize: 13, fontWeight: isGroupActive ? 600 : 400,
                   cursor: 'pointer', transition: 'all 0.12s',
                   textAlign: 'left', width: '100%',
-                  borderLeft: `2px solid ${isGroupActive ? 'var(--accent)' : 'transparent'}`,
                 }}
                 onMouseEnter={e => { if (!isGroupActive) e.currentTarget.style.color = 'var(--text)' }}
                 onMouseLeave={e => { if (!isGroupActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
@@ -182,39 +181,42 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                     <polyline points="9 18 15 12 9 6"/>
                   </svg>
                 </button>
-                {isOpen && children.map(child => {
-                  const childActive = active === child.id
-                  return (
-                    <button key={child.label} onClick={() => onChange(child.id)} style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '6px 10px 6px 32px', borderRadius: 7, border: 'none',
-                      background: childActive ? 'var(--accent)12' : 'transparent',
-                      color: childActive ? 'var(--accent)' : 'var(--text-dim)',
-                      fontSize: 13, fontWeight: childActive ? 600 : 400,
-                      cursor: 'pointer', transition: 'all 0.12s',
-                      textAlign: 'left', width: '100%',
-                      borderLeft: `2px solid ${childActive ? 'var(--accent)' : 'var(--border2)'}`,
-                    }}
-                    onMouseEnter={e => { if (!childActive) e.currentTarget.style.color = 'var(--text)' }}
-                    onMouseLeave={e => { if (!childActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
-                      <span style={{ flex: 1 }}>{child.label}</span>
-                      {child.id === 'workflows' && activeImportCount > 0 && (
-                        <span
-                          onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
-                          title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
-                          style={{
-                            fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 99,
-                            background: 'var(--accent)', color: '#fff',
-                            flexShrink: 0, lineHeight: 1.5, cursor: 'pointer',
-                            animation: 'sidebarBadgePulse 2s ease-in-out infinite',
-                          }}
-                        >
-                          ↓ {activeImportCount}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
+                {isOpen && (
+                  <div style={{ marginLeft: 18, borderLeft: '1px solid var(--border2)' }}>
+                    {children.map(child => {
+                      const childActive = active === child.id
+                      return (
+                        <button key={child.label} onClick={() => onChange(child.id)} style={{
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          padding: '6px 10px 6px 18px', borderRadius: 7, border: 'none',
+                          background: childActive ? 'var(--accent)12' : 'transparent',
+                          color: childActive ? 'var(--accent)' : 'var(--text-dim)',
+                          fontSize: 13, fontWeight: childActive ? 600 : 400,
+                          cursor: 'pointer', transition: 'all 0.12s',
+                          textAlign: 'left', width: '100%',
+                        }}
+                        onMouseEnter={e => { if (!childActive) e.currentTarget.style.color = 'var(--text)' }}
+                        onMouseLeave={e => { if (!childActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
+                          <span style={{ flex: 1 }}>{child.label}</span>
+                          {child.id === 'workflows' && activeImportCount > 0 && (
+                            <span
+                              onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
+                              title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
+                              style={{
+                                fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 99,
+                                background: 'var(--accent)', color: '#fff',
+                                flexShrink: 0, lineHeight: 1.5, cursor: 'pointer',
+                                animation: 'sidebarBadgePulse 2s ease-in-out infinite',
+                              }}
+                            >
+                              ↓ {activeImportCount}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </React.Fragment>
             )
           }
@@ -229,7 +231,6 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               fontSize: 13, fontWeight: isActive ? 600 : 400,
               cursor: 'pointer', transition: 'all 0.12s',
               textAlign: 'left', width: '100%',
-              borderLeft: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
             }}
             onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text)' }}
             onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
