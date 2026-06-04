@@ -222,7 +222,8 @@ function CountPicker({ value, onChange, max }) {
   })
 
   const numStyle = (active) => ({
-    fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: 1.1,
+    fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: '26px',
+    height: 26, display: 'flex', alignItems: 'center',
     color: active ? 'var(--accent)' : 'inherit',
   })
 
@@ -723,7 +724,7 @@ export default function Workflows() {
         <div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>Workflows</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Backfill</div>
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 520 }}>
+          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6 }}>
             Convert your orphaned media files into active seeds by grabbing matching releases from your trackers.
           </p>
         </div>
