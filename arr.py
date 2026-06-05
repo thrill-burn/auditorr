@@ -203,6 +203,10 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
     Returns the last seen list of active queue records so the caller can extract
     outputPath for a manual import when the timeout expires with items still present.
     Returns [] when the item cleared cleanly or was never seen.
+
+    Returns early (before timeout) when all active items are in importPending state —
+    the download is complete and Radarr is blocking the import; force import is needed
+    immediately rather than after a full 300 s wait.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
@@ -210,12 +214,13 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
         return []
     # Fetch the full queue and filter client-side — the ?movieId= URL param is unreliable
     # across Radarr versions and may silently return empty rather than the full list
-    id_field        = 'movieId' if service == 'radarr' else 'seriesId'
-    deadline        = time.monotonic() + timeout
-    notified        = False
-    ever_seen       = False   # did we ever find this item in the queue?
-    not_found_ticks = 0       # consecutive polls with item absent
-    last_active     = []      # last snapshot of active records (for outputPath extraction)
+    id_field             = 'movieId' if service == 'radarr' else 'seriesId'
+    deadline             = time.monotonic() + timeout
+    notified             = False
+    ever_seen            = False   # did we ever find this item in the queue?
+    not_found_ticks      = 0       # consecutive polls with item absent
+    import_pending_ticks = 0       # consecutive polls with all items importPending
+    last_active          = []      # last snapshot of active records (for outputPath extraction)
     while time.monotonic() < deadline:
         try:
             result   = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/queue?pageSize=500', timeout=10)
@@ -227,21 +232,30 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
             # and must NOT be treated as terminal.
             active   = [r for r in relevant if r.get('status') not in ('error', 'failed')]
             if active:
-                ever_seen   = True
-                last_active = active
-                not_found_ticks = 0
+                ever_seen            = True
+                last_active          = active
+                not_found_ticks      = 0
                 if not notified and on_downloading:
                     on_downloading()
                     notified = True
+                # If all items are importPending the download is done but Radarr is
+                # blocking the import — return early so force import fires immediately
+                # instead of waiting the full timeout.
+                if all(r.get('trackedDownloadState') == 'importPending' for r in active):
+                    import_pending_ticks += 1
+                    if import_pending_ticks >= 3:  # ~15 s of confirmed importPending
+                        return last_active
+                else:
+                    import_pending_ticks = 0
             elif relevant:
                 return []  # item is only in hard terminal states (error/failed)
             else:
                 not_found_ticks += 1
                 # Radarr's download-client check interval defaults to ~60 s, so the
                 # queue entry may not appear until a full minute after the grab.
-                # Wait up to 12 consecutive empty polls (~60 s) before concluding the
+                # Wait up to 24 consecutive empty polls (~120 s) before concluding the
                 # item was never registered.  Once seen, its absence means processed.
-                if ever_seen or not_found_ticks >= 12:
+                if ever_seen or not_found_ticks >= 24:
                     return []
         except Exception:
             pass
@@ -276,16 +290,24 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         id_param     = f'seriesId={arr_id}'
 
     def _query_by_download_id(dl_id):
-        encoded = urllib.parse.quote(dl_id, safe='')
-        return _arr_get(conn['base_url'], conn['api_key'],
-                        f'/api/v3/manualimport?downloadId={encoded}&{id_param}',
-                        timeout=30)
+        try:
+            encoded = urllib.parse.quote(dl_id, safe='')
+            return _arr_get(conn['base_url'], conn['api_key'],
+                            f'/api/v3/manualimport?downloadId={encoded}&{id_param}',
+                            timeout=30)
+        except urllib.error.HTTPError as e:
+            log.warning("manualimport GET by downloadId returned HTTP %s — falling back to folder", e.code)
+            return []
 
     def _query_by_folder(folder):
-        encoded = urllib.parse.quote(folder, safe='')
-        return _arr_get(conn['base_url'], conn['api_key'],
-                        f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
-                        timeout=30)
+        try:
+            encoded = urllib.parse.quote(folder, safe='')
+            return _arr_get(conn['base_url'], conn['api_key'],
+                            f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
+                            timeout=30)
+        except urllib.error.HTTPError as e:
+            log.warning("manualimport GET by folder returned HTTP %s", e.code)
+            return []
 
     # Try downloadId first (finds download-client-tracked files), then folder fallbacks.
     files = []

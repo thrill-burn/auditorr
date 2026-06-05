@@ -1154,6 +1154,19 @@ def workflows_watch_import():
                 watch['completed_at'] = time.time()
                 return
 
+            # If the item is still downloading (not yet importPending), the 300 s poll
+            # timed out before the download finished — extend the wait instead of
+            # firing force import against an incomplete file (which causes a 500 error).
+            if not any(r.get('trackedDownloadState') == 'importPending' for r in last_active):
+                watch['status']  = 'downloading'
+                watch['message'] = 'Downloading — waiting for completion'
+                last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=7200)
+                if not last_active:
+                    watch['status']       = 'done'
+                    watch['message']      = 'Imported successfully'
+                    watch['completed_at'] = time.time()
+                    return
+
             # Queue didn't clear — extract context for manual import
             rec             = last_active[0]
             download_id     = rec.get('downloadId') or ''
