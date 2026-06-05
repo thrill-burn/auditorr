@@ -318,29 +318,37 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
     if not files:
         raise ValueError(f"No importable files found — check {service} queue manually")
 
-    # Build the POST body as a flat array (ManualImportReprocessResource[]).
-    # Key differences from the GET response:
-    #   - flat array, not {"files": [...], "importMode": "..."}
-    #   - movieId/seriesId as a top-level integer field
-    #   - importMode per item
-    #   - rejections cleared — the user (auditorr) is explicitly choosing to import,
-    #     mirroring what Radarr's own UI does when you confirm a manual import
-    id_key    = 'movieId'  if service == 'radarr' else 'seriesId'
-    post_body = [
-        {
-            **f,
-            id_key:       arr_id,
-            'movie':      {'id': arr_id} if service == 'radarr' else f.get('movie'),
-            'series':     {'id': arr_id} if service == 'sonarr' else f.get('series'),
-            'importMode': 'Auto',
-            'rejections': [],   # clear so Radarr doesn't refuse equal-quality imports
+    # Use the ManualImport command endpoint with replaceExistingFiles=True.
+    # This mirrors what Radarr/Sonarr's "Import Anyway" UI button does and bypasses
+    # quality revision checks (e.g. importing a non-RERIP over an existing RERIP),
+    # which the /api/v3/manualimport POST endpoint cannot override server-side.
+    id_key = 'movieId' if service == 'radarr' else 'seriesId'
+    cmd_files = []
+    for f in files:
+        item = {
+            'path':         f['path'],
+            id_key:         arr_id,
+            'quality':      f.get('quality') or {},
+            'languages':    f.get('languages') or [],
+            'releaseGroup': f.get('releaseGroup') or '',
+            'downloadId':   f.get('downloadId') or download_id or '',
+            'rejections':   [],
         }
-        for f in files
-    ]
-
+        if service == 'sonarr':
+            # Sonarr needs episode context so it can assign the file correctly
+            episodes = f.get('episodes') or []
+            item['episodeIds']    = [ep['id'] for ep in episodes if ep.get('id')]
+            item['seasonNumber']  = f.get('seasonNumber', 0)
+        cmd_files.append(item)
+    cmd_body = {
+        'name':                 'ManualImport',
+        'files':                cmd_files,
+        'replaceExistingFiles': True,
+        'importMode':           'Auto',
+    }
     req = urllib.request.Request(
-        conn['base_url'].rstrip('/') + '/api/v3/manualimport',
-        data=json.dumps(post_body).encode(),
+        conn['base_url'].rstrip('/') + '/api/v3/command',
+        data=json.dumps(cmd_body).encode(),
         headers={'X-Api-Key': conn['api_key'], 'Content-Type': 'application/json'},
         method='POST',
     )
@@ -349,10 +357,28 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
-            # Radarr/Sonarr returns 4xx when files are already imported via normal queue flow
-            log.info("Manual import POST returned %s for %s %s — likely already imported", e.code, service, arr_id)
+            log.info("ManualImport command returned %s for %s %s — likely already imported", e.code, service, arr_id)
             return []
         raise
+
+
+def remove_from_arr_queue(cfg, service, connection_id, queue_id):
+    """Delete a queue item from Arr without removing from the download client."""
+    conns = normalize_arr_connections(cfg, service=service)
+    conn  = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None or not queue_id:
+        return
+    req = urllib.request.Request(
+        conn['base_url'].rstrip('/') + f'/api/v3/queue/{queue_id}?removeFromClient=false&blocklist=false',
+        headers={'X-Api-Key': conn['api_key']},
+        method='DELETE',
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            log.info("Removed queue item %s from %s queue", queue_id, service)
+            return resp.status
+    except Exception as e:
+        log.warning("Failed to remove queue item %s from %s: %s", queue_id, service, e)
 
 
 def test_arr_connections(cfg):

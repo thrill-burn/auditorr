@@ -1166,12 +1166,18 @@ def workflows_watch_import():
             force_manual_import_by_id(cfg, service, connection_id, arr_id,
                                       download_id=download_id, download_folder=download_folder)
 
-            # Short follow-up poll: confirm the queue entry actually cleared after the
-            # manual import command was submitted (Radarr processes imports asynchronously).
-            poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=120)
+            # Confirm the queue entry actually cleared after the manual import command
+            # was submitted (Arr processes imports asynchronously).
+            still_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=120)
 
-            watch['status']       = 'done'
-            watch['message']      = 'Imported successfully'
+            if still_active:
+                stuck_rec = still_active[0]
+                msgs = [m for msg in stuck_rec.get('statusMessages', []) for m in msg.get('messages', [])]
+                watch['status']  = 'error'
+                watch['message'] = 'Import stalled: ' + ('; '.join(msgs) or 'queue item remained')
+            else:
+                watch['status']       = 'done'
+                watch['message']      = 'Imported successfully'
             watch['completed_at'] = time.time()
         except Exception as e:
             log.warning("Auto-import failed for %s/%s: %s", service, arr_id, e)
