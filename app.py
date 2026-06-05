@@ -31,7 +31,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id
 from scripts import generate_script
 from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -1140,35 +1140,54 @@ def workflows_watch_import():
             def on_downloading():
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — verifying in qBittorrent'
+
+            # Snapshot the current file ID so we can confirm import even when the
+            # ManualImport command reports status='failed' internally (Radarr quirk)
+            original_file_id = get_arr_file_id(cfg, service, connection_id, arr_id)
+
             last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, on_downloading=on_downloading)
 
-            # Extract downloadId and outputPath from the last seen queue record.
-            # downloadId (qBit hash) is the precise key for finding download-client-
-            # tracked files via manualimport — necessary for same-quality grabs where
-            # Radarr won't auto-import and the file sits in importPending state.
-            download_id     = None
+            if not last_active:
+                # Queue cleared naturally (standard quality upgrade auto-imported)
+                watch['status']       = 'done'
+                watch['message']      = 'Imported successfully'
+                watch['completed_at'] = time.time()
+                return
+
+            # Queue didn't clear — extract context for manual import
+            rec             = last_active[0]
+            download_id     = rec.get('downloadId') or ''
+            output_path     = rec.get('outputPath') or ''
             download_folder = None
-            if last_active:
-                rec = last_active[0]
-                download_id = rec.get('downloadId') or ''
-                output_path = rec.get('outputPath') or ''
-                if output_path:
-                    import os as _os
-                    # outputPath may be the file itself (single-file torrent) or a folder
-                    download_folder = _os.path.dirname(output_path) if '.' in _os.path.basename(output_path) else output_path
-                if download_id:
-                    log.info("Manual import will use downloadId %s", download_id)
-                elif download_folder:
-                    log.info("Manual import will use download folder %s", download_folder)
+            if output_path:
+                import os as _os
+                download_folder = _os.path.dirname(output_path) if '.' in _os.path.basename(output_path) else output_path
+            if download_id:
+                log.info("Manual import will use downloadId %s", download_id)
+            elif download_folder:
+                log.info("Manual import will use download folder %s", download_folder)
 
             watch['status']  = 'importing'
             watch['message'] = 'Importing — triggering manual import'
-            force_manual_import_by_id(cfg, service, connection_id, arr_id,
-                                      download_id=download_id, download_folder=download_folder)
 
-            # Confirm the queue entry actually cleared after the manual import command
-            # was submitted (Arr processes imports asynchronously).
-            still_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=120)
+            # Retry loop: fire the command up to 3 times, confirming via both queue state
+            # and a direct Arr API check (file ID change) after each attempt.
+            still_active = last_active
+            for attempt in range(3):
+                force_manual_import_by_id(cfg, service, connection_id, arr_id,
+                                          download_id=download_id, download_folder=download_folder)
+                still_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=60)
+                if not still_active:
+                    break
+                # Verify directly with Arr — command may have imported even if queue
+                # hasn't reflected it yet or command reported 'failed' internally
+                current_file_id = get_arr_file_id(cfg, service, connection_id, arr_id)
+                if current_file_id is not None and current_file_id != original_file_id:
+                    still_active = []
+                    break
+                if attempt < 2:
+                    watch['message'] = f'Importing — retrying ({attempt + 2}/3)'
+                    time.sleep(20)
 
             if still_active:
                 stuck_rec = still_active[0]

@@ -362,6 +362,30 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         raise
 
 
+def get_arr_file_id(cfg, service, connection_id, arr_id):
+    """Return the current file ID for a Radarr movie or Sonarr series episode files.
+
+    Used to detect whether a ManualImport command actually replaced the file,
+    since the command endpoint may report status='failed' even on success.
+    Returns None if unavailable.
+    """
+    conns = normalize_arr_connections(cfg, service=service)
+    conn  = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        return None
+    try:
+        if service == 'radarr':
+            info = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}', timeout=10)
+            return info.get('movieFileId')
+        else:
+            # For Sonarr track the set of episode file IDs as a frozen snapshot
+            eps = _arr_get(conn['base_url'], conn['api_key'],
+                           f'/api/v3/episodefile?seriesId={arr_id}', timeout=10)
+            return frozenset(e['id'] for e in eps if e.get('id'))
+    except Exception:
+        return None
+
+
 def remove_from_arr_queue(cfg, service, connection_id, queue_id):
     """Delete a queue item from Arr without removing from the download client."""
     conns = normalize_arr_connections(cfg, service=service)
