@@ -1,5 +1,6 @@
 import os
 import json
+import zlib
 import sqlite3
 import logging
 from datetime import datetime, timedelta
@@ -272,9 +273,10 @@ def db_load_results():
                         'SELECT 1 FROM file_results WHERE tab = ?', (db_tab,)
                     ).fetchone()
                     if not existing:
+                        compressed = zlib.compress(json.dumps(files).encode(), level=1)
                         conn.execute(
                             'INSERT INTO file_results (tab, files_json) VALUES (?, ?)',
-                            (db_tab, json.dumps(files))
+                            (db_tab, compressed)
                         )
             if needs_rewrite:
                 conn.execute(
@@ -289,11 +291,15 @@ def db_load_results():
 
 
 def db_save_file_results(tab, files):
+    # Compress JSON to avoid hitting SQLite's ~1 GB text limit for large libraries.
+    # Large libraries (16K+ torrents with season packs) can produce 500 MB+ of raw
+    # JSON; zlib brings that down to ~10-15% of original size.
+    compressed = zlib.compress(json.dumps(files).encode(), level=1)
     conn = _db_conn()
     try:
         conn.execute(
             'INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
-            (tab, json.dumps(files))
+            (tab, compressed)
         )
         conn.commit()
     finally:
@@ -304,7 +310,14 @@ def db_load_file_results(tab):
     conn = _db_conn()
     try:
         row = conn.execute('SELECT files_json FROM file_results WHERE tab = ?', (tab,)).fetchone()
-        return json.loads(row['files_json']) if row else []
+        if not row:
+            return []
+        data = row['files_json']
+        # Decompress if stored as bytes (compressed), fall back to plain JSON for
+        # rows written by older versions of the app.
+        if isinstance(data, (bytes, bytearray)):
+            return json.loads(zlib.decompress(data).decode())
+        return json.loads(data)
     finally:
         conn.close()
 
