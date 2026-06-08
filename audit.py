@@ -52,29 +52,44 @@ def _is_excluded(rel_path, filename, patterns):
 
 
 def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None):
-    records     = []
+    # Returns an ordered list of file_keys (one per filesystem entry, including
+    # cross-seed duplicates) instead of full record dicts. Per-file metadata
+    # (rel_path, size, nlink, excluded) is folded directly into inode_map to
+    # avoid holding a second equally-large data structure in memory during the walk.
+    key_order   = []
     scanned     = scanned_so_far
     stat_errors = 0
     if not os.path.exists(base_path):
         log.warning(f"Path does not exist, skipping: {base_path}")
-        return records, scanned, stat_errors
+        return key_order, scanned, stat_errors
     for root, _, files in os.walk(base_path):
         for filename in files:
             full_path = os.path.join(root, filename)
             try:
                 st       = os.stat(full_path)
-                inode    = st.st_ino
                 file_key = (st.st_dev, st.st_ino)
                 size     = st.st_size
                 nlink    = st.st_nlink
                 rel_path = os.path.relpath(full_path, base_path)
+                excluded = (compiled_exclusions.match(full_path, rel_path, filename)
+                            if compiled_exclusions is not None
+                            else is_excluded(full_path, rel_path, filename, exclusion_patterns))
                 inode_map.setdefault(file_key, {
                     'trackers': set(), 'status': 'Orphaned',
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
                     'instance_id': None, 'instance_name': None,
+                    'size': 0,
+                    'torrent_nlink': 0, 'torrent_rel_path': None, 'torrent_excluded': False,
+                    'media_rel_path': None, 'media_excluded': False,
                 })
                 if source_label == 'Torrent':
                     inode_map[file_key]['torrent_paths'].append(full_path)
+                    if inode_map[file_key]['torrent_rel_path'] is None:
+                        # First occurrence wins for cross-seeded inodes
+                        inode_map[file_key]['size']             = size
+                        inode_map[file_key]['torrent_nlink']    = nlink
+                        inode_map[file_key]['torrent_rel_path'] = rel_path
+                        inode_map[file_key]['torrent_excluded'] = excluded
                     qbit_info = qbit_file_map.get(full_path)
                     if qbit_info:
                         inode_map[file_key]['trackers'].update(qbit_info['trackers'])
@@ -89,12 +104,12 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                             inode_map[file_key]['status'] = qbit_info['status']
                 else:
                     inode_map[file_key]['media_paths'].append(full_path)
-                records.append({
-                    "full_path": full_path, "rel_path": rel_path,
-                    "size": size, "inode": inode, "file_key": file_key,
-                    "nlink": nlink, "source": source_label,
-                    "excluded": compiled_exclusions.match(full_path, rel_path, filename) if compiled_exclusions is not None else is_excluded(full_path, rel_path, filename, exclusion_patterns),
-                })
+                    if inode_map[file_key]['media_rel_path'] is None:
+                        inode_map[file_key]['media_rel_path'] = rel_path
+                        inode_map[file_key]['media_excluded'] = excluded
+                        if inode_map[file_key]['size'] == 0:
+                            inode_map[file_key]['size'] = size
+                key_order.append(file_key)
             except Exception as e:
                 log.warning(f"Could not stat {full_path}: {e}")
                 stat_errors += 1
@@ -104,62 +119,65 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 if total_ref[0] % 500 == 0:
                     set_state(total_files=total_ref[0])
             update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
-    return records, scanned, stat_errors
+    return key_order, scanned, stat_errors
 
 
-def _build_duplicate_map(all_records):
+def _build_duplicate_map(inode_map):
     """O(n) duplicate detection: group by size, then file identity, then hash representatives only."""
     size_groups = {}
-    for f in all_records:
-        if f['size'] > 0:
-            size_groups.setdefault(f['size'], []).append(f)
+    for file_key, info in inode_map.items():
+        if info['size'] > 0:
+            size_groups.setdefault(info['size'], []).append(file_key)
 
     duplicate_map = {}
-    for size, items in size_groups.items():
-        key_to_rep = {}
-        for item in items:
-            file_key = item.get('file_key', item['inode'])
-            if file_key not in key_to_rep:
-                key_to_rep[file_key] = item
-        if len(key_to_rep) <= 1:
+    for size, file_keys in size_groups.items():
+        if len(file_keys) <= 1:
             continue
         hash_to_keys = {}
-        for file_key, rep in key_to_rep.items():
-            fh = get_fast_hash(rep['full_path'], size)
+        for file_key in file_keys:
+            info = inode_map[file_key]
+            paths = info['torrent_paths'] or info['media_paths']
+            if not paths:
+                continue
+            fh = get_fast_hash(paths[0], size)
             if fh:
                 hash_to_keys.setdefault(fh, []).append(file_key)
-        for fh, file_keys in hash_to_keys.items():
-            if len(file_keys) <= 1:
+        for fh, dup_keys in hash_to_keys.items():
+            if len(dup_keys) <= 1:
                 continue
-            for file_key in file_keys:
-                others = [key_to_rep[o]['full_path'] for o in file_keys if o != file_key]
+            for file_key in dup_keys:
+                others = []
+                for o in dup_keys:
+                    if o != file_key:
+                        oinfo  = inode_map[o]
+                        opaths = oinfo['torrent_paths'] or oinfo['media_paths']
+                        if opaths:
+                            others.append(opaths[0])
                 duplicate_map.setdefault(file_key, []).extend(others)
     return duplicate_map
 
 
-def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
+def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map):
     torrent_files_data = []
     seen_torrent_keys = set()
-    for item in torrent_records:
-        inode = item['inode']
-        file_key = item.get('file_key', inode)
+    for file_key in torrent_key_order:
         # Cross-seeded files share an inode across multiple torrent directories.
         # Only emit one entry per unique inode so the file browser and health
         # metrics don't count the same physical file N times (once per cross-seed).
         if file_key in seen_torrent_keys:
             continue
         seen_torrent_keys.add(file_key)
-        file_id = f"{file_key[0]}:{file_key[1]}" if isinstance(file_key, tuple) else str(file_key)
-        info  = inode_map[file_key]
+        info    = inode_map[file_key]
+        file_id = f"{file_key[0]}:{file_key[1]}"
         torrent_files_data.append({
-            "path": item['rel_path'], "size": item['size'], "inode": inode,
+            "path": info['torrent_rel_path'], "size": info['size'], "inode": file_key[1],
             "file_id": file_id,
             "status": info['status'],
-            "imported": item['nlink'] > 1 or len(info['media_paths']) > 0,
+            "imported": info['torrent_nlink'] > 1 or len(info['media_paths']) > 0,
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['media_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
-            "excluded": item.get('excluded', False),
+            "excluded": info['torrent_excluded'],
             "hash": info.get('hash', ''),
             "category": info.get('category', ''),
             "instance_id":   info.get('instance_id'),
@@ -167,22 +185,20 @@ def _assemble_records(torrent_records, media_records, inode_map, duplicate_map):
         })
     media_files_data = []
     seen_media_keys = set()
-    for item in media_records:
-        inode = item['inode']
-        file_key = item.get('file_key', inode)
+    for file_key in media_key_order:
         if file_key in seen_media_keys:
             continue
         seen_media_keys.add(file_key)
-        file_id = f"{file_key[0]}:{file_key[1]}" if isinstance(file_key, tuple) else str(file_key)
-        info  = inode_map[file_key]
+        info    = inode_map[file_key]
+        file_id = f"{file_key[0]}:{file_key[1]}"
         media_files_data.append({
-            "path": item['rel_path'], "size": item['size'], "inode": inode,
+            "path": info['media_rel_path'], "size": info['size'], "inode": file_key[1],
             "file_id": file_id,
             "status": info['status'], "imported": True,
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['torrent_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
-            "excluded": item.get('excluded', False),
+            "excluded": info['media_excluded'],
         })
     return torrent_files_data, media_files_data
 
@@ -576,21 +592,21 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         inode_map          = {}
         exclusion_patterns = expand_exclusion_patterns(cfg)
         compiled_excl      = compile_exclusions(exclusion_patterns)
-        torrent_records, scanned, torrent_errors = _walk_directory(
+        torrent_key_order, scanned, torrent_errors = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
         set_state(status_message="Scanning media directory...", phase="disk")
-        media_records, _, media_errors = _walk_directory(
+        media_key_order, _, media_errors = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
         stat_errors = torrent_errors + media_errors
         set_state(status_message="Detecting duplicates...", phase="post")
-        duplicate_map = _build_duplicate_map(torrent_records + media_records)
+        duplicate_map = _build_duplicate_map(inode_map)
         torrent_files_data, media_files_data = _assemble_records(
-            torrent_records, media_records, inode_map, duplicate_map)
-        del torrent_records, media_records, inode_map, duplicate_map
+            torrent_key_order, media_key_order, inode_map, duplicate_map)
+        del torrent_key_order, media_key_order, inode_map, duplicate_map
         set_state(status_message="Computing health metrics...", phase="post")
         dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg)
         cross_seed_stats   = _compute_cross_seed_stats(media_files_data)

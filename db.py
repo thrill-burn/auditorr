@@ -291,10 +291,14 @@ def db_load_results():
 
 
 def db_save_file_results(tab, files):
-    # Compress JSON to avoid hitting SQLite's ~1 GB text limit for large libraries.
-    # Large libraries (16K+ torrents with season packs) can produce 500 MB+ of raw
-    # JSON; zlib brings that down to ~10-15% of original size.
-    compressed = zlib.compress(json.dumps(files).encode(), level=1)
+    # Stream JSON through zlib rather than materializing the full string + bytes
+    # simultaneously. For 650K-file libraries this avoids a ~1 GB peak where
+    # json.dumps() string, .encode() bytes, and compressed output all coexist.
+    cobj = zlib.compressobj(level=1)
+    chunks = [cobj.compress(chunk.encode('utf-8', errors='replace'))
+              for chunk in json.JSONEncoder().iterencode(files)]
+    chunks.append(cobj.flush())
+    compressed = b''.join(chunks)
     conn = _db_conn()
     try:
         conn.execute(
