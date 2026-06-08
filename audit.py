@@ -689,6 +689,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         set_state(status_message=msg, last_scan_status="error")
     finally:
+        scan_end = time.time()
         set_state(progress=100, is_scanning=False,
                   last_audit_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                  trigger="idle", phase="idle")
+                  trigger="idle", phase="idle",
+                  last_scan_completed_at=scan_end,
+                  last_scan_duration=scan_end - scan_start)

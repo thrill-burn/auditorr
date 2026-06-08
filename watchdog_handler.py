@@ -35,6 +35,24 @@ class AuditDebounceHandler(FileSystemEventHandler):
 
     def _fire(self):
         set_state(next_scan_in=None)
+        state = get_state()
+        cooldown = self._cooldown_fn()
+        last_ended   = state.get('last_scan_completed_at', 0.0)
+        last_duration = state.get('last_scan_duration', 0.0)
+        if last_ended:
+            # Don't re-trigger immediately from events that fired during the scan —
+            # suppress for max(cooldown, scan_duration) seconds after the scan ended.
+            suppression = max(cooldown, last_duration)
+            elapsed = time.time() - last_ended
+            if elapsed < suppression:
+                remaining = suppression - elapsed
+                log.info(f"Watchdog: post-scan suppression, rescheduling in {remaining:.0f}s.")
+                with self._lock:
+                    self._timer = threading.Timer(remaining, self._fire)
+                    self._timer.daemon = True
+                    self._timer.start()
+                set_state(next_scan_in=int(remaining))
+                return
         if try_start_scanning("watchdog"):
             log.info("Watchdog: cooldown elapsed, triggering audit.")
             threading.Thread(target=run_audit_process, args=("watchdog",), daemon=True).start()

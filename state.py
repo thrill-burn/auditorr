@@ -3,16 +3,18 @@ import threading
 _state_lock = threading.Lock()
 
 audit_state = {
-    "is_scanning":      False,
-    "progress":         0,
-    "last_audit_time":  "Never",
-    "total_files":      0,
-    "scanned_files":    0,
-    "status_message":   "",
-    "last_scan_status": "never",   # "ok" | "error" | "never"
-    "trigger":          "startup",
-    "next_scan_in":     None,
-    "phase":            "idle",
+    "is_scanning":           False,
+    "progress":              0,
+    "last_audit_time":       "Never",
+    "total_files":           0,
+    "scanned_files":         0,
+    "status_message":        "",
+    "last_scan_status":      "never",   # "ok" | "error" | "never"
+    "trigger":               "startup",
+    "next_scan_in":          None,
+    "phase":                 "idle",
+    "last_scan_completed_at": 0.0,
+    "last_scan_duration":    0.0,
 }
 
 
