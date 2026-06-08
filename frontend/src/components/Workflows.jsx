@@ -391,6 +391,8 @@ function ResultItem({ item }) {
   // Single-release grab key
   const singleKey = item.best_release?.guid || item.best_release?.title
 
+  const infoUrl = found ? (releases[0]?.info_url || '') : ''
+
   return (
     <div style={{ borderBottom: '1px solid var(--border)' }}>
       {/* Header row */}
@@ -427,10 +429,34 @@ function ResultItem({ item }) {
           )}
           {filename && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, minWidth: 0 }}>
-              <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 0', minWidth: 0 }}
-                title={filename}>
-                {filename}
-              </span>
+              {infoUrl ? (
+                <a
+                  href={infoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  title={filename}
+                  style={{
+                    fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)',
+                    opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    flex: '1 1 0', minWidth: 0, textDecoration: 'underline',
+                    textDecorationColor: 'var(--text-dim)', textUnderlineOffset: 2,
+                  }}
+                >
+                  {filename}
+                </a>
+              ) : (
+                <span
+                  style={{
+                    fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)',
+                    opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    flex: '1 1 0', minWidth: 0,
+                  }}
+                  title={filename}
+                >
+                  {filename}
+                </span>
+              )}
               {item.file_quality && (
                 <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.65, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   {item.file_quality}
@@ -521,10 +547,19 @@ function ResultItem({ item }) {
                 background: isBest ? 'var(--accent)08' : 'transparent',
                 border: `1px solid ${isBest ? 'var(--accent)25' : 'transparent'}`,
               }}>
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={r.title}>
-                  {r.title}
-                </span>
+                {r.info_url ? (
+                  <a href={r.info_url} target="_blank" rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: 'color-mix(in srgb, var(--text) 30%, transparent)', textUnderlineOffset: 2 }}
+                    title={r.title}>
+                    {r.title}
+                  </a>
+                ) : (
+                  <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    title={r.title}>
+                    {r.title}
+                  </span>
+                )}
                 <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}
                   title={r.indexer}>
                   {r.indexer}
@@ -579,7 +614,7 @@ function loadPref(key, fallback) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function Workflows() {
+export default function Workflows({ onNavigate }) {
   const [phase, setPhase] = useState('config')  // config | running | done | stopped
 
   // Data loaded on mount

@@ -162,6 +162,7 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
     for r in rows:
         q_outer = r.get('quality') or {}
         q_inner = q_outer.get('quality') or {}
+        guid = r.get('guid', '')
         result.append({
             'title':               r.get('title', ''),
             'indexer':             r.get('indexer', ''),
@@ -169,7 +170,8 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'seeders':             r.get('seeders', 0),
             'leechers':            r.get('leechers', 0),
             'size':                r.get('size', 0),
-            'guid':                r.get('guid', ''),
+            'guid':                guid,
+            'info_url':            r.get('infoUrl') or (guid if str(guid).startswith('http') else ''),
             'quality_name':        q_inner.get('name', ''),
             'resolution':          q_inner.get('resolution', 0),
             'source':              q_inner.get('source', ''),
