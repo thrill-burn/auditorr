@@ -284,9 +284,10 @@ function SectionLabel({ children }) {
 
 // ── Grab button (shared) ──────────────────────────────────────────────────────
 function GrabButton({ state, onGrab, onReset, errorMsg }) {
-  if (state === 'idle')     return <button onClick={onGrab} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)' }}>Grab</button>
-  if (state === 'grabbing') return <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
-  if (state === 'grabbed')  return <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
+  if (state === 'idle')        return <button onClick={onGrab} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)' }}>Grab</button>
+  if (state === 'grabbing')    return <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
+  if (state === 'refreshing')  return <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>Re-searching…</span>
+  if (state === 'grabbed')     return <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
   return <button onClick={onReset} title={errorMsg || 'Grab failed — click to retry'} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)' }}>Failed ↺</button>
 }
 
@@ -300,10 +301,12 @@ function ResultItem({ item }) {
   const importPollRef    = useRef(null)
   const importStartedRef = useRef(false)
   const mountedRef       = useRef(true)
+  const refreshPollRef   = useRef(null)
 
   useEffect(() => () => {
     mountedRef.current = false
     clearTimeout(importPollRef.current)
+    clearTimeout(refreshPollRef.current)
   }, [])
 
   const startImportWatch = useCallback(async () => {
@@ -339,6 +342,60 @@ function ResultItem({ item }) {
     }
   }, [item])
 
+  const doRefreshAndRetry = useCallback(async (originalRelease) => {
+    const key = originalRelease.guid || originalRelease.title
+    const params = {
+      service:       item.arr_service,
+      connection_id: item.arr_connection_id,
+      arr_id:        item.arr_id,
+    }
+    if (item.episode_id)           params.episode_id    = item.episode_id
+    if (item.season_number != null) params.season_number = item.season_number
+    if (item.path)                 params.path          = item.path
+
+    const poll = async () => {
+      if (!mountedRef.current) return
+      try {
+        const data = await api.acquireReleases(params)
+        if (data.status === 'searching') {
+          refreshPollRef.current = setTimeout(poll, 2000)
+          return
+        }
+        if (data.status === 'done' && data.releases?.length) {
+          const fresh = data.releases.find(r => r.indexer === originalRelease.indexer && r.title === originalRelease.title)
+          if (!fresh) {
+            setGrabErrors(s => ({ ...s, [key]: `Release not found on ${originalRelease.indexer} after re-search` }))
+            setGrabStates(s => ({ ...s, [key]: 'error' }))
+            return
+          }
+          setGrabStates(s => ({ ...s, [key]: 'grabbing' }))
+          try {
+            await api.grabRelease({
+              service:       item.arr_service,
+              connection_id: item.arr_connection_id,
+              guid:          fresh.guid,
+              indexer_id:    fresh.indexer_id,
+            })
+            setGrabStates(s => ({ ...s, [key]: 'grabbed' }))
+            startImportWatch()
+          } catch (err2) {
+            setGrabErrors(s => ({ ...s, [key]: err2.message }))
+            setGrabStates(s => ({ ...s, [key]: 'error' }))
+          }
+        } else {
+          setGrabErrors(s => ({ ...s, [key]: data.message || 'Re-search failed' }))
+          setGrabStates(s => ({ ...s, [key]: 'error' }))
+        }
+      } catch (err) {
+        if (mountedRef.current) {
+          setGrabErrors(s => ({ ...s, [key]: err.message }))
+          setGrabStates(s => ({ ...s, [key]: 'error' }))
+        }
+      }
+    }
+    poll()
+  }, [item, startImportWatch])
+
   const doGrab = useCallback(async (release, e) => {
     e.stopPropagation()
     const key = release.guid || release.title
@@ -353,11 +410,11 @@ function ResultItem({ item }) {
       })
       setGrabStates(s => ({ ...s, [key]: 'grabbed' }))
       startImportWatch()
-    } catch (err) {
-      setGrabErrors(s => ({ ...s, [key]: err.message }))
-      setGrabStates(s => ({ ...s, [key]: 'error' }))
+    } catch (_err) {
+      setGrabStates(s => ({ ...s, [key]: 'refreshing' }))
+      doRefreshAndRetry(release)
     }
-  }, [grabStates, item, startImportWatch])
+  }, [grabStates, item, startImportWatch, doRefreshAndRetry])
 
   const resetGrab = useCallback((key, e) => {
     e.stopPropagation()
