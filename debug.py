@@ -106,9 +106,16 @@ _SAFE_EXTENSIONS = {
 }
 
 
+# An already-sanitized segment ("~a1b2c3" / "~a1b2c3.mkv") — must pass through
+# unchanged so running the sanitizer twice never re-hashes (hash stability).
+_HASHED_SEG_RE = re.compile(r'~[0-9a-f]{6}(\.[A-Za-z0-9]{1,5})?')
+
+
 def sanitize_segment(seg):
     """Keep generic segments; replace identifying ones with a stable hash."""
     if not seg:
+        return seg
+    if _HASHED_SEG_RE.fullmatch(seg):
         return seg
     base, ext = os.path.splitext(seg)
     core = re.sub(r'[\s_\-0-9]+', '', base).lower()
@@ -133,6 +140,31 @@ _IP_RE       = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
 _TOKEN_RE    = re.compile(r'\b[0-9a-fA-F]{24,}\b')
 _NIX_PATH_RE = re.compile(r'(?:/[^/\s\'",;]+){2,}/?')
 _WIN_PATH_RE = re.compile(r'[A-Za-z]:\\[^\s\'",;]+')
+# Quoted values in structured log lines (file_name='...', folder="..."). Quotes
+# delimit the full value, so this is the only place paths/names containing
+# spaces can be caught reliably.
+_QUOTED_RE   = re.compile(r"'([^'\n]{3,})'|\"([^\"\n]{3,})\"")
+# Bare filenames outside quotes: dotted release names ending in a real extension
+_EXT_ALT     = '|'.join(e.lstrip('.') for e in sorted(_SAFE_EXTENSIONS))
+_FILENAME_RE = re.compile(r'[^\s/\\\'",;]+\.(?:' + _EXT_ALT + r')\b', re.IGNORECASE)
+# Media-release fingerprints: year in parens, SxxExx, resolution, source tags —
+# used to decide that a quoted value without slashes/extension is still a title
+_MEDIA_HINT_RE = re.compile(
+    r'\((?:19|20)\d\d\)|\bS\d{1,2}E\d{2,3}\b|\b\d{3,4}p\b'
+    r'|\b(?:WEB-?DL|WEBRip|BluRay|Blu-Ray|REMUX|HDTV|DVDRip|x26[45]|H\.?26[45])\b',
+    re.IGNORECASE,
+)
+
+
+def _sanitize_quoted(m):
+    quote = m.group(0)[0]
+    inner = m.group(1) if m.group(1) is not None else m.group(2)
+    if '/' in inner or '\\' in inner:
+        return f'{quote}{sanitize_path(inner)}{quote}'
+    _, ext = os.path.splitext(inner)
+    if ext.lower() in _SAFE_EXTENSIONS or _MEDIA_HINT_RE.search(inner):
+        return f'{quote}{sanitize_segment(inner)}{quote}'
+    return m.group(0)
 
 
 def sanitize_text(text):
@@ -143,8 +175,13 @@ def sanitize_text(text):
     s = _URL_RE.sub(lambda m: m.group(1) + '<host>', s)
     s = _IP_RE.sub('<ip>', s)
     s = _TOKEN_RE.sub('<token>', s)
+    # Quoted spans first — quotes are the only reliable delimiter for paths and
+    # filenames containing spaces ("The Lion King (1994) ... .mkv")
+    s = _QUOTED_RE.sub(_sanitize_quoted, s)
     s = _NIX_PATH_RE.sub(lambda m: sanitize_path(m.group(0)), s)
     s = _WIN_PATH_RE.sub(lambda m: sanitize_path(m.group(0)), s)
+    # Bare unquoted filenames (file_name=Some.Release.2025.2160p.GRP.mkv)
+    s = _FILENAME_RE.sub(lambda m: sanitize_segment(m.group(0)), s)
     return s
 
 
