@@ -38,7 +38,7 @@ from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_in
 from scripts import generate_script
 from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
-from debug import install_ring_buffer, build_debug_report
+from debug import install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
@@ -47,6 +47,22 @@ APP_VERSION = "1.6.1"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()
+
+# Native crashes (SIGSEGV/SIGABRT) dump Python tracebacks to stderr → docker logs
+import faulthandler
+faulthandler.enable()
+
+
+def _log_thread_exception(args):
+    # Default excepthook prints to stderr only, bypassing the ring buffer —
+    # route background-thread crashes (audit, watchdog, workflows) into logging
+    # so they appear in /api/debug/report.
+    log.error("Unhandled exception in thread '%s'",
+              getattr(args.thread, 'name', '?'),
+              exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+
+threading.excepthook = _log_thread_exception
 
 app = Flask(__name__, static_folder='frontend/dist', static_url_path='')
 # Allow requests from localhost and private network ranges (LAN self-hosting).
@@ -126,8 +142,28 @@ def _handle_aborted_scan():
     db_set_meta('consecutive_aborted_scans', streak)
     db_set_meta('last_aborted_scan', {**marker, 'detected_at': datetime.now().isoformat(timespec='seconds')})
     db_delete_meta('scan_marker')
+
+    # The kernel's per-cgroup oom_kill counter survives worker restarts (it only
+    # resets when the container is recreated), so an increment here is hard
+    # evidence the death was an OOM kill rather than e.g. a manual restart.
+    oom_note = ""
+    events = cgroup_oom_events() or {}
+    count  = events.get('oom_kill') or 0
+    prev   = int(db_get_meta('oom_kill_counter', 0) or 0)
+    if count != prev:
+        db_set_meta('oom_kill_counter', count)
+    if count > prev:
+        new_kills = count - prev
+        db_set_meta('oom_kills_attributed',
+                    int(db_get_meta('oom_kills_attributed', 0) or 0) + new_kills)
+        oom_note = (f" The container cgroup recorded {new_kills} OOM kill(s) since the last "
+                    f"boot — confirmed out-of-memory.")
+
+    # Prefer the sampler's last reading (≤20s before death) over the last phase transition
+    rss = marker.get('last_rss_mb') or marker.get('rss_mb', '?')
     msg = (f"Scan never finished — the process died during '{marker.get('phase', 'unknown phase')}' "
-           f"(started {marker.get('started_at', '?')}, rss {marker.get('rss_mb', '?')} MB). "
+           f"(started {marker.get('started_at', '?')}, last observed rss {rss} MB)."
+           f"{oom_note} "
            f"This usually means the container was killed mid-scan (out-of-memory) or restarted. "
            f"See /api/debug/report.")
     log.warning(f"Aborted scan detected (streak: {streak}): {msg}")
@@ -155,6 +191,11 @@ def _run_startup_audit():
 
 
 def _startup_sequence():
+    mp = memory_pressure()
+    log.info(f"Memory at boot: rss={mp['rss_mb']} MB, "
+             f"container limit={mp['container'].get('limit_mb')} MB, "
+             f"host available={mp['host_available_mb']} MB, "
+             f"cgroup oom_kill events={(mp['cgroup_oom_events'] or {}).get('oom_kill')}")
     streak = _handle_aborted_scan()
     if streak >= 2:
         # Crash-loop breaker: the last scans all died mid-run. Re-running the

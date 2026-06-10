@@ -1,8 +1,10 @@
 import os
+import gc
 import math
 import time
 import hashlib
 import logging
+import threading
 from datetime import datetime, timedelta
 
 import sources
@@ -19,7 +21,7 @@ from db import (
     db_get_meta, db_set_meta, db_delete_meta,
 )
 from state import get_state, set_state, update_progress
-from debug import process_rss_mb
+from debug import process_rss_mb, container_memory, host_available_mb
 
 log = logging.getLogger(__name__)
 
@@ -646,6 +648,11 @@ def _save_error_status(message):
     db_save_results(curr)
 
 
+# Serializes read-modify-write of the scan marker between the audit thread
+# (phase transitions) and the memory sampler thread (periodic RSS updates).
+_marker_lock = threading.Lock()
+
+
 def _enter_phase(phase, message):
     """Advance the scan to a new phase: update state, log RSS, and persist the
     scan marker so a process killed mid-scan (OOM, container restart) leaves
@@ -658,12 +665,54 @@ def _enter_phase(phase, message):
     }]
     set_state(phase_history=hist[-30:])
     try:
-        marker = db_get_meta('scan_marker') or {}
-        marker['phase']  = message
-        marker['rss_mb'] = rss
-        db_set_meta('scan_marker', marker)
+        with _marker_lock:
+            marker = db_get_meta('scan_marker') or {}
+            marker['phase']  = message
+            marker['rss_mb'] = rss
+            db_set_meta('scan_marker', marker)
     except Exception as e:
         log.warning(f"Could not update scan marker: {e}")
+
+
+def _memory_sampler(stop_event, interval=20):
+    """Sample RSS during a scan: persist breadcrumbs into the scan marker so an
+    OOM-killed scan leaves a memory reading from seconds before death (the
+    in-memory log buffer dies with the process — SQLite survives), and log
+    warnings while there is still time to read them when usage approaches the
+    container limit or host memory runs out."""
+    warned = set()
+    while not stop_event.wait(interval):
+        rss = process_rss_mb()
+        if rss is None:
+            continue  # non-Linux dev machine
+        try:
+            with _marker_lock:
+                marker = db_get_meta('scan_marker')
+                if marker:
+                    marker['last_rss_mb']    = rss
+                    marker['peak_rss_mb']    = max(rss, marker.get('peak_rss_mb') or 0)
+                    marker['last_sample_at'] = datetime.now().isoformat(timespec='seconds')
+                    db_set_meta('scan_marker', marker)
+        except Exception:
+            pass
+        limit = (container_memory() or {}).get('limit_mb')
+        if limit:
+            pct = rss * 100 // limit
+            for threshold in (95, 85):
+                if pct >= threshold and threshold not in warned:
+                    warned.add(threshold)
+                    log.warning(
+                        f"Memory pressure: scan is using {rss} MB — {pct}% of the container's "
+                        f"{limit} MB limit. If the scan dies here it was OOM-killed; raise the "
+                        f"memory limit or add exclusions for large structural directories.")
+                    break
+        else:
+            avail = host_available_mb()
+            if avail is not None and avail < 400 and 'host' not in warned:
+                warned.add('host')
+                log.warning(
+                    f"Memory pressure: host has only {avail} MB available — the host OOM killer "
+                    f"may terminate the scan (no container memory limit is set).")
 
 
 def run_audit_process(trigger=None, persist_source_errors=True):
@@ -685,6 +734,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         })
     except Exception as e:
         log.warning(f"Could not write scan marker: {e}")
+    sampler_stop = threading.Event()
+    threading.Thread(target=_memory_sampler, args=(sampler_stop,), daemon=True,
+                     name="audit-memory-sampler").start()
     try:
         qbit_file_map, trackers, tracker_snapshot = sources.fetch_file_map(cfg)
         set_state(source_file_count=len(qbit_file_map))
@@ -704,6 +756,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
         stat_errors = torrent_errors + media_errors
+        # The source file map is only consulted during the walks — release it
+        # (~300 MB at 650K files) before the memory-heavy assemble/save phases.
+        del qbit_file_map
         _enter_phase("post", "Detecting duplicates...")
         duplicate_map = _build_duplicate_map(inode_map)
         _enter_phase("post", "Assembling file records...")
@@ -801,7 +856,11 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             db_set_meta('consecutive_aborted_scans', 0)
         except Exception:
             pass
-        log.info("Audit complete.")
+        rss = process_rss_mb()
+        log.info(f"Audit complete: {len(torrent_files_data)} torrent file(s), "
+                 f"{len(media_files_data)} media file(s), {len(trackers)} tracker(s), "
+                 f"{round(time.time() - scan_start)}s"
+                 + (f", rss={rss} MB" if rss is not None else ""))
         if stat_errors:
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")
         status_msg = f"Audit complete. {stat_errors} file(s) could not be read — check logs." if stat_errors else "Audit complete."
@@ -813,6 +872,45 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             _save_error_status(msg)
             db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         set_state(status_message=msg, last_scan_status="error")
+    except MemoryError:
+        # Python-level allocation failure (the kernel OOM killer SIGKILLs instead —
+        # that case is handled by the scan marker at next boot). Drop the big scan
+        # structures first so this error path itself has memory to log and persist.
+        try:
+            del inode_map
+        except NameError:
+            pass
+        try:
+            del qbit_file_map
+        except NameError:
+            pass
+        try:
+            del duplicate_map
+        except NameError:
+            pass
+        try:
+            del torrent_files_data
+        except NameError:
+            pass
+        try:
+            del media_files_data
+        except NameError:
+            pass
+        gc.collect()
+        rss = process_rss_mb()
+        msg = ("Audit error: out of memory (MemoryError)"
+               + (f" at ~{rss} MB RSS" if rss is not None else "")
+               + ". The scan exceeded available memory — raise the container memory limit "
+                 "or exclude large structural directories (e.g. disc folders). "
+                 "See /api/debug/report.")
+        log.error(msg)
+        try:
+            _save_error_status(msg)
+            db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                          duration_seconds=round(time.time() - scan_start, 1))
+        except Exception as e2:
+            log.error(f"Could not persist out-of-memory error status: {e2}")
+        set_state(status_message=msg, last_scan_status="error")
     except Exception as e:
         msg = f"Audit error: {e}"
         log.exception("Unexpected error during audit")
@@ -820,6 +918,13 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         set_state(status_message=msg, last_scan_status="error")
     finally:
+        sampler_stop.set()
+        # Persist this scan's phase history (with per-phase RSS) so the debug
+        # report can show it even after a process restart.
+        try:
+            db_set_meta('last_scan_phases', get_state().get('phase_history') or [])
+        except Exception:
+            pass
         # The process survived to this point — remove the crash marker. If the
         # process is killed mid-scan (OOM), this never runs and the marker is
         # found at next startup, which records an 'aborted' audit run.

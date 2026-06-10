@@ -235,6 +235,28 @@ def _read_int_file(path):
         return None
 
 
+def _read_keyed_file(path):
+    """Parse 'key value' lines (cgroup events files). None when unreadable."""
+    try:
+        with open(path) as f:
+            out = {}
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2:
+                    try:
+                        out[parts[0]] = int(parts[1])
+                    except ValueError:
+                        pass
+            return out
+    except OSError:
+        return None
+
+
+# Module constants so tests can point these at fixture files
+_CGROUP_V2_EVENTS = '/sys/fs/cgroup/memory.events'
+_CGROUP_V1_OOM    = '/sys/fs/cgroup/memory/memory.oom_control'
+
+
 def container_memory():
     """Read cgroup memory limit/usage (v2 then v1). None when unavailable."""
     limit   = _read_int_file('/sys/fs/cgroup/memory.max')
@@ -247,6 +269,47 @@ def container_memory():
             limit = None
     to_mb = lambda v: round(v / (1024 * 1024)) if v is not None else None
     return {'limit_mb': to_mb(limit), 'current_mb': to_mb(current)}
+
+
+def cgroup_oom_events():
+    """Kernel OOM counters for this container's cgroup, or None when unavailable.
+
+    The OOM killer SIGKILLs the process — nothing can be logged from inside at
+    the moment of death — but the cgroup's oom_kill counter survives a worker
+    restart (it resets only when the whole container is recreated), so a counter
+    increment seen at next boot is hard evidence the previous death was an OOM.
+    """
+    vals = _read_keyed_file(_CGROUP_V2_EVENTS)
+    if vals is not None:
+        return {'oom': vals.get('oom', 0), 'oom_kill': vals.get('oom_kill', 0)}
+    vals = _read_keyed_file(_CGROUP_V1_OOM)
+    if vals is not None and 'oom_kill' in vals:
+        return {'oom_kill': vals['oom_kill']}
+    return None
+
+
+def host_available_mb():
+    """Host MemAvailable — relevant when there is no container memory limit and
+    the host's OOM killer is the thing doing the killing."""
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return round(int(line.split()[1]) / 1024)
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def memory_pressure():
+    """One-call snapshot of everything relevant to diagnosing memory deaths."""
+    return {
+        'rss_mb':            process_rss_mb(),
+        'peak_rss_mb':       process_peak_rss_mb(),
+        'container':         container_memory(),
+        'cgroup_oom_events': cgroup_oom_events(),
+        'host_available_mb': host_available_mb(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +354,12 @@ def _db_stats():
         stats['db_size_mb'] = round(size / (1024 * 1024), 1)
     except OSError:
         stats['db_size_mb'] = None
+    try:
+        import shutil
+        usage = shutil.disk_usage(DATA_DIR)
+        stats['data_dir_free_mb'] = round(usage.free / (1024 * 1024))
+    except OSError:
+        stats['data_dir_free_mb'] = None
     try:
         conn = sqlite3.connect(DB_FILE)
         try:
@@ -371,6 +440,8 @@ def build_debug_report(version):
             'rss_mb':            process_rss_mb(),
             'peak_rss_mb':       process_peak_rss_mb(),
             'container_memory':  container_memory(),
+            'cgroup_oom_events': cgroup_oom_events(),
+            'host_available_mb': host_available_mb(),
             'data_dir_set':      bool(os.environ.get('DATA_DIR')),
             'auth_enabled':      bool(os.environ.get('AUDITORR_SECRET', '').strip()),
         },
@@ -393,7 +464,12 @@ def build_debug_report(version):
                 **m, 'phase': sanitize_text(m.get('phase')),
             } if m else None)(db_get_meta('last_aborted_scan')),
             'in_progress_scan_marker': db_get_meta('scan_marker'),
+            'oom_kills_attributed':    db_get_meta('oom_kills_attributed', 0),
             'runs_last_24h_by_trigger': runs_last_24h,
+            'last_scan_phases': [
+                {**h, 'message': sanitize_text(h.get('message'))}
+                for h in (db_get_meta('last_scan_phases') or [])
+            ],
         },
         'library':       _library_stats(),
         'database':      _db_stats(),
