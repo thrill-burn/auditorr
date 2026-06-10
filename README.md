@@ -1,9 +1,8 @@
 # auditorr
 
 **A media library audit tool for qBittorrent / qui + Sonarr / Radarr.**
-Hardlink-based health score, per-tracker analytics, cross-seed
-effectiveness, and a change log that tells you exactly what moved between
-scans.
+Library health score, per-tracker analytics, cross-seed effectiveness, and
+a file-level change log between audits.
 
 <p align="center">
   <a href="docs/dashboard.png">
@@ -18,8 +17,9 @@ scans.
     <td width="50%" valign="top">
       <a href="docs/feature-media.png"><img src="docs/feature-media.png" alt="Media explorer" /></a>
       <p><b>Media explorer</b><br>
-      Tree or flat view of your library. See every hardlink
-      per file and which tracker is seeding it. Connect to Sonarr/Radarr and fix orphaned files.</p>
+      Tree or flat view of your library. Click a file to see every hardlink
+      sibling and which tracker is seeding it — answer <i>"is this episode
+      actually linked to my downloads?"</i> in one click.</p>
     </td>
     <td width="50%" valign="top">
       <a href="docs/feature-torrents.png"><img src="docs/feature-torrents.png" alt="Torrents" /></a>
@@ -33,9 +33,9 @@ scans.
     <td width="50%" valign="top">
       <a href="docs/feature-trackers.png"><img src="docs/feature-trackers.png" alt="Trackers" /></a>
       <p><b>Trackers</b><br>
-      Per-tracker analytics: seeding TB, uploaded volume, yield %
+      Per-tracker analytics: size seeded, 30-day uploaded, <b>yield %</b>
       (uploaded ÷ seeding), orphaned, not imported, and an uploaded trend
-      graph. Deep-link into the explorer pre-filtered by tracker.</p>
+      sparkline. Deep-link into the explorer pre-filtered by tracker.</p>
     </td>
     <td width="50%" valign="top">
       <a href="docs/feature-changes.png"><img src="docs/feature-changes.png" alt="Change log" /></a>
@@ -49,12 +49,24 @@ scans.
 
 ---
 
+## Workflows <sub><sup>NEW IN 1.6.0</sup></sub>
+
+The dashboard tells you what's wrong; **workflows** fix it.
+
+**Backfill** targets *orphaned media*: files on disk with no hardlink to a
+seeding torrent and no way to grow one (trumped, dead tracker, your own
+rip). Search the same title on the tracker you want, grab a version that
+actually seeds, and swap it in via Sonarr / Radarr — turning dead weight
+into a properly seeding upgrade.
+
+---
+
 ## Install
 
 ### Unraid
 
-auditorr is available on **Unraid Community Apps** — search for `auditorr`
-in the Apps tab and install in one click.
+auditorr is on **Unraid Community Apps** — search for `auditorr` in the
+Apps tab and install in one click.
 
 - **WebUI:** `http://[IP]:[PORT:8677]/`
 - **Appdata:** `/mnt/user/appdata/auditorr/data` → `/app/data`
@@ -65,7 +77,7 @@ in the Apps tab and install in one click.
 ```yaml
 services:
   auditorr:
-    build: .
+    image: ghcr.io/thrill-burn/auditorr:latest
     container_name: auditorr
     restart: unless-stopped
     ports:
@@ -74,12 +86,7 @@ services:
       - ./data:/app/data
       - /path/to/media:/data/media:ro
       - /path/to/torrents:/data/torrents:ro
-    environment:
-      - AUDITORR_PORT=8677
 ```
-
-Open `http://your-server-ip:8677` and point auditorr at your torrent source
-from the in-app settings.
 
 <details>
 <summary><b>Build from source</b></summary>
@@ -101,138 +108,12 @@ docker run -d \
 
 ---
 
-## Health score
-
-| Component         | Max pts | What it measures                                                    |
-| ----------------- | ------- | ------------------------------------------------------------------- |
-| Hardlinked Media  |     70  | % of media library hardlinked back to a torrent file                |
-| Orphaned Torrents |     10  | Files in your torrent folder that qBittorrent has no record of      |
-| Not Imported      |     10  | Seeding torrents with no matching file in your media library        |
-| Duplicate Files   |     10  | Bit-for-bit identical files that share no inode (true disk dupes)   |
-
-The 10-point categories lose points **linearly** as problem data grows
-toward the configured threshold. At the threshold, all 10 points are gone.
-
 > [!IMPORTANT]
 > The Hardlinked Media score assumes you use hardlinks between your torrent
 > folder and your media library — the
 > [TRaSH Guides](https://trash-guides.info/File-and-Folder-Structure/) folder
 > structure. Without hardlinks, this score is 0 regardless of how healthy
 > the rest of your library is.
-
----
-
-## Exclusions
-
-Use **Settings -> Exclusion Folders & Patterns** for files that should not
-participate in health scoring or Not Imported reporting. This is useful for
-unmanaged qBittorrent categories such as books, music, games, or Lidarr
-downloads, and for metadata/artwork sidecars that media servers place next to
-hardlinked media files.
-
-Excluded files are removed from:
-
-- Health score totals
-- Not Imported count/size
-- Not Imported rescan paths sent to Sonarr/Radarr
-- Per-tracker Not Imported stats
-
-The **File explorer visibility** toggle only controls whether excluded rows are
-shown in the UI. Excluded rows are ignored for scoring either way.
-
-### Folder Exclusions
-
-Add one folder per line. You can use the path as you think of it on the host,
-inside Docker, or relative to the `/data` folder. These all match the same
-TRaSH-style category folder:
-
-```txt
-torrents/books
-data/torrents/books
-/data/torrents/books
-/mnt/user/data/torrents/books
-```
-
-For an unRAID TRaSH layout where the host path is `/mnt/user/data` and auditorr
-sees it mounted as `/data`, a typical exclusion list is:
-
-```txt
-torrents/games
-torrents/lidarr
-torrents/music
-torrents/books
-```
-
-If you also want to ignore a media-side folder, add it the same way:
-
-```txt
-media/music
-/mnt/user/data/media/books
-```
-
-You do not need `/**` at the end. Folder paths are treated as subtree prefixes.
-Existing glob-style entries such as `torrents/books/**` still work.
-
-### File Exclusions
-
-Add one filename, directory name, extension rule, or glob per line:
-
-```txt
-**/.plexmatch
-*.nfo
-poster.*
-folder.*
-Featurettes
-ext:.srt
-name:@eaDir
-contains:sample
-```
-
-Rules are matched against both the full path and the scan-root-relative path, so
-the same rule works whether a file is seen as `/data/torrents/books/file.epub`
-or just `books/file.epub`.
-
-### Media Server Sidecar Presets
-
-The settings page also has media-server preset buttons for common sidecar files.
-These presets add rules behind the scenes; they do not overwrite your manual
-exclusion list.
-
-| Preset | Common files ignored |
-| ------ | -------------------- |
-| Plex | `.plexmatch`, `.nfo`, image sidecars such as `poster.jpg`, `folder.jpg`, `cover.jpg`, `background.png`, `fanart-1.jpg`, `Movie-fanart.jpg`, `backdrop.webp`, `logo.png`, `clearlogo.png`, `square.jpg`, `show.jpg` |
-| Jellyfin | `.nfo`, `movie.nfo`, `tvshow.nfo`, `season.nfo`, `artist.nfo`, `album.nfo`, image sidecars such as `poster.jpg`, `folder.jpg`, `cover.png`, `backdrop.jpg`, `fanart.jpg`, `banner.png`, `logo.png`, `thumb.jpg`, plus `extrafanart` folders |
-| Emby | `.nfo`, image sidecars such as `poster.jpg`, `folder.jpg`, `cover.png`, `fanart.jpg`, `backdrop.jpg`, `banner.png`, `logo.png`, `clearlogo.png`, `landscape.jpg`, `thumb.jpg` |
-| Kodi | `.nfo`, image sidecars such as `poster.jpg`, `folder.jpg`, `cover.png`, `fanart.jpg`, `backdrop.jpg`, `banner.png`, `logo.png`, `clearlogo.png`, `landscape.jpg`, `thumb.jpg`, plus `extrafanart` folders |
-| Universal Media Server | `.nfo`, image sidecars such as `folder.jpg`, `cover.jpg`, `albumart.jpg`, `poster.jpg`, `fanart.jpg`, `background.jpg` |
-
-These presets are intentionally aimed at metadata/artwork sidecars, not video
-or audio files. If you run a photo library or intentionally track image files as
-primary media, leave the presets off and add narrower manual rules instead.
-
-Reference behavior:
-
-- Plex documents [`.plexmatch` files](https://support.plex.tv/articles/plexmatch/)
-  for match hinting, [NFO files](https://support.plex.tv/articles/using-nfo-metadata-files-with-plex/),
-  and [local artwork assets](https://support.plex.tv/articles/200220677-local-media-assets-movies/)
-  such as `poster.jpg`, `folder.jpg`, `cover.jpg`, background/fanart images,
-  and media-name suffixed artwork.
-- Jellyfin documents [NFO names](https://jellyfin.org/docs/general/server/metadata/nfo/)
-  such as `movie.nfo`, `tvshow.nfo`, `season.nfo`, `artist.nfo`, and
-  `album.nfo`, plus [local artwork names](https://jellyfin.org/docs/general/server/media/movies/)
-  such as `poster`, `folder`, `cover`, `fanart`, `banner`, `logo`, and
-  `thumb`.
-- Kodi documents [NFO files](https://kodi.wiki/view/NFO_files) for local
-  metadata and [local artwork](https://kodi.wiki/view/Artwork).
-- Emby documents automatic artwork downloads in its
-  [Metadata Manager](https://support.emby.media/support/articles/Metadata-manager.html)
-  docs.
-- Universal Media Server does not publish a single canonical sidecar naming
-  table, so the UMS preset stays conservative and only covers common
-  folder/cover/album-art style image sidecars plus `.nfo`.
-
-After changing exclusions, save settings and run a new audit. Existing results
-will update after the next scan.
 
 ---
 
