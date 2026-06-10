@@ -117,6 +117,18 @@ docker run -d \
 
 ---
 
+## Reporting issues
+
+If a scan fails or behaves unexpectedly, open `http://<host>:8677/api/debug/report`
+and paste the output into your issue or forum post. The report is
+**privacy-scrubbed and safe to share publicly**: it contains no credentials,
+hostnames, IPs, or API keys, and media file/folder names are replaced with
+short hashes. It includes your (sanitized) configuration, library size stats,
+memory usage, recent audit history, crash evidence, and recent log lines —
+usually everything needed to diagnose a problem in one paste.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -10,6 +10,7 @@ import secrets
 import functools
 import urllib.parse
 import urllib.error
+from datetime import datetime
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -20,7 +21,7 @@ from db import (
     init_db,
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
-    db_load_file_results,
+    db_load_file_results, db_stream_file_results,
     db_save_history,
     db_get_recent_runs,
     db_clear_audit_history,
@@ -28,6 +29,8 @@ from db import (
     db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
     db_delete_upload_snapshots,
     db_get_change_log,
+    db_save_audit,
+    db_get_meta, db_set_meta, db_delete_meta,
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats
@@ -35,9 +38,15 @@ from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_in
 from scripts import generate_script
 from media_server_exclusions import normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
+from debug import install_ring_buffer, build_debug_report
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
+
+APP_VERSION = "1.6.1"
+
+# Keep the last ~400 log records in memory for /api/debug/report
+install_ring_buffer()
 
 app = Flask(__name__, static_folder='frontend/dist', static_url_path='')
 # Allow requests from localhost and private network ranges (LAN self-hosting).
@@ -101,6 +110,35 @@ def _torrent_source_configured(cfg):
     return bool(cfg.get(host_key))
 
 
+def _handle_aborted_scan():
+    """Detect a scan that never finished because the process died mid-run.
+
+    The audit writes a scan marker at start and removes it on any normal exit
+    (success or handled error). A marker still present at boot means the
+    previous process was killed — almost always the container being OOM-killed
+    or restarted — so record an 'aborted' audit run (visible in Audit History)
+    and bump the consecutive-abort streak. Returns the current streak.
+    """
+    marker = db_get_meta('scan_marker')
+    if not marker:
+        return 0
+    streak = int(db_get_meta('consecutive_aborted_scans', 0) or 0) + 1
+    db_set_meta('consecutive_aborted_scans', streak)
+    db_set_meta('last_aborted_scan', {**marker, 'detected_at': datetime.now().isoformat(timespec='seconds')})
+    db_delete_meta('scan_marker')
+    msg = (f"Scan never finished — the process died during '{marker.get('phase', 'unknown phase')}' "
+           f"(started {marker.get('started_at', '?')}, rss {marker.get('rss_mb', '?')} MB). "
+           f"This usually means the container was killed mid-scan (out-of-memory) or restarted. "
+           f"See /api/debug/report.")
+    log.warning(f"Aborted scan detected (streak: {streak}): {msg}")
+    try:
+        db_save_audit(marker.get('trigger', 'unknown'), None, 'aborted', msg, {},
+                      source=db_load_config().get('TORRENT_SOURCE', 'qbit'))
+    except Exception as e:
+        log.warning(f"Could not record aborted audit run: {e}")
+    return streak
+
+
 def _run_startup_audit():
     """Run the startup audit, retrying once after 60s on connection errors (other containers may not be ready)."""
     if not _torrent_source_configured(db_load_config()):
@@ -116,6 +154,22 @@ def _run_startup_audit():
             run_audit_process("startup", persist_source_errors=True)
 
 
+def _startup_sequence():
+    streak = _handle_aborted_scan()
+    if streak >= 2:
+        # Crash-loop breaker: the last scans all died mid-run. Re-running the
+        # startup audit on every boot would hammer the disk for hours and crash
+        # again — surface the problem instead and wait for a manual scan.
+        warn = (f"Automatic scans paused: the last {streak} scans were killed mid-run "
+                f"(likely out-of-memory). Start a scan manually when ready; a completed "
+                f"scan re-enables automatic scanning. See /api/debug/report for details.")
+        log.warning(warn)
+        set_state(status_message=warn, last_scan_status="error")
+        return
+    _run_startup_audit()
+    start_watchdog()
+
+
 def startup():
     # Use a lock file to ensure only one gunicorn worker runs the startup audit.
     # Both workers import the module and hit this code, but only the first one
@@ -129,12 +183,10 @@ def startup():
             except OSError:
                 log.info("Startup audit already running in another worker, skipping.")
                 return
-            _run_startup_audit()
-            start_watchdog()
+            _startup_sequence()
     except ImportError:
         # fcntl not available (Windows) — just run without locking
-        _run_startup_audit()
-        start_watchdog()
+        _startup_sequence()
 
 threading.Thread(target=startup, daemon=True).start()
 
@@ -144,7 +196,18 @@ threading.Thread(target=startup, daemon=True).start()
 
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "ok", "version": "1.6.0"}), 200
+    return jsonify({"status": "ok", "version": APP_VERSION}), 200
+
+
+@app.route('/api/debug/report')
+@require_auth
+def debug_report():
+    """Privacy-scrubbed diagnostic dump for bug reports — safe to paste publicly.
+
+    No credentials; hosts/IPs/tokens redacted; media file and folder names
+    replaced with stable short hashes.
+    """
+    return jsonify(build_debug_report(APP_VERSION))
 
 
 @app.route('/api/results')
@@ -159,7 +222,10 @@ def get_files():
     tab = request.args.get('tab', '')
     if tab not in ('media', 'torrents'):
         return jsonify({"error": "tab must be 'media' or 'torrents'"}), 400
-    return jsonify(db_load_file_results(tab))
+    # Stream the stored JSON straight through without parsing it — for 500K+
+    # file libraries json.loads + jsonify here costs minutes of CPU and several
+    # GB of RAM, and a request that slow can stall the whole UI.
+    return app.response_class(db_stream_file_results(tab), mimetype='application/json')
 
 
 @app.route('/api/progress')
@@ -277,16 +343,26 @@ def handle_config():
         threading.Thread(target=restart_watchdog, daemon=True).start()
 
         # Recompute health metrics immediately using existing scan results
-        # so threshold changes are reflected on the dashboard without a full rescan
+        # so threshold changes are reflected on the dashboard without a full rescan.
+        # Skip for very large libraries — deserializing both full file lists costs
+        # multiple GB of RAM; the new thresholds apply on the next audit instead.
         try:
-            curr         = db_load_results()
-            media_files  = db_load_file_results('media')
-            torrent_files = db_load_file_results('torrents')
-            if media_files and torrent_files:
-                new_dashboard = process_health_metrics(
-                    media_files, torrent_files, new_conf, update_history=False)
-                curr['dashboard'] = new_dashboard
-                db_save_results(curr)
+            stored_count = sum(
+                (db_get_meta(f'file_results_{tab}_stats') or {}).get('count', 0)
+                for tab in ('media', 'torrents')
+            )
+            if stored_count > 200_000:
+                log.info(f"Skipping immediate health recompute ({stored_count} files stored) — "
+                         f"new thresholds apply on the next audit.")
+            else:
+                curr         = db_load_results()
+                media_files  = db_load_file_results('media')
+                torrent_files = db_load_file_results('torrents')
+                if media_files and torrent_files:
+                    new_dashboard = process_health_metrics(
+                        media_files, torrent_files, new_conf, update_history=False)
+                    curr['dashboard'] = new_dashboard
+                    db_save_results(curr)
         except Exception as e:
             log.warning(f"Could not recompute health metrics after config save: {e}")
 

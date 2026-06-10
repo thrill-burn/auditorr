@@ -90,6 +90,14 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 - **Sort options** — Largest / Smallest / Random (OS-entropy) / A → Z
 - **Search depth** — 5 / 15 / All with estimated time; backend cap raised to 500
 
+### Shipped in v1.6.1 (large-library hardening)
+- **Crash-restart loop fix** — duplicate detection caps (skip excluded files, skip size groups > 200, ≤ 10 sibling paths per file) eliminate the quadratic memory blowup on BDMV/disc-heavy libraries
+- **Signature-based diff** — change log diffs against a compact `{path: bitmask}` map instead of deserializing previous full file lists
+- **Aborted-scan detection** — scan marker + per-phase RSS tracking; killed scans appear as `aborted` rows in Audit History with the exact phase of death
+- **Crash-loop breaker** — automatic scanning pauses after 2 consecutive killed scans instead of restarting forever
+- **`/api/debug/report`** — privacy-scrubbed diagnostic dump (sanitized config, memory/cgroup stats, crash evidence, recent logs) safe to paste publicly
+- **gthread gunicorn worker** — slow requests no longer kill the worker or block progress polls; `/api/files` streams stored JSON without parsing it
+
 ---
 
 ## v1.7 — Future Ideas

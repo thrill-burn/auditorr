@@ -14,9 +14,12 @@ from db import (
     db_load_results, db_save_results, db_save_audit,
     db_save_upload_snapshot, db_get_upload_snapshots,
     db_save_change_log_entry,
-    db_save_file_results, db_load_file_results,
+    db_save_file_results,
+    db_save_file_signatures, db_load_file_signatures,
+    db_get_meta, db_set_meta, db_delete_meta,
 )
 from state import get_state, set_state, update_progress
+from debug import process_rss_mb
 
 log = logging.getLogger(__name__)
 
@@ -122,16 +125,38 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
     return key_order, scanned, stat_errors
 
 
+# Size groups larger than this are skipped entirely. Real media duplicates come
+# in groups of 2-5; groups of hundreds of identically-sized files are structural
+# (BDMV .bdmv/.clpi/.bup, DVD IFO/BUP) and hashing + cross-referencing them is
+# what used to blow up both scan time and memory on disc-heavy libraries.
+DUP_GROUP_LIMIT = 200
+# Each file stores at most this many sibling paths. Without a cap a group of k
+# identical files stores k*(k-1) path strings — quadratic, and the reason
+# file_results JSON used to exceed SQLite's 1 GB limit on large libraries.
+DUP_PATHS_PER_FILE = 10
+
+
+def _info_excluded(info):
+    """Effective excluded flag for an inode (torrent role wins when present)."""
+    if info['torrent_rel_path'] is not None:
+        return info['torrent_excluded']
+    return info['media_excluded']
+
+
 def _build_duplicate_map(inode_map):
     """O(n) duplicate detection: group by size, then file identity, then hash representatives only."""
     size_groups = {}
     for file_key, info in inode_map.items():
-        if info['size'] > 0:
+        if info['size'] > 0 and not _info_excluded(info):
             size_groups.setdefault(info['size'], []).append(file_key)
 
     duplicate_map = {}
+    skipped_groups = 0
     for size, file_keys in size_groups.items():
         if len(file_keys) <= 1:
+            continue
+        if len(file_keys) > DUP_GROUP_LIMIT:
+            skipped_groups += 1
             continue
         hash_to_keys = {}
         for file_key in file_keys:
@@ -146,14 +171,18 @@ def _build_duplicate_map(inode_map):
             if len(dup_keys) <= 1:
                 continue
             for file_key in dup_keys:
-                others = []
+                others = duplicate_map.setdefault(file_key, [])
                 for o in dup_keys:
+                    if len(others) >= DUP_PATHS_PER_FILE:
+                        break
                     if o != file_key:
                         oinfo  = inode_map[o]
                         opaths = oinfo['torrent_paths'] or oinfo['media_paths']
                         if opaths:
                             others.append(opaths[0])
-                duplicate_map.setdefault(file_key, []).extend(others)
+    if skipped_groups:
+        log.info(f"Duplicate detection: skipped {skipped_groups} size group(s) larger than "
+                 f"{DUP_GROUP_LIMIT} files (structural files, e.g. disc folders).")
     return duplicate_map
 
 
@@ -441,12 +470,36 @@ def _build_yield_summary():
 # Diff engine
 # ---------------------------------------------------------------------------
 
-def compute_diff(prev_snap, curr_snap):
-    if not prev_snap or not curr_snap:
-        return None
+# Signature bitmask bits — a compact per-file fingerprint of the only fields
+# compute_diff cares about on the *previous* side. Stored as {path: int} so
+# diffing against the last scan never deserializes the previous full record
+# list (multi-GB of Python objects for 500K+ file libraries).
+SIG_ORPHANED = 1
+SIG_IMPORTED = 2
+SIG_HAS_DUPS = 4
 
-    def fset(snap, key):
-        return {f['path']: f for f in snap.get(key, [])}
+
+def file_signatures(files):
+    """Build the compact {path: bitmask} diff signature for a file list."""
+    return {
+        f['path']: (
+            (SIG_ORPHANED if f.get('status') == 'Orphaned' else 0)
+            | (SIG_IMPORTED if f.get('imported') else 0)
+            | (SIG_HAS_DUPS if f.get('duplicate_paths') else 0)
+        )
+        for f in files
+    }
+
+
+def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None):
+    """Diff the current snapshot against compact signatures of the previous scan.
+
+    prev_sigs_by_tab: {'media': {path: bitmask}, 'torrents': {path: bitmask}}
+    Lists are capped at 50 entries during collection (not after) so a mass
+    rename/move can't transiently allocate one diff entry per file.
+    """
+    if not prev_sigs_by_tab or not curr_snap:
+        return None
 
     changes = {
         'newly_orphaned':      [],
@@ -457,40 +510,57 @@ def compute_diff(prev_snap, curr_snap):
         'removed_files':       [],
         'score_delta':         None,
     }
+    CAP = 50
+    has_changes = False
 
-    ps = prev_snap.get('dashboard', {}).get('score')
-    cs = curr_snap.get('dashboard', {}).get('score')
-    if ps is not None and cs is not None:
-        changes['score_delta'] = round(cs - ps, 1)
+    cs = (curr_snap.get('dashboard') or {}).get('score')
+    if prev_score is not None and cs is not None:
+        changes['score_delta'] = round(cs - prev_score, 1)
+
+    def add(key, entry):
+        nonlocal has_changes
+        has_changes = True
+        if len(changes[key]) < CAP:
+            changes[key].append(entry)
 
     for tab, key in [('media', 'media_files'), ('torrents', 'torrent_files')]:
-        prev = fset(prev_snap, key)
-        curr = fset(curr_snap, key)
+        prev = prev_sigs_by_tab.get(tab) or {}
+        curr_paths = set()
 
-        for path, f in curr.items():
+        for f in curr_snap.get(key, []):
+            path = f['path']
+            curr_paths.add(path)
             if path not in prev:
-                changes['new_files'].append({'path': path, 'size': f['size'], 'tab': tab})
+                add('new_files', {'path': path, 'size': f['size'], 'tab': tab})
             else:
-                pf = prev[path]
-                if pf.get('status') != 'Orphaned' and f.get('status') == 'Orphaned':
-                    changes['newly_orphaned'].append({'path': path, 'size': f['size'], 'tab': tab})
-                if tab == 'torrents' and not pf.get('imported') and f.get('imported'):
-                    changes['newly_imported'].append({'path': path, 'size': f['size'], 'tab': tab})
-                if not pf.get('duplicate_paths') and f.get('duplicate_paths'):
-                    changes['new_duplicates'].append({'path': path, 'size': f['size'], 'tab': tab})
-                if pf.get('duplicate_paths') and not f.get('duplicate_paths'):
-                    changes['resolved_duplicates'].append({'path': path, 'size': f['size'], 'tab': tab})
+                sig = prev[path]
+                if not (sig & SIG_ORPHANED) and f.get('status') == 'Orphaned':
+                    add('newly_orphaned', {'path': path, 'size': f['size'], 'tab': tab})
+                if tab == 'torrents' and not (sig & SIG_IMPORTED) and f.get('imported'):
+                    add('newly_imported', {'path': path, 'size': f['size'], 'tab': tab})
+                if not (sig & SIG_HAS_DUPS) and f.get('duplicate_paths'):
+                    add('new_duplicates', {'path': path, 'size': f['size'], 'tab': tab})
+                if (sig & SIG_HAS_DUPS) and not f.get('duplicate_paths'):
+                    add('resolved_duplicates', {'path': path, 'size': f['size'], 'tab': tab})
 
         for path in prev:
-            if path not in curr:
-                changes['removed_files'].append({'path': path, 'tab': tab})
+            if path not in curr_paths:
+                add('removed_files', {'path': path, 'tab': tab})
 
-    for k in changes:
-        if isinstance(changes[k], list):
-            changes[k] = changes[k][:50]
-
-    has_changes = any(isinstance(v, list) and v for v in changes.values())
     return changes if has_changes else None
+
+
+def compute_diff(prev_snap, curr_snap):
+    """Diff two full snapshots. Thin wrapper over the signature-based diff,
+    kept for callers/tests that hold both snapshots in memory."""
+    if not prev_snap or not curr_snap:
+        return None
+    prev_sigs = {
+        'media':    file_signatures(prev_snap.get('media_files', [])),
+        'torrents': file_signatures(prev_snap.get('torrent_files', [])),
+    }
+    prev_score = (prev_snap.get('dashboard') or {}).get('score')
+    return compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +646,26 @@ def _save_error_status(message):
     db_save_results(curr)
 
 
+def _enter_phase(phase, message):
+    """Advance the scan to a new phase: update state, log RSS, and persist the
+    scan marker so a process killed mid-scan (OOM, container restart) leaves
+    evidence of exactly where it died for the next boot to report."""
+    rss = process_rss_mb()
+    set_state(status_message=message, phase=phase)
+    log.info(f"Audit: {message}" + (f" (rss={rss} MB)" if rss is not None else ""))
+    hist = (get_state().get('phase_history') or []) + [{
+        'message': message, 'rss_mb': rss, 'at': datetime.now().isoformat(timespec='seconds'),
+    }]
+    set_state(phase_history=hist[-30:])
+    try:
+        marker = db_get_meta('scan_marker') or {}
+        marker['phase']  = message
+        marker['rss_mb'] = rss
+        db_set_meta('scan_marker', marker)
+    except Exception as e:
+        log.warning(f"Could not update scan marker: {e}")
+
+
 def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
@@ -584,11 +674,23 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         trigger = get_state().get('trigger', 'manual')
     scan_start = time.time()
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
-              status_message="Connecting to torrent source...", last_scan_status="running", phase="connecting")
+              status_message="Connecting to torrent source...", last_scan_status="running",
+              phase="connecting", phase_history=[])
+    try:
+        db_set_meta('scan_marker', {
+            'started_at': datetime.now().isoformat(timespec='seconds'),
+            'trigger':    trigger,
+            'pid':        os.getpid(),
+            'phase':      'Connecting to torrent source...',
+        })
+    except Exception as e:
+        log.warning(f"Could not write scan marker: {e}")
     try:
         qbit_file_map, trackers, tracker_snapshot = sources.fetch_file_map(cfg)
+        set_state(source_file_count=len(qbit_file_map))
         total_ref = [0]
-        set_state(total_files=0, status_message="Scanning torrent directory...", phase="disk")
+        set_state(total_files=0)
+        _enter_phase("disk", "Scanning torrent directory...")
         inode_map          = {}
         exclusion_patterns = expand_exclusion_patterns(cfg)
         compiled_excl      = compile_exclusions(exclusion_patterns)
@@ -596,18 +698,19 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
-        set_state(status_message="Scanning media directory...", phase="disk")
+        _enter_phase("disk", "Scanning media directory...")
         media_key_order, _, media_errors = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
         stat_errors = torrent_errors + media_errors
-        set_state(status_message="Detecting duplicates...", phase="post")
+        _enter_phase("post", "Detecting duplicates...")
         duplicate_map = _build_duplicate_map(inode_map)
+        _enter_phase("post", "Assembling file records...")
         torrent_files_data, media_files_data = _assemble_records(
             torrent_key_order, media_key_order, inode_map, duplicate_map)
         del torrent_key_order, media_key_order, inode_map, duplicate_map
-        set_state(status_message="Computing health metrics...", phase="post")
+        _enter_phase("post", "Computing health metrics...")
         dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg)
         cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
         tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
@@ -648,24 +751,24 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             yield_summary = None
         result["yield_summary"] = yield_summary
 
-        # Compute diff from old file_results vs current in-memory data — BEFORE overwriting.
-        # This avoids storing file lists in audit_snapshots (300MB+ per row for large libraries)
-        # and avoids deserializing two fat snapshots on every audit and every /api/changes call.
+        # Compute diff against compact signatures of the previous scan — BEFORE overwriting.
+        # Signatures are {path: bitmask}, so this never deserializes the previous full
+        # record lists (multi-GB of Python objects for 500K+ file libraries).
         ran_at = datetime.now().isoformat()
+        _enter_phase("post", "Computing changes vs previous scan...")
         try:
-            old_media    = db_load_file_results('media')
-            old_torrents = db_load_file_results('torrents')
-            if old_media or old_torrents:
-                prev_snap = {
-                    "media_files": old_media, "torrent_files": old_torrents,
-                    "dashboard":   db_load_results().get('dashboard'),
-                }
+            prev_sigs = {
+                'media':    db_load_file_signatures('media'),
+                'torrents': db_load_file_signatures('torrents'),
+            }
+            if prev_sigs['media'] or prev_sigs['torrents']:
                 curr_snap = {
                     "media_files": media_files_data, "torrent_files": torrent_files_data,
                     "dashboard":   dashboard_stats,
                 }
-                diff = compute_diff(prev_snap, curr_snap)
-                del old_media, old_torrents, prev_snap, curr_snap
+                prev_score = (db_load_results().get('dashboard') or {}).get('score')
+                diff = compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
+                del prev_sigs, curr_snap
                 if diff:
                     db_save_change_log_entry(
                         ran_at=ran_at,
@@ -674,11 +777,18 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                         source=cfg.get('TORRENT_SOURCE', 'qbit'),
                         diff=diff,
                     )
+            else:
+                log.info("No previous file signatures stored — change log skipped this run, "
+                         "resumes on the next audit.")
         except Exception as e:
             log.warning(f"Could not save change log entry: {e}")
         # Persist file lists separately so /api/results only loads summary data
+        _enter_phase("post", "Saving file results...")
         db_save_file_results('media',    media_files_data)
         db_save_file_results('torrents', torrent_files_data)
+        db_save_file_signatures('media',    file_signatures(media_files_data))
+        db_save_file_signatures('torrents', file_signatures(torrent_files_data))
+        _enter_phase("post", "Saving audit results...")
         db_save_results(result)
         # Snapshot stores only dashboard stats — no file lists (eliminates 300MB+ per row)
         snapshot = {"dashboard": dashboard_stats}
@@ -686,6 +796,11 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                       source=cfg.get('TORRENT_SOURCE', 'qbit'),
                       duration_seconds=round(time.time() - scan_start, 1),
                       ran_at=ran_at)
+        # Scan finished — clear the crash-loop streak so future startups scan normally
+        try:
+            db_set_meta('consecutive_aborted_scans', 0)
+        except Exception:
+            pass
         log.info("Audit complete.")
         if stat_errors:
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")
@@ -705,6 +820,13 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
         set_state(status_message=msg, last_scan_status="error")
     finally:
+        # The process survived to this point — remove the crash marker. If the
+        # process is killed mid-scan (OOM), this never runs and the marker is
+        # found at next startup, which records an 'aborted' audit run.
+        try:
+            db_delete_meta('scan_marker')
+        except Exception:
+            pass
         scan_end = time.time()
         set_state(progress=100, is_scanning=False,
                   last_audit_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

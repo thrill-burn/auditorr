@@ -196,7 +196,8 @@ def grab_release(cfg, service, connection_id, guid, indexer_id):
         method='POST',
     )
     with urllib.request.urlopen(http_req, timeout=30) as resp:
-        return json.loads(resp.read())
+        raw = resp.read()
+        return json.loads(raw) if raw.strip() else {}
 
 
 def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None):

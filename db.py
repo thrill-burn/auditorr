@@ -103,6 +103,10 @@ def init_db():
                 tab        TEXT PRIMARY KEY,
                 files_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         ''')
         conn.commit()
         # Migrations: add columns that didn't exist in earlier schema versions
@@ -305,6 +309,16 @@ def db_save_file_results(tab, files):
             'INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
             (tab, compressed)
         )
+        # Cheap stats so other code paths (config-save recompute guard, debug
+        # report) can learn the library size without deserializing the blob.
+        conn.execute(
+            'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+            (f'file_results_{tab}_stats', json.dumps({
+                'count':            len(files),
+                'compressed_bytes': len(compressed),
+                'saved_at':         datetime.now().isoformat(),
+            }))
+        )
         conn.commit()
     finally:
         conn.close()
@@ -322,6 +336,97 @@ def db_load_file_results(tab):
         if isinstance(data, (bytes, bytearray)):
             return json.loads(zlib.decompress(data).decode())
         return json.loads(data)
+    finally:
+        conn.close()
+
+
+def db_stream_file_results(tab, chunk_size=1 << 20):
+    """Yield the stored file list as raw JSON byte chunks, without parsing it.
+
+    For very large libraries the decoded JSON is ~1 GB and the parsed object
+    graph several times that; serving the stored JSON straight through keeps the
+    peak at roughly the compressed blob size plus one chunk.
+    """
+    conn = _db_conn()
+    try:
+        row = conn.execute('SELECT files_json FROM file_results WHERE tab = ?', (tab,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        yield b'[]'
+        return
+    data = row['files_json']
+    if isinstance(data, (bytes, bytearray)):
+        dobj = zlib.decompressobj()
+        for i in range(0, len(data), chunk_size):
+            yield dobj.decompress(data[i:i + chunk_size])
+        yield dobj.flush()
+    else:
+        yield data.encode('utf-8', errors='replace')
+
+
+def db_save_file_signatures(tab, sigs):
+    """Persist the compact per-file diff signature map ({path: bitmask}).
+
+    Stored separately from the full file lists so the next audit can diff
+    against the previous scan without deserializing two multi-GB record lists.
+    """
+    compressed = zlib.compress(json.dumps(sigs).encode('utf-8', errors='replace'), 1)
+    conn = _db_conn()
+    try:
+        conn.execute(
+            'INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
+            (f'{tab}_sigs', compressed)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def db_load_file_signatures(tab):
+    conn = _db_conn()
+    try:
+        row = conn.execute('SELECT files_json FROM file_results WHERE tab = ?', (f'{tab}_sigs',)).fetchone()
+        if not row:
+            return {}
+        data = row['files_json']
+        if isinstance(data, (bytes, bytearray)):
+            return json.loads(zlib.decompress(data).decode())
+        return json.loads(data)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# App meta (small key/value rows: scan markers, counters, stats)
+# ---------------------------------------------------------------------------
+
+def db_get_meta(key, default=None):
+    conn = _db_conn()
+    try:
+        row = conn.execute('SELECT value FROM app_meta WHERE key = ?', (key,)).fetchone()
+        return json.loads(row['value']) if row else default
+    finally:
+        conn.close()
+
+
+def db_set_meta(key, value):
+    conn = _db_conn()
+    try:
+        conn.execute(
+            'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+            (key, json.dumps(value))
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def db_delete_meta(key):
+    conn = _db_conn()
+    try:
+        conn.execute('DELETE FROM app_meta WHERE key = ?', (key,))
+        conn.commit()
     finally:
         conn.close()
 

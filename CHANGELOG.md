@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.6.1 — 2026-06-10
+
+### Features
+- **`/api/debug/report` diagnostic endpoint** — returns a privacy-scrubbed JSON dump designed to be pasted publicly when reporting issues: runtime info (current/peak RSS, container memory limit from cgroups), sanitized configuration, library and database size stats, scan state with per-phase memory history, crash evidence, the last 20 audit runs, and the last ~400 log lines. Credentials are never included; hostnames, IPs, and API tokens are redacted; media file and folder names are replaced with stable 6-char hashes (`~a1b2c3.mkv`) so files can be correlated across the report without being readable. Generic structure (`/data/torrents`, `Season 01`, real file extensions) is preserved for debuggability.
+- **Aborted-scan detection** — the audit now writes a scan marker at start, updates it at every phase with current memory usage, and removes it on any normal exit. If the process dies mid-scan (OOM-kill, container restart), the next startup finds the marker and records an **aborted** entry in Audit History stating exactly which phase the scan died in and how much memory it was using. Previously a killed scan left no trace at all — the audit history stayed empty and the scan silently restarted from the top.
+
+### Bug Fixes
+- **Crash-restart scan loop on very large libraries** — on 500K+ file libraries the scan could be killed mid-run (out-of-memory or gunicorn worker timeout), which left no audit history entry and immediately re-triggered the startup audit when the worker respawned — appearing in the UI as the scan endlessly starting over even with the watchdog disabled. Three fixes combine to address it:
+  - **Duplicate detection memory blowup** — for a group of *k* identically-sized identical files, every file stored all *k−1* sibling paths: *k²* path strings total. Disc-based libraries (BDMV/DVD rips) contain thousands of identically-sized structural files (`.bdmv`, `.clpi`, `.mpls`, plus the `BACKUP` copy inside every disc), producing groups large enough to consume many GB of RAM and inflate the stored `files_json` — likely also the root cause of the earlier "string or blob too big" failures. Size groups larger than 200 files are now skipped (real media duplicates come in groups of 2–5), each file stores at most 10 sibling paths, and **excluded files are skipped entirely** — previously an excluded disc directory was still hashed and cross-referenced, so exclusions did not reduce duplicate-detection cost at all.
+  - **Diff no longer loads previous file lists** — computing the change log deserialized both previous full file lists (several GB of Python objects at 650K files) while the current lists were also in memory. Each audit now saves a compact `{path: bitmask}` signature map per tab (~2% of the size) and the next audit diffs against that. Diff lists are capped during collection, so a mass rename can't transiently allocate one entry per file. The first audit after upgrading skips the change log entry once while signatures are established.
+  - **Crash-loop breaker** — after 2 consecutive scans killed mid-run, the startup audit and watchdog are paused and a clear warning is shown instead of hammering the disk for hours on every container restart. A completed manual scan re-enables automatic scanning.
+- **gunicorn worker killed by slow requests** — the Docker image now runs gunicorn with the `gthread` worker (8 threads) instead of the default sync worker. Previously a single slow request (e.g. serving a very large `/api/files` response) could exceed the 300 s timeout and get the worker SIGKILLed — taking any in-progress audit down with it — and blocked all other requests (including progress polls) while it ran.
+
+### Performance
+- **`/api/files` streams stored JSON** — the endpoint previously parsed the stored file list (`json.loads`) and re-serialized it (`jsonify`); at 650K files that costs minutes of CPU and several GB of RAM per request. The stored JSON is now streamed straight through in decompressed chunks without ever being parsed.
+- **Config save no longer deserializes huge libraries** — saving settings recomputes health metrics from stored file lists so threshold changes apply instantly; for libraries above 200K files this is now skipped (new thresholds apply on the next audit) instead of loading both full file lists into memory on every save.
+- **Granular scan phases with memory telemetry** — "Computing health metrics" previously covered six internal steps including diff computation and database saves. Each step now reports its own status message and logs process RSS at every transition, so slow or crashing scans can be pinpointed to an exact step.
+
 ## v1.6.0 — 2026-06-02
 
 ### Features

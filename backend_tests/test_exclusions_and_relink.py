@@ -1,7 +1,9 @@
 import unittest
 from unittest.mock import patch
 
-from arr import arr_search, fetch_arr_media_index, normalize_arr_connections, test_arr_connections
+# Alias the import so pytest doesn't collect the app function as a test
+from arr import arr_search, fetch_arr_media_index, normalize_arr_connections
+from arr import test_arr_connections as _arr_test_connections
 from audit import _compute_tracker_file_stats, _not_imported_paths, process_health_metrics
 from exclusions import compile_exclusions, is_excluded
 from media_server_exclusions import expand_exclusion_patterns
@@ -376,7 +378,7 @@ class ArrConnectionTests(unittest.TestCase):
 
         with patch("arr._test_arr_connection", return_value=(True, None)), \
                 patch("arr._arr_get", side_effect=fake_get):
-            result = test_arr_connections(cfg)
+            result = _arr_test_connections(cfg)
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["connection_count"], 2)
