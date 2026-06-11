@@ -62,14 +62,34 @@ MEDIA_SERVER_EXCLUSION_PRESETS = {
 }
 
 
+DISC_RIP_EXCLUSION_PRESETS = {
+    "bluray": [
+        "BDMV",
+        "CERTIFICATE",
+    ],
+    "dvd": [
+        "VIDEO_TS",
+        "AUDIO_TS",
+    ],
+}
+
+
 def normalize_media_server_presets(values):
+    return _normalize_presets(values, MEDIA_SERVER_EXCLUSION_PRESETS)
+
+
+def normalize_disc_rip_presets(values):
+    return _normalize_presets(values, DISC_RIP_EXCLUSION_PRESETS)
+
+
+def _normalize_presets(values, allowed):
     if not isinstance(values, list):
         return []
     seen = set()
     normalized = []
     for value in values:
         key = str(value or "").strip().lower()
-        if key in MEDIA_SERVER_EXCLUSION_PRESETS and key not in seen:
+        if key in allowed and key not in seen:
             seen.add(key)
             normalized.append(key)
     return normalized
@@ -81,6 +101,8 @@ def expand_exclusion_patterns(cfg):
         for pattern in cfg.get("EXCLUSION_PATTERNS", [])
         if isinstance(pattern, str) and pattern.strip()
     ]
+    for preset in normalize_disc_rip_presets(cfg.get("DISC_RIP_EXCLUSION_PRESETS", [])):
+        patterns.extend(DISC_RIP_EXCLUSION_PRESETS[preset])
     for preset in normalize_media_server_presets(cfg.get("MEDIA_SERVER_EXCLUSION_PRESETS", [])):
         patterns.extend(MEDIA_SERVER_EXCLUSION_PRESETS[preset])
     return _dedupe(patterns)

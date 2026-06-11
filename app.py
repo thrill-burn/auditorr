@@ -36,7 +36,7 @@ from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id
 from scripts import generate_script
-from media_server_exclusions import normalize_media_server_presets
+from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
 from debug import install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events
 
@@ -361,6 +361,9 @@ def handle_config():
                 'NI_RATIO':           float(data.get('NI_RATIO',  0.01)),
                 'DUP_RATIO':          float(data.get('DUP_RATIO', 0.01)),
                 'EXCLUSION_PATTERNS':           [p for p in data.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)],
+                'DISC_RIP_EXCLUSION_PRESETS': normalize_disc_rip_presets(
+                    data.get('DISC_RIP_EXCLUSION_PRESETS', [])
+                ),
                 'MEDIA_SERVER_EXCLUSION_PRESETS': normalize_media_server_presets(
                     data.get('MEDIA_SERVER_EXCLUSION_PRESETS', [])
                 ),

@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     'NI_RATIO':           0.01,
     'DUP_RATIO':          0.01,
     'EXCLUSION_PATTERNS':          [],
+    'DISC_RIP_EXCLUSION_PRESETS':  [],
     'MEDIA_SERVER_EXCLUSION_PRESETS': [],
     'EXCLUSION_HIDE_FROM_EXPLORER': False,
     'SONARR_URL':         '',
@@ -554,6 +555,18 @@ def validate_config(data):
             for i, preset in enumerate(presets):
                 if str(preset).lower() not in allowed_presets:
                     errors.append(f"MEDIA_SERVER_EXCLUSION_PRESETS[{i}] must be one of plex, jellyfin, emby, kodi, ums")
+
+    disc_presets = data.get('DISC_RIP_EXCLUSION_PRESETS')
+    if disc_presets is not None:
+        allowed_disc_presets = {'bluray', 'dvd'}
+        if not isinstance(disc_presets, list):
+            errors.append("DISC_RIP_EXCLUSION_PRESETS must be a list")
+        elif len(disc_presets) > len(allowed_disc_presets):
+            errors.append("DISC_RIP_EXCLUSION_PRESETS contains too many entries")
+        else:
+            for i, preset in enumerate(disc_presets):
+                if str(preset).lower() not in allowed_disc_presets:
+                    errors.append(f"DISC_RIP_EXCLUSION_PRESETS[{i}] must be one of bluray, dvd")
 
     arr_connections = data.get('ARR_CONNECTIONS')
     if arr_connections is not None:

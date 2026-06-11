@@ -138,6 +138,35 @@ class ExclusionRuleTests(unittest.TestCase):
             patterns,
         ))
 
+    def test_disc_rip_presets_exclude_bd_and_dvd_structures_only(self):
+        patterns = expand_exclusion_patterns({
+            "EXCLUSION_PATTERNS": [],
+            "DISC_RIP_EXCLUSION_PRESETS": ["bluray", "dvd"],
+        })
+        compiled = compile_exclusions(patterns)
+
+        excluded = [
+            ("/data/media/Movies/Movie (2024)/BDMV/STREAM/00001.m2ts", "Movies/Movie (2024)/BDMV/STREAM/00001.m2ts", "00001.m2ts"),
+            ("/data/media/Movies/Movie (2024)/BDMV/PLAYLIST/00001.mpls", "Movies/Movie (2024)/BDMV/PLAYLIST/00001.mpls", "00001.mpls"),
+            ("/data/media/Movies/Movie (2024)/CERTIFICATE/id.bdmv", "Movies/Movie (2024)/CERTIFICATE/id.bdmv", "id.bdmv"),
+            ("/data/media/Movies/Movie (2024)/VIDEO_TS/VTS_01_1.VOB", "Movies/Movie (2024)/VIDEO_TS/VTS_01_1.VOB", "VTS_01_1.VOB"),
+            ("/data/media/Movies/Movie (2024)/VIDEO_TS/VIDEO_TS.IFO", "Movies/Movie (2024)/VIDEO_TS/VIDEO_TS.IFO", "VIDEO_TS.IFO"),
+            ("/data/media/Movies/Movie (2024)/AUDIO_TS/placeholder.txt", "Movies/Movie (2024)/AUDIO_TS/placeholder.txt", "placeholder.txt"),
+        ]
+        for full_path, rel_path, filename in excluded:
+            self.assertTrue(is_excluded(full_path, rel_path, filename, patterns), filename)
+            self.assertTrue(compiled.match(full_path, rel_path, filename), filename)
+
+        visible = [
+            ("/data/media/Movies/Movie (2024)/Movie (2024).mkv", "Movies/Movie (2024)/Movie (2024).mkv", "Movie (2024).mkv"),
+            ("/data/media/Movies/Movie (2024)/Movie (2024).mp4", "Movies/Movie (2024)/Movie (2024).mp4", "Movie (2024).mp4"),
+            ("/data/media/Movies/Movie (2024)/Feature.m2ts", "Movies/Movie (2024)/Feature.m2ts", "Feature.m2ts"),
+            ("/data/media/Movies/Movie (2024)/Feature.VOB", "Movies/Movie (2024)/Feature.VOB", "Feature.VOB"),
+        ]
+        for full_path, rel_path, filename in visible:
+            self.assertFalse(is_excluded(full_path, rel_path, filename, patterns), filename)
+            self.assertFalse(compiled.match(full_path, rel_path, filename), filename)
+
 
 class CompiledExclusionMatcherTests(unittest.TestCase):
     def test_compiled_matcher_agrees_with_is_excluded_across_all_pattern_types(self):

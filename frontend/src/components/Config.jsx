@@ -11,6 +11,10 @@ const MEDIA_SERVER_PRESETS = [
   { id: 'kodi', label: 'Kodi' },
   { id: 'ums', label: 'Universal Media Server' },
 ]
+const DISC_RIP_PRESETS = [
+  { id: 'bluray', label: 'Blu-ray Disc' },
+  { id: 'dvd', label: 'DVD Disc' },
+]
 const ARR_SERVICES = [
   { id: 'sonarr', label: 'Sonarr', port: '8989' },
   { id: 'radarr', label: 'Radarr', port: '7878' },
@@ -175,6 +179,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [dupPct, setDupPct] = useState('')
   const [exclusionPatterns,        setExclusionPatterns]        = useState('')
   const [exclusionFocused,         setExclusionFocused]         = useState(false)
+  const [discRipPresets,           setDiscRipPresets]           = useState([])
   const [mediaServerPresets,       setMediaServerPresets]       = useState([])
   const [exclusionHideFromExplorer, setExclusionHideFromExplorer] = useState(false)
   const [arrConnections,           setArrConnections]           = useState([])
@@ -196,6 +201,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
+      setDiscRipPresets(Array.isArray(c.DISC_RIP_EXCLUSION_PRESETS) ? c.DISC_RIP_EXCLUSION_PRESETS : [])
       setMediaServerPresets(Array.isArray(c.MEDIA_SERVER_EXCLUSION_PRESETS) ? c.MEDIA_SERVER_EXCLUSION_PRESETS : [])
       setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
       setArrConnections((c.ARR_CONNECTIONS || []).map(conn => ({
@@ -362,6 +368,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       NI_RATIO:  parseFloat(niPct)  / 100 || 0.01,
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
       EXCLUSION_PATTERNS:           exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
+      DISC_RIP_EXCLUSION_PRESETS:   discRipPresets,
       MEDIA_SERVER_EXCLUSION_PRESETS: mediaServerPresets,
       EXCLUSION_HIDE_FROM_EXPLORER: exclusionHideFromExplorer,
       ARR_CONNECTIONS:              cleanArrConnections(),
@@ -402,6 +409,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   const toggleMediaPreset = id => {
     setMediaServerPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
+    setIsDirty(true)
+  }
+
+  const toggleDiscPreset = id => {
+    setDiscRipPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
     setIsDirty(true)
   }
 
@@ -841,6 +853,32 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             transition: 'border 0.12s', boxSizing: 'border-box',
           }}
         />
+        <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Full disc rip presets</div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
+            Ignore full-disc Blu-ray and DVD folder structures such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>BDMV</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>CERTIFICATE</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>VIDEO_TS</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>AUDIO_TS</span>. Standalone video files remain visible.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {DISC_RIP_PRESETS.map(preset => {
+              const active = discRipPresets.includes(preset.id)
+              return (
+                <button
+                  key={preset.id}
+                  onClick={() => toggleDiscPreset(preset.id)}
+                  style={{
+                    padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12,
+                    border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
+                    background: active ? 'var(--accent)18' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--text-dim)',
+                    cursor: 'pointer', transition: 'all 0.12s',
+                  }}
+                >
+                  {preset.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
         <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Media server sidecar presets</div>
           <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
