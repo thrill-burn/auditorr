@@ -29,14 +29,30 @@ def _compute_script_root(local_path, media_path):
 
 
 def _build_dup_groups(all_files, local_path, media_path=''):
-    """Group files with duplicate_paths into structured groups for the Actions page."""
+    """Group files with duplicate_paths into structured groups for the Actions page.
+
+    Files marked excluded never appear in a group — not as the canonical copy and
+    not as a duplicate partner — so generated scripts never touch them (#14).
+    """
     script_root   = _compute_script_root(local_path, media_path)
     groups        = []
     seen_file_ids = set()
     covered_paths = set()  # absolute paths already assigned to any group slot
 
+    # Absolute paths of every excluded file, so excluded *partners* can be
+    # dropped from other files' duplicate lists (duplicate_paths entries are
+    # absolute paths with no excluded flag of their own).
+    excluded_abs   = set()
+    excluded_count = 0
     for f in all_files:
-        if not f.get('duplicate_paths'):
+        if f.get('excluded'):
+            file_root = f.get('_file_root', local_path)
+            excluded_abs.add(posixpath.join(file_root, f['path']) if file_root else f['path'])
+            if f.get('duplicate_paths'):
+                excluded_count += 1
+
+    for f in all_files:
+        if not f.get('duplicate_paths') or f.get('excluded'):
             continue
         inode   = f['inode']
         file_id = f.get('file_id', inode)
@@ -46,6 +62,9 @@ def _build_dup_groups(all_files, local_path, media_path=''):
         canon_full = posixpath.join(file_root, f['path']) if file_root else f['path']
         if canon_full in covered_paths:
             continue
+        dup_paths = [p for p in f.get('duplicate_paths', []) if p not in excluded_abs]
+        if not dup_paths:
+            continue  # every partner is excluded — nothing left to dedupe
         seen_file_ids.add(file_id)
         covered_paths.add(canon_full)
 
@@ -56,7 +75,7 @@ def _build_dup_groups(all_files, local_path, media_path=''):
             canon_dev = None
         group_files = [{"path": canon_rel, "size": f['size'], "inode": inode, "canonical": True, "same_fs": True}]
         is_cross_fs = False
-        for dup_path in f.get('duplicate_paths', []):
+        for dup_path in dup_paths:
             covered_paths.add(dup_path)
             try:
                 same_fs = (canon_dev is not None and os.stat(dup_path).st_dev == canon_dev)
@@ -66,9 +85,9 @@ def _build_dup_groups(all_files, local_path, media_path=''):
                 is_cross_fs = True
             dup_rel = posixpath.relpath(dup_path, script_root)
             group_files.append({"path": dup_rel, "size": f['size'], "inode": 0, "canonical": False, "same_fs": same_fs})
-        recoverable = 0 if is_cross_fs else f['size'] * len(f.get('duplicate_paths', []))
+        recoverable = 0 if is_cross_fs else f['size'] * len(dup_paths)
         groups.append({"files": group_files, "recoverable_size": recoverable, "skipped": is_cross_fs})
-    return {"groups": groups, "script_root": script_root}
+    return {"groups": groups, "script_root": script_root, "excluded_count": excluded_count}
 
 
 def generate_script(script_type, results, cfg):
@@ -79,7 +98,10 @@ def generate_script(script_type, results, cfg):
     now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     if script_type == 'orphaned_torrents_delete':
-        orphaned   = [f for f in torrent_files if f.get('status') == 'Orphaned']
+        # Excluded files are invisible to script generation — never emit a
+        # delete command for something the user explicitly excluded (#14).
+        orphaned       = [f for f in torrent_files if f.get('status') == 'Orphaned' and not f.get('excluded')]
+        excluded_count = sum(1 for f in torrent_files if f.get('status') == 'Orphaned' and f.get('excluded'))
         total_size = sum(f['size'] for f in orphaned)
         lines = [
             '#!/bin/bash',
@@ -87,6 +109,10 @@ def generate_script(script_type, results, cfg):
             f'# Generated: {now_str}',
             '# WARNING: Review carefully before running. This permanently deletes files.',
             f'# {len(orphaned)} files — {_human_size(total_size)} expected to be freed',
+        ]
+        if excluded_count:
+            lines.append(f'# {excluded_count} orphaned file(s) skipped — they match your Excluded Files & Folders settings')
+        lines += [
             '#',
             '# This script will:',
             '#   1. Record free disk space before deletions',
@@ -245,6 +271,7 @@ def generate_script(script_type, results, cfg):
         dup_result         = _build_dup_groups(tagged_torrent + tagged_media, local_path, media_path)
         groups             = dup_result['groups']
         script_root        = dup_result['script_root']
+        excluded_count     = dup_result.get('excluded_count', 0)
         total_recoverable  = sum(g['recoverable_size'] for g in groups)
         skipped_count      = sum(1 for g in groups if g['skipped'])
         non_skipped_groups = [g for g in groups if not g['skipped']]
@@ -258,6 +285,10 @@ def generate_script(script_type, results, cfg):
             f'# {len(groups)} duplicate groups found',
             f'# {_human_size(total_recoverable)} recoverable',
             f'# {skipped_count} groups skipped (cross-filesystem — cannot hardlink across mounts)',
+        ]
+        if excluded_count:
+            lines.append(f'# {excluded_count} duplicate file(s) skipped — they match your Excluded Files & Folders settings')
+        lines += [
             '#',
             '# This script replaces duplicate files with hardlinks.',
             '# All file paths will continue to exist after running.',
