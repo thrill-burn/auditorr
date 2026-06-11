@@ -905,7 +905,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             })}
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>File explorer visibility</div>
             <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Control whether excluded files appear in the file explorer.</div>
