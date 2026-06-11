@@ -349,13 +349,13 @@ def generate_script(script_type, results, cfg):
                 qname  = shlex.quote(filename)
                 lines.append(f'# Duplicate: {nc_path}')
                 lines.append(f'printf "[{group_num}/{total_non_skipped}] Verifying %s...\\n" {qname}')
-                lines.append(f"HASH_A=$(md5sum {qcanon} | cut -d' ' -f1)")
-                lines.append(f"HASH_B=$(md5sum {qnc} | cut -d' ' -f1)")
-                lines.append('if [ "$HASH_A" != "$HASH_B" ]; then')
-                lines.append('  echo "  SKIP: Hash mismatch — files differ, skipping this group"')
+                # cmp stops at the first differing byte — md5sum would read both
+                # files in full (and hash them) even when they differ immediately
+                lines.append(f'if ! cmp -s {qcanon} {qnc}; then')
+                lines.append('  echo "  SKIP: Files differ — skipping this group"')
                 lines.append('  SKIPPED=$((SKIPPED+1))')
                 lines.append('else')
-                lines.append('  echo "  Hash verified. Creating hardlink..."')
+                lines.append('  echo "  Verified identical. Creating hardlink..."')
                 lines.append(f'  ln -f {qcanon} {qnc}')
                 lines.append(f'  echo "  Done. {size_human} reclaimed."')
                 lines.append(f'  RECLAIMED=$((RECLAIMED+{size_bytes}))')
