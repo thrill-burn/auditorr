@@ -26,6 +26,27 @@ const VERDICTS = [
   },
 ]
 
+// Superseded sub-buckets — what to do depends on how the orphaned torrent's
+// quality compares to the library file it duplicates.
+const QUALITY_BUCKETS = [
+  {
+    key: 'higher', label: 'Higher quality than library', color: 'var(--green)',
+    desc: 'Better than what you imported — consider a manual import in Sonarr/Radarr to upgrade your library copy before doing anything else.',
+  },
+  {
+    key: 'same', label: 'Same quality as library', color: 'var(--blue)',
+    desc: 'An alternate copy at the same quality — pure ratio padding. Keep seeding or delete, nothing to upgrade.',
+  },
+  {
+    key: 'lower', label: 'Lower quality than library', color: 'var(--yellow)',
+    desc: 'Your library already has better. Safe to delete once the torrent has earned its keep.',
+  },
+  {
+    key: 'unknown', label: 'Quality comparison unavailable', color: 'var(--text-dim)',
+    desc: 'One side of the comparison could not be parsed — check the quality chips on each row before acting.',
+  },
+]
+
 function itemKey(item) {
   return item.hash || item.rep_path
 }
@@ -67,20 +88,24 @@ function copyText(text) {
   document.body.removeChild(ta)
 }
 
-// Deepest common directory of a torrent's files — what an exclusion rule
-// should cover. Falls back to the exact file path for single rootless files.
-function exclusionPattern(item) {
+// Exclusion rules for a torrent. Single-file torrents always get an exact
+// file-path rule — their parent is often a shared category dir (tv-sonarr)
+// that must never be excluded wholesale. Multi-file torrents get their
+// common folder only when it sits at least two segments deep
+// (category/release-folder); a flatter layout means the common folder IS the
+// category dir, so those fall back to per-file rules too.
+function exclusionPatterns(item) {
   const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
-  if (paths.length === 0) return null
+  if (paths.length <= 1) return paths
   const segLists = paths.map(p => p.split('/').slice(0, -1))
-  if (segLists.some(s => s.length === 0)) return paths[0]
+  if (segLists.some(s => s.length === 0)) return paths
   let common = segLists[0]
   for (const segs of segLists.slice(1)) {
     let i = 0
     while (i < common.length && i < segs.length && common[i] === segs[i]) i++
     common = common.slice(0, i)
   }
-  return common.length > 0 ? common.join('/') + '/' : paths[0]
+  return common.length >= 2 ? [common.join('/') + '/'] : paths
 }
 
 function QualityChip({ label, hdr, dim }) {
@@ -150,9 +175,6 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
             <>
               <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>vs library</span>
               <QualityChip label={lib.quality_name} hdr={lib.hdr} dim />
-              {lib.same_quality && (
-                <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.7 }}>same quality — alternate copy</span>
-              )}
             </>
           )}
           {item.tracker_msg && (
@@ -202,16 +224,19 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
         </a>
       )}
 
-      {/* Unregistered torrents: jump to the client to delete — copies the
-          title so its search box can be prescreened with one paste */}
-      {item.verdict === 'unregistered' && client && (
+      {/* Jump to the client to inspect/delete — copies the title so its
+          search box can be prescreened with one paste. Red for unregistered
+          (the verdict that begs for deletion), neutral elsewhere. */}
+      {client && (
         <button
           onClick={e => onOpenClient(item, e)}
-          title={`Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find and delete`}
+          title={`Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find this torrent`}
           style={{
             fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
             cursor: 'pointer', marginTop: 2,
-            background: 'var(--red)18', color: 'var(--red)', border: '1px solid var(--red)40',
+            background: item.verdict === 'unregistered' ? 'var(--red)18' : 'var(--surface2)',
+            color:      item.verdict === 'unregistered' ? 'var(--red)'   : 'var(--text-dim)',
+            border:     `1px solid ${item.verdict === 'unregistered' ? 'var(--red)40' : 'var(--border2)'}`,
           }}
         >
           {client.name} ⧉↗
@@ -221,15 +246,17 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
   )
 }
 
-export default function Triage({ onNavigate, onScript }) {
+export default function Triage() {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
   const [selected, setSelected] = useState(() => new Set())
-  const [busy,     setBusy]     = useState(null)   // 'rescan' | 'exclude' | null
+  const [busy,     setBusy]     = useState(null)   // 'rescan' | 'exclude' | 'delete' | null
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui', url }
+  const [clientDeleteAllowed, setClientDeleteAllowed] = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -243,6 +270,7 @@ export default function Triage({ onNavigate, onScript }) {
       const isQui = cfg.TORRENT_SOURCE === 'qui'
       const url = (isQui ? cfg.QUI_HOST : cfg.QB_HOST) || ''
       setClient(url ? { name: isQui ? 'qui' : 'qBittorrent', url } : null)
+      setClientDeleteAllowed(!!cfg.ALLOW_CLIENT_DELETE)
     }).catch(() => {})
   }, [])
 
@@ -287,13 +315,25 @@ export default function Triage({ onNavigate, onScript }) {
     })
   }, [])
 
-  const handleDeleteScript = () => {
-    onScript({
-      scriptType: 'delete_selected',
-      title: 'Delete Selected Files',
-      subtitle: `${selectedItems.length} torrent${selectedItems.length !== 1 ? 's' : ''} · ${formatBytes(selectedSize)}`,
-      body: { paths: selectedPaths },
-    })
+  // Items deletable through the client need a torrent hash; path-keyed
+  // entries (hash unknown) can only be handled manually.
+  const deletableItems = selectedItems.filter(i => i.hash)
+
+  const handleClientDelete = async () => {
+    setBusy('delete')
+    try {
+      const resp = await api.removeTorrents(
+        deletableItems.map(i => ({ hash: i.hash, instance_id: i.instance_id }))
+      )
+      toast(`Removed ${resp.removed} torrent${resp.removed !== 1 ? 's' : ''} and their files via ${client?.name || 'the client'}`, 'success')
+      const keys = new Set(deletableItems.map(itemKey))
+      setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
+      setSelected(new Set())
+      setConfirmOpen(false)
+    } catch (e) {
+      toast(e.message, 'error')
+    }
+    setBusy(null)
   }
 
   const handleRescan = async () => {
@@ -315,7 +355,7 @@ export default function Triage({ onNavigate, onScript }) {
 
   const handleExclude = async () => {
     setBusy('exclude')
-    const patterns = [...new Set(selectedItems.map(exclusionPattern).filter(Boolean))]
+    const patterns = [...new Set(selectedItems.flatMap(exclusionPatterns))]
     try {
       const resp = await api.excludePatterns(patterns)
       toast(`Added ${resp.added} exclusion rule${resp.added !== 1 ? 's' : ''} — applies from the next audit`, 'success')
@@ -373,6 +413,23 @@ export default function Triage({ onNavigate, onScript }) {
             const keys = sectionItems.map(itemKey)
             const allChecked  = keys.every(k => selected.has(k))
             const someChecked = !allChecked && keys.some(k => selected.has(k))
+
+            const renderRows = (rowItems) => (
+              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden' }}>
+                {rowItems.map(item => (
+                  <TriageRow
+                    key={itemKey(item)}
+                    item={item}
+                    color={v.color}
+                    checked={selected.has(itemKey(item))}
+                    onToggle={() => toggle(itemKey(item))}
+                    client={client}
+                    onOpenClient={openInClient}
+                  />
+                ))}
+              </div>
+            )
+
             return (
               <div key={v.key}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
@@ -386,19 +443,31 @@ export default function Triage({ onNavigate, onScript }) {
                 <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 10px 34px', lineHeight: 1.5, maxWidth: 640 }}>
                   {v.desc}
                 </p>
-                <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden' }}>
-                  {sectionItems.map(item => (
-                    <TriageRow
-                      key={itemKey(item)}
-                      item={item}
-                      color={v.color}
-                      checked={selected.has(itemKey(item))}
-                      onToggle={() => toggle(itemKey(item))}
-                      client={client}
-                      onOpenClient={openInClient}
-                    />
-                  ))}
-                </div>
+                {v.key !== 'superseded' ? renderRows(sectionItems) : (
+                  QUALITY_BUCKETS.map(b => {
+                    const bucketItems = sectionItems.filter(i => (i.library?.quality_cmp || 'unknown') === b.key)
+                    if (bucketItems.length === 0) return null
+                    const bKeys = bucketItems.map(itemKey)
+                    const bAll  = bKeys.every(k => selected.has(k))
+                    const bSome = !bAll && bKeys.some(k => selected.has(k))
+                    const bSize = bucketItems.reduce((s, i) => s + i.total_size, 0)
+                    return (
+                      <div key={b.key} style={{ marginLeft: 34, marginBottom: 16 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                          <Checkbox checked={bAll} indeterminate={bSome} onChange={() => toggleSection(bucketItems)} />
+                          <span style={{ fontSize: 12.5, fontWeight: 600, color: b.color }}>{b.label}</span>
+                          <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                            {bucketItems.length} · {formatBytes(bSize)}
+                          </span>
+                        </div>
+                        <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '0 0 8px 25px', lineHeight: 1.5, maxWidth: 620 }}>
+                          {b.desc}
+                        </p>
+                        {renderRows(bucketItems)}
+                      </div>
+                    )
+                  })
+                )}
               </div>
             )
           })}
@@ -411,14 +480,86 @@ export default function Triage({ onNavigate, onScript }) {
               <ActionButton onClick={handleExclude} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
                 {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
               </ActionButton>
-              <ActionButton danger onClick={handleDeleteScript} disabled={busy != null}>
-                Generate Delete Script
-              </ActionButton>
+              {clientDeleteAllowed && client && (
+                <ActionButton danger onClick={() => setConfirmOpen(true)} disabled={busy != null || deletableItems.length === 0}
+                  title={deletableItems.length === 0
+                    ? 'None of the selected items have a torrent hash'
+                    : `Remove the selected torrents AND their downloaded files via ${client.name}`}>
+                  Delete from {client.name}
+                </ActionButton>
+              )}
             </ActionBar>
+          )}
+
+          {confirmOpen && (
+            <ConfirmDeleteModal
+              items={deletableItems}
+              skippedCount={selectedItems.length - deletableItems.length}
+              clientName={client?.name || 'client'}
+              busy={busy === 'delete'}
+              onCancel={() => setConfirmOpen(false)}
+              onConfirm={handleClientDelete}
+            />
           )}
         </>
       )}
       <SpinKeyframes />
+    </div>
+  )
+}
+
+function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, onConfirm }) {
+  const totalSize  = items.reduce((s, i) => s + i.total_size, 0)
+  const totalFiles = items.reduce((s, i) => s + i.file_count, 0)
+  return (
+    <div
+      onClick={busy ? undefined : onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 200, display: 'flex',
+        alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.55)',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 'min(560px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 96px)',
+          display: 'flex', flexDirection: 'column',
+          background: 'var(--surface)', border: '1px solid var(--border2)',
+          borderRadius: 12, boxShadow: '0 16px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{ padding: '18px 20px 0' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>Delete from {clientName}</div>
+          <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
+            This permanently removes <b>{items.length} torrent{items.length !== 1 ? 's' : ''}</b> from {clientName} and
+            deletes <b>{totalFiles} file{totalFiles !== 1 ? 's' : ''} · {formatBytes(totalSize)}</b> from disk. There is no undo.
+          </p>
+          {skippedCount > 0 && (
+            <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0' }}>
+              {skippedCount} selected item{skippedCount !== 1 ? 's have' : ' has'} no torrent hash and will be skipped.
+            </p>
+          )}
+        </div>
+        <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
+          {items.map(item => (
+            <div key={itemKey(item)} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 12px', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {item.parsed?.title || (item.rep_path || '').replace(/\\/g, '/').split('/').pop()}
+              </span>
+              <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+                {formatBytes(item.total_size)}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '14px 20px 18px' }}>
+          <ActionButton onClick={onCancel} disabled={busy}>Cancel</ActionButton>
+          <ActionButton danger onClick={onConfirm} disabled={busy}>
+            {busy ? 'Deleting…' : `Delete ${items.length} torrent${items.length !== 1 ? 's' : ''} + files`}
+          </ActionButton>
+        </div>
+      </div>
     </div>
   )
 }

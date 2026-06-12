@@ -100,6 +100,7 @@ export const api = {
   cleanupReport:  ()         => req('/workflows/cleanup'),
   dedupeReport:   ()         => req('/workflows/dedupe'),
   excludePatterns: (patterns) => req('/workflows/exclude', { method: 'POST', body: JSON.stringify({ patterns }) }),
+  removeTorrents: (items)     => req('/workflows/remove_torrents', { method: 'POST', body: JSON.stringify({ items, delete_files: true }) }),
   browseData:    ()       => req('/browse_data'),
   sourceInfo:    ()       => req('/source_info'),
   fetchSavePath: (creds)  => req('/source_save_path', { method: 'POST', body: JSON.stringify(creds) }),

@@ -580,6 +580,95 @@ def fetch_torrent_details(cfg, items):
 
 
 # ---------------------------------------------------------------------------
+# remove_torrents
+# ---------------------------------------------------------------------------
+
+def remove_torrents(cfg, items, delete_files=True):
+    """Delete torrents — and their downloaded files — across qui instances.
+
+    items: [{'hash': str, 'instance_id': int|None}]. Hashes without a known
+    instance_id are located by listing every eligible instance first (same
+    approach as fetch_torrent_details). Uses qui's bulk-action endpoint
+    (POST /api/instances/{id}/torrents/bulk-action) with action
+    'deleteWithFiles' / 'delete' — both confirmed in the action enum of a
+    live instance's /api/openapi.json (2026-06-12).
+    Returns the number of torrents submitted for deletion.
+    """
+    base    = (cfg.get('QUI_HOST') or '').rstrip('/')
+    api_key = cfg.get('QUI_API_KEY', '')
+    if not base:
+        raise SourceConnectionError("QUI_HOST is not configured")
+
+    wanted = {}  # hash -> instance_id|None
+    for i in items:
+        h = i.get('hash')
+        if h:
+            wanted.setdefault(h, i.get('instance_id'))
+    if not wanted:
+        return 0
+
+    socket.setdefaulttimeout(30)
+    try:
+        sess = _session(api_key)
+        resp = sess.get(f'{base}/api/instances', timeout=15)
+        resp.raise_for_status()
+        all_instances = resp.json()
+        if not isinstance(all_instances, list):
+            all_instances = _unwrap(all_instances)
+        eligible = {i['id'] for i in all_instances if _eligible(i)}
+        if not eligible:
+            raise SourceConnectionError("No eligible qui instances")
+
+        by_instance = {}  # instance_id -> [hashes]
+        unresolved  = []
+        for h, inst_id in wanted.items():
+            if inst_id in eligible:
+                by_instance.setdefault(inst_id, []).append(h)
+            else:
+                unresolved.append(h)
+
+        if unresolved:
+            remaining = set(unresolved)
+            for inst_id in eligible:
+                if not remaining:
+                    break
+                try:
+                    found = []
+                    for t in _fetch_all_torrents(sess, base, inst_id):
+                        h = _norm_torrent(t)['hash']
+                        if h in remaining:
+                            found.append(h)
+                except Exception as e:
+                    log.warning('qui: torrent list failed for instance %s: %s', inst_id, e)
+                    continue
+                if found:
+                    by_instance.setdefault(inst_id, []).extend(found)
+                    remaining -= set(found)
+
+        removed = 0
+        for inst_id, hashes in by_instance.items():
+            action_resp = sess.post(
+                f'{base}/api/instances/{inst_id}/torrents/bulk-action',
+                json={'hashes': hashes,
+                      'action': 'deleteWithFiles' if delete_files else 'delete'},
+                timeout=30,
+            )
+            action_resp.raise_for_status()
+            removed += len(hashes)
+        return removed
+    except SourceConnectionError:
+        raise
+    except requests.exceptions.ConnectionError as e:
+        raise SourceConnectionError(f"qui connection error: {_connection_error_message(base)}") from e
+    except requests.exceptions.HTTPError as e:
+        raise SourceConnectionError(f"qui HTTP error: {e}") from e
+    except Exception as e:
+        raise SourceConnectionError(f"qui error: {e}") from e
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+# ---------------------------------------------------------------------------
 # test_connection
 # ---------------------------------------------------------------------------
 

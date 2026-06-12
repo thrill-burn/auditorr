@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import time
+import unicodedata
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -619,6 +620,41 @@ _SOURCE_DISPLAY = {
     'remux': 'Remux', 'bluray': 'Bluray', 'webdl': 'WEB-DL',
     'webrip': 'WEBRip', 'hdtv': 'HDTV', 'dvd': 'DVD',
 }
+_RES_RANK    = {'480p': 1, '720p': 2, '1080p': 3, '2160p': 4}
+_SOURCE_RANK = {'dvd': 1, 'hdtv': 2, 'webrip': 3, 'webdl': 4, 'bluray': 5, 'remux': 6}
+
+
+def parse_quality_name(quality_name):
+    """Extract (resolution, source) labels from an arr quality name like 'Bluray-1080p'."""
+    name = str(quality_name or '')
+    resolution = next((label for label, pat in _RES_NAME_PATTERNS
+                       if re.search(pat, name, re.IGNORECASE)), '')
+    source = next((label for label, pat in _SOURCE_NAME_PATTERNS
+                   if re.search(pat, name, re.IGNORECASE)), '')
+    return resolution, source
+
+
+def compare_release_quality(parsed, lib_quality_name):
+    """Compare a parsed torrent release against the library file's arr quality name.
+
+    Resolution decides; source (Remux > Bluray > WEB-DL > WEBRip > HDTV > DVD)
+    breaks resolution ties. Returns 'higher' | 'same' | 'lower' | 'unknown' —
+    'unknown' whenever the deciding field is missing on either side, because a
+    bucket that suggests "safe to delete" must not guess.
+    """
+    t_res = _RES_RANK.get(parsed.get('resolution'), 0)
+    l_res = _RES_RANK.get(parse_quality_name(lib_quality_name)[0], 0)
+    if not t_res or not l_res:
+        return 'unknown'
+    if t_res != l_res:
+        return 'higher' if t_res > l_res else 'lower'
+    t_src = _SOURCE_RANK.get(parsed.get('source'), 0)
+    l_src = _SOURCE_RANK.get(parse_quality_name(lib_quality_name)[1], 0)
+    if not t_src or not l_src:
+        return 'same'
+    if t_src != l_src:
+        return 'higher' if t_src > l_src else 'lower'
+    return 'same'
 
 
 def parse_release_info(path):
@@ -802,17 +838,25 @@ def _normalize_title(title):
     return t
 
 
+def _ascii_fold(title):
+    """Strip diacritics so 'Žižek' matches the ASCII 'Zizek' a release name uses."""
+    return unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode()
+
+
 def title_match_keys(title):
     """All normalized lookup keys a title should match under.
 
     Scene names handle apostrophes two ways — replaced by a separator
     (Widow.s.Bay) or dropped entirely (Widows.Bay) — so "Widow's Bay" must
-    index/look up as both 'widow s bay' and 'widows bay'.
+    index/look up as both 'widow s bay' and 'widows bay'. Diacritics get the
+    same treatment: arr titles keep them ("Žižek!") while release names are
+    ASCII ("zizek"), so an ASCII-folded variant of every key is added too.
     """
     if not title:
         return set()
-    keys = {_normalize_title(title)}
-    keys.add(_normalize_title(re.sub(r"['’`]", '', title)))
+    variants = {title, re.sub(r"['’`]", '', title)}
+    variants |= {_ascii_fold(v) for v in variants}
+    keys = {_normalize_title(v) for v in variants}
     keys.discard('')
     return keys
 

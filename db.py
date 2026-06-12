@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     'QB_PASS':            '',
     'QUI_HOST':           '',
     'QUI_API_KEY':        '',
+    'ALLOW_CLIENT_DELETE': False,  # Workflows may delete torrents+files via the client (opt-in)
     'MEDIA_PATH':         '/data/media',
     'REMOTE_PATH':        '/data/torrents',
     'LOCAL_PATH':         '/data/torrents',

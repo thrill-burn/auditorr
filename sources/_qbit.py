@@ -201,6 +201,40 @@ def fetch_torrent_details(cfg, items):
 
 
 # ---------------------------------------------------------------------------
+# remove_torrents
+# ---------------------------------------------------------------------------
+
+def remove_torrents(cfg, items, delete_files=True):
+    """Delete torrents — and their downloaded files — from qBittorrent.
+
+    items: [{'hash': str, ...}] — instance_id is ignored (single instance).
+    Returns the number of torrents that existed and were submitted for
+    deletion (qBittorrent silently ignores unknown hashes, so existence is
+    checked first to give the caller an honest count).
+    """
+    hashes = sorted({i.get('hash') for i in items if i.get('hash')})
+    if not hashes:
+        return 0
+    socket.setdefaulttimeout(30)
+    try:
+        qbt = qbittorrentapi.Client(
+            host=cfg.get('QB_HOST'),
+            username=cfg.get('QB_USER'),
+            password=cfg.get('QB_PASS'),
+        )
+        qbt.auth_log_in()
+        existing = [t.hash for t in qbt.torrents_info(torrent_hashes=hashes)]
+        if not existing:
+            return 0
+        qbt.torrents_delete(delete_files=delete_files, torrent_hashes=existing)
+        return len(existing)
+    except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
+        raise SourceConnectionError(f"qBittorrent error: {e}") from e
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+# ---------------------------------------------------------------------------
 # test_connection
 # ---------------------------------------------------------------------------
 

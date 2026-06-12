@@ -543,6 +543,34 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             )}
           </div>
         )}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>Workflow torrent deletion</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+              Allow workflow pages to delete torrents and their files directly via {isQui ? 'qui' : 'qBittorrent'}. Off keeps auditorr read-only against your client.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 24 }}>
+            {[
+              { value: false, label: 'Disallowed' },
+              { value: true,  label: 'Allowed'    },
+            ].map(opt => (
+              <button
+                key={String(opt.value)}
+                onClick={() => set('ALLOW_CLIENT_DELETE')(opt.value)}
+                style={{
+                  padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
+                  border: `1px solid ${!!conf.ALLOW_CLIENT_DELETE === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
+                  background: !!conf.ALLOW_CLIENT_DELETE === opt.value ? 'var(--accent)18' : 'transparent',
+                  color: !!conf.ALLOW_CLIENT_DELETE === opt.value ? 'var(--accent)' : 'var(--text-dim)',
+                  cursor: 'pointer', transition: 'all 0.12s',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </Card>
 
       <Card title="Path Mappings">

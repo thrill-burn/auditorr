@@ -34,7 +34,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality
 from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -351,6 +351,7 @@ def handle_config():
                 'QB_PASS':            str(data['QB_PASS']) if data.get('QB_PASS') else existing.get('QB_PASS',''),
                 'QUI_HOST':           str(data.get('QUI_HOST', '')),
                 'QUI_API_KEY':        str(data['QUI_API_KEY']) if data.get('QUI_API_KEY') else existing.get('QUI_API_KEY', ''),
+                'ALLOW_CLIENT_DELETE': bool(data.get('ALLOW_CLIENT_DELETE', existing.get('ALLOW_CLIENT_DELETE', False))),
                 'MEDIA_PATH':         str(data.get('MEDIA_PATH', '')),
                 'REMOTE_PATH':        str(data.get('REMOTE_PATH', '')),
                 'LOCAL_PATH':         str(data.get('LOCAL_PATH', '')),
@@ -839,6 +840,37 @@ def workflows_exclude():
     return jsonify({"status": "success", "added": added, "total": len(existing)})
 
 
+@app.route('/api/workflows/remove_torrents', methods=['POST'])
+@require_auth
+def workflows_remove_torrents():
+    """Delete selected torrents AND their files via the torrent client.
+
+    Destructive — gated behind the ALLOW_CLIENT_DELETE config flag (off by
+    default) so conservative users can keep auditorr strictly read-only
+    against their client.
+    """
+    cfg = db_load_config()
+    if not cfg.get('ALLOW_CLIENT_DELETE'):
+        return jsonify({
+            "status": "error",
+            "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
+        }), 403
+    data  = request.json or {}
+    items = [
+        {'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
+        for i in (data.get('items') or []) if i.get('hash')
+    ]
+    if not items:
+        return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
+    try:
+        removed = sources.remove_torrents(cfg, items, delete_files=bool(data.get('delete_files', True)))
+    except sources.SourceConnectionError as e:
+        return jsonify({"status": "error", "message": str(e)}), 502
+    log.info("Client delete: removed %d/%d torrent(s) (delete_files=%s)",
+             removed, len(items), data.get('delete_files', True))
+    return jsonify({"status": "success", "removed": removed, "requested": len(items)})
+
+
 @app.route('/api/workflows/triage')
 @require_auth
 def workflows_triage():
@@ -972,7 +1004,7 @@ def workflows_triage():
                 'hdr':          library_match.get('file_hdr') or '',
                 'filename':     os.path.basename(library_match.get('path') or ''),
                 'arr_url':      _arr_url(library_match),
-                'same_quality': bool(parsed['resolution'] and parsed['resolution'] in lib_quality),
+                'quality_cmp':  compare_release_quality(parsed, lib_quality),
             }
         elif in_arr:
             t = arr_title_hit
@@ -984,11 +1016,12 @@ def workflows_triage():
                 'hdr':          '',
                 'filename':     '',
                 'arr_url':      _arr_url(t),
-                'same_quality': False,
+                'quality_cmp':  'unknown',
             }
 
         items.append({
             'hash':           g['hash'],
+            'instance_id':    g['instance_id'],
             'rep_path':       rep['path'],
             'paths':          [f['path'] for f in g['files']],
             'file_count':     len(g['files']),
