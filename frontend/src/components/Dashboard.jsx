@@ -121,19 +121,31 @@ function HealthDial({ score, status, smartTrend, color }) {
 
   // Thin segments sweeping the threshold-aligned gradient up to the
   // (animated) fill position — a conic gradient the dial actually earns.
-  const SEGMENTS = 60
+  // Each segment overlaps into the next so antialiased edges blend against
+  // same-colored paint instead of the track (butted edges leave a faint
+  // radial seam at every junction — the "grainy" look).
+  const SEGMENTS = 120
+  const OVERLAP  = 0.6 / SEGMENTS
   const arcSegments = []
   for (let i = 0; i < SEGMENTS; i++) {
     const t0 = i / SEGMENTS
-    const t1 = (i + 1) / SEGMENTS
     if (t0 >= animPct) break
-    const cappedT1 = Math.min(t1, animPct)
+    const t1 = Math.min((i + 1) / SEGMENTS + OVERLAP, animPct)
     const segStart = START_DEG + SWEEP_DEG * t0
-    const segEnd   = START_DEG + SWEEP_DEG * cappedT1
-    const segPath  = arcPath(CX, CY, R_OUTER, R_INNER, segStart, segEnd)
-    arcSegments.push({ path: segPath, color: `hsl(${dialHue(t0)}, 90%, 52%)` })
+    const segEnd   = START_DEG + SWEEP_DEG * t1
+    arcSegments.push({
+      path:  arcPath(CX, CY, R_OUTER, R_INNER, segStart, segEnd),
+      color: `hsl(${dialHue(Math.min((t0 + t1) / 2, animPct))}, 90%, 52%)`,
+    })
   }
   const tipColor = `hsl(${dialHue(animPct)}, 90%, 52%)`
+  // The glow lives on a dedicated tip cap — a blur filter on a sub-degree
+  // sliver renders as noise, so give it a few degrees of its own.
+  const tipPath = animPct > 0.01
+    ? arcPath(CX, CY, R_OUTER, R_INNER,
+        START_DEG + SWEEP_DEG * Math.max(0, animPct - 0.012),
+        START_DEG + SWEEP_DEG * animPct)
+    : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
@@ -146,9 +158,13 @@ function HealthDial({ score, status, smartTrend, color }) {
         ))}
         {/* Color-swept filled segments */}
         {arcSegments.map((seg, i) => (
-          <path key={i} d={seg.path} fill={seg.color}
-            style={{ filter: i === arcSegments.length - 1 ? 'drop-shadow(0 0 6px ' + tipColor + ')' : 'none' }} />
+          <path key={i} d={seg.path} fill={seg.color} />
         ))}
+        {/* Tip cap with glow */}
+        {tipPath && (
+          <path d={tipPath} fill={tipColor}
+            style={{ filter: 'drop-shadow(0 0 6px ' + tipColor + ')' }} />
+        )}
         {/* Threshold ticks + labels */}
         {ticks.map((t, i) => (
           <g key={i}>
@@ -696,18 +712,9 @@ function TrackerDetailModal({ trackerName, trackerStats, uploadStats, onNavigate
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, selectedTrackers, setSelectedTrackers, allTrackers, onReveal }) {
   const toast = useToast()
-  const [sonarrConfigured, setSonarrConfigured] = useState(false)
-  const [radarrConfigured, setRadarrConfigured] = useState(false)
   const [uploadStats, setUploadStats] = useState(null)
   const [trackerDetail, setTrackerDetail] = useState(null)
   const [yieldPanelTab, setYieldPanelTab] = useState('upload')
-
-  useEffect(() => {
-    api.getConfig().then(cfg => {
-      setSonarrConfigured(!!cfg.SONARR_URL)
-      setRadarrConfigured(!!cfg.RADARR_URL)
-    }).catch(() => {})
-  }, [])
 
   useEffect(() => {
     api.uploadStats(timeRange).then(d => {
@@ -726,26 +733,34 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     ? Math.round((det.hardlinked_media_size / det.total_media_size) * 100) : 100
   const c = scoreColor(score)
 
-  const notImportedPaths = data.not_imported_paths || []
-
-  // Per-day totals from upload snapshots — feeds the card sparklines
+  // Per-day series from upload snapshots — feeds the card sparklines.
+  // Orphaned/Not Imported sum the per-tracker stats; Hardlinked %/Duplicates
+  // come from the snapshot's library-wide '_library' block.
   const sparkSeries = (() => {
+    const series = {}
     const days = uploadStats?.daily_tracker_stats
-    if (!days || days.length < 2) return {}
-    const orphaned = [], notImported = []
-    for (const day of days) {
-      let o = 0, n = 0
-      for (const s of Object.values(day.by_tracker || {})) {
-        o += s.orphaned_size || 0
-        n += s.not_imported_size || 0
+    if (days && days.length >= 2) {
+      const orphaned = [], notImported = []
+      for (const day of days) {
+        let o = 0, n = 0
+        for (const s of Object.values(day.by_tracker || {})) {
+          o += s.orphaned_size || 0
+          n += s.not_imported_size || 0
+        }
+        orphaned.push(o)
+        notImported.push(n)
       }
-      orphaned.push(o)
-      notImported.push(n)
+      if (orphaned.some(v => v > 0))    series.orphaned    = orphaned
+      if (notImported.some(v => v > 0)) series.notImported = notImported
     }
-    return {
-      orphaned:    orphaned.some(v => v > 0)    ? orphaned    : null,
-      notImported: notImported.some(v => v > 0) ? notImported : null,
+    const libDays = uploadStats?.daily_library_stats
+    if (libDays && libDays.length >= 2) {
+      series.hardlinked = libDays.map(d =>
+        d.total_media_size > 0 ? (d.hardlinked_media_size / d.total_media_size) * 100 : 100)
+      const dupes = libDays.map(d => d.duplicate_size || 0)
+      if (dupes.some(v => v > 0)) series.duplicates = dupes
     }
+    return series
   })()
 
   const metrics = [
@@ -755,10 +770,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.hl_score} / 70 pts`,
       desc: 'Percentage of your media library that is hardlinked back to a torrent file. 100% means everything is connected.',
       color: 'var(--blue)',
+      spark: sparkSeries.hardlinked ? { data: sparkSeries.hardlinked, title: 'Hardlinked % trend' } : null,
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
-        [{ type: 'navigate', label: 'Backfill Orphaned Media', tab: 'backfill' }],
-        [],
+        [{ type: 'navigate', label: 'Open Backfill Workflow', tab: 'backfill' }],
       ],
     },
     {
@@ -771,7 +786,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
         [{ type: 'navigate', label: 'Open Cleanup Workflow', tab: 'cleanup' }],
-        [],
       ],
     },
     {
@@ -784,14 +798,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       actionRows: [
         [{ type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' }],
         [{ type: 'navigate', label: 'Open Triage Workflow', tab: 'triage' }],
-        [{ type: 'api', label: 'Radarr Rescan', loadingLabel: 'Rescanning…',
-            apiCall: () => api.radarrRescan(notImportedPaths),
-            successToast: 'Radarr rescan triggered — check Radarr for import results',
-            errorToast: true, hidden: !radarrConfigured },
-         { type: 'api', label: 'Sonarr Rescan', loadingLabel: 'Rescanning…',
-            apiCall: () => api.sonarrRescan(notImportedPaths),
-            successToast: 'Sonarr rescan triggered — check Sonarr for import results',
-            errorToast: true, hidden: !sonarrConfigured }],
       ],
     },
     {
@@ -800,9 +806,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.dup_score} / 10 pts`,
       desc: 'Bit-for-bit identical files that share no inode — true copies wasting disk space.',
       color: 'var(--purple)',
+      spark: sparkSeries.duplicates ? { data: sparkSeries.duplicates, title: 'Duplicate size trend' } : null,
       actionRows: [
-        [{ type: 'navigate', label: 'View Media Dupes', tab: 'media', status: 'Duplicate' }],
-        [{ type: 'navigate', label: 'View Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
+        [{ type: 'navigate', label: 'View Media Dupes', tab: 'media', status: 'Duplicate' },
+         { type: 'navigate', label: 'View Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
         [{ type: 'navigate', label: 'Open Dedupe Workflow', tab: 'dedupe' }],
       ],
     },

@@ -382,6 +382,7 @@ def compute_upload_stats(days=30, from_date=None, to_date=None):
     # Per-day point-in-time stats: seeding_size, orphaned_size, not_imported_size
     # Use the last snapshot of each day (all rows, not just delta pairs)
     daily_point_by_tracker = {}
+    daily_library_by_date  = {}
     for row in rows:
         try:
             t = datetime.fromisoformat(row['taken_at'])
@@ -398,10 +399,18 @@ def compute_upload_stats(days=30, from_date=None, to_date=None):
                 'not_imported_size': snap_data.get('not_imported_size', 0),
             }
         daily_point_by_tracker[date_str] = day_stats
+        # Library-wide block (hardlinked/duplicates) — absent in old snapshots
+        lib = row['snapshot'].get('_library')
+        if isinstance(lib, dict):
+            daily_library_by_date[date_str] = lib
 
     daily_tracker_stats = [
         {'date': date_str, 'by_tracker': stats}
         for date_str, stats in sorted(daily_point_by_tracker.items())
+    ]
+    daily_library_stats = [
+        {'date': date_str, **stats}
+        for date_str, stats in sorted(daily_library_by_date.items())
     ]
 
     # Total uploaded over the period
@@ -451,6 +460,7 @@ def compute_upload_stats(days=30, from_date=None, to_date=None):
         "total_seeding_size":  total_seeding_size,
         "daily_uploads":       daily_uploads,
         "daily_tracker_stats": daily_tracker_stats,
+        "daily_library_stats": daily_library_stats,
         "tracker_yields":      tracker_yields,
     }
 
@@ -794,6 +804,15 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 aug[tracker]['orphaned_count']     = fstats['orphaned_count']
                 aug[tracker]['not_imported_size']  = fstats['not_imported_size']
                 aug[tracker]['not_imported_count'] = fstats['not_imported_count']
+            # Library-wide stats (hardlinked %, duplicates) have no per-tracker
+            # breakdown — stored under a '_'-prefixed key, which every tracker
+            # loop already skips. Feeds the dashboard card trend sparklines.
+            det = dashboard_stats['current']['details']
+            aug['_library'] = {
+                'hardlinked_media_size': det['hardlinked_media_size'],
+                'total_media_size':      det['total_media_size'],
+                'duplicate_size':        det['duplicate_size'],
+            }
             db_save_upload_snapshot(aug, source=cfg.get('TORRENT_SOURCE', 'qbit'))
         except Exception as e:
             log.warning(f"Could not save upload snapshot: {e}")
