@@ -634,6 +634,16 @@ def parse_quality_name(quality_name):
     return resolution, source
 
 
+def _effective_res_rank(resolution, source):
+    """Resolution rank, inferring SD when only a DVD source tag is present —
+    'DVDRip' releases and the arr quality name 'DVD' carry no resolution token
+    but are 480p-class by definition."""
+    rank = _RES_RANK.get(resolution, 0)
+    if not rank and source == 'dvd':
+        rank = _RES_RANK['480p']
+    return rank
+
+
 def compare_release_quality(parsed, lib_quality_name):
     """Compare a parsed torrent release against the library file's arr quality name.
 
@@ -642,14 +652,15 @@ def compare_release_quality(parsed, lib_quality_name):
     'unknown' whenever the deciding field is missing on either side, because a
     bucket that suggests "safe to delete" must not guess.
     """
-    t_res = _RES_RANK.get(parsed.get('resolution'), 0)
-    l_res = _RES_RANK.get(parse_quality_name(lib_quality_name)[0], 0)
+    lib_res, lib_src = parse_quality_name(lib_quality_name)
+    t_res = _effective_res_rank(parsed.get('resolution'), parsed.get('source'))
+    l_res = _effective_res_rank(lib_res, lib_src)
     if not t_res or not l_res:
         return 'unknown'
     if t_res != l_res:
         return 'higher' if t_res > l_res else 'lower'
     t_src = _SOURCE_RANK.get(parsed.get('source'), 0)
-    l_src = _SOURCE_RANK.get(parse_quality_name(lib_quality_name)[1], 0)
+    l_src = _SOURCE_RANK.get(lib_src, 0)
     if not t_src or not l_src:
         return 'same'
     if t_src != l_src:
@@ -657,11 +668,24 @@ def compare_release_quality(parsed, lib_quality_name):
     return 'same'
 
 
-def parse_release_info(path):
-    """Parse title, season/episode, and quality hints from a release file or folder name.
+def _parse_year_from_name(name):
+    """Release year from a space-normalized release name, or None.
 
-    Returns {'title', 'season', 'episode', 'resolution', 'source', 'hdr',
-    'quality_label'} — empty strings / None for anything not detected.
+    Takes the LAST plausible year token so titles that are themselves years
+    survive ("2012 2009 1080p" → 2009). Tokens outside 1900..now+2 are
+    ignored, which also skips title numbers like "Blade Runner 2049".
+    """
+    cutoff = time.gmtime().tm_year + 2
+    years = [int(y) for y in re.findall(r'\b((?:19|20)\d{2})\b', name)
+             if 1900 <= int(y) <= cutoff]
+    return years[-1] if years else None
+
+
+def parse_release_info(path):
+    """Parse title, season/episode, year, and quality hints from a release file or folder name.
+
+    Returns {'title', 'season', 'episode', 'year', 'resolution', 'source',
+    'hdr', 'quality_label'} — empty strings / None for anything not detected.
     """
     base = os.path.basename(str(path or '').replace('\\', '/').rstrip('/'))
     stem = os.path.splitext(base)[0]
@@ -686,6 +710,7 @@ def parse_release_info(path):
         'title':         _parse_title_from_filename(base),
         'season':        season,
         'episode':       episode,
+        'year':          _parse_year_from_name(name),
         'resolution':    resolution,
         'source':        source,
         'hdr':           hdr,
@@ -709,6 +734,8 @@ def parse_release_info_for_path(rel_path):
                 parsed[key] = folder[key]
         if parsed['season'] is None:
             parsed['season'] = folder['season']
+        if parsed['year'] is None:
+            parsed['year'] = folder['year']
         parsed['quality_label'] = ' '.join(
             x for x in (parsed['resolution'], _SOURCE_DISPLAY.get(parsed['source'], '')) if x)
     return parsed

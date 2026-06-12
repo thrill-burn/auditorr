@@ -156,7 +156,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {p.title || filename}{seTag}
+            {p.title || filename}{p.year ? ` (${p.year})` : ''}{seTag}
           </span>
           {item.file_count > 1 && (
             <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
@@ -173,7 +173,12 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
           <QualityChip label={p.quality_label} hdr={p.hdr} />
           {lib && lib.quality_name && (
             <>
-              <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>vs library</span>
+              <span
+                title={`${lib.title}${lib.year ? ` (${lib.year})` : ''}${lib.filename ? ' — ' + lib.filename : ''}`}
+                style={{ fontSize: 10, color: 'var(--text-dim)' }}
+              >
+                vs library{lib.year ? ` (${lib.year})` : ''}
+              </span>
               <QualityChip label={lib.quality_name} hdr={lib.hdr} dim />
             </>
           )}

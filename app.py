@@ -935,7 +935,7 @@ def workflows_triage():
     titles_by_norm = {}
     for t in all_titles:
         for key in title_match_keys(t.get('title') or ''):
-            titles_by_norm.setdefault(key, t)
+            titles_by_norm.setdefault(key, []).append(t)
 
     conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
 
@@ -959,8 +959,20 @@ def workflows_triage():
         parsed_keys    = title_match_keys(parsed['title'])
         is_episode     = parsed['season'] is not None
 
+        # Same-title remakes ("The Smashing Machine" 2002 vs 2025) must not
+        # match each other: when the release name carries a year, a radarr
+        # candidate with a different year is rejected. Only enforced for
+        # movies — TV release names often carry air dates, not series years.
+        def _year_ok(entry):
+            if parsed['year'] is None or entry.get('service') != 'radarr':
+                return True
+            if not entry.get('year'):
+                return True
+            return abs(int(entry['year']) - parsed['year']) <= 1
+
         # Library rows with files, preferring the service that fits the content type
         lib_rows = next((lib_by_title[k] for k in parsed_keys if k in lib_by_title), [])
+        lib_rows = [r for r in lib_rows if _year_ok(r)]
         if lib_rows:
             preferred = 'sonarr' if is_episode else 'radarr'
             lib_rows = [r for r in lib_rows if r.get('service') == preferred] or lib_rows
@@ -981,7 +993,9 @@ def workflows_triage():
             else:
                 library_match = lib_rows[0]
 
-        arr_title_hit = next((titles_by_norm[k] for k in parsed_keys if k in titles_by_norm), None)
+        arr_title_hit = next(
+            (t for k in parsed_keys for t in titles_by_norm.get(k, []) if _year_ok(t)),
+            None)
         in_arr = arr_title_hit is not None
 
         if tracker_health == 'unregistered':
