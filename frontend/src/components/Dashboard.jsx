@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, formatBytesCompact, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
@@ -36,13 +36,31 @@ function DashboardSkeleton() {
 }
 
 // ── SVG Arc Dial ──────────────────────────────────────────────────────────────
+// Gradient hue stops aligned with the scoreColor() status thresholds:
+// red below 75, yellow 75–89, green 90+. The arc tip color therefore always
+// agrees with the status text and the score number.
+const DIAL_HUE_STOPS = [[0, 0], [0.75, 55], [0.9, 100], [1, 125]]
+const DIAL_ZONES = [
+  { from: 0,    to: 0.75, color: 'hsl(0, 80%, 50%)'   },   // Poor/Fair
+  { from: 0.75, to: 0.9,  color: 'hsl(55, 85%, 50%)'  },   // Good
+  { from: 0.9,  to: 1,    color: 'hsl(115, 70%, 45%)' },   // Excellent
+]
+
+function dialHue(t) {
+  for (let i = 1; i < DIAL_HUE_STOPS.length; i++) {
+    const [t1, h1] = DIAL_HUE_STOPS[i - 1]
+    const [t2, h2] = DIAL_HUE_STOPS[i]
+    if (t <= t2) return h1 + (h2 - h1) * ((t - t1) / (t2 - t1))
+  }
+  return DIAL_HUE_STOPS[DIAL_HUE_STOPS.length - 1][1]
+}
+
 function HealthDial({ score, status, smartTrend, color }) {
   const SIZE = 220
   const CX = SIZE / 2, CY = SIZE / 2
   const R_OUTER = 90, R_INNER = 68
   const GAP_DEG = 50
   const START_DEG = 90 + GAP_DEG / 2
-  const END_DEG   = 90 + 360 - GAP_DEG / 2
   const SWEEP_DEG = 360 - GAP_DEG
 
   function polarToXY(cx, cy, r, angleDeg) {
@@ -56,53 +74,89 @@ function HealthDial({ score, status, smartTrend, color }) {
     return `M ${s1.x} ${s1.y} A ${rO} ${rO} 0 ${large} 1 ${e1.x} ${e1.y} L ${s2.x} ${s2.y} A ${rI} ${rI} 0 ${large} 0 ${e2.x} ${e2.y} Z`
   }
 
-  const pct     = Math.min(Math.max(score, 0), 100) / 100
-  const fillEnd = START_DEG + SWEEP_DEG * pct
-  const trackPath = arcPath(CX, CY, R_OUTER, R_INNER, START_DEG, END_DEG)
-  const ticks = [0, 25, 50, 75, 100].map(v => {
+  const target = Math.min(Math.max(score, 0), 100) / 100
+
+  // Animated fill: ease toward the score on mount and whenever it changes,
+  // so the gradient is visible as a sweep rather than a static rainbow.
+  const animRef = useRef(0)
+  const [animPct, setAnimPct] = useState(0)
+  useEffect(() => {
+    const from = animRef.current
+    const dur = 900
+    const t0 = performance.now()
+    let raf
+    const step = (now) => {
+      const t = Math.min(1, (now - t0) / dur)
+      const eased = 1 - Math.pow(1 - t, 3)
+      const v = from + (target - from) * eased
+      animRef.current = v
+      setAnimPct(v)
+      if (t < 1) raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [target])
+
+  const trackPath = arcPath(CX, CY, R_OUTER, R_INNER, START_DEG, START_DEG + SWEEP_DEG)
+
+  // Zone bands on the unfilled track, with labeled ticks at the thresholds
+  const zonePaths = DIAL_ZONES.map(z => ({
+    path: arcPath(CX, CY, R_OUTER, R_INNER,
+      START_DEG + SWEEP_DEG * z.from, START_DEG + SWEEP_DEG * z.to),
+    color: z.color,
+  }))
+  const ticks = [75, 90].map(v => {
     const deg = START_DEG + SWEEP_DEG * (v / 100)
-    return { inner: polarToXY(CX, CY, R_INNER - 4, deg), outer: polarToXY(CX, CY, R_OUTER + 4, deg) }
+    return {
+      value: v,
+      inner: polarToXY(CX, CY, R_INNER - 4, deg),
+      outer: polarToXY(CX, CY, R_OUTER + 4, deg),
+      label: polarToXY(CX, CY, R_OUTER + 13, deg),
+    }
   })
 
   const delta = smartTrend?.delta
   const trendLabel = smartTrend?.label
   const up = delta != null && delta >= 0
 
-  // Build arc segments that sweep the color along the arc path.
-  // We draw N thin segments, each colored by interpolating red->yellow->green
-  // based on its position along the arc. Only segments within the filled
-  // portion (0..pct) are rendered — this gives a true conic gradient effect.
-  const SEGMENTS = 60  // enough for smooth appearance
+  // Thin segments sweeping the threshold-aligned gradient up to the
+  // (animated) fill position — a conic gradient the dial actually earns.
+  const SEGMENTS = 60
   const arcSegments = []
   for (let i = 0; i < SEGMENTS; i++) {
     const t0 = i / SEGMENTS
     const t1 = (i + 1) / SEGMENTS
-    if (t0 >= pct) break  // only draw up to the score
-    const cappedT1 = Math.min(t1, pct)
+    if (t0 >= animPct) break
+    const cappedT1 = Math.min(t1, animPct)
     const segStart = START_DEG + SWEEP_DEG * t0
     const segEnd   = START_DEG + SWEEP_DEG * cappedT1
     const segPath  = arcPath(CX, CY, R_OUTER, R_INNER, segStart, segEnd)
-    // Color: 0=red, 0.5=yellow, 1=green interpolated in HSL space
-    // red=0deg, yellow=60deg, green=120deg in HSL
-    const hue = t0 * 120  // 0 -> 120
-    const segColor = `hsl(${hue}, 90%, 52%)`
-    arcSegments.push({ path: segPath, color: segColor })
+    arcSegments.push({ path: segPath, color: `hsl(${dialHue(t0)}, 90%, 52%)` })
   }
+  const tipColor = `hsl(${dialHue(animPct)}, 90%, 52%)`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
       <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
         {/* Track */}
         <path d={trackPath} fill="var(--surface3)" />
+        {/* Faint zone bands — where Poor/Fair, Good, and Excellent live */}
+        {zonePaths.map((z, i) => (
+          <path key={i} d={z.path} fill={z.color} fillOpacity="0.10" />
+        ))}
         {/* Color-swept filled segments */}
         {arcSegments.map((seg, i) => (
           <path key={i} d={seg.path} fill={seg.color}
-            style={{ filter: i === arcSegments.length - 1 ? 'drop-shadow(0 0 5px ' + color + '66)' : 'none' }} />
+            style={{ filter: i === arcSegments.length - 1 ? 'drop-shadow(0 0 6px ' + tipColor + ')' : 'none' }} />
         ))}
-        {/* Tick marks on top */}
+        {/* Threshold ticks + labels */}
         {ticks.map((t, i) => (
-          <line key={i} x1={t.inner.x} y1={t.inner.y} x2={t.outer.x} y2={t.outer.y}
-            stroke="var(--bg)" strokeWidth="2.5" />
+          <g key={i}>
+            <line x1={t.inner.x} y1={t.inner.y} x2={t.outer.x} y2={t.outer.y}
+              stroke="var(--bg)" strokeWidth="2.5" />
+            <text x={t.label.x} y={t.label.y + 3} textAnchor="middle"
+              fontFamily="var(--mono)" fontSize="9" fill="var(--text-dim)">{t.value}</text>
+          </g>
         ))}
         <text x={CX} y={CY - 6} textAnchor="middle" fontFamily="var(--mono)" fontSize="38" fontWeight="700" fill={color}>{score}</text>
         <text x={CX} y={CY + 12} textAnchor="middle" fontFamily="var(--mono)" fontSize="11" fill="var(--text-dim)">/ 100</text>
@@ -185,8 +239,29 @@ function RoundedStackedBar({ x, y, width, height, fill, allTrackers, host, paylo
   return <rect x={x} y={y} width={width} height={height} fill={fill} />
 }
 
+// ── Sparkline ─────────────────────────────────────────────────────────────────
+function Sparkline({ data, color, title }) {
+  if (!data || data.length < 2) return null
+  const W = 110, H = 26, P = 2
+  const max = Math.max(...data)
+  const min = Math.min(...data)
+  const range = max - min || 1
+  const pts = data.map((v, i) => {
+    const x = P + (i / (data.length - 1)) * (W - 2 * P)
+    const y = H - P - ((v - min) / range) * (H - 2 * P)
+    return `${x},${y}`
+  }).join(' ')
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ flexShrink: 0, opacity: 0.85 }}>
+      {title && <title>{title}</title>}
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5"
+        strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 // ── Metric card ───────────────────────────────────────────────────────────────
-function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigate, onScript, toast }) {
+function MetricCard({ label, value, sub, pts, desc, color, spark, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
 
   const handleAction = async (a) => {
@@ -218,7 +293,10 @@ function MetricCard({ label, value, sub, pts, desc, color, actionRows, onNavigat
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>{label}</span>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, background: color + '18', border: '1px solid ' + color + '35', borderRadius: 4, padding: '1px 6px' }}>{pts}</span>
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, marginTop: 10 }}>{value}</span>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, marginTop: 10 }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1 }}>{value}</span>
+        {spark && <Sparkline data={spark.data} color={color} title={spark.title} />}
+      </div>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto', paddingTop: 14 }}>
@@ -650,6 +728,26 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
   const notImportedPaths = data.not_imported_paths || []
 
+  // Per-day totals from upload snapshots — feeds the card sparklines
+  const sparkSeries = (() => {
+    const days = uploadStats?.daily_tracker_stats
+    if (!days || days.length < 2) return {}
+    const orphaned = [], notImported = []
+    for (const day of days) {
+      let o = 0, n = 0
+      for (const s of Object.values(day.by_tracker || {})) {
+        o += s.orphaned_size || 0
+        n += s.not_imported_size || 0
+      }
+      orphaned.push(o)
+      notImported.push(n)
+    }
+    return {
+      orphaned:    orphaned.some(v => v > 0)    ? orphaned    : null,
+      notImported: notImported.some(v => v > 0) ? notImported : null,
+    }
+  })()
+
   const metrics = [
     {
       label: 'Hardlinked Media', value: hlPct + '%',
@@ -659,7 +757,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--blue)',
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
-        [{ type: 'navigate', label: 'Backfill Orphaned Media', tab: 'workflows' }],
+        [{ type: 'navigate', label: 'Backfill Orphaned Media', tab: 'backfill' }],
         [],
       ],
     },
@@ -669,9 +767,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.or_score} / 10 pts`,
       desc: 'Files in your torrent folder that qBittorrent has no knowledge of. Safe to delete unless you added them manually.',
       color: 'var(--yellow)',
+      spark: sparkSeries.orphaned ? { data: sparkSeries.orphaned, title: 'Orphaned size trend' } : null,
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
-        [{ type: 'script', label: 'Generate Delete Script', scriptType: 'orphaned_torrents_delete', title: 'Orphaned Torrent Delete Script' }],
+        [{ type: 'navigate', label: 'Open Cleanup Workflow', tab: 'cleanup' }],
         [],
       ],
     },
@@ -681,13 +780,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.ni_score} / 10 pts`,
       desc: 'Seeding torrents with no matching file in your media folder. Sonarr/Radarr may have skipped or failed to import these.',
       color: 'var(--red)',
+      spark: sparkSeries.notImported ? { data: sparkSeries.notImported, title: 'Not-imported size trend' } : null,
       actionRows: [
         [{ type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' }],
-        [{ type: 'api', label: 'Trigger Radarr Rescan', loadingLabel: 'Rescanning…',
+        [{ type: 'navigate', label: 'Open Triage Workflow', tab: 'triage' }],
+        [{ type: 'api', label: 'Radarr Rescan', loadingLabel: 'Rescanning…',
             apiCall: () => api.radarrRescan(notImportedPaths),
             successToast: 'Radarr rescan triggered — check Radarr for import results',
-            errorToast: true, hidden: !radarrConfigured }],
-        [{ type: 'api', label: 'Trigger Sonarr Rescan', loadingLabel: 'Rescanning…',
+            errorToast: true, hidden: !radarrConfigured },
+         { type: 'api', label: 'Sonarr Rescan', loadingLabel: 'Rescanning…',
             apiCall: () => api.sonarrRescan(notImportedPaths),
             successToast: 'Sonarr rescan triggered — check Sonarr for import results',
             errorToast: true, hidden: !sonarrConfigured }],
@@ -702,7 +803,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       actionRows: [
         [{ type: 'navigate', label: 'View Media Dupes', tab: 'media', status: 'Duplicate' }],
         [{ type: 'navigate', label: 'View Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
-        [{ type: 'script', label: 'Generate Dedupe Script', scriptType: 'dedupe', title: 'Dedupe Script' }],
+        [{ type: 'navigate', label: 'Open Dedupe Workflow', tab: 'dedupe' }],
       ],
     },
   ]

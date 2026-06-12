@@ -597,6 +597,135 @@ def _fetch_sonarr_media(conn):
     return all_rows
 
 
+# Release-name quality detection — order matters (remux outranks bluray; the
+# bare WEB tag is resolved to webdl). Patterns run against dot/underscore-
+# normalized names so word boundaries are reliable.
+_RES_NAME_PATTERNS = [
+    ('2160p', r'\b(2160p|4k|uhd)\b'),
+    ('1080p', r'\b1080[pi]\b'),
+    ('720p',  r'\b720p\b'),
+    ('480p',  r'\b(480p|sdtv)\b'),
+]
+_SOURCE_NAME_PATTERNS = [
+    ('remux',  r'\bremux\b'),
+    ('bluray', r'\b(blu[- ]?ray|bdrip|brrip|bd(25|50|66|100))\b'),
+    ('webdl',  r'\bweb[- ]?dl\b'),
+    ('webrip', r'\bweb[- ]?rip\b'),
+    ('webdl',  r'\bweb\b'),
+    ('hdtv',   r'\bhdtv\b'),
+    ('dvd',    r'\b(dvdrip|dvd)\b'),
+]
+_SOURCE_DISPLAY = {
+    'remux': 'Remux', 'bluray': 'Bluray', 'webdl': 'WEB-DL',
+    'webrip': 'WEBRip', 'hdtv': 'HDTV', 'dvd': 'DVD',
+}
+
+
+def parse_release_info(path):
+    """Parse title, season/episode, and quality hints from a release file or folder name.
+
+    Returns {'title', 'season', 'episode', 'resolution', 'source', 'hdr',
+    'quality_label'} — empty strings / None for anything not detected.
+    """
+    base = os.path.basename(str(path or '').replace('\\', '/').rstrip('/'))
+    stem = os.path.splitext(base)[0]
+    name = re.sub(r'[._]', ' ', stem)
+
+    se = re.search(r'[Ss](\d{1,2})[Ee](\d{1,3})', base)
+    season  = int(se.group(1)) if se else None
+    episode = int(se.group(2)) if se else None
+    if season is None:
+        # Season-pack folders: "Show S03 1080p ..." with no episode marker
+        sp = re.search(r'\b[Ss](\d{1,2})\b(?!\s*[Ee])', name)
+        if sp:
+            season = int(sp.group(1))
+
+    resolution = next((label for label, pat in _RES_NAME_PATTERNS
+                       if re.search(pat, name, re.IGNORECASE)), '')
+    source = next((label for label, pat in _SOURCE_NAME_PATTERNS
+                   if re.search(pat, name, re.IGNORECASE)), '')
+    hdr = _detect_hdr(base)
+    quality_label = ' '.join(x for x in (resolution, _SOURCE_DISPLAY.get(source, '')) if x)
+    return {
+        'title':         _parse_title_from_filename(base),
+        'season':        season,
+        'episode':       episode,
+        'resolution':    resolution,
+        'source':        source,
+        'hdr':           hdr,
+        'quality_label': quality_label,
+    }
+
+
+def parse_release_info_for_path(rel_path):
+    """Parse a relative torrent path, merging release-folder hints into the file name's.
+
+    Episode files inside a season-pack folder often lack quality tags the
+    folder name carries ("Show S03 1080p BluRay/Show S03E01.mkv") — fields the
+    file name leaves blank are filled from the top-level folder.
+    """
+    norm = str(rel_path or '').replace('\\', '/')
+    parsed = parse_release_info(norm)
+    if '/' in norm:
+        folder = parse_release_info(norm.split('/')[0])
+        for key in ('resolution', 'source', 'hdr', 'title'):
+            if not parsed[key]:
+                parsed[key] = folder[key]
+        if parsed['season'] is None:
+            parsed['season'] = folder['season']
+        parsed['quality_label'] = ' '.join(
+            x for x in (parsed['resolution'], _SOURCE_DISPLAY.get(parsed['source'], '')) if x)
+    return parsed
+
+
+_arr_titles_cache = {'data': None, 'ts': 0}
+_ARR_TITLES_TTL = 120
+
+
+def fetch_arr_all_titles(cfg, force=False):
+    """Every managed title across all Arr instances, including items without files.
+
+    The media index only contains items that HAVE files — this list is what lets
+    Triage distinguish "in the library but never imported" from "not in the
+    library at all". Returns [{service, connection_id, arr_id, title,
+    title_slug, year, has_file}].
+    """
+    now = time.monotonic()
+    if not force and _arr_titles_cache['data'] is not None and (now - _arr_titles_cache['ts']) < _ARR_TITLES_TTL:
+        return _arr_titles_cache['data']
+    rows = []
+    for conn in normalize_arr_connections(cfg):
+        try:
+            if conn['service'] == 'radarr':
+                for m in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie'):
+                    rows.append({
+                        'service':       'radarr',
+                        'connection_id': conn['id'],
+                        'arr_id':        m.get('id'),
+                        'title':         m.get('title') or '',
+                        'title_slug':    m.get('titleSlug') or '',
+                        'year':          m.get('year'),
+                        'has_file':      bool(m.get('hasFile')),
+                    })
+            else:
+                for s in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series'):
+                    stats = s.get('statistics') or {}
+                    rows.append({
+                        'service':       'sonarr',
+                        'connection_id': conn['id'],
+                        'arr_id':        s.get('id'),
+                        'title':         s.get('title') or '',
+                        'title_slug':    s.get('titleSlug') or '',
+                        'year':          s.get('year'),
+                        'has_file':      (stats.get('episodeFileCount') or 0) > 0,
+                    })
+        except Exception as e:
+            log.warning("Could not fetch %s titles from %s: %s", conn['service'], conn['id'], e)
+    _arr_titles_cache['data'] = rows
+    _arr_titles_cache['ts'] = now
+    return rows
+
+
 def _detect_hdr(title):
     """Detect the highest HDR format present in a release title."""
     t = re.sub(r'[.\-_]', ' ', title.upper())

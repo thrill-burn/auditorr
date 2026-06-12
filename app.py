@@ -33,9 +33,9 @@ from db import (
     db_get_meta, db_set_meta, db_delete_meta,
 )
 from state import get_state, set_state, try_start_scanning
-from audit import run_audit_process, process_health_metrics, compute_upload_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id
-from scripts import generate_script
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, _normalize_title
+from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
 from debug import install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events
@@ -635,7 +635,7 @@ def test_arr_connections_route():
     })
 
 
-@app.route('/api/actions/script/<script_type>')
+@app.route('/api/actions/script/<script_type>', methods=['GET', 'POST'])
 @require_auth
 def get_action_script(script_type):
     cfg = db_load_config()
@@ -643,8 +643,11 @@ def get_action_script(script_type):
     results['torrent_files'] = db_load_file_results('torrents')
     if script_type == 'dedupe':
         results['media_files'] = db_load_file_results('media')
+    # POST carries a selection from a workflow page: {'paths': [...]} for
+    # delete scripts, {'groups': [...]} (canonical paths) for dedupe.
+    selection = (request.get_json(silent=True) or {}) if request.method == 'POST' else None
     try:
-        script = generate_script(script_type, results, cfg)
+        script = generate_script(script_type, results, cfg, selection=selection)
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     return app.response_class(script, mimetype='text/plain; charset=utf-8')
@@ -804,6 +807,301 @@ def workflows_indexers():
         log.exception("Error fetching Arr indexers")
         return jsonify({"status": "error", "message": str(e)}), 400
     return jsonify({"status": "success", "indexers": indexers})
+
+
+# ---------------------------------------------------------------------------
+# Workflow report endpoints (Triage / Cleanup / Dedupe)
+# ---------------------------------------------------------------------------
+
+_VIDEO_EXTS = {'.mkv', '.mp4', '.avi', '.m2ts', '.ts', '.mov', '.wmv'}
+_TRIAGE_GROUP_CAP = 500
+
+
+@app.route('/api/workflows/exclude', methods=['POST'])
+@require_auth
+def workflows_exclude():
+    """Append patterns to the Excluded Files & Folders config list."""
+    data = request.json or {}
+    patterns = [str(p).strip() for p in (data.get('patterns') or []) if str(p).strip()]
+    if not patterns:
+        return jsonify({"status": "error", "message": "No patterns provided"}), 400
+    cfg = db_load_config()
+    existing = [p for p in cfg.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)]
+    seen = {p.strip().lower() for p in existing}
+    added = 0
+    for p in patterns:
+        if p.lower() not in seen:
+            existing.append(p)
+            seen.add(p.lower())
+            added += 1
+    cfg['EXCLUSION_PATTERNS'] = existing
+    db_save_config(cfg)
+    return jsonify({"status": "success", "added": added, "total": len(existing)})
+
+
+@app.route('/api/workflows/triage')
+@require_auth
+def workflows_triage():
+    """Classify every not-imported torrent into an actionable verdict.
+
+    Verdicts (priority order):
+      unregistered    — tracker says the torrent is no longer registered (dead seed)
+      superseded      — the library already has this title (possibly different quality)
+      import_pending  — title is managed by Sonarr/Radarr but has no library file
+      not_in_library  — title matches nothing in any Arr instance
+    """
+    cfg = db_load_config()
+    torrent_files = db_load_file_results('torrents')
+    not_imported  = [f for f in torrent_files if _is_not_imported_torrent(f)]
+
+    # Group files by torrent hash — verdicts are per torrent, not per file
+    groups = {}
+    for f in not_imported:
+        key = f.get('hash') or f['path']
+        g = groups.setdefault(key, {
+            'hash':        f.get('hash') or '',
+            'instance_id': f.get('instance_id'),
+            'files':       [],
+            'total_size':  0,
+            'trackers':    set(),
+        })
+        g['files'].append(f)
+        g['total_size'] += f['size']
+        g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
+
+    group_list = sorted(groups.values(), key=lambda g: -g['total_size'])
+    truncated  = len(group_list) > _TRIAGE_GROUP_CAP
+    group_list = group_list[:_TRIAGE_GROUP_CAP]
+
+    # Live source lookup: upload stats + tracker registration status. The
+    # tracker message ("Unregistered torrent") is the strongest signal here.
+    details = {}
+    try:
+        details = sources.fetch_torrent_details(cfg, [
+            {'hash': g['hash'], 'instance_id': g['instance_id']}
+            for g in group_list if g['hash']
+        ])
+    except Exception as e:
+        log.warning("Triage: torrent detail fetch failed: %s", e)
+
+    try:
+        media_index = fetch_arr_media_index(cfg)
+    except Exception as e:
+        log.warning("Triage: media index fetch failed: %s", e)
+        media_index = []
+    try:
+        all_titles = fetch_arr_all_titles(cfg)
+    except Exception as e:
+        log.warning("Triage: title list fetch failed: %s", e)
+        all_titles = []
+
+    lib_by_title = {}
+    for m in media_index:
+        lib_by_title.setdefault(_normalize_title(m.get('title') or ''), []).append(m)
+    titles_by_norm = {}
+    for t in all_titles:
+        titles_by_norm.setdefault(_normalize_title(t.get('title') or ''), t)
+
+    conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
+
+    def _arr_url(entry):
+        conn = conn_by_id.get(entry.get('connection_id'))
+        if not conn:
+            return ''
+        prefix = '/movie/' if entry.get('service') == 'radarr' else '/series/'
+        slug = entry.get('title_slug') or ''
+        return conn['base_url'].rstrip('/') + prefix + (slug or str(entry.get('arr_id') or ''))
+
+    items = []
+    for g in group_list:
+        videos = [f for f in g['files']
+                  if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
+        rep = max(videos or g['files'], key=lambda f: f['size'])
+        parsed = parse_release_info_for_path(rep['path'])
+
+        det            = details.get(g['hash'], {})
+        tracker_health = det.get('tracker_health', 'unknown')
+        norm_title     = _normalize_title(parsed['title']) if parsed['title'] else ''
+        is_episode     = parsed['season'] is not None
+
+        # Library rows with files, preferring the service that fits the content type
+        lib_rows = lib_by_title.get(norm_title, []) if norm_title else []
+        if lib_rows:
+            preferred = 'sonarr' if is_episode else 'radarr'
+            lib_rows = [r for r in lib_rows if r.get('service') == preferred] or lib_rows
+
+        library_match = None
+        if lib_rows:
+            if is_episode and lib_rows[0].get('service') == 'sonarr':
+                # Same episode, or any episode of the same season for season packs
+                if parsed['episode'] is not None:
+                    se_tag = f"s{parsed['season']:02d}e{parsed['episode']:02d}"
+                else:
+                    se_tag = f"s{parsed['season']:02d}e"
+                for r in lib_rows:
+                    base = os.path.basename(r.get('relative_path') or r.get('path') or '').lower()
+                    if se_tag in base:
+                        library_match = r
+                        break
+            else:
+                library_match = lib_rows[0]
+
+        in_arr = bool(norm_title and norm_title in titles_by_norm)
+
+        if tracker_health == 'unregistered':
+            verdict = 'unregistered'
+        elif library_match:
+            verdict = 'superseded'
+        elif in_arr or lib_rows:
+            verdict = 'import_pending'
+        else:
+            verdict = 'not_in_library'
+
+        lib_payload = None
+        if library_match:
+            lib_quality = library_match.get('file_quality_name') or ''
+            lib_payload = {
+                'title':        library_match.get('title') or '',
+                'year':         library_match.get('year'),
+                'service':      library_match.get('service') or '',
+                'quality_name': lib_quality,
+                'hdr':          library_match.get('file_hdr') or '',
+                'filename':     os.path.basename(library_match.get('path') or ''),
+                'arr_url':      _arr_url(library_match),
+                'same_quality': bool(parsed['resolution'] and parsed['resolution'] in lib_quality),
+            }
+        elif in_arr:
+            t = titles_by_norm[norm_title]
+            lib_payload = {
+                'title':        t.get('title') or '',
+                'year':         t.get('year'),
+                'service':      t.get('service') or '',
+                'quality_name': '',
+                'hdr':          '',
+                'filename':     '',
+                'arr_url':      _arr_url(t),
+                'same_quality': False,
+            }
+
+        items.append({
+            'hash':           g['hash'],
+            'rep_path':       rep['path'],
+            'paths':          [f['path'] for f in g['files']],
+            'file_count':     len(g['files']),
+            'total_size':     g['total_size'],
+            'trackers':       sorted(g['trackers']),
+            'verdict':        verdict,
+            'parsed':         parsed,
+            'library':        lib_payload,
+            'tracker_health': tracker_health,
+            'tracker_msg':    det.get('tracker_msg', ''),
+            'uploaded':       det.get('uploaded'),
+            'ratio':          det.get('ratio'),
+            'added_on':       det.get('added_on'),
+        })
+
+    verdict_order = {'unregistered': 0, 'superseded': 1, 'import_pending': 2, 'not_in_library': 3}
+    items.sort(key=lambda i: (verdict_order.get(i['verdict'], 9), -i['total_size']))
+    counts = {}
+    for i in items:
+        counts[i['verdict']] = counts.get(i['verdict'], 0) + 1
+
+    return jsonify({
+        "status":         "success",
+        "items":          items,
+        "counts":         counts,
+        "truncated":      truncated,
+        "arr_configured": bool(conn_by_id),
+    })
+
+
+@app.route('/api/workflows/cleanup')
+@require_auth
+def workflows_cleanup():
+    """Orphaned-torrent report grouped by top-level folder, with hardlink and age info."""
+    cfg = db_load_config()
+    torrent_files = db_load_file_results('torrents')
+    local_path    = cfg.get('LOCAL_PATH', '')
+
+    orphaned       = [f for f in torrent_files if f.get('status') == 'Orphaned' and not f.get('excluded')]
+    excluded_count = sum(1 for f in torrent_files if f.get('status') == 'Orphaned' and f.get('excluded'))
+
+    # mtime via os.stat is best-effort and capped — a pathological orphan count
+    # shouldn't turn the report page into a second filesystem scan
+    fetch_mtime = bool(local_path) and len(orphaned) <= 5000
+
+    folders = {}
+    for f in orphaned:
+        rel = f['path'].replace('\\', '/')
+        # Group at release-folder depth: with a TRaSH layout the first segment
+        # is a category dir (movies/, tv/) and the second is the torrent's own
+        # folder — cap at two segments so groups map to abandoned payloads.
+        dir_segs = rel.split('/')[:-1]
+        top = '/'.join(dir_segs[:2]) if dir_segs else '(root)'
+        g = folders.setdefault(top, {
+            'folder': top, 'files': [],
+            'total_size': 0, 'freeable_size': 0, 'hardlinked_size': 0,
+        })
+        # Hardlinked elsewhere — deleting frees nothing until the last link goes
+        hardlinked = bool(f.get('imported')) or bool(f.get('linked_paths'))
+        entry = {'path': f['path'], 'size': f['size'], 'hardlinked': hardlinked, 'mtime': None}
+        if fetch_mtime:
+            try:
+                entry['mtime'] = int(os.path.getmtime(os.path.join(local_path, f['path'])))
+            except OSError:
+                pass
+        g['files'].append(entry)
+        g['total_size'] += f['size']
+        if hardlinked:
+            g['hardlinked_size'] += f['size']
+        else:
+            g['freeable_size'] += f['size']
+
+    groups = sorted(folders.values(), key=lambda g: -g['total_size'])
+    for g in groups:
+        g['files'].sort(key=lambda x: -x['size'])
+
+    return jsonify({
+        "status":         "success",
+        "groups":         groups,
+        "file_count":     len(orphaned),
+        "total_size":     sum(g['total_size'] for g in groups),
+        "freeable_size":  sum(g['freeable_size'] for g in groups),
+        "excluded_count": excluded_count,
+    })
+
+
+@app.route('/api/workflows/dedupe')
+@require_auth
+def workflows_dedupe():
+    """Duplicate-group report — the same groups the dedupe script is built from."""
+    cfg = db_load_config()
+    local_path = cfg.get('LOCAL_PATH', '')
+    media_path = cfg.get('MEDIA_PATH', '')
+    torrent_files = db_load_file_results('torrents')
+    media_files   = db_load_file_results('media')
+    tagged = ([{**f, '_file_root': local_path} for f in torrent_files]
+              + [{**f, '_file_root': media_path} for f in media_files])
+    dup_result = _build_dup_groups(tagged, local_path, media_path)
+
+    groups_out = []
+    for g in dup_result['groups']:
+        canonical = next(f for f in g['files'] if f['canonical'])
+        groups_out.append({
+            'id':               canonical['path'],
+            'files':            g['files'],
+            'recoverable_size': g['recoverable_size'],
+            'cross_fs':         g['skipped'],
+        })
+    groups_out.sort(key=lambda g: (g['cross_fs'], -g['recoverable_size']))
+
+    return jsonify({
+        "status":            "success",
+        "groups":            groups_out,
+        "script_root":       dup_result['script_root'],
+        "excluded_count":    dup_result.get('excluded_count', 0),
+        "total_recoverable": sum(g['recoverable_size'] for g in groups_out),
+    })
 
 
 @app.route('/api/workflows/acquire_candidates')

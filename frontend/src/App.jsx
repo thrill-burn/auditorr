@@ -6,7 +6,10 @@ import Dashboard    from './components/Dashboard'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
 import Trackers     from './components/Trackers'
-import Workflows    from './components/Workflows'
+import Backfill     from './components/workflows/Backfill'
+import Triage       from './components/workflows/Triage'
+import Cleanup      from './components/workflows/Cleanup'
+import Dedupe       from './components/workflows/Dedupe'
 import ScanProgress    from './components/ScanProgress'
 import ImportProgress  from './components/ImportProgress'
 import ErrorBanner  from './components/ErrorBanner'
@@ -20,16 +23,16 @@ function _btnStyle(bg, color) {
   return { padding: '7px 14px', borderRadius: 6, border: 'none', background: bg, color, fontSize: 12, fontWeight: 500, cursor: 'pointer' }
 }
 
-function ScriptModal({ scriptType, title, subtitle, onClose }) {
+function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
   const [script, setScript] = useState(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    api.actionScript(scriptType)
+    api.actionScript(scriptType, body)
       .then(text => { setScript(text); setLoading(false) })
       .catch(e => { setScript(`# Error loading script: ${e.message}`); setLoading(false) })
-  }, [scriptType])
+  }, [scriptType, body])
 
   const handleCopy = () => {
     const ta = document.createElement('textarea')
@@ -114,8 +117,9 @@ function ScriptModal({ scriptType, title, subtitle, onClose }) {
 
 // Hash-based routing helpers
 function getHashTab() {
-  const hash = window.location.hash.replace('#', '') || 'dashboard'
-  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config', 'workflows']
+  let hash = window.location.hash.replace('#', '') || 'dashboard'
+  if (hash === 'workflows') hash = 'backfill'  // legacy alias from before per-workflow pages
+  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config', 'backfill', 'triage', 'cleanup', 'dedupe']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -353,6 +357,15 @@ function AppInner() {
         crossSeedMultiplier={crossSeedMultiplier}
         activeImportCount={activeImports.filter(j => !['done', 'error'].includes(j.status)).length}
         onOpenImportPanel={() => setImportPanelOpen(true)}
+        workflowCounts={(() => {
+          const det = results?.dashboard?.current?.details
+          if (!det) return null
+          return {
+            triage:  det.not_imported_count    || 0,
+            cleanup: det.orphaned_torrent_count || 0,
+            dedupe:  det.duplicate_count        || 0,
+          }
+        })()}
       />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {!showWizard && <ErrorBanner message={results?.status} />}
@@ -420,8 +433,17 @@ function AppInner() {
               onThemeChange={setTheme}
             />
           )}
-          {tab === 'workflows' && (
-            <Workflows onNavigate={handleNavigate} />
+          {tab === 'backfill' && (
+            <Backfill onNavigate={handleNavigate} />
+          )}
+          {tab === 'triage' && (
+            <Triage onNavigate={handleNavigate} onScript={setScriptModal} />
+          )}
+          {tab === 'cleanup' && (
+            <Cleanup onNavigate={handleNavigate} onScript={setScriptModal} />
+          )}
+          {tab === 'dedupe' && (
+            <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />
           )}
         </div>
       </div>
@@ -430,6 +452,7 @@ function AppInner() {
           scriptType={scriptModal.scriptType}
           title={scriptModal.title || scriptModal.label}
           subtitle={scriptModal.subtitle}
+          body={scriptModal.body}
           onClose={() => setScriptModal(null)}
         />
       )}

@@ -66,7 +66,9 @@ export const api = {
   testSonarr: (url, apiKey) => req('/test_sonarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
   testRadarr: (url, apiKey) => req('/test_radarr', { method: 'POST', body: JSON.stringify({ url, api_key: apiKey }) }),
   testArrConnections: (conf) => req('/test_arr_connections', { method: 'POST', body: JSON.stringify(conf) }),
-  actionScript: (type)    => reqText('/actions/script/' + type),
+  actionScript: (type, body) => body
+    ? reqText('/actions/script/' + type, { method: 'POST', body: JSON.stringify(body) })
+    : reqText('/actions/script/' + type),
   sonarrRescan: (paths)   => req('/actions/sonarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
   radarrRescan: (paths)   => req('/actions/radarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
   sonarrSearch: (path)    => req('/actions/sonarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
@@ -94,6 +96,10 @@ export const api = {
   generateStatus: (jobId)  => req('/workflows/generate/status?job_id=' + jobId),
   stopGenerate:   (jobId)  => req('/workflows/generate/stop',   { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
   workflowIndexers: ()   => req('/workflows/indexers'),
+  triageReport:   ()         => req('/workflows/triage'),
+  cleanupReport:  ()         => req('/workflows/cleanup'),
+  dedupeReport:   ()         => req('/workflows/dedupe'),
+  excludePatterns: (patterns) => req('/workflows/exclude', { method: 'POST', body: JSON.stringify({ patterns }) }),
   browseData:    ()       => req('/browse_data'),
   sourceInfo:    ()       => req('/source_info'),
   fetchSavePath: (creds)  => req('/source_save_path', { method: 'POST', body: JSON.stringify(creds) }),

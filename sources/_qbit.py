@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import qbittorrentapi
 
-from sources import SourceConnectionError
+from sources import SourceConnectionError, classify_tracker_entries
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +132,72 @@ def _fetch_inner(cfg):
     tracker_snapshot['_instance_count'] = 1
 
     return file_map, sorted(trackers_set), tracker_snapshot
+
+
+# ---------------------------------------------------------------------------
+# fetch_torrent_details
+# ---------------------------------------------------------------------------
+
+def fetch_torrent_details(cfg, items):
+    """Live lookup of upload stats + tracker health for specific torrents.
+
+    items: [{'hash': str, ...}] — instance_id is ignored (single instance).
+    Returns {hash: {'uploaded', 'ratio', 'added_on', 'tracker_health', 'tracker_msg'}}.
+    """
+    hashes = sorted({i.get('hash') for i in items if i.get('hash')})
+    if not hashes:
+        return {}
+    socket.setdefaulttimeout(30)
+    try:
+        qbt = qbittorrentapi.Client(
+            host=cfg.get('QB_HOST'),
+            username=cfg.get('QB_USER'),
+            password=cfg.get('QB_PASS'),
+        )
+        qbt.auth_log_in()
+        details = {}
+        for torrent in qbt.torrents_info(torrent_hashes=hashes):
+            details[torrent.hash] = {
+                'uploaded':       torrent.uploaded,
+                'ratio':          round(float(torrent.ratio), 3),
+                'added_on':       getattr(torrent, 'added_on', None),
+                'tracker_health': 'unknown',
+                'tracker_msg':    '',
+            }
+
+        _host = cfg.get('QB_HOST')
+        _user = cfg.get('QB_USER')
+        _pass = cfg.get('QB_PASS')
+        _thread_local = threading.local()
+
+        def _get_thread_client():
+            if not hasattr(_thread_local, 'client'):
+                client = qbittorrentapi.Client(host=_host, username=_user, password=_pass)
+                client.auth_log_in()
+                _thread_local.client = client
+            return _thread_local.client
+
+        def _fetch_health(torrent_hash):
+            try:
+                entries = [
+                    {'url': t.url, 'status': t.status, 'msg': t.msg}
+                    for t in _get_thread_client().torrents_trackers(torrent_hash=torrent_hash)
+                ]
+                return torrent_hash, classify_tracker_entries(entries)
+            except Exception:
+                return torrent_hash, ('unknown', '')
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(_fetch_health, h) for h in details]
+            for future in as_completed(futures):
+                torrent_hash, (health, msg) = future.result()
+                details[torrent_hash]['tracker_health'] = health
+                details[torrent_hash]['tracker_msg']    = msg
+        return details
+    except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
+        raise SourceConnectionError(f"qBittorrent error: {e}") from e
+    finally:
+        socket.setdefaulttimeout(None)
 
 
 # ---------------------------------------------------------------------------

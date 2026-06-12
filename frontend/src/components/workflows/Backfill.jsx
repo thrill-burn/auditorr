@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { api } from '../api'
-import { formatBytes } from '../utils'
+import { api } from '../../api'
+import { formatBytes } from '../../utils'
+import {
+  Chip, LabeledChips, IndexerChips, FolderChips, SortPicker, CountPicker,
+  SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError,
+  QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
+} from './shared'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function parseSeason(path) {
@@ -49,238 +54,13 @@ function groupByFolder(candidates) {
   return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
 }
 
-// ── Shared chip ───────────────────────────────────────────────────────────────
-function Chip({ active, onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
-        border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-        background: active ? 'var(--accent)18' : 'transparent',
-        color: active ? 'var(--accent)' : 'var(--text-dim)',
-        fontWeight: active ? 600 : 400,
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-// ── Labeled chips (options with separate display labels) ─────────────────────
-const QUALITY_RES_OPTIONS = [
-  { value: '2160p', label: '2160p / 4K' },
-  { value: '1080p', label: '1080p'      },
-  { value: '720p',  label: '720p'       },
-]
-const QUALITY_SOURCE_OPTIONS = [
-  { value: 'remux',  label: 'Remux'  },
-  { value: 'bluray', label: 'Bluray' },
-  { value: 'webdl',  label: 'WEB-DL' },
-  { value: 'webrip', label: 'WEBRip' },
-  { value: 'hdtv',   label: 'HDTV'   },
-]
-const HDR_OPTIONS = [
-  { value: 'DV',    label: 'Dolby Vision' },
-  { value: 'HDR10+', label: 'HDR10+' },
-  { value: 'HDR10', label: 'HDR10'   },
-  { value: 'HDR',   label: 'HDR'     },
-  { value: 'HLG',   label: 'HLG'     },
-  { value: 'SDR',   label: 'SDR'     },
-]
-const HDR_STYLE = {
-  'DV':     { bg: '#7c3aed20', color: '#a78bfa' },
-  'HDR10+': { bg: '#1d4ed820', color: '#60a5fa' },
-  'HDR10':  { bg: '#0e749820', color: '#38bdf8' },
-  'HDR':    { bg: '#05966920', color: '#34d399' },
-  'HLG':    { bg: '#0f766e20', color: '#2dd4bf' },
-}
-
-function LabeledChips({ options, value, onChange, allLabel = 'Any' }) {
-  const noneSelected = value.length === 0
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>{allLabel}</Chip>
-      {options.map(opt => {
-        const active = value.includes(opt.value)
-        return (
-          <Chip key={opt.value} active={active}
-            onClick={() => onChange(active ? value.filter(v => v !== opt.value) : [...value, opt.value])}>
-            {opt.label}
-          </Chip>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Indexer chips ─────────────────────────────────────────────────────────────
-function IndexerChips({ options, value, onChange, allLabel = 'All' }) {
-  const noneSelected = value.length === 0
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>{allLabel}</Chip>
-      {options.map(opt => {
-        const active = value.includes(opt)
-        return (
-          <Chip key={opt} active={active}
-            onClick={() => onChange(active ? value.filter(v => v !== opt) : [...value, opt])}>
-            {opt}
-          </Chip>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Folder chips ──────────────────────────────────────────────────────────────
-function FolderChips({ folders, selected, onChange }) {
-  const noneSelected = selected.length === 0
-  const toggle = name => onChange(selected.includes(name) ? selected.filter(f => f !== name) : [...selected, name])
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>All</Chip>
-      {folders.map(({ name, count }) => (
-        <Chip key={name} active={selected.includes(name)} onClick={() => toggle(name)}>
-          {name} <span style={{ opacity: 0.55 }}>({count})</span>
-        </Chip>
-      ))}
-    </div>
-  )
-}
-
-// ── Sort picker ───────────────────────────────────────────────────────────────
+// ── Sort options ──────────────────────────────────────────────────────────────
 const SORT_OPTIONS = [
   { value: 'largest',  label: 'Largest',    sub: 'biggest files first' },
   { value: 'smallest', label: 'Smallest',   sub: 'quickest wins first' },
   { value: 'random',   label: 'Random',     sub: 'shuffle the queue'   },
   { value: 'alpha',    label: 'A → Z',      sub: 'alphabetical'        },
 ]
-
-function SortPicker({ value, onChange }) {
-  return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      {SORT_OPTIONS.map(opt => {
-        const active = value === opt.value
-        return (
-          <button
-            key={opt.value}
-            onClick={() => onChange(opt.value)}
-            style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-              padding: '8px 14px', borderRadius: 8, cursor: 'pointer', minWidth: 110,
-              border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-              background: active ? 'var(--accent)12' : 'var(--surface)',
-              color: active ? 'var(--accent)' : 'var(--text)',
-            }}
-          >
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{opt.label}</span>
-            <span style={{ fontSize: 11, marginTop: 2, opacity: 0.6, fontFamily: 'var(--mono)' }}>{opt.sub}</span>
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Count picker ──────────────────────────────────────────────────────────────
-// null means "all available"
-function CountPicker({ value, onChange, max }) {
-  const inputRef = useRef(null)
-  const [inputVal, setInputVal] = useState(() =>
-    value !== null && value !== 5 ? String(value) : ''
-  )
-
-  const customActive = value !== null && value !== 5
-  const allActive    = value === null
-  const fiveActive   = value === 5
-
-  function handleFive() {
-    setInputVal('')
-    onChange(5)
-  }
-
-  function handleAll() {
-    setInputVal('')
-    onChange(null)
-  }
-
-  function handleInput(e) {
-    const raw = e.target.value
-    setInputVal(raw)
-    if (raw === '') { onChange(5); return }
-    const n = parseInt(raw, 10)
-    if (!isNaN(n) && n >= 1) onChange(max > 0 ? Math.min(n, max) : n)
-  }
-
-  const cardStyle = (active) => ({
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    padding: '10px 22px', borderRadius: 8, minWidth: 90,
-    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-    background: active ? 'var(--accent)12' : 'var(--surface)',
-    color: active ? 'var(--accent)' : 'var(--text)',
-  })
-
-  const numStyle = (active) => ({
-    fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: '26px',
-    height: 26, display: 'flex', alignItems: 'center',
-    color: active ? 'var(--accent)' : 'inherit',
-  })
-
-  const subStyle = { fontSize: 11, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }
-
-  return (
-    <div style={{ display: 'flex', gap: 10 }}>
-      <button onClick={handleFive} style={{ ...cardStyle(fiveActive), cursor: 'pointer', border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: fiveActive ? 'var(--accent)' : 'var(--border)' }}>
-        <span style={numStyle(fiveActive)}>5</span>
-        <span style={subStyle}>quick</span>
-      </button>
-
-      <div style={{ ...cardStyle(customActive), cursor: 'text' }} onClick={() => inputRef.current?.focus()}>
-        <input
-          ref={inputRef}
-          type="number"
-          min={1}
-          max={max || undefined}
-          value={inputVal}
-          onChange={handleInput}
-          placeholder="—"
-          style={{
-            ...numStyle(customActive),
-            width: 54, textAlign: 'center',
-            background: 'none', border: 'none', outline: 'none',
-            padding: 0, margin: 0, fontWeight: 700,
-          }}
-        />
-        <span style={subStyle}>custom</span>
-      </div>
-
-      <button
-        onClick={handleAll}
-        disabled={max === 0}
-        style={{ ...cardStyle(allActive), cursor: max === 0 ? 'not-allowed' : 'pointer', opacity: max === 0 ? 0.4 : 1, border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: allActive ? 'var(--accent)' : 'var(--border)' }}
-      >
-        <span style={numStyle(allActive)}>{max > 0 ? max : '—'}</span>
-        <span style={subStyle}>all</span>
-      </button>
-
-      <style>{`
-        input[type=number]::-webkit-inner-spin-button,
-        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-        input[type=number] { -moz-appearance: textfield; }
-      `}</style>
-    </div>
-  )
-}
-
-// ── Section label ─────────────────────────────────────────────────────────────
-function SectionLabel({ children }) {
-  return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 8 }}>
-      {children}
-    </div>
-  )
-}
 
 // ── Grab button (shared) ──────────────────────────────────────────────────────
 function GrabButton({ state, onGrab, onReset, errorMsg }) {
@@ -671,7 +451,7 @@ function loadPref(key, fallback) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function Workflows({ onNavigate }) {
+export default function Backfill({ onNavigate }) {
   const [phase, setPhase] = useState('config')  // config | running | done | stopped
 
   // Data loaded on mount
@@ -813,19 +593,13 @@ export default function Workflows({ onNavigate }) {
   if (phase === 'config') {
     return (
       <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>Workflows</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Backfill</div>
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6 }}>
-            Convert your orphaned media files into active seeds by grabbing matching releases from your trackers.
-          </p>
-        </div>
+        <WorkflowHeader
+          title="Backfill"
+          accent="var(--blue)"
+          blurb="Convert your orphaned media files into active seeds by grabbing matching releases from your trackers."
+        />
 
-        {loadError && (
-          <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 8, color: 'var(--red)', fontSize: 13 }}>
-            {loadError}
-          </div>
-        )}
+        <WorkflowError message={loadError} />
 
         {loading ? (
           <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
@@ -888,7 +662,7 @@ export default function Workflows({ onNavigate }) {
               <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                 How to order candidates when there are more than the search limit.
               </div>
-              <SortPicker value={sort} onChange={setSort} />
+              <SortPicker options={SORT_OPTIONS} value={sort} onChange={setSort} />
               <div style={{ marginTop: 12 }}>
                 <input
                   type="text"
@@ -940,7 +714,7 @@ export default function Workflows({ onNavigate }) {
           </>
         )}
 
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <SpinKeyframes />
       </div>
     )
   }
@@ -1004,7 +778,7 @@ export default function Workflows({ onNavigate }) {
         </div>
       )}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <SpinKeyframes />
     </div>
   )
 }

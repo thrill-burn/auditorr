@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 
 import requests
 
-from sources import SourceConnectionError
+from sources import SourceConnectionError, classify_tracker_entries
 
 log = logging.getLogger(__name__)
 
@@ -486,6 +486,97 @@ def _fetch_inner(cfg):
         log.info('qui: total file_map entries across all instances: %d', len(file_map))
 
     return file_map, sorted(trackers_set), tracker_snapshot
+
+
+# ---------------------------------------------------------------------------
+# fetch_torrent_details
+# ---------------------------------------------------------------------------
+
+def fetch_torrent_details(cfg, items):
+    """Live lookup of upload stats + tracker health for specific torrents.
+
+    items: [{'hash': str, 'instance_id': int|None}]. Hashes with a known
+    instance_id only query that instance; hashes without one are looked up on
+    every eligible instance. Returns {hash: details}; failures are best-effort
+    (missing entries, never an exception).
+    """
+    base    = (cfg.get('QUI_HOST') or '').rstrip('/')
+    api_key = cfg.get('QUI_API_KEY', '')
+    if not base:
+        return {}
+
+    wanted = {}  # hash -> instance_id|None
+    for i in items:
+        h = i.get('hash')
+        if h:
+            wanted.setdefault(h, i.get('instance_id'))
+    if not wanted:
+        return {}
+
+    details = {}
+    try:
+        sess = _session(api_key)
+        resp = sess.get(f'{base}/api/instances', timeout=15)
+        resp.raise_for_status()
+        all_instances = resp.json()
+        if not isinstance(all_instances, list):
+            all_instances = _unwrap(all_instances)
+        eligible = {i['id']: i for i in all_instances if _eligible(i)}
+        if not eligible:
+            return {}
+
+        # Upload stats come from the per-instance torrent lists (no single-hash
+        # endpoint is documented) — fetch each involved instance's list once.
+        involved_ids = {inst_id for inst_id in wanted.values() if inst_id in eligible}
+        if any(inst_id not in eligible for inst_id in wanted.values()):
+            involved_ids = set(eligible)  # unknown instance — search everywhere
+        hash_to_instance = {}
+        for inst_id in involved_ids:
+            try:
+                for t in _fetch_all_torrents(sess, base, inst_id):
+                    nt = _norm_torrent(t)
+                    th = nt['hash']
+                    if th in wanted and th not in details:
+                        details[th] = {
+                            'uploaded':       nt['uploaded'],
+                            'ratio':          round(float(t.get('ratio') or 0), 3),
+                            'added_on':       t.get('added_on') or t.get('addedOn'),
+                            'tracker_health': 'unknown',
+                            'tracker_msg':    '',
+                        }
+                        hash_to_instance[th] = inst_id
+            except Exception as e:
+                log.warning('qui: torrent detail list failed for instance %s: %s', inst_id, e)
+
+        def _fetch_health(torrent_hash, inst_id):
+            try:
+                tr_resp = sess.get(
+                    f'{base}/api/instances/{inst_id}/torrents/{torrent_hash}/trackers',
+                    timeout=8,
+                )
+                tr_resp.raise_for_status()
+                entries = [
+                    {
+                        'url':    t.get('url') or t.get('announce') or '',
+                        'status': t.get('status'),
+                        'msg':    t.get('msg') or t.get('message') or '',
+                    }
+                    for t in _unwrap(tr_resp.json())
+                ]
+                return torrent_hash, classify_tracker_entries(entries)
+            except Exception:
+                return torrent_hash, ('unknown', '')
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(_fetch_health, th, inst_id)
+                       for th, inst_id in hash_to_instance.items()]
+            for future in as_completed(futures, timeout=120):
+                torrent_hash, (health, msg) = future.result()
+                details[torrent_hash]['tracker_health'] = health
+                details[torrent_hash]['tracker_msg']    = msg
+    except Exception as e:
+        log.warning('qui: fetch_torrent_details failed: %s', e)
+    return details
 
 
 # ---------------------------------------------------------------------------

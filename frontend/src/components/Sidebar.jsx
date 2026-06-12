@@ -63,7 +63,11 @@ const NAV = [
       </svg>
     ),
     children: [
-      { id: 'workflows', label: 'Backfill' },
+      // Same order as the dashboard metric cards they build on
+      { id: 'backfill', label: 'Backfill', accent: 'var(--blue)' },
+      { id: 'cleanup',  label: 'Cleanup',  accent: 'var(--yellow)', badgeKey: 'cleanup' },
+      { id: 'triage',   label: 'Triage',   accent: 'var(--red)',    badgeKey: 'triage' },
+      { id: 'dedupe',   label: 'Dedupe',   accent: 'var(--purple)', badgeKey: 'dedupe' },
     ],
   },
   {
@@ -77,28 +81,29 @@ const NAV = [
   },
 ]
 
-export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel }) {
+const WORKFLOW_TAB_IDS = ['backfill', 'triage', 'cleanup', 'dedupe']
+
+export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel, workflowCounts }) {
   const scoreC = score != null ? scoreColor(score) : 'var(--text-dim)'
   const csDisplay = crossSeedMultiplier != null ? crossSeedMultiplier.toFixed(2) : null
 
   const [openGroups, setOpenGroups] = useState(() => {
     const s = new Set()
-    if (active === 'workflows') s.add('workflows')
+    if (WORKFLOW_TAB_IDS.includes(active)) s.add('workflows')
     return s
   })
 
   useEffect(() => {
-    if (active === 'workflows') setOpenGroups(s => new Set([...s, 'workflows']))
+    if (WORKFLOW_TAB_IDS.includes(active)) setOpenGroups(s => new Set([...s, 'workflows']))
   }, [active])
 
+  // Parent group rows only expand/collapse — pages live on the children
   function handleGroupClick(groupId) {
-    const isOpen = openGroups.has(groupId)
     setOpenGroups(prev => {
       const next = new Set(prev)
-      isOpen ? next.delete(groupId) : next.add(groupId)
+      next.has(groupId) ? next.delete(groupId) : next.add(groupId)
       return next
     })
-    if (!isOpen) onChange(groupId)
   }
 
   const triggerLabel = {
@@ -158,7 +163,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
       <nav style={{ flex: 1, padding: '10px 10px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
         {NAV.map(({ id, label, icon, children }) => {
           if (children) {
-            const isGroupActive = active === id
+            const isGroupActive = children.some(c => c.id === active)
             const isOpen = openGroups.has(id)
             return (
               <React.Fragment key={id}>
@@ -185,6 +190,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                   <div style={{ marginLeft: 18, borderLeft: '1px solid var(--border2)' }}>
                     {children.map(child => {
                       const childActive = active === child.id
+                      const count = child.badgeKey && workflowCounts ? workflowCounts[child.badgeKey] : null
                       return (
                         <button key={child.label} onClick={() => onChange(child.id)} style={{
                           display: 'flex', alignItems: 'center', gap: 8,
@@ -197,8 +203,25 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                         }}
                         onMouseEnter={e => { if (!childActive) e.currentTarget.style.color = 'var(--text)' }}
                         onMouseLeave={e => { if (!childActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
+                          {child.accent && (
+                            <span style={{ width: 7, height: 7, borderRadius: 2, background: child.accent, flexShrink: 0, opacity: childActive ? 1 : 0.6 }} />
+                          )}
                           <span style={{ flex: 1 }}>{child.label}</span>
-                          {child.id === 'workflows' && activeImportCount > 0 && (
+                          {count != null && count > 0 && (
+                            <span
+                              title={`${count} item${count !== 1 ? 's' : ''} need attention`}
+                              style={{
+                                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
+                                background: child.accent ? 'transparent' : 'var(--surface2)',
+                                border: `1px solid ${child.accent || 'var(--border2)'}40`,
+                                color: child.accent || 'var(--text-dim)',
+                                flexShrink: 0, lineHeight: 1.5,
+                              }}
+                            >
+                              {count > 999 ? '999+' : count}
+                            </span>
+                          )}
+                          {child.id === 'backfill' && activeImportCount > 0 && (
                             <span
                               onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
                               title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
