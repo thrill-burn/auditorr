@@ -248,6 +248,27 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
   )
 }
 
+// ── Cross-link between sibling workflows ──────────────────────────────────────
+export function WorkflowCrossLink({ text, linkLabel, count, onClick }) {
+  if (!count) return null
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+        padding: '6px 12px', borderRadius: 7, fontSize: 12, cursor: 'pointer',
+        border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-dim)',
+        transition: 'all 0.12s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--accent)' }}
+      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'var(--border2)' }}
+    >
+      {text}
+      <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{linkLabel} ({count}) →</span>
+    </button>
+  )
+}
+
 // ── Empty / success state ─────────────────────────────────────────────────────
 export function EmptyState({ emoji = '🎉', title, sub }) {
   return (

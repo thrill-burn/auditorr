@@ -209,16 +209,30 @@ def _fetch_all_torrents(session, base, inst_id):
 
 
 def _fetch_torrent_data(session, base, inst_id, torrent_hash):
-    """Fetch files + trackers for a single torrent; returns (hosts, files)."""
+    """Fetch files + trackers for a single torrent.
+
+    Returns (hosts, (health, msg), files) — the tracker entries are classified
+    here (dead-seed detection) since status/msg ride along with the same call.
+    """
     try:
         tr_resp = session.get(
             f'{base}/api/instances/{inst_id}/torrents/{torrent_hash}/trackers',
             timeout=8,
         )
         tr_resp.raise_for_status()
-        hosts = _tracker_hosts(_unwrap(tr_resp.json()))
+        raw_trackers = _unwrap(tr_resp.json())
+        hosts = _tracker_hosts(raw_trackers)
+        health = classify_tracker_entries([
+            {
+                'url':    t.get('url') or t.get('announce') or '',
+                'status': t.get('status'),
+                'msg':    t.get('msg') or t.get('message') or '',
+            }
+            for t in raw_trackers
+        ])
     except Exception:
-        hosts = ['Unknown']
+        hosts  = ['Unknown']
+        health = ('unknown', '')
 
     try:
         fi_resp = session.get(
@@ -234,7 +248,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
         log.debug('qui: files endpoint failed for %s: %s', torrent_hash, e)
         files = []
 
-    return hosts, files
+    return hosts, health, files
 
 
 def _process_instance(session, base, inst, remote_path, local_path,
@@ -246,14 +260,15 @@ def _process_instance(session, base, inst, remote_path, local_path,
     torrents = _fetch_all_torrents(session, base, inst_id)
 
     tracker_map = {}
+    health_map  = {}
     files_map   = {}
 
     def _fetch(t):
         th = _norm_torrent(t)['hash']
         if not th:
-            return th, ['Unknown'], []
-        hosts, files = _fetch_torrent_data(session, base, inst_id, th)
-        return th, hosts, files
+            return th, ['Unknown'], ('unknown', ''), []
+        hosts, health, files = _fetch_torrent_data(session, base, inst_id, th)
+        return th, hosts, health, files
 
     # Per-torrent file/tracker fetch — bounded total timeout so a single
     # hung request can't stall the whole scan indefinitely.
@@ -263,12 +278,13 @@ def _process_instance(session, base, inst, remote_path, local_path,
         try:
             for future in as_completed(futures, timeout=_PER_INSTANCE_TIMEOUT):
                 try:
-                    th, hosts, files = future.result()
+                    th, hosts, health, files = future.result()
                 except Exception:
                     th    = _norm_torrent(futures[future])['hash']
-                    hosts, files = ['Unknown'], []
+                    hosts, health, files = ['Unknown'], ('unknown', ''), []
                 if th:
                     tracker_map[th] = hosts
+                    health_map[th]  = health
                     files_map[th]   = files
         except FuturesTimeout:
             log.warning('qui: timed out fetching per-torrent data for instance %s — '
@@ -278,6 +294,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     th = _norm_torrent(t)['hash']
                     if th:
                         tracker_map.setdefault(th, ['Unknown'])
+                        health_map.setdefault(th, ('unknown', ''))
                         files_map.setdefault(th, [])
 
     empty_file_count    = 0
@@ -286,6 +303,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
     sample_paths        = []
 
     def _add_entry(full_path, status, hosts, category=''):
+        health, health_msg = health_map.get(th, ('unknown', ''))
         entry = file_map.setdefault(full_path, {
             'status':        status,
             'trackers':      set(),
@@ -293,6 +311,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
             'instance_id':   inst_id,
             'instance_name': inst_name,
             'category':      category or '',
+            'tracker_health': health,
+            'tracker_msg':    health_msg,
         })
         entry['trackers'].update(hosts)
         if status == 'Seeding' or entry['status'] == 'Seeding':

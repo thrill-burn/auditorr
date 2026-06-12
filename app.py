@@ -874,10 +874,15 @@ def workflows_remove_torrents():
 @app.route('/api/workflows/triage')
 @require_auth
 def workflows_triage():
-    """Classify every not-imported torrent into an actionable verdict.
+    """Classify every problem torrent into an actionable verdict.
+
+    Covers two candidate sets: not-imported torrents, and imported torrents
+    whose audit-time tracker check flagged the torrent as unregistered.
 
     Verdicts (priority order):
-      unregistered    — tracker says the torrent is no longer registered (dead seed)
+      dead_seed       — imported AND tracker-dead: deleting via the client is
+                        lossless (the library hardlink keeps the data)
+      unregistered    — not imported, tracker no longer registers the torrent
       superseded      — the library already has this title (possibly different quality)
       import_pending  — title is managed by Sonarr/Radarr but has no library file
       not_in_library  — title matches nothing in any Arr instance
@@ -885,6 +890,13 @@ def workflows_triage():
     cfg = db_load_config()
     torrent_files = db_load_file_results('torrents')
     not_imported  = [f for f in torrent_files if _is_not_imported_torrent(f)]
+    # Dead seeds: fully imported but the tracker no longer registers the
+    # torrent (flag captured at audit time). Deleting these via the client is
+    # lossless — the hardlinked library copy keeps the data alive.
+    dead_seeds = [f for f in torrent_files
+                  if f.get('imported') and not f.get('excluded')
+                  and f.get('status') != 'Orphaned'
+                  and f.get('tracker_health') == 'unregistered']
 
     # Group files by torrent hash — verdicts are per torrent, not per file
     groups = {}
@@ -896,6 +908,25 @@ def workflows_triage():
             'files':       [],
             'total_size':  0,
             'trackers':    set(),
+            'imported':    False,
+            'stored_msg':  '',
+        })
+        g['files'].append(f)
+        g['total_size'] += f['size']
+        g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
+    for f in dead_seeds:
+        key = f.get('hash') or f['path']
+        existing = groups.get(key)
+        if existing is not None and not existing['imported']:
+            continue  # partially-imported torrent — already triaged normally
+        g = groups.setdefault(key, {
+            'hash':        f.get('hash') or '',
+            'instance_id': f.get('instance_id'),
+            'files':       [],
+            'total_size':  0,
+            'trackers':    set(),
+            'imported':    True,
+            'stored_msg':  f.get('tracker_msg') or '',
         })
         g['files'].append(f)
         g['total_size'] += f['size']
@@ -998,7 +1029,14 @@ def workflows_triage():
             None)
         in_arr = arr_title_hit is not None
 
-        if tracker_health == 'unregistered':
+        if g['imported']:
+            # Live re-verify the audit-time flag: a torrent the tracker now
+            # answers for has recovered (re-registered) — drop it. Anything
+            # else (still unregistered, or tracker unreachable) stays.
+            if tracker_health == 'working':
+                continue
+            verdict = 'dead_seed'
+        elif tracker_health == 'unregistered':
             verdict = 'unregistered'
         elif library_match:
             verdict = 'superseded'
@@ -1045,13 +1083,13 @@ def workflows_triage():
             'parsed':         parsed,
             'library':        lib_payload,
             'tracker_health': tracker_health,
-            'tracker_msg':    det.get('tracker_msg', ''),
+            'tracker_msg':    det.get('tracker_msg') or g['stored_msg'],
             'uploaded':       det.get('uploaded'),
             'ratio':          det.get('ratio'),
             'added_on':       det.get('added_on'),
         })
 
-    verdict_order = {'unregistered': 0, 'superseded': 1, 'import_pending': 2, 'not_in_library': 3}
+    verdict_order = {'dead_seed': 0, 'unregistered': 1, 'superseded': 2, 'import_pending': 3, 'not_in_library': 4}
     items.sort(key=lambda i: (verdict_order.get(i['verdict'], 9), -i['total_size']))
     counts = {}
     for i in items:

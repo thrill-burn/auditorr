@@ -59,26 +59,34 @@ def _fetch_inner(cfg):
         return _thread_local.client
 
     # Fetch trackers and file lists in a single parallel pass — one login and
-    # two API calls per worker instead of two separate executor pools.
+    # two API calls per worker instead of two separate executor pools. The
+    # tracker entries are also classified here (dead-seed detection): the
+    # status/msg fields come along for free with the same API call.
     def _fetch_torrent_data(torrent):
         try:
             thread_qbt = _get_thread_client()
-            raw   = [t.url for t in thread_qbt.torrents_trackers(torrent_hash=torrent.hash)
-                     if t.url.startswith('http') or t.url.startswith('udp')]
-            hosts = [t.split('/')[2] for t in raw if len(t.split('/')) > 2] or ['Unknown']
+            entries = [{'url': t.url, 'status': t.status, 'msg': t.msg}
+                       for t in thread_qbt.torrents_trackers(torrent_hash=torrent.hash)]
+            raw   = [e['url'] for e in entries
+                     if e['url'].startswith('http') or e['url'].startswith('udp')]
+            hosts = [u.split('/')[2] for u in raw if len(u.split('/')) > 2] or ['Unknown']
+            health, msg = classify_tracker_entries(entries)
             files = list(thread_qbt.torrents_files(torrent_hash=torrent.hash))
         except Exception:
             hosts = ['Unknown']
+            health, msg = 'unknown', ''
             files = []
-        return torrent.hash, hosts, files
+        return torrent.hash, hosts, (health, msg), files
 
     tracker_map = {}
+    health_map  = {}
     files_map   = {}
     with ThreadPoolExecutor(max_workers=16) as executor:
         futures = {executor.submit(_fetch_torrent_data, t): t for t in torrents}
         for future in as_completed(futures):
-            torrent_hash, hosts, files = future.result()
+            torrent_hash, hosts, health, files = future.result()
             tracker_map[torrent_hash] = hosts
+            health_map[torrent_hash]  = health
             files_map[torrent_hash]   = files
 
     # Build file map using pre-fetched tracker and file data
@@ -106,6 +114,7 @@ def _fetch_inner(cfg):
             status = 'Downloading'
         else:
             status = 'Paused'
+        health, health_msg = health_map.get(torrent.hash, ('unknown', ''))
         for f in files_map.get(torrent.hash, []):
             full_path = os.path.join(save_path, f.name)
             entry = file_map.setdefault(full_path, {
@@ -113,13 +122,15 @@ def _fetch_inner(cfg):
                 "trackers": set(),
                 "hash": torrent.hash,
                 "category": getattr(torrent, 'category', '') or '',
+                "tracker_health": health,
+                "tracker_msg": health_msg,
             })
             entry["trackers"].update(hosts)
             if status == 'Seeding' or entry["status"] == 'Seeding':
                 entry["status"] = 'Seeding'
             elif entry["status"] == 'Paused':
                 entry["status"] = status
-    del tracker_map, files_map
+    del tracker_map, health_map, files_map
 
     all_hosts        = set(tracker_upload) | set(tracker_seeding_size)
     tracker_snapshot = {

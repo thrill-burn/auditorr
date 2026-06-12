@@ -3,14 +3,18 @@ import { api } from '../../api'
 import { formatBytes, copyText } from '../../utils'
 import { useToast } from '../Toast'
 import {
-  WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
+  WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
   Checkbox, ActionBar, ActionButton, SpinKeyframes, HDR_STYLE,
 } from './shared'
 
 const VERDICTS = [
   {
-    key: 'unregistered', label: 'Unregistered', color: 'var(--red)',
-    desc: 'The tracker no longer recognizes these torrents — trumped, deleted, or nuked. Seeding them earns nothing. Safe to delete.',
+    key: 'dead_seed', label: 'Dead Seeds — imported', color: 'var(--green)',
+    desc: 'Tracker-dead (trumped, deleted, or nuked) but already imported: your library holds a hardlink to the same data, so deleting these via the client is completely lossless. The safest cleanup there is.',
+  },
+  {
+    key: 'unregistered', label: 'Unregistered — not imported', color: 'var(--red)',
+    desc: 'Tracker-dead and NOT in your library — this torrent holds the only copy of the data. Seeding earns nothing, but deleting loses the files, so decide whether anything here is worth keeping first.',
   },
   {
     key: 'superseded', label: 'Superseded', color: 'var(--yellow)',
@@ -242,7 +246,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
   )
 }
 
-export default function Triage() {
+export default function Triage({ onNavigate, cleanupCount }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
@@ -376,7 +380,7 @@ export default function Triage() {
       <WorkflowHeader
         title="Triage"
         accent="var(--red)"
-        blurb="Explains why each seeding torrent was never imported — quality superseded, dead on the tracker, import failure, or not in your library at all — and what to do about it."
+        blurb="Every torrent that needs your attention: dead on the tracker (imported or not), quality superseded, import failures, or not in your library at all — and what to do about each."
         right={!loading && (
           <button onClick={load} style={{
             fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
@@ -387,12 +391,21 @@ export default function Triage() {
 
       <WorkflowError message={error} />
 
+      {!loading && (
+        <WorkflowCrossLink
+          text="Everything here has an active torrent. Files with no torrent attached:"
+          linkLabel="Cleanup"
+          count={cleanupCount}
+          onClick={() => onNavigate && onNavigate({ tab: 'cleanup' })}
+        />
+      )}
+
       {loading && <LoadingRow label="Inspecting torrents — querying tracker status and your Sonarr/Radarr libraries…" />}
 
       {!loading && !error && items.length === 0 && (
         <EmptyState
-          title="Everything is imported"
-          sub="Every seeding torrent has a matching file in your media library. Nothing to triage."
+          title="Nothing to triage"
+          sub="Every seeding torrent is imported and registered on its tracker. All clear."
         />
       )}
 

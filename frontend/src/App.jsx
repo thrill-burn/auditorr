@@ -361,7 +361,7 @@ function AppInner() {
           const det = results?.dashboard?.current?.details
           if (!det) return null
           return {
-            triage:  det.not_imported_count    || 0,
+            triage:  (det.not_imported_count || 0) + (det.dead_seed_count || 0),
             cleanup: det.orphaned_torrent_count || 0,
             dedupe:  det.duplicate_count        || 0,
           }
@@ -437,10 +437,13 @@ function AppInner() {
             <Backfill onNavigate={handleNavigate} />
           )}
           {tab === 'triage' && (
-            <Triage onNavigate={handleNavigate} onScript={setScriptModal} />
+            <Triage onNavigate={handleNavigate}
+              cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0} />
           )}
           {tab === 'cleanup' && (
-            <Cleanup onNavigate={handleNavigate} onScript={setScriptModal} />
+            <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
+              triageCount={(results?.dashboard?.current?.details?.not_imported_count || 0)
+                + (results?.dashboard?.current?.details?.dead_seed_count || 0)} />
           )}
           {tab === 'dedupe' && (
             <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />

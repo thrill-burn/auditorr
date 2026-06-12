@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
 import {
-  WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
+  WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
   Checkbox, ActionBar, ActionButton, SpinKeyframes,
 } from './shared'
 
@@ -106,7 +106,7 @@ function FolderGroup({ group, selected, onToggleFile, onToggleGroup }) {
   )
 }
 
-export default function Cleanup({ onNavigate, onScript }) {
+export default function Cleanup({ onNavigate, onScript, triageCount }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
@@ -219,6 +219,15 @@ export default function Cleanup({ onNavigate, onScript }) {
       />
 
       <WorkflowError message={error} />
+
+      {!loading && (
+        <WorkflowCrossLink
+          text="Everything here has no torrent attached. Problem torrents the client still knows about:"
+          linkLabel="Triage"
+          count={triageCount}
+          onClick={() => onNavigate && onNavigate({ tab: 'triage' })}
+        />
+      )}
 
       {loading && <LoadingRow label="Loading orphaned files…" />}
 

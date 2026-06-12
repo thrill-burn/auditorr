@@ -83,6 +83,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     'trackers': set(), 'status': 'Orphaned',
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
                     'instance_id': None, 'instance_name': None,
+                    'tracker_health': 'unknown', 'tracker_msg': '',
                     'size': 0,
                     'torrent_nlink': 0, 'torrent_rel_path': None, 'torrent_excluded': False,
                     'media_rel_path': None, 'media_excluded': False,
@@ -98,10 +99,12 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     qbit_info = qbit_file_map.get(full_path)
                     if qbit_info:
                         inode_map[file_key]['trackers'].update(qbit_info['trackers'])
-                        inode_map[file_key]['hash']          = qbit_info.get('hash', '')
-                        inode_map[file_key]['instance_id']   = qbit_info.get('instance_id')
-                        inode_map[file_key]['instance_name'] = qbit_info.get('instance_name')
-                        inode_map[file_key]['category']      = qbit_info.get('category', '')
+                        inode_map[file_key]['hash']           = qbit_info.get('hash', '')
+                        inode_map[file_key]['instance_id']    = qbit_info.get('instance_id')
+                        inode_map[file_key]['instance_name']  = qbit_info.get('instance_name')
+                        inode_map[file_key]['category']       = qbit_info.get('category', '')
+                        inode_map[file_key]['tracker_health'] = qbit_info.get('tracker_health', 'unknown')
+                        inode_map[file_key]['tracker_msg']    = qbit_info.get('tracker_msg', '')
                         cur = inode_map[file_key]['status']
                         if qbit_info['status'] == 'Seeding' or cur == 'Seeding':
                             inode_map[file_key]['status'] = 'Seeding'
@@ -213,6 +216,8 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "category": info.get('category', ''),
             "instance_id":   info.get('instance_id'),
             "instance_name": info.get('instance_name'),
+            "tracker_health": info.get('tracker_health', 'unknown'),
+            "tracker_msg":    info.get('tracker_msg', ''),
         })
     media_files_data = []
     seen_media_keys = set()
@@ -283,6 +288,9 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
             "not_imported_size": not_imported_size, "duplicate_size": dup_size,
             "orphaned_torrent_count": sum(1 for f in scoring_torrents if f['status'] == 'Orphaned'),
             "not_imported_count": sum(1 for f in scoring_torrents if not f['imported'] and f['status'] != 'Orphaned'),
+            "dead_seed_count": sum(1 for f in scoring_torrents
+                                   if f['imported'] and f['status'] != 'Orphaned'
+                                   and f.get('tracker_health') == 'unregistered'),
             "duplicate_count": dup_count, "or_limit": or_limit, "ni_limit": ni_limit,
             "dup_limit": dup_limit, "hl_score": round(hl_score,1), "or_score": round(or_score,1),
             "ni_score": round(ni_score,1), "dup_score": round(dup_score,1),
