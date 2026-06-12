@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { FixedSizeList } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
-import { formatBytes } from '../utils'
+import { formatBytes, copyText, parseReleaseTitle } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
 
@@ -30,6 +30,35 @@ function detectMediaType(filePath) {
     if (/tv|television|show|series|sonarr/.test(part)) return 'tv'
   }
   return 'unknown'
+}
+
+// Open a torrent in the client. qui deep-links straight to the torrent by
+// hash (/instances/{id}?torrent={hash} selects it with the details pane);
+// qBittorrent's WebUI reads no URL params, so copy a searchable title for a
+// one-paste search instead. The release folder (second path segment in TRaSH
+// layouts) names the torrent better than a nested file's basename.
+function openTorrentInClient(node, torrentSource, qbHost, quiHost, toast) {
+  if (torrentSource === 'qui') {
+    const base = (quiHost || '').replace(/\/+$/, '')
+    const url = node.hash && node.instance_id != null
+      ? `${base}/instances/${node.instance_id}?torrent=${node.hash}`
+      : (node.instance_id != null ? `${base}/instances/${node.instance_id}` : base)
+    window.open(url, '_blank', 'noopener')
+    return
+  }
+  const segs = (node.path || '').replace(/\\/g, '/').split('/')
+  const nameSource = segs.length >= 3 ? segs[1] : segs[segs.length - 1]
+  const term = parseReleaseTitle(nameSource) || nameSource
+  copyText(term)
+  window.open(qbHost, '_blank', 'noopener')
+  toast(`“${term}” copied — paste it into the qBittorrent search box to find this torrent`, 'info')
+}
+
+function clientLinkTitle(node, torrentSource) {
+  if (torrentSource === 'qui') {
+    return node.hash && node.instance_id != null ? 'Open this torrent in qui' : 'Open in qui'
+  }
+  return 'Copy the title and open qBittorrent — paste into its search box to find this torrent'
 }
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
@@ -409,13 +438,10 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
         </span>
         {showSourceLink && (
           <button
-            title={torrentSource === 'qui' ? 'Open in qui' : 'Open in qBittorrent'}
+            title={clientLinkTitle(node, torrentSource)}
             onClick={e => {
               e.stopPropagation()
-              const url = torrentSource === 'qui'
-                ? (node.instance_id ? `${quiHost}/instances/${node.instance_id}` : quiHost)
-                : qbHost
-              window.open(url, '_blank')
+              openTorrentInClient(node, torrentSource, qbHost, quiHost, toast)
             }}
             style={{
               background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,
@@ -563,13 +589,10 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           </span>
           {showSourceLink && (
             <button
-              title={torrentSource === 'qui' ? 'Open in qui' : 'Open in qBittorrent'}
+              title={clientLinkTitle(node, torrentSource)}
               onClick={e => {
                 e.stopPropagation()
-                const url = torrentSource === 'qui'
-                  ? (node.instance_id ? `${quiHost}/instances/${node.instance_id}` : quiHost)
-                  : qbHost
-                window.open(url, '_blank')
+                openTorrentInClient(node, torrentSource, qbHost, quiHost, toast)
               }}
               style={{
                 background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,

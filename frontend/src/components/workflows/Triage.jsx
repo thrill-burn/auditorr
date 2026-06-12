@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { api } from '../../api'
-import { formatBytes } from '../../utils'
+import { formatBytes, copyText } from '../../utils'
 import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
@@ -72,20 +72,9 @@ function torrentSearchName(item) {
   return common.length > 0 ? common[common.length - 1] : fileBase()
 }
 
-// Clipboard write that also works outside secure contexts (plain-http LAN)
-function copyText(text) {
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).catch(() => {})
-    return
-  }
-  const ta = document.createElement('textarea')
-  ta.value = text
-  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
-  document.body.appendChild(ta)
-  ta.focus()
-  ta.select()
-  try { document.execCommand('copy') } catch (_) {}
-  document.body.removeChild(ta)
+// qui can jump straight to a torrent by hash; qBittorrent cannot
+function canDeepLink(client, item) {
+  return client?.name === 'qui' && item.hash && item.instance_id != null
 }
 
 // Exclusion rules for a torrent. Single-file torrents always get an exact
@@ -229,13 +218,15 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
         </a>
       )}
 
-      {/* Jump to the client to inspect/delete — copies the title so its
-          search box can be prescreened with one paste. Red for unregistered
-          (the verdict that begs for deletion), neutral elsewhere. */}
+      {/* Jump to the client to inspect/delete — qui deep-links to the exact
+          torrent; qBittorrent copies the title for a one-paste search. Red
+          for unregistered (the verdict that begs for deletion). */}
       {client && (
         <button
           onClick={e => onOpenClient(item, e)}
-          title={`Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find this torrent`}
+          title={canDeepLink(client, item)
+            ? 'Open this torrent in qui'
+            : `Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find this torrent`}
           style={{
             fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
             cursor: 'pointer', marginTop: 2,
@@ -244,7 +235,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
             border:     `1px solid ${item.verdict === 'unregistered' ? 'var(--red)40' : 'var(--border2)'}`,
           }}
         >
-          {client.name} ⧉↗
+          {client.name} {canDeepLink(client, item) ? '↗' : '⧉↗'}
         </button>
       )}
     </div>
@@ -282,10 +273,17 @@ export default function Triage() {
   const openInClient = useCallback((item, e) => {
     e.stopPropagation()
     if (!client) return
+    // qui deep-links straight to the torrent: /instances/{id}?torrent={hash}
+    // selects it and opens the details pane. Stock qBittorrent's WebUI reads
+    // no URL params, so it gets the copy-title-and-paste flow instead.
+    if (canDeepLink(client, item)) {
+      window.open(`${client.url.replace(/\/+$/, '')}/instances/${item.instance_id}?torrent=${item.hash}`, '_blank', 'noopener')
+      return
+    }
     const term = torrentSearchName(item)
     copyText(term)
     window.open(client.url, '_blank', 'noopener')
-    toast(`“${term}” copied — paste it into the ${client.name} search box to find and delete`, 'info')
+    toast(`“${term}” copied — paste it into the ${client.name} search box to find this torrent`, 'info')
   }, [client, toast])
 
   useEffect(() => { load() }, [load])
