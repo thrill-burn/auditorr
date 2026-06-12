@@ -779,15 +779,18 @@ def _parse_title_from_filename(filename):
     name = re.split(r'\b(19|20)\d{2}\b', name)[0]
     # Strip quality/format tags and everything after — \s+ anchor ensures the
     # tag is a standalone token, preventing mid-word matches (e.g. "Internal" in
-    # "Internal Affairs" or "4K" in "The 4K Experience")
+    # "Internal Affairs" or "4K" in "The 4K Experience"); the lookahead requires
+    # the tag to END at a token boundary too ("MA" must not eat "Machine")
     name = re.sub(
         r'\s+(2160p|1080p|1080i|720p|480p|4K|BluRay|BDRip|BRRip|WEB-DL|WEBRip|HDTV|DVDRip|'
         r'AMZN|DSNP|NF|HULU|HBO|x264|x265|HEVC|HDR|DV|AAC|DDP|DTS|MA|FLAC|REMUX|PROPER|REPACK|INTERNAL)'
-        r'.*$',
+        r'(?=[\s)\]]|$).*$',
         '', name, flags=re.IGNORECASE,
     )
-    # Collapse multiple spaces and strip
+    # Collapse multiple spaces and strip, then drop dangling separators left
+    # by the year/episode splits — "The Lion King (1994)" splits to "The Lion King ("
     name = re.sub(r'\s+', ' ', name).strip()
+    name = re.sub(r'[\s(\[\-–—]+$', '', name)
     return name
 
 
@@ -797,6 +800,21 @@ def _normalize_title(title):
     t = re.sub(r'[^\w\s]', ' ', t)  # replace punctuation with space
     t = re.sub(r'\s+', ' ', t).strip()
     return t
+
+
+def title_match_keys(title):
+    """All normalized lookup keys a title should match under.
+
+    Scene names handle apostrophes two ways — replaced by a separator
+    (Widow.s.Bay) or dropped entirely (Widows.Bay) — so "Widow's Bay" must
+    index/look up as both 'widow s bay' and 'widows bay'.
+    """
+    if not title:
+        return set()
+    keys = {_normalize_title(title)}
+    keys.add(_normalize_title(re.sub(r"['’`]", '', title)))
+    keys.discard('')
+    return keys
 
 
 def _test_arr_connection(url, api_key):

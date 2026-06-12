@@ -34,7 +34,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, _normalize_title
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys
 from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -895,12 +895,15 @@ def workflows_triage():
         log.warning("Triage: title list fetch failed: %s", e)
         all_titles = []
 
+    # Index arr titles under every match variant (apostrophes spaced/dropped)
     lib_by_title = {}
     for m in media_index:
-        lib_by_title.setdefault(_normalize_title(m.get('title') or ''), []).append(m)
+        for key in title_match_keys(m.get('title') or ''):
+            lib_by_title.setdefault(key, []).append(m)
     titles_by_norm = {}
     for t in all_titles:
-        titles_by_norm.setdefault(_normalize_title(t.get('title') or ''), t)
+        for key in title_match_keys(t.get('title') or ''):
+            titles_by_norm.setdefault(key, t)
 
     conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
 
@@ -921,11 +924,11 @@ def workflows_triage():
 
         det            = details.get(g['hash'], {})
         tracker_health = det.get('tracker_health', 'unknown')
-        norm_title     = _normalize_title(parsed['title']) if parsed['title'] else ''
+        parsed_keys    = title_match_keys(parsed['title'])
         is_episode     = parsed['season'] is not None
 
         # Library rows with files, preferring the service that fits the content type
-        lib_rows = lib_by_title.get(norm_title, []) if norm_title else []
+        lib_rows = next((lib_by_title[k] for k in parsed_keys if k in lib_by_title), [])
         if lib_rows:
             preferred = 'sonarr' if is_episode else 'radarr'
             lib_rows = [r for r in lib_rows if r.get('service') == preferred] or lib_rows
@@ -946,7 +949,8 @@ def workflows_triage():
             else:
                 library_match = lib_rows[0]
 
-        in_arr = bool(norm_title and norm_title in titles_by_norm)
+        arr_title_hit = next((titles_by_norm[k] for k in parsed_keys if k in titles_by_norm), None)
+        in_arr = arr_title_hit is not None
 
         if tracker_health == 'unregistered':
             verdict = 'unregistered'
@@ -971,7 +975,7 @@ def workflows_triage():
                 'same_quality': bool(parsed['resolution'] and parsed['resolution'] in lib_quality),
             }
         elif in_arr:
-            t = titles_by_norm[norm_title]
+            t = arr_title_hit
             lib_payload = {
                 'title':        t.get('title') or '',
                 'year':         t.get('year'),
