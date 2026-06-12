@@ -30,6 +30,43 @@ function itemKey(item) {
   return item.hash || item.rep_path
 }
 
+// Search term for prescreening the qBittorrent/qui search box: the parsed
+// title ("The Show") — qBit filters per word, so it matches dotted release
+// names AND surfaces every torrent of that title, not just this release.
+// Falls back to the release folder / file name when parsing found nothing.
+function torrentSearchName(item) {
+  if (item.parsed?.title) return item.parsed.title
+  const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
+  if (paths.length === 0) return ''
+  const fileBase = () => (paths[0].split('/').pop() || '').replace(/\.[^.]+$/, '')
+  if (paths.length === 1) return fileBase()
+  const segLists = paths.map(p => p.split('/').slice(0, -1))
+  if (segLists.some(s => s.length === 0)) return fileBase()
+  let common = segLists[0]
+  for (const segs of segLists.slice(1)) {
+    let i = 0
+    while (i < common.length && i < segs.length && common[i] === segs[i]) i++
+    common = common.slice(0, i)
+  }
+  return common.length > 0 ? common[common.length - 1] : fileBase()
+}
+
+// Clipboard write that also works outside secure contexts (plain-http LAN)
+function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {})
+    return
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
+  document.body.appendChild(ta)
+  ta.focus()
+  ta.select()
+  try { document.execCommand('copy') } catch (_) {}
+  document.body.removeChild(ta)
+}
+
 // Deepest common directory of a torrent's files — what an exclusion rule
 // should cover. Falls back to the exact file path for single rootless files.
 function exclusionPattern(item) {
@@ -70,7 +107,7 @@ function QualityChip({ label, hdr, dim }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle }) {
+function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
   const p = item.parsed || {}
   const seTag = p.season != null
     ? ` · S${String(p.season).padStart(2, '0')}${p.episode != null ? 'E' + String(p.episode).padStart(2, '0') : ' pack'}`
@@ -164,6 +201,22 @@ function TriageRow({ item, color, checked, onToggle }) {
           {lib.service} ↗
         </a>
       )}
+
+      {/* Unregistered torrents: jump to the client to delete — copies the
+          title so its search box can be prescreened with one paste */}
+      {item.verdict === 'unregistered' && client && (
+        <button
+          onClick={e => onOpenClient(item, e)}
+          title={`Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find and delete`}
+          style={{
+            fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+            cursor: 'pointer', marginTop: 2,
+            background: 'var(--red)18', color: 'var(--red)', border: '1px solid var(--red)40',
+          }}
+        >
+          {client.name} ⧉↗
+        </button>
+      )}
     </div>
   )
 }
@@ -176,6 +229,8 @@ export default function Triage({ onNavigate, onScript }) {
   const [selected, setSelected] = useState(() => new Set())
   const [busy,     setBusy]     = useState(null)   // 'rescan' | 'exclude' | null
 
+  const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui', url }
+
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
@@ -184,7 +239,21 @@ export default function Triage({ onNavigate, onScript }) {
       .then(setReport)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
+    api.getConfig().then(cfg => {
+      const isQui = cfg.TORRENT_SOURCE === 'qui'
+      const url = (isQui ? cfg.QUI_HOST : cfg.QB_HOST) || ''
+      setClient(url ? { name: isQui ? 'qui' : 'qBittorrent', url } : null)
+    }).catch(() => {})
   }, [])
+
+  const openInClient = useCallback((item, e) => {
+    e.stopPropagation()
+    if (!client) return
+    const term = torrentSearchName(item)
+    copyText(term)
+    window.open(client.url, '_blank', 'noopener')
+    toast(`“${term}” copied — paste it into the ${client.name} search box to find and delete`, 'info')
+  }, [client, toast])
 
   useEffect(() => { load() }, [load])
 
@@ -325,6 +394,8 @@ export default function Triage({ onNavigate, onScript }) {
                       color={v.color}
                       checked={selected.has(itemKey(item))}
                       onToggle={() => toggle(itemKey(item))}
+                      client={client}
+                      onOpenClient={openInClient}
                     />
                   ))}
                 </div>
