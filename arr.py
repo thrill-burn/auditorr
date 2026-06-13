@@ -183,6 +183,64 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
     return result
 
 
+def parse_trump_pm(pm_text):
+    """Extract (old_title, new_title) from a tracker trump PM.
+
+    The PM convention: the trumped release name appears between "have been
+    trumped" and "(and) will be replaced by"; the replacement follows that
+    phrase, optionally terminated by a "Reason:" line. Returns ('', '') when
+    the delimiter phrase is absent — the UI falls back to manual fields.
+    """
+    text = re.sub(r'\r\n?', '\n', str(pm_text or ''))
+    halves = re.split(r'(?i)\b(?:and\s+)?will\s+be\s+replaced\s+by\b', text, maxsplit=1)
+    if len(halves) != 2:
+        return '', ''
+    before, after = halves
+
+    old = ''
+    for line in reversed(before.split('\n')):
+        line = line.strip()
+        if not line:
+            continue
+        # Skip the boilerplate sentence itself; the release name is its own line
+        if re.search(r'(?i)have\s+been\s+trumped|following\s+torrent', line):
+            continue
+        old = line
+        break
+
+    after = re.split(r'(?i)\n\s*reason\s*:', after, maxsplit=1)[0]
+    new = ' '.join(l.strip() for l in after.strip().split('\n') if l.strip())
+
+    # Trailing sentence period (PMs end the phrase with "."); scene names
+    # never end in a bare dot, so stripping one is safe
+    return old.rstrip('.').strip(), new.rstrip('.').strip()
+
+
+def _norm_release_name(name):
+    """Normalize a release name for exact comparison: dots/underscores to
+    spaces, collapse whitespace, lowercase."""
+    return re.sub(r'\s+', ' ', re.sub(r'[._]', ' ', str(name or '').lower())).strip()
+
+
+def match_trump_release(releases, new_title, indexer=''):
+    """Find the replacement release by exact normalized title match.
+
+    Release names include the group tag, so the title is effectively a unique
+    id — fuzzy matching would only invite grabbing the wrong release. When
+    several indexers carry the same release, the optional indexer filter (or
+    the highest seeder count) decides.
+    """
+    target = _norm_release_name(new_title)
+    if not target:
+        return None
+    pool = [r for r in releases
+            if not indexer or (r.get('indexer') or '').lower() == indexer.lower()]
+    exact = [r for r in pool if _norm_release_name(r.get('title')) == target]
+    if not exact:
+        return None
+    return max(exact, key=lambda r: r.get('seeders') or 0)
+
+
 def grab_release(cfg, service, connection_id, guid, indexer_id):
     """Trigger a release grab on the given Arr instance (equivalent to clicking Grab in the UI)."""
     conns = normalize_arr_connections(cfg, service=service)

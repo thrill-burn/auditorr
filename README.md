@@ -25,8 +25,9 @@ a file-level change log between audits.
       <a href="docs/feature-torrents.png"><img src="docs/feature-torrents.png" alt="Torrents" /></a>
       <p><b>Torrents</b><br>
       Every file qBittorrent / qui is seeding, with tracker, status, and
-      reverse hardlink lookup. A <code>qbit/qui ↗</code> chip per row
-      deep-links to that torrent in your client.</p>
+      reverse hardlink lookup. A <code>qui ↗</code> chip per row deep-links
+      straight to that torrent in qui; for qBittorrent the chip copies a
+      searchable title and opens the WebUI for a one-paste search.</p>
     </td>
   </tr>
   <tr>
@@ -49,15 +50,44 @@ a file-level change log between audits.
 
 ---
 
-## Workflows <sub><sup>NEW IN 1.6.0</sup></sub>
+## Workflows
 
-The dashboard tells you what's wrong; **workflows** fix it.
+The dashboard tells you what's wrong; **workflows** fix it. One per
+dashboard card, in the same order and colors.
 
 **Backfill** targets *orphaned media*: files on disk with no hardlink to a
 seeding torrent and no way to grow one (trumped, dead tracker, your own
 rip). Search the same title on the tracker you want, grab a version that
 actually seeds, and swap it in via Sonarr / Radarr — turning dead weight
 into a properly seeding upgrade.
+
+**Cleanup** targets *orphaned torrent files*: files in your torrent folder
+the client has no torrent for. Review them grouped by release folder, then
+generate a reviewed delete script — or exclude the ones you put there on
+purpose.
+
+**Triage** explains every problem torrent and what to do about it:
+**Dead Seeds** (tracker-dead but already imported — your library hardlink
+keeps the data, so deleting them via the client is lossless), Unregistered,
+Superseded (bucketed by quality vs your library copy: higher / same /
+lower), Import Pending, and Not in Library. Rows show uploaded and seeding
+time (the hit-and-run tiebreaker), tracker messages, and quality chips.
+Actions: trigger a Sonarr/Radarr rescan, exclude, or — **opt-in via
+Config** — delete torrents *and their files* directly through
+qBittorrent / qui, behind a confirmation dialog that lists every hash and
+file path before anything is sent.
+
+**Dedupe** targets *duplicate files*: review duplicate groups and generate
+a script that replaces copies with hardlinks, verified with `cmp` before
+linking.
+
+**Trumped** automates the private-tracker trump swap. Paste the tracker's
+"this release has been trumped" PM; auditorr parses the old and new release
+names, finds the entire hardlink group (every cross-seed of the old
+content), removes it from the client with its files, and grabs the exact
+replacement through Sonarr/Radarr — wizard-style, confirmed at every step.
+auditorr never contacts a tracker: everything goes through the client and
+the arrs.
 
 ---
 

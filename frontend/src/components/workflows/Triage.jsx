@@ -198,18 +198,20 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
         </div>
       </div>
 
-      <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 64 }}>
+      {/* Fixed-width trailing columns so every row lines up vertically —
+          no minWidth stretching, and the arr-link slot is always rendered
+          even when empty. */}
+      <div style={{ flexShrink: 0, textAlign: 'right', width: 110 }}>
         <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.total_size)}</div>
-        <div title={(item.trackers || []).join(', ')} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110 }}>
+        <div title={(item.trackers || []).join(', ')} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {(item.trackers || [])[0] || 'no tracker'}{item.trackers?.length > 1 ? ` +${item.trackers.length - 1}` : ''}
         </div>
       </div>
 
-      {/* Earnings — the keep/delete tiebreaker, rightmost so seeded time
-          lines up column-like across rows. Seeding time matters more than
-          per-torrent ratio on private trackers: it decides whether deleting
-          now means a hit-and-run. */}
-      <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 86 }}>
+      {/* Earnings — the keep/delete tiebreaker. Seeding time matters more
+          than per-torrent ratio on private trackers: it decides whether
+          deleting now means a hit-and-run. */}
+      <div style={{ flexShrink: 0, textAlign: 'right', width: 100 }}>
         <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: item.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
           {item.uploaded != null ? `↑ ${formatBytes(item.uploaded)}` : '—'}
         </div>
@@ -221,22 +223,24 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
         )}
       </div>
 
-      {lib?.arr_url && (
-        <a
-          href={lib.arr_url} target="_blank" rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          title={`Open in ${lib.service}`}
-          style={{
-            fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-            textDecoration: 'none', marginTop: 2,
-            background: lib.service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
-            color:      lib.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-            border:     `1px solid ${lib.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
-          }}
-        >
-          {lib.service} ↗
-        </a>
-      )}
+      <span style={{ flexShrink: 0, width: 58, display: 'flex', justifyContent: 'flex-end' }}>
+        {lib?.arr_url && (
+          <a
+            href={lib.arr_url} target="_blank" rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            title={`Open in ${lib.service}`}
+            style={{
+              fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+              textDecoration: 'none', marginTop: 2, alignSelf: 'flex-start',
+              background: lib.service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
+              color:      lib.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
+              border:     `1px solid ${lib.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
+            }}
+          >
+            {lib.service} ↗
+          </a>
+        )}
+      </span>
 
       {/* Jump to the client to inspect/delete — qui deep-links to the exact
           torrent; qBittorrent copies the title for a one-paste search. Red

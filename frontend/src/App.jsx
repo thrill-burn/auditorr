@@ -10,6 +10,7 @@ import Backfill     from './components/workflows/Backfill'
 import Triage       from './components/workflows/Triage'
 import Cleanup      from './components/workflows/Cleanup'
 import Dedupe       from './components/workflows/Dedupe'
+import Trumped      from './components/workflows/Trumped'
 import ScanProgress    from './components/ScanProgress'
 import ImportProgress  from './components/ImportProgress'
 import ErrorBanner  from './components/ErrorBanner'
@@ -119,7 +120,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
 function getHashTab() {
   let hash = window.location.hash.replace('#', '') || 'dashboard'
   if (hash === 'workflows') hash = 'backfill'  // legacy alias from before per-workflow pages
-  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config', 'backfill', 'triage', 'cleanup', 'dedupe']
+  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config', 'backfill', 'triage', 'cleanup', 'dedupe', 'trumped']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -447,6 +448,9 @@ function AppInner() {
           )}
           {tab === 'dedupe' && (
             <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />
+          )}
+          {tab === 'trumped' && (
+            <Trumped onNavigate={handleNavigate} />
           )}
         </div>
       </div>

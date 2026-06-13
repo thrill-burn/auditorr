@@ -34,7 +34,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, _norm_release_name
 from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -43,7 +43,7 @@ from debug import install_ring_buffer, build_debug_report, memory_pressure, cgro
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
 
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.7.0"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()
@@ -869,6 +869,221 @@ def workflows_remove_torrents():
     log.info("Client delete: removed %d/%d torrent(s) (delete_files=%s)",
              removed, len(items), data.get('delete_files', True))
     return jsonify({"status": "success", "removed": removed, "requested": len(items)})
+
+
+# ---------------------------------------------------------------------------
+# Trumped workflow — PM-driven swap of a trumped release for its replacement.
+# See prompts/TRUMP.md for the full design. auditorr never contacts a tracker:
+# group resolution and deletion go through the client, search/grab through
+# Sonarr/Radarr.
+# ---------------------------------------------------------------------------
+
+def _trump_find_arr_item(cfg, parsed):
+    """Match a parsed release against managed arr titles (title + year aware).
+
+    Mirrors Triage's matching rules: diacritic/apostrophe-folded title keys,
+    radarr year enforcement (±1) so same-title remakes can't cross-match, and
+    content-type service preference (episodes → sonarr, otherwise radarr).
+    """
+    keys = title_match_keys(parsed['title'])
+    if not keys:
+        return None
+    candidates = []
+    for t in fetch_arr_all_titles(cfg):
+        if not (title_match_keys(t.get('title') or '') & keys):
+            continue
+        if (parsed['year'] is not None and t.get('service') == 'radarr'
+                and t.get('year') and abs(int(t['year']) - parsed['year']) > 1):
+            continue
+        candidates.append(t)
+    preferred = 'sonarr' if parsed['season'] is not None else 'radarr'
+    candidates.sort(key=lambda t: 0 if t.get('service') == preferred else 1)
+    return candidates[0] if candidates else None
+
+
+@app.route('/api/workflows/trump/parse', methods=['POST'])
+@require_auth
+def workflows_trump_parse():
+    """Extract old/new release titles from a pasted trump PM. Pure text parsing."""
+    data = request.json or {}
+    old_title, new_title = parse_trump_pm(data.get('pm_text') or '')
+    if not old_title and not new_title:
+        return jsonify({
+            "status": "error",
+            "message": "Could not find the “will be replaced by” phrase — paste the full PM or fill in the titles manually.",
+        }), 422
+    return jsonify({"status": "success", "old_title": old_title, "new_title": new_title})
+
+
+@app.route('/api/workflows/trump/resolve_group', methods=['POST'])
+@require_auth
+def workflows_trump_resolve_group():
+    """Resolve the trumped release to its full cross-seed group, live from the client.
+
+    Audit records keep one hash per path (the healthiest claimant), so they
+    cannot enumerate cross-seed siblings — this queries the client directly:
+    name-match the old title, then group every torrent with the same payload
+    size that shares at least one content file path.
+    """
+    data = request.json or {}
+    old_title = str(data.get('old_title') or '').strip()
+    if not old_title:
+        return jsonify({"status": "error", "message": "old_title is required"}), 400
+    cfg = db_load_config()
+    try:
+        rows = sources.list_torrents(cfg)
+    except sources.SourceConnectionError as e:
+        return jsonify({"status": "error", "message": str(e)}), 502
+
+    target = _norm_release_name(old_title)
+    matches = [r for r in rows if _norm_release_name(r['name']) == target]
+    if not matches:
+        tokens = set(target.split())
+        matches = [r for r in rows
+                   if tokens and tokens.issubset(set(_norm_release_name(r['name']).split()))]
+    if not matches:
+        return jsonify({
+            "status": "error",
+            "message": f"No torrent matching “{old_title}” was found in the client.",
+        }), 404
+
+    seed      = matches[0]
+    same_size = [r for r in rows if r['size'] == seed['size']]
+    paths_map = sources.fetch_torrent_file_paths(cfg, same_size)
+    seed_paths = set(paths_map.get(seed['hash'], []))
+    group = []
+    for r in same_size:
+        ps = set(paths_map.get(r['hash'], []))
+        if r['hash'] == seed['hash'] or (seed_paths and ps & seed_paths):
+            group.append({**r, 'paths': sorted(ps)})
+
+    try:
+        details = sources.fetch_torrent_details(cfg, group)
+    except Exception as e:
+        log.warning("Trump: torrent detail fetch failed: %s", e)
+        details = {}
+    for g in group:
+        det = details.get(g['hash'], {})
+        g['uploaded']       = det.get('uploaded')
+        g['seeding_time']   = det.get('seeding_time')
+        g['tracker_health'] = det.get('tracker_health', 'unknown')
+        g['tracker_msg']    = det.get('tracker_msg', '')
+    group.sort(key=lambda g: g['name'])
+    return jsonify({
+        "status":       "success",
+        "torrents":     group,
+        "total_size":   seed['size'],
+        "matched_name": seed['name'],
+    })
+
+
+@app.route('/api/workflows/trump/search_release', methods=['POST'])
+@require_auth
+def workflows_trump_search_release():
+    """Find the replacement release in Sonarr/Radarr's release search.
+
+    Exact normalized title match (release names are effectively unique ids),
+    optionally restricted to the indexer the PM came from. Always returns the
+    arr deep link as a manual fallback.
+    """
+    data      = request.json or {}
+    new_title = str(data.get('new_title') or '').strip()
+    indexer   = str(data.get('indexer') or '').strip()
+    if not new_title:
+        return jsonify({"status": "error", "message": "new_title is required"}), 400
+    cfg    = db_load_config()
+    parsed = parse_release_info_for_path(new_title)
+    item   = _trump_find_arr_item(cfg, parsed)
+    if item is None:
+        return jsonify({
+            "status": "error",
+            "message": f"No Sonarr/Radarr entry matches “{parsed['title'] or new_title}” — add the title to an arr first, then retry.",
+        }), 404
+
+    conn = next((c for c in normalize_arr_connections(cfg)
+                 if c['id'] == item.get('connection_id')), None)
+    prefix = '/movie/' if item.get('service') == 'radarr' else '/series/'
+    fallback_url = ''
+    if conn:
+        fallback_url = (conn['base_url'].rstrip('/') + prefix
+                        + (item.get('title_slug') or str(item.get('arr_id') or '')))
+
+    try:
+        if item['service'] == 'radarr':
+            releases = fetch_release_matrix(cfg, 'radarr', item['connection_id'], item['arr_id'])
+        elif parsed['episode'] is not None:
+            releases = fetch_release_matrix(cfg, 'sonarr', item['connection_id'], item['arr_id'],
+                                            file_path=new_title)
+        elif parsed['season'] is not None:
+            releases = fetch_release_matrix(cfg, 'sonarr', item['connection_id'], item['arr_id'],
+                                            season_number=parsed['season'])
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Could not determine season/episode from the new release name.",
+                "fallback_url": fallback_url,
+            }), 422
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Release search failed: {e}",
+                        "fallback_url": fallback_url}), 502
+
+    release = match_trump_release(releases, new_title, indexer)
+    return jsonify({
+        "status":        "success",
+        "release":       release,
+        "service":       item['service'],
+        "connection_id": item['connection_id'],
+        "arr_id":        item['arr_id'],
+        "arr_title":     item.get('title') or '',
+        "arr_year":      item.get('year'),
+        "fallback_url":  fallback_url,
+        "candidates":    len(releases),
+    })
+
+
+@app.route('/api/workflows/trump/execute', methods=['POST'])
+@require_auth
+def workflows_trump_execute():
+    """Nuke the confirmed group via the client, grab the replacement, re-audit.
+
+    Gated by ALLOW_CLIENT_DELETE like every destructive client action. The
+    grab half is optional — when no release matched, the user grabs manually
+    via the arr deep link and this only deletes.
+    """
+    cfg = db_load_config()
+    if not cfg.get('ALLOW_CLIENT_DELETE'):
+        return jsonify({
+            "status": "error",
+            "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
+        }), 403
+    data  = request.json or {}
+    items = [{'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
+             for i in (data.get('hashes') or []) if i.get('hash')]
+    if not items:
+        return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
+    try:
+        removed = sources.remove_torrents(cfg, items, delete_files=True)
+    except sources.SourceConnectionError as e:
+        return jsonify({"status": "error", "message": str(e)}), 502
+
+    grabbed, grab_error = None, ''
+    release = data.get('release') or {}
+    if release.get('guid') and data.get('service'):
+        try:
+            grab_release(cfg, data['service'], data.get('connection_id'),
+                         release['guid'], release.get('indexer_id'))
+            grabbed = True
+        except Exception as e:
+            grabbed = False
+            grab_error = str(e)
+
+    rescan = False
+    if try_start_scanning("trump"):
+        threading.Thread(target=run_audit_process, args=("trump",), daemon=True).start()
+        rescan = True
+    log.info("Trump execute: removed %d/%d torrent(s), grabbed=%s", removed, len(items), grabbed)
+    return jsonify({"status": "success", "removed": removed, "requested": len(items),
+                    "grabbed": grabbed, "grab_error": grab_error, "rescan_started": rescan})
 
 
 @app.route('/api/workflows/triage')

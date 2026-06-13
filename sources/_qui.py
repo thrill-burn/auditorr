@@ -610,6 +610,108 @@ def fetch_torrent_details(cfg, items):
 
 
 # ---------------------------------------------------------------------------
+# list_torrents / fetch_torrent_file_paths
+# ---------------------------------------------------------------------------
+
+def _eligible_instances(sess, base):
+    resp = sess.get(f'{base}/api/instances', timeout=15)
+    resp.raise_for_status()
+    all_instances = resp.json()
+    if not isinstance(all_instances, list):
+        all_instances = _unwrap(all_instances)
+    return [i for i in all_instances if _eligible(i)]
+
+
+def list_torrents(cfg):
+    """Light live listing of every torrent across all eligible qui instances.
+
+    Returns [{'hash', 'name', 'size', 'save_path', 'tracker', 'instance_id',
+    'instance_name'}], deduplicated by hash (qui per-instance endpoints can
+    return all managed torrents regardless of which instance is queried).
+    """
+    base    = (cfg.get('QUI_HOST') or '').rstrip('/')
+    api_key = cfg.get('QUI_API_KEY', '')
+    if not base:
+        raise SourceConnectionError("QUI_HOST is not configured")
+    socket.setdefaulttimeout(30)
+    try:
+        sess = _session(api_key)
+        eligible = _eligible_instances(sess, base)
+        if not eligible:
+            raise SourceConnectionError("No eligible qui instances")
+        rows = []
+        seen = set()
+        for inst in eligible:
+            try:
+                for t in _fetch_all_torrents(sess, base, inst['id']):
+                    nt = _norm_torrent(t)
+                    if not nt['hash'] or nt['hash'] in seen:
+                        continue
+                    seen.add(nt['hash'])
+                    tracker_url = t.get('tracker') or ''
+                    parts = tracker_url.split('/')
+                    rows.append({
+                        'hash':          nt['hash'],
+                        'name':          nt['name'],
+                        'size':          nt['size'],
+                        'save_path':     nt['save_path'],
+                        'tracker':       parts[2] if len(parts) > 2 else '',
+                        'instance_id':   inst['id'],
+                        'instance_name': inst.get('name', str(inst['id'])),
+                    })
+            except Exception as e:
+                log.warning('qui: list_torrents failed for instance %s: %s', inst.get('name', '?'), e)
+        return rows
+    except SourceConnectionError:
+        raise
+    except requests.exceptions.ConnectionError as e:
+        raise SourceConnectionError(f"qui connection error: {_connection_error_message(base)}") from e
+    except Exception as e:
+        raise SourceConnectionError(f"qui error: {e}") from e
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+def fetch_torrent_file_paths(cfg, items):
+    """Absolute client-side file paths for specific torrents.
+
+    items: [{'hash', 'instance_id'?, 'save_path'?, ...}]. Unknown instance ids
+    are tried against every eligible instance. Returns {hash: [paths]};
+    failures yield empty lists, never exceptions.
+    """
+    base    = (cfg.get('QUI_HOST') or '').rstrip('/')
+    api_key = cfg.get('QUI_API_KEY', '')
+    if not base:
+        return {}
+    result = {}
+    try:
+        sess = _session(api_key)
+        eligible_ids = [i['id'] for i in _eligible_instances(sess, base)]
+        for i in items:
+            h = i.get('hash')
+            if not h or h in result:
+                continue
+            sp = (i.get('save_path') or '').rstrip('/')
+            inst = i.get('instance_id')
+            try_ids = [inst] if inst in eligible_ids else eligible_ids
+            result[h] = []
+            for iid in try_ids:
+                try:
+                    resp = sess.get(
+                        f'{base}/api/instances/{iid}/torrents/{h}/files', timeout=8)
+                    resp.raise_for_status()
+                    files = [_norm_file(f) for f in _unwrap(resp.json())]
+                except Exception:
+                    continue
+                if files:
+                    result[h] = [f"{sp}/{f['name']}" for f in files]
+                    break
+    except Exception as e:
+        log.warning('qui: fetch_torrent_file_paths failed: %s', e)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # remove_torrents
 # ---------------------------------------------------------------------------
 

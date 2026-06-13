@@ -222,6 +222,86 @@ def fetch_torrent_details(cfg, items):
 
 
 # ---------------------------------------------------------------------------
+# list_torrents / fetch_torrent_file_paths
+# ---------------------------------------------------------------------------
+
+def list_torrents(cfg):
+    """Light live listing of every torrent in the client.
+
+    Returns [{'hash', 'name', 'size', 'save_path', 'tracker', 'instance_id',
+    'instance_name'}] — size is the torrent's payload size, so cross-seeds of
+    the same content report identical values (the Trumped workflow's sibling
+    pre-filter).
+    """
+    socket.setdefaulttimeout(30)
+    try:
+        qbt = qbittorrentapi.Client(
+            host=cfg.get('QB_HOST'),
+            username=cfg.get('QB_USER'),
+            password=cfg.get('QB_PASS'),
+        )
+        qbt.auth_log_in()
+        rows = []
+        for t in qbt.torrents_info():
+            tracker_url = getattr(t, 'tracker', '') or ''
+            parts = tracker_url.split('/')
+            rows.append({
+                'hash':          t.hash,
+                'name':          t.name,
+                'size':          t.size,
+                'save_path':     t.save_path,
+                'tracker':       parts[2] if len(parts) > 2 else '',
+                'instance_id':   None,
+                'instance_name': None,
+            })
+        return rows
+    except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
+        raise SourceConnectionError(f"qBittorrent error: {e}") from e
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+def fetch_torrent_file_paths(cfg, items):
+    """Absolute client-side file paths for specific torrents.
+
+    items: [{'hash', 'save_path'?, ...}] — save_path is used when provided
+    (saves an API round-trip), looked up live otherwise.
+    Returns {hash: [paths]}; failures yield empty lists, never exceptions.
+    """
+    wanted = {}
+    for i in items:
+        h = i.get('hash')
+        if h:
+            wanted.setdefault(h, i.get('save_path') or '')
+    if not wanted:
+        return {}
+    socket.setdefaulttimeout(30)
+    try:
+        qbt = qbittorrentapi.Client(
+            host=cfg.get('QB_HOST'),
+            username=cfg.get('QB_USER'),
+            password=cfg.get('QB_PASS'),
+        )
+        qbt.auth_log_in()
+        missing_sp = [h for h, sp in wanted.items() if not sp]
+        if missing_sp:
+            for t in qbt.torrents_info(torrent_hashes=missing_sp):
+                wanted[t.hash] = t.save_path
+        result = {}
+        for h, sp in wanted.items():
+            try:
+                files = qbt.torrents_files(torrent_hash=h)
+                result[h] = [os.path.join(sp, f.name).replace('\\', '/') for f in files]
+            except Exception:
+                result[h] = []
+        return result
+    except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
+        raise SourceConnectionError(f"qBittorrent error: {e}") from e
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+# ---------------------------------------------------------------------------
 # remove_torrents
 # ---------------------------------------------------------------------------
 

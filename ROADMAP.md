@@ -100,14 +100,28 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 
 ---
 
-## v1.7 — Future Ideas
+## v1.7 — Triage & Client Actions ✅
 
-- **Additional workflows** — Upgrade workflow (find candidates currently seeded at a lower quality and search for an upgrade); potential others
+### Shipped in v1.7.0
+- **Dead Seeds** — audit-time tracker-health classification (zero extra API cost) stored on every torrent file record; new Triage section for imported + tracker-dead torrents (lossless deletes), live re-verified on page load; counted in the sidebar badge
+- **Opt-in client-side deletion** — `ALLOW_CLIENT_DELETE` config toggle (default off); Triage deletes torrents + files via qBittorrent `torrents/delete` or qui bulk-action, behind a confirmation dialog listing hashes, trackers, seeding time, and every file path; replaces Triage's delete script (which caused redownloads)
+- **Superseded quality buckets** — higher / same / lower than library / unavailable, via resolution + source ranking; DVD implies SD
+- **Seeding time per row** — replaces per-torrent ratio as the hit-and-run tiebreaker
+- **Matching fixes** — year-aware radarr matching (same-title remakes), diacritic folding (Žižek!), year-titled films (2046 / 1917 / 2012), qBittorrent 5.x tracker status codes
+- **Cross-seed delete safety** — per-path records keep the healthiest claimant torrent; a path with any live torrent can never be flagged as a dead seed
+- **Exclusion granularity fix** — exact file paths for single-file torrents; category dirs can never become exclusion rules
+- **qui deep links** — Triage + File Explorer chips open the exact torrent (`?torrent={hash}`); qBittorrent chips copy a searchable title
+- **Cleanup ↔ Triage cross-links** with live counts
+- **Trumped workflow** — PM-driven wizard: paste the tracker's trump PM, confirm the hardlink group (resolved live for cross-seed siblings), nuke it everywhere via the client, grab the replacement through Sonarr/Radarr. Design in `prompts/TRUMP.md`
+
+---
+
+## Future Ideas
+- **Dead-since tracking** — persist when each torrent was first seen tracker-dead across audits, so Dead Seeds can show tracker-credited seed time (seeded minus dead duration) for hit-and-run decisions
 - **Webhook / notification support** — alert when health score drops below threshold (Discord, ntfy.sh, Gotify)
 - **Per-tracker import success rate** — of files downloaded from each tracker, what % got imported by Sonarr/Radarr
 - **Lidarr / Readarr support** — extend `_SERVICE_MAP` in `arr.py` with Lidarr/Readarr endpoints
 - **One-click hardlink repair** — for orphaned media with a matching torrent file, create the missing hardlink directly from the UI
-- **Unraid Community Applications template** — publish a CA template for one-click install
 - **Title parser 4K fix** — `4K` token in the quality-tag regex strips mid-title occurrences (e.g. "The 4K Experience"); needs a lookahead or post-tag word boundary (2 xfail tests already cover this)
 - **Export to arr** — bulk-add orphaned media files to Sonarr/Radarr monitored list from the file explorer
 - **Torrent re-announce** — trigger a re-announce via qBittorrent API for all seeding torrents on a selected tracker directly from the Trackers page

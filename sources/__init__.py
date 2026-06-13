@@ -9,6 +9,8 @@ Each backend implements:
   fetch_save_path_hint(payload)-> {'save_path': str|None, 'version': str|None, 'torrent_count': int, 'seeding_size': int, 'instances': [...]}
   fetch_torrent_details(cfg, items) -> {hash: {'uploaded', 'ratio', 'added_on', 'tracker_health', 'tracker_msg'}}
   remove_torrents(cfg, items, delete_files=True) -> int (count submitted for deletion)
+  list_torrents(cfg) -> [{'hash', 'name', 'size', 'save_path', 'tracker', 'instance_id', 'instance_name'}]
+  fetch_torrent_file_paths(cfg, items) -> {hash: [absolute client-side file paths]}
 """
 
 
@@ -78,6 +80,8 @@ from sources._qbit import (  # noqa: E402
     fetch_save_path_hint  as _qbit_fetch_save_path_hint,
     fetch_torrent_details as _qbit_fetch_torrent_details,
     remove_torrents       as _qbit_remove_torrents,
+    list_torrents         as _qbit_list_torrents,
+    fetch_torrent_file_paths as _qbit_fetch_torrent_file_paths,
 )
 from sources._qui import (  # noqa: E402
     fetch_file_map        as _qui_fetch_file_map,
@@ -86,6 +90,8 @@ from sources._qui import (  # noqa: E402
     fetch_save_path_hint  as _qui_fetch_save_path_hint,
     fetch_torrent_details as _qui_fetch_torrent_details,
     remove_torrents       as _qui_remove_torrents,
+    list_torrents         as _qui_list_torrents,
+    fetch_torrent_file_paths as _qui_fetch_torrent_file_paths,
 )
 
 
@@ -139,3 +145,17 @@ def remove_torrents(cfg, items, delete_files=True):
     if _source(cfg) == 'qui':
         return _qui_remove_torrents(cfg, items, delete_files)
     return _qbit_remove_torrents(cfg, items, delete_files)
+
+
+def list_torrents(cfg):
+    """Live, light listing of every torrent (Trumped workflow group resolution)."""
+    if _source(cfg) == 'qui':
+        return _qui_list_torrents(cfg)
+    return _qbit_list_torrents(cfg)
+
+
+def fetch_torrent_file_paths(cfg, items):
+    """Absolute client-side file paths per torrent — {hash: [paths]}."""
+    if _source(cfg) == 'qui':
+        return _qui_fetch_torrent_file_paths(cfg, items)
+    return _qbit_fetch_torrent_file_paths(cfg, items)
