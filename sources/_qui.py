@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 
 import requests
 
-from sources import SourceConnectionError, classify_tracker_entries
+from sources import SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK
 
 log = logging.getLogger(__name__)
 
@@ -315,6 +315,15 @@ def _process_instance(session, base, inst, remote_path, local_path,
             'tracker_msg':    health_msg,
         })
         entry['trackers'].update(hosts)
+        # Cross-seeded paths: the record must reflect the HEALTHIEST claimant
+        # — a path with any live torrent is not a dead seed, and deleting its
+        # files would break that live torrent. Hash follows the health.
+        if _HEALTH_RANK.get(health, 1) > _HEALTH_RANK.get(entry['tracker_health'], 1):
+            entry['tracker_health'] = health
+            entry['tracker_msg']    = health_msg
+            entry['hash']           = th
+            entry['instance_id']    = inst_id
+            entry['instance_name']  = inst_name
         if status == 'Seeding' or entry['status'] == 'Seeding':
             entry['status'] = 'Seeding'
         elif entry['status'] == 'Paused':

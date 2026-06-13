@@ -35,6 +35,13 @@ UNREGISTERED_TRACKER_PATTERNS = (
 )
 
 
+# Merge priority for per-path tracker health when several torrents claim the
+# same file (cross-seeds): least-dead wins — a path with any live torrent
+# must never be classified as a dead seed, because deleting its files would
+# break that live torrent.
+HEALTH_RANK = {'unregistered': 0, 'unknown': 1, 'not_working': 2, 'working': 3}
+
+
 def classify_tracker_entries(entries):
     """Classify a torrent's tracker list into a single health verdict.
 
