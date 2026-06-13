@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../../api'
 import { formatBytes, copyText } from '../../utils'
 import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
-  Checkbox, ActionBar, ActionButton, SpinKeyframes, HDR_STYLE,
+  Checkbox, ActionBar, ActionButton, Spinner, SpinKeyframes, HDR_STYLE,
 } from './shared'
 
 const VERDICTS = [
@@ -541,9 +542,20 @@ export default function Triage({ onNavigate, cleanupCount }) {
 function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, onConfirm }) {
   const totalSize  = items.reduce((s, i) => s + i.total_size, 0)
   const totalFiles = items.reduce((s, i) => s + i.file_count, 0)
-  return (
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onCancel() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
+  // Portal to <body>: the page container's fade-in animation leaves a
+  // persistent transform, which makes position:fixed resolve against the
+  // (very tall) page instead of the viewport — the dialog would center
+  // thousands of pixels off-screen, leaving only the dimmed backdrop.
+  return createPortal(
     <div
-      onClick={busy ? undefined : onCancel}
+      onClick={onCancel}
       style={{
         position: 'fixed', inset: 0, zIndex: 200, display: 'flex',
         alignItems: 'center', justifyContent: 'center',
@@ -572,29 +584,60 @@ function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, o
           )}
         </div>
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
-          {items.map(item => (
-            <div key={itemKey(item)} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 12px', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {item.parsed?.title || (item.rep_path || '').replace(/\\/g, '/').split('/').pop()}
-              </span>
-              {item.seeding_time != null && (
-                <span title="Total time seeding" style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-                  seeded {formatDuration(item.seeding_time)}
-                </span>
-              )}
-              <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-                {formatBytes(item.total_size)}
-              </span>
-            </div>
-          ))}
+          {items.map(item => {
+            const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
+            const shownPaths = paths.slice(0, 8)
+            return (
+              <div key={itemKey(item)} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.parsed?.title || (item.rep_path || '').replace(/\\/g, '/').split('/').pop()}
+                    {item.parsed?.year ? ` (${item.parsed.year})` : ''}
+                  </span>
+                  {item.seeding_time != null && (
+                    <span title="Total time seeding" style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+                      seeded {formatDuration(item.seeding_time)}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', flexShrink: 0 }}>
+                    {formatBytes(item.total_size)}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 3, fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                  <span title={item.hash} style={{ flexShrink: 0 }}>hash {String(item.hash).slice(0, 12)}…</span>
+                  {(item.trackers || [])[0] && <span style={{ flexShrink: 0 }}>{item.trackers[0]}</span>}
+                  <span style={{ flexShrink: 0 }}>{item.file_count} file{item.file_count !== 1 ? 's' : ''}</span>
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  {shownPaths.map(p => (
+                    <div key={p} title={p} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p}
+                    </div>
+                  ))}
+                  {paths.length > shownPaths.length && (
+                    <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.6 }}>
+                      +{paths.length - shownPaths.length} more files
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '14px 20px 18px' }}>
-          <ActionButton onClick={onCancel} disabled={busy}>Cancel</ActionButton>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
+          {busy && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+              <Spinner /> Deleting via {clientName}…
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          <ActionButton onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</ActionButton>
           <ActionButton danger onClick={onConfirm} disabled={busy}>
             {busy ? 'Deleting…' : `Delete ${items.length} torrent${items.length !== 1 ? 's' : ''} + files`}
           </ActionButton>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
