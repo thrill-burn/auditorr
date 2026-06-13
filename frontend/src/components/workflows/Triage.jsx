@@ -395,6 +395,26 @@ export default function Triage({ onNavigate, cleanupCount }) {
     setBusy(null)
   }
 
+  // One-click exclude for a suggested junk category. The real exclusion
+  // applies on the next audit, so drop the matching rows now (by the
+  // suggestion's lowercase match substrings) to clear the reminder.
+  const handleSuggestionExclude = async (sugg) => {
+    setBusy('suggest')
+    try {
+      const resp = await api.excludePatterns(sugg.patterns)
+      toast(`Excluding ${sugg.patterns.join(', ')} — added ${resp.added} rule${resp.added !== 1 ? 's' : ''}, visible in Config → Excluded Files`, 'success')
+      const hit = p => { const lp = p.toLowerCase(); return (sugg.match || []).some(m => lp.includes(m)) }
+      setReport(r => ({
+        ...r,
+        items: (r?.items || []).filter(i => !hit(i.rep_path)),
+        suggestions: (r?.suggestions || []).filter(s => s.id !== sugg.id),
+      }))
+    } catch (e) {
+      toast(e.message, 'error')
+    }
+    setBusy(null)
+  }
+
   return (
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 22 }}>
       <WorkflowHeader
@@ -439,6 +459,35 @@ export default function Triage({ onNavigate, cleanupCount }) {
           {!report?.arr_configured && (
             <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, color: 'var(--yellow)', fontSize: 12.5 }}>
               No Sonarr/Radarr connection configured — library matching is disabled, so most items fall into “Not in Library”.
+            </div>
+          )}
+
+          {report?.suggestions?.length > 0 && (
+            <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--text)' }}>
+                <span style={{ fontWeight: 600 }}>Tidy up Triage</span>
+                <span style={{ color: 'var(--text-dim)' }}> — some torrents only linger here because of files Sonarr/Radarr never import. Exclude them in one click (saved to Config → Excluded Files, editable there):</span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {report.suggestions.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => handleSuggestionExclude(s)}
+                    disabled={busy != null}
+                    title={`${s.detail} — adds ${s.patterns.join(', ')}`}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 7,
+                      fontSize: 12, cursor: busy != null ? 'not-allowed' : 'pointer', opacity: busy != null ? 0.5 : 1,
+                      border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
+                    }}
+                  >
+                    <span>Exclude <span style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>{s.label}</span></span>
+                    <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                      {s.count} · {formatBytes(s.size)}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

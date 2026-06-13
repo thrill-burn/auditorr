@@ -1311,13 +1311,71 @@ def workflows_triage():
     for i in items:
         counts[i['verdict']] = counts.get(i['verdict'], 0) + 1
 
+    suggestions = _triage_exclusion_suggestions(items)
+
     return jsonify({
         "status":         "success",
         "items":          items,
         "counts":         counts,
         "truncated":      truncated,
         "arr_configured": bool(conn_by_id),
+        "suggestions":    suggestions,
     })
+
+
+# Junk auditorr can recognize in Triage and gently offer to exclude. Detection
+# keys off each torrent's representative (largest) file. Patterns use the
+# case-insensitive exclusion syntaxes (ext:/contains:/bareword segment) so they
+# match regardless of how the release cased its names; the `match` substrings
+# let the UI drop the affected rows immediately (the real exclusion only takes
+# effect on the next audit walk). Subtitles and Extras/Featurettes are
+# deliberately NOT suggested — those are often kept on purpose.
+_DISC_SEGMENTS = {'bdmv': 'bluray', 'certificate': 'bluray', 'video_ts': 'dvd', 'audio_ts': 'dvd'}
+_SAMPLE_RE     = re.compile(r'(?:^|[ .\-_/])sample(?:[ .\-_/]|$)')
+_DISC_PATTERNS = {'bluray': ['BDMV', 'CERTIFICATE'], 'dvd': ['VIDEO_TS', 'AUDIO_TS']}
+_DISC_MATCH    = {'bluray': ['bdmv', 'certificate'], 'dvd': ['video_ts', 'audio_ts']}
+
+
+def _classify_triage_junk(rep_path):
+    """('disc', 'bluray'|'dvd') | ('sample', None) | ('ext', '.sfv') | (None, None)."""
+    norm = str(rep_path or '').replace('\\', '/').lower()
+    for seg in norm.split('/'):
+        if seg in _DISC_SEGMENTS:
+            return ('disc', _DISC_SEGMENTS[seg])
+    if _SAMPLE_RE.search(norm):
+        return ('sample', None)
+    ext = os.path.splitext(norm)[1]
+    if ext and ext not in _VIDEO_EXTS:
+        return ('ext', ext)
+    return (None, None)
+
+
+def _triage_exclusion_suggestions(items):
+    buckets = {}
+    for i in items:
+        kind, sub = _classify_triage_junk(i['rep_path'])
+        if kind == 'ext':
+            key = f'ext:{sub}'
+            b = buckets.setdefault(key, {
+                'id': key, 'label': f'{sub} files',
+                'detail': 'sidecar files Sonarr/Radarr never import',
+                'patterns': [f'ext:{sub.lstrip(".")}'], 'match': [sub], 'count': 0, 'size': 0})
+        elif kind == 'sample':
+            b = buckets.setdefault('sample', {
+                'id': 'sample', 'label': 'sample clips',
+                'detail': 'scene sample videos, not the real release',
+                'patterns': ['contains:sample'], 'match': ['sample'], 'count': 0, 'size': 0})
+        elif kind == 'disc':
+            key = f'disc:{sub}'
+            b = buckets.setdefault(key, {
+                'id': key, 'label': f'{"Blu-ray" if sub == "bluray" else "DVD"} disc folders',
+                'detail': 'full-disc rip structure (matches the disc-rip preset)',
+                'patterns': _DISC_PATTERNS[sub], 'match': _DISC_MATCH[sub], 'count': 0, 'size': 0})
+        else:
+            continue
+        b['count'] += 1
+        b['size']  += i['total_size']
+    return sorted(buckets.values(), key=lambda s: -s['count'])
 
 
 @app.route('/api/workflows/cleanup')
