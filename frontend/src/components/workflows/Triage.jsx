@@ -198,9 +198,17 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
         </div>
       </div>
 
-      {/* Earnings — the keep/delete tiebreaker. Seeding time matters more
-          than per-torrent ratio on private trackers: it decides whether
-          deleting now means a hit-and-run. */}
+      <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 64 }}>
+        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.total_size)}</div>
+        <div title={(item.trackers || []).join(', ')} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110 }}>
+          {(item.trackers || [])[0] || 'no tracker'}{item.trackers?.length > 1 ? ` +${item.trackers.length - 1}` : ''}
+        </div>
+      </div>
+
+      {/* Earnings — the keep/delete tiebreaker, rightmost so seeded time
+          lines up column-like across rows. Seeding time matters more than
+          per-torrent ratio on private trackers: it decides whether deleting
+          now means a hit-and-run. */}
       <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 86 }}>
         <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: item.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
           {item.uploaded != null ? `↑ ${formatBytes(item.uploaded)}` : '—'}
@@ -211,13 +219,6 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
             seeded {formatDuration(item.seeding_time)}
           </div>
         )}
-      </div>
-
-      <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 64 }}>
-        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.total_size)}</div>
-        <div title={(item.trackers || []).join(', ')} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110 }}>
-          {(item.trackers || [])[0] || 'no tracker'}{item.trackers?.length > 1 ? ` +${item.trackers.length - 1}` : ''}
-        </div>
       </div>
 
       {lib?.arr_url && (
