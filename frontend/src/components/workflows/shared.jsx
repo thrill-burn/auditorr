@@ -238,7 +238,7 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
           <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>
         </div>
         {blurb && (
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 640 }}>
+          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 960 }}>
             {blurb}
           </p>
         )}

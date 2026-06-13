@@ -55,6 +55,17 @@ function itemKey(item) {
   return item.hash || item.rep_path
 }
 
+// Compact duration for seeding time — the hit-and-run tiebreaker, so days
+// are the unit that matters
+function formatDuration(secs) {
+  if (secs == null) return null
+  const d = secs / 86400
+  if (d >= 1) return `${d >= 10 ? Math.round(d) : d.toFixed(1)}d`
+  const h = secs / 3600
+  if (h >= 1) return `${Math.round(h)}h`
+  return `${Math.max(1, Math.round(secs / 60))}m`
+}
+
 // Search term for prescreening the qBittorrent/qui search box: the parsed
 // title ("The Show") — qBit filters per word, so it matches dotted release
 // names AND surfaces every torrent of that title, not just this release.
@@ -186,14 +197,17 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
         </div>
       </div>
 
-      {/* Earnings — the keep/delete tiebreaker */}
+      {/* Earnings — the keep/delete tiebreaker. Seeding time matters more
+          than per-torrent ratio on private trackers: it decides whether
+          deleting now means a hit-and-run. */}
       <div style={{ flexShrink: 0, textAlign: 'right', minWidth: 86 }}>
         <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: item.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
           {item.uploaded != null ? `↑ ${formatBytes(item.uploaded)}` : '—'}
         </div>
-        {item.ratio != null && (
-          <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
-            ratio {item.ratio.toFixed(2)}
+        {item.seeding_time != null && (
+          <div title="Total time seeding — check your tracker's hit-and-run rules before deleting"
+            style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+            seeded {formatDuration(item.seeding_time)}
           </div>
         )}
       </div>
@@ -456,7 +470,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
                     {sectionItems.length} · {formatBytes(sectionSize)}
                   </span>
                 </div>
-                <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 10px 34px', lineHeight: 1.5, maxWidth: 640 }}>
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 10px 34px', lineHeight: 1.5, maxWidth: 960 }}>
                   {v.desc}
                 </p>
                 {v.key !== 'superseded' ? renderRows(sectionItems) : (
@@ -476,7 +490,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
                             {bucketItems.length} · {formatBytes(bSize)}
                           </span>
                         </div>
-                        <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '0 0 8px 25px', lineHeight: 1.5, maxWidth: 620 }}>
+                        <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '0 0 8px 25px', lineHeight: 1.5, maxWidth: 960 }}>
                           {b.desc}
                         </p>
                         {renderRows(bucketItems)}
@@ -563,6 +577,11 @@ function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, o
               <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {item.parsed?.title || (item.rep_path || '').replace(/\\/g, '/').split('/').pop()}
               </span>
+              {item.seeding_time != null && (
+                <span title="Total time seeding" style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+                  seeded {formatDuration(item.seeding_time)}
+                </span>
+              )}
               <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
                 {formatBytes(item.total_size)}
               </span>

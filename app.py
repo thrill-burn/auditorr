@@ -1086,6 +1086,7 @@ def workflows_triage():
             'tracker_msg':    det.get('tracker_msg') or g['stored_msg'],
             'uploaded':       det.get('uploaded'),
             'ratio':          det.get('ratio'),
+            'seeding_time':   det.get('seeding_time'),
             'added_on':       det.get('added_on'),
         })
 

@@ -838,8 +838,14 @@ def _parse_title_from_filename(filename):
     name = re.sub(r'[._\-]', ' ', name)
     # For TV shows: strip everything from SxxExx onwards
     name = re.split(r'[Ss]\d{1,2}[Ee]\d{1,2}', name)[0]
-    # For movies: strip year (4 digits) and everything after
-    name = re.split(r'\b(19|20)\d{2}\b', name)[0]
+    # For movies: strip the release year and everything after — but only a
+    # plausible year (1900..now+2, so "Blade Runner 2049" keeps its number)
+    # and never the leading token (year-titled films like "1917" or "2046")
+    cutoff = time.gmtime().tm_year + 2
+    for m in re.finditer(r'\b((?:19|20)\d{2})\b', name):
+        if m.start() > 0 and 1900 <= int(m.group(1)) <= cutoff:
+            name = name[:m.start()]
+            break
     # Strip quality/format tags and everything after — \s+ anchor ensures the
     # tag is a standalone token, preventing mid-word matches (e.g. "Internal" in
     # "Internal Affairs" or "4K" in "The 4K Experience"); the lookahead requires

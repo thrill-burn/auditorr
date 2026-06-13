@@ -40,7 +40,7 @@ def classify_tracker_entries(entries):
 
     entries: [{'url': str, 'status': int|None, 'msg': str}] — qBittorrent
     tracker status codes: 0=disabled, 1=not contacted, 2=working, 3=updating,
-    4=not working.
+    4=not working; qBittorrent 5.x adds 5=tracker error and 6=unreachable.
 
     Returns (health, msg) where health is one of
     'unregistered' | 'working' | 'not_working' | 'unknown'.
@@ -54,9 +54,9 @@ def classify_tracker_entries(entries):
     statuses = [e.get('status') for e in real]
     if any(s in (2, 3) for s in statuses):
         return 'working', ''
-    if any(s == 4 for s in statuses):
+    if any(s in (4, 5, 6) for s in statuses):
         first_msg = next(((e.get('msg') or '').strip() for e in real
-                          if e.get('status') == 4 and (e.get('msg') or '').strip()), '')
+                          if e.get('status') in (4, 5, 6) and (e.get('msg') or '').strip()), '')
         return 'not_working', first_msg
     return 'unknown', ''
 

@@ -171,6 +171,7 @@ def fetch_torrent_details(cfg, items):
             details[torrent.hash] = {
                 'uploaded':       torrent.uploaded,
                 'ratio':          round(float(torrent.ratio), 3),
+                'seeding_time':   getattr(torrent, 'seeding_time', None),
                 'added_on':       getattr(torrent, 'added_on', None),
                 'tracker_health': 'unknown',
                 'tracker_msg':    '',

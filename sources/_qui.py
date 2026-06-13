@@ -560,6 +560,7 @@ def fetch_torrent_details(cfg, items):
                         details[th] = {
                             'uploaded':       nt['uploaded'],
                             'ratio':          round(float(t.get('ratio') or 0), 3),
+                            'seeding_time':   t.get('seeding_time') or t.get('seedingTime'),
                             'added_on':       t.get('added_on') or t.get('addedOn'),
                             'tracker_health': 'unknown',
                             'tracker_msg':    '',
