@@ -101,6 +101,7 @@ export const api = {
   dedupeReport:   ()         => req('/workflows/dedupe'),
   excludePatterns: (patterns) => req('/workflows/exclude', { method: 'POST', body: JSON.stringify({ patterns }) }),
   removeTorrents: (items)     => req('/workflows/remove_torrents', { method: 'POST', body: JSON.stringify({ items, delete_files: true }) }),
+  triageResolveGroups: (hashes) => req('/workflows/triage/resolve_groups', { method: 'POST', body: JSON.stringify({ hashes }) }),
   trumpParse:        (pmText)  => req('/workflows/trump/parse',          { method: 'POST', body: JSON.stringify({ pm_text: pmText }) }),
   trumpResolveGroup: (oldTitle) => req('/workflows/trump/resolve_group', { method: 'POST', body: JSON.stringify({ old_title: oldTitle }) }),
   trumpSearchRelease: (params) => req('/workflows/trump/search_release', { method: 'POST', body: JSON.stringify(params) }),

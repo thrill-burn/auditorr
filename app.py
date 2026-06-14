@@ -871,6 +871,75 @@ def workflows_remove_torrents():
     return jsonify({"status": "success", "removed": removed, "requested": len(items)})
 
 
+@app.route('/api/workflows/triage/resolve_groups', methods=['POST'])
+@require_auth
+def workflows_triage_resolve_groups():
+    """Resolve each selected Triage torrent to its full live cross-seed group.
+
+    Triage records keep one hash per path (the healthiest claimant), so the
+    sibling cross-seeds are invisible in the report. This queries the client
+    directly so the delete modal can offer 'this torrent only' vs 'all N
+    cross-seeds' — deletion is hardlink-safe either way (each torrent holds its
+    own hardlink to the shared inode).
+    """
+    data   = request.json or {}
+    hashes = [str(h) for h in (data.get('hashes') or []) if h]
+    if not hashes:
+        return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
+    cfg = db_load_config()
+    try:
+        rows = sources.list_torrents(cfg)
+    except sources.SourceConnectionError as e:
+        return jsonify({"status": "error", "message": str(e)}), 502
+
+    by_hash    = {r['hash']: r for r in rows}
+    seeds      = [by_hash[h] for h in hashes if h in by_hash]
+    sizes      = {s['size'] for s in seeds}
+    candidates = [r for r in rows if r['size'] in sizes]
+    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
+
+    groups = {s['hash']: _cross_seed_group(candidates, paths_map, s) for s in seeds}
+
+    # Enrich every unique group member with live details (seeding time, tracker
+    # health) — one batched call across all resolved groups.
+    seen, members_in = set(), []
+    for g in groups.values():
+        for t in g:
+            if t['hash'] not in seen:
+                seen.add(t['hash'])
+                members_in.append({'hash': t['hash'], 'instance_id': t.get('instance_id')})
+    try:
+        details = sources.fetch_torrent_details(cfg, members_in)
+    except Exception as e:
+        log.warning("Triage resolve_groups: detail fetch failed: %s", e)
+        details = {}
+
+    out = {}
+    for h, g in groups.items():
+        members = []
+        for t in g:
+            det = details.get(t['hash'], {})
+            members.append({
+                'hash':           t['hash'],
+                'instance_id':    t.get('instance_id'),
+                'name':           t['name'],
+                'tracker':        t.get('tracker') or '',
+                'size':           t['size'],
+                'seeding_time':   det.get('seeding_time'),
+                'uploaded':       det.get('uploaded'),
+                'tracker_health': det.get('tracker_health', 'unknown'),
+                'tracker_msg':    det.get('tracker_msg', ''),
+            })
+        members.sort(key=lambda m: m['name'])
+        out[h] = members
+
+    # Hashes not found in the client get an empty group → the modal falls back
+    # to a single-torrent delete for them.
+    for h in hashes:
+        out.setdefault(h, [])
+    return jsonify({"status": "success", "groups": out})
+
+
 # ---------------------------------------------------------------------------
 # Trumped workflow — PM-driven swap of a trumped release for its replacement.
 # See prompts/TRUMP.md for the full design. auditorr never contacts a tracker:
@@ -915,6 +984,25 @@ def workflows_trump_parse():
     return jsonify({"status": "success", "old_title": old_title, "new_title": new_title})
 
 
+def _cross_seed_group(rows, paths_map, seed):
+    """The cross-seed group of `seed`, drawn from `rows`.
+
+    A sibling is any torrent with the same payload size that shares at least one
+    content file path with the seed (hardlinked cross-seeds point at the same
+    files). The seed itself is always included. `paths_map` is {hash: [paths]}.
+    Each returned row gains a sorted 'paths' list.
+    """
+    seed_paths = set(paths_map.get(seed['hash'], []))
+    group = []
+    for r in rows:
+        if r['size'] != seed['size']:
+            continue
+        ps = set(paths_map.get(r['hash'], []))
+        if r['hash'] == seed['hash'] or (seed_paths and ps & seed_paths):
+            group.append({**r, 'paths': sorted(ps)})
+    return group
+
+
 @app.route('/api/workflows/trump/resolve_group', methods=['POST'])
 @require_auth
 def workflows_trump_resolve_group():
@@ -950,12 +1038,7 @@ def workflows_trump_resolve_group():
     seed      = matches[0]
     same_size = [r for r in rows if r['size'] == seed['size']]
     paths_map = sources.fetch_torrent_file_paths(cfg, same_size)
-    seed_paths = set(paths_map.get(seed['hash'], []))
-    group = []
-    for r in same_size:
-        ps = set(paths_map.get(r['hash'], []))
-        if r['hash'] == seed['hash'] or (seed_paths and ps & seed_paths):
-            group.append({**r, 'paths': sorted(ps)})
+    group     = _cross_seed_group(same_size, paths_map, seed)
 
     try:
         details = sources.fetch_torrent_details(cfg, group)

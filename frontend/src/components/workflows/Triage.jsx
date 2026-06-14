@@ -56,6 +56,13 @@ function itemKey(item) {
   return item.hash || item.rep_path
 }
 
+// Default delete scope: a superseded torrent whose library copy is the better
+// one is dead weight → remove the whole cross-seed group. Everything else
+// defaults to the single recorded torrent.
+function defaultScope(item) {
+  return (item.verdict === 'superseded' && item.library?.quality_cmp === 'lower') ? 'all' : 'one'
+}
+
 // Compact duration for seeding time — the hit-and-run tiebreaker, so days
 // are the unit that matters
 function formatDuration(secs) {
@@ -274,6 +281,12 @@ export default function Triage({ onNavigate, cleanupCount }) {
   const [selected, setSelected] = useState(() => new Set())
   const [busy,     setBusy]     = useState(null)   // 'rescan' | 'exclude' | 'delete' | null
   const [confirmOpen, setConfirmOpen] = useState(false)
+  // Cross-seed groups resolved live when the delete modal opens, keyed by the
+  // item's recorded hash → [{hash, instance_id, name, tracker, seeding_time…}].
+  const [groups,    setGroups]    = useState({})
+  const [scopes,    setScopes]    = useState({})   // itemKey → 'one' | 'all'
+  const [resolving, setResolving] = useState(false)
+  const [resolveError, setResolveError] = useState(null)
 
   const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui', url }
   const [clientDeleteAllowed, setClientDeleteAllowed] = useState(false)
@@ -346,12 +359,60 @@ export default function Triage({ onNavigate, cleanupCount }) {
   // entries (hash unknown) can only be handled manually.
   const deletableItems = selectedItems.filter(i => i.hash)
 
+  // Open the confirm modal and resolve each selected torrent's live cross-seed
+  // group so the user can choose per-item: delete just this torrent, or the
+  // whole hardlinked group. Deletion is hardlink-safe either way.
+  const openConfirm = useCallback(async () => {
+    setConfirmOpen(true)
+    setResolveError(null)
+    setResolving(true)
+    setScopes(() => {
+      const m = {}
+      for (const i of deletableItems) m[itemKey(i)] = defaultScope(i)
+      return m
+    })
+    try {
+      const resp = await api.triageResolveGroups(deletableItems.map(i => i.hash))
+      setGroups(resp.groups || {})
+    } catch (e) {
+      setResolveError(e.message)
+      setGroups({})
+    }
+    setResolving(false)
+  }, [deletableItems])
+
+  const setItemScope = useCallback((key, scope) => {
+    setScopes(prev => ({ ...prev, [key]: scope }))
+  }, [])
+
+  const setAllScopes = useCallback((scope) => {
+    setScopes(() => {
+      const m = {}
+      for (const i of deletableItems) m[itemKey(i)] = scope
+      return m
+    })
+  }, [deletableItems])
+
+  // Flatten the selection into a deduped removal set, honoring each item's
+  // scope: 'all' pulls every hash in its cross-seed group, 'one' just the
+  // recorded torrent.
+  const buildRemovalItems = useCallback(() => {
+    const byHash = new Map()
+    for (const item of deletableItems) {
+      const grp = groups[item.hash] || []
+      if ((scopes[itemKey(item)] || 'one') === 'all' && grp.length > 0) {
+        for (const m of grp) byHash.set(m.hash, { hash: m.hash, instance_id: m.instance_id })
+      } else {
+        byHash.set(item.hash, { hash: item.hash, instance_id: item.instance_id })
+      }
+    }
+    return [...byHash.values()]
+  }, [deletableItems, groups, scopes])
+
   const handleClientDelete = async () => {
     setBusy('delete')
     try {
-      const resp = await api.removeTorrents(
-        deletableItems.map(i => ({ hash: i.hash, instance_id: i.instance_id }))
-      )
+      const resp = await api.removeTorrents(buildRemovalItems())
       toast(`Removed ${resp.removed} torrent${resp.removed !== 1 ? 's' : ''} and their files via ${client?.name || 'the client'}`, 'success')
       const keys = new Set(deletableItems.map(itemKey))
       setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
@@ -566,7 +627,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
                 {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
               </ActionButton>
               {clientDeleteAllowed && client && (
-                <ActionButton danger onClick={() => setConfirmOpen(true)} disabled={busy != null || deletableItems.length === 0}
+                <ActionButton danger onClick={openConfirm} disabled={busy != null || deletableItems.length === 0}
                   title={deletableItems.length === 0
                     ? 'None of the selected items have a torrent hash'
                     : `Remove the selected torrents AND their downloaded files via ${client.name}`}>
@@ -579,6 +640,12 @@ export default function Triage({ onNavigate, cleanupCount }) {
           {confirmOpen && (
             <ConfirmDeleteModal
               items={deletableItems}
+              groups={groups}
+              scopes={scopes}
+              resolving={resolving}
+              resolveError={resolveError}
+              onSetItemScope={setItemScope}
+              onSetAllScopes={setAllScopes}
               skippedCount={selectedItems.length - deletableItems.length}
               clientName={client?.name || 'client'}
               busy={busy === 'delete'}
@@ -593,9 +660,55 @@ export default function Triage({ onNavigate, cleanupCount }) {
   )
 }
 
-function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, onConfirm }) {
-  const totalSize  = items.reduce((s, i) => s + i.total_size, 0)
-  const totalFiles = items.reduce((s, i) => s + i.file_count, 0)
+// A small two-way scope switch: delete just the recorded torrent, or the whole
+// hardlinked cross-seed group.
+function ScopeSwitch({ scope, groupSize, onChange }) {
+  const opts = [
+    { key: 'one', label: 'This torrent only' },
+    { key: 'all', label: `All ${groupSize} cross-seeds` },
+  ]
+  return (
+    <div style={{ display: 'inline-flex', border: '1px solid var(--border2)', borderRadius: 6, overflow: 'hidden' }}>
+      {opts.map((o, idx) => {
+        const active = scope === o.key
+        return (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            style={{
+              fontSize: 10.5, fontFamily: 'var(--mono)', padding: '3px 9px', cursor: 'pointer',
+              border: 'none', borderLeft: idx ? '1px solid var(--border2)' : 'none',
+              background: active ? (o.key === 'all' ? 'var(--red)20' : 'var(--surface3)') : 'transparent',
+              color: active ? (o.key === 'all' ? 'var(--red)' : 'var(--text)') : 'var(--text-dim)',
+              fontWeight: active ? 700 : 400,
+            }}
+          >
+            {o.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function ConfirmDeleteModal({
+  items, groups, scopes, resolving, resolveError,
+  onSetItemScope, onSetAllScopes, skippedCount, clientName, busy, onCancel, onConfirm,
+}) {
+  const totalSize = items.reduce((s, i) => s + i.total_size, 0)
+  const anyGroups = items.some(i => (groups[i.hash] || []).length > 1)
+
+  // Deduped set of every torrent hash that will actually be removed.
+  const removalHashes = new Set()
+  for (const item of items) {
+    const grp = groups[item.hash] || []
+    if ((scopes[itemKey(item)] || 'one') === 'all' && grp.length > 0) {
+      grp.forEach(m => removalHashes.add(m.hash))
+    } else {
+      removalHashes.add(item.hash)
+    }
+  }
+  const torrentCount = removalHashes.size
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onCancel() }
@@ -628,19 +741,39 @@ function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, o
         <div style={{ padding: '18px 20px 0' }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>Delete from {clientName}</div>
           <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
-            This permanently removes <b>{items.length} torrent{items.length !== 1 ? 's' : ''}</b> from {clientName} and
-            deletes <b>{totalFiles} file{totalFiles !== 1 ? 's' : ''} · {formatBytes(totalSize)}</b> from disk. There is no undo.
+            This permanently removes <b>{torrentCount} torrent{torrentCount !== 1 ? 's' : ''}</b> from {clientName} and
+            deletes their files (<b>{formatBytes(totalSize)}</b> of data) from disk. There is no undo.
           </p>
           {skippedCount > 0 && (
             <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0' }}>
               {skippedCount} selected item{skippedCount !== 1 ? 's have' : ' has'} no torrent hash and will be skipped.
             </p>
           )}
+          {resolveError && (
+            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0' }}>
+              Couldn’t resolve cross-seed groups ({resolveError}) — only the listed torrents will be deleted.
+            </p>
+          )}
+          {anyGroups && !resolving && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 0', fontSize: 11.5, color: 'var(--text-dim)' }}>
+              <span>Cross-seeds are hardlinked — deleting one never harms the others. Apply to all:</span>
+              <button onClick={() => onSetAllScopes('one')} style={miniBtn}>This torrent only</button>
+              <button onClick={() => onSetAllScopes('all')} style={miniBtn}>All cross-seeds</button>
+            </div>
+          )}
         </div>
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
+          {resolving && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+              <Spinner /> Finding cross-seeds in {clientName}…
+            </div>
+          )}
           {items.map(item => {
+            const grp   = groups[item.hash] || []
+            const scope = scopes[itemKey(item)] || 'one'
+            const hasGroup = grp.length > 1
             const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
-            const shownPaths = paths.slice(0, 8)
+            const shownPaths = paths.slice(0, 6)
             return (
               <div key={itemKey(item)} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -657,23 +790,54 @@ function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, o
                     {formatBytes(item.total_size)}
                   </span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 3, fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
-                  <span title={item.hash} style={{ flexShrink: 0 }}>hash {String(item.hash).slice(0, 12)}…</span>
-                  {(item.trackers || [])[0] && <span style={{ flexShrink: 0 }}>{item.trackers[0]}</span>}
-                  <span style={{ flexShrink: 0 }}>{item.file_count} file{item.file_count !== 1 ? 's' : ''}</span>
-                </div>
-                <div style={{ marginTop: 4 }}>
-                  {shownPaths.map(p => (
-                    <div key={p} title={p} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p}
+
+                {hasGroup ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                      <ScopeSwitch scope={scope} groupSize={grp.length} onChange={s => onSetItemScope(itemKey(item), s)} />
                     </div>
-                  ))}
-                  {paths.length > shownPaths.length && (
-                    <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.6 }}>
-                      +{paths.length - shownPaths.length} more files
+                    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {grp.map(m => {
+                        const willDelete = scope === 'all' || m.hash === item.hash
+                        return (
+                          <div key={m.hash} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 10, fontFamily: 'var(--mono)' }}>
+                            <span style={{
+                              flexShrink: 0, width: 42, color: willDelete ? 'var(--red)' : 'var(--text-dim)',
+                              fontWeight: willDelete ? 700 : 400,
+                            }}>
+                              {willDelete ? 'delete' : 'keep'}
+                            </span>
+                            <span style={{ flex: 1, minWidth: 0, color: willDelete ? 'var(--text)' : 'var(--text-dim)', opacity: willDelete ? 1 : 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {m.name}
+                            </span>
+                            {m.tracker && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{m.tracker}</span>}
+                            {m.seeding_time != null && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{formatDuration(m.seeding_time)}</span>}
+                          </div>
+                        )
+                      })}
                     </div>
-                  )}
-                </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 3, fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                      <span title={item.hash} style={{ flexShrink: 0 }}>hash {String(item.hash).slice(0, 12)}…</span>
+                      {(item.trackers || [])[0] && <span style={{ flexShrink: 0 }}>{item.trackers[0]}</span>}
+                      {!resolving && <span style={{ flexShrink: 0 }}>no cross-seeds</span>}
+                    </div>
+                    <div style={{ marginTop: 4 }}>
+                      {shownPaths.map(p => (
+                        <div key={p} title={p} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {p}
+                        </div>
+                      ))}
+                      {paths.length > shownPaths.length && (
+                        <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.6 }}>
+                          +{paths.length - shownPaths.length} more files
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             )
           })}
@@ -686,12 +850,17 @@ function ConfirmDeleteModal({ items, skippedCount, clientName, busy, onCancel, o
           )}
           <span style={{ flex: 1 }} />
           <ActionButton onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</ActionButton>
-          <ActionButton danger onClick={onConfirm} disabled={busy}>
-            {busy ? 'Deleting…' : `Delete ${items.length} torrent${items.length !== 1 ? 's' : ''} + files`}
+          <ActionButton danger onClick={onConfirm} disabled={busy || resolving}>
+            {busy ? 'Deleting…' : `Delete ${torrentCount} torrent${torrentCount !== 1 ? 's' : ''} + files`}
           </ActionButton>
         </div>
       </div>
     </div>,
     document.body
   )
+}
+
+const miniBtn = {
+  fontSize: 10.5, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
+  border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
 }
