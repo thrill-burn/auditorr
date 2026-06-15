@@ -59,8 +59,10 @@ function HealthDial({ score, status, smartTrend, color }) {
   const SIZE = 220
   const CX = SIZE / 2, CY = SIZE / 2
   const R_OUTER = 90, R_INNER = 68
-  const GAP_DEG = 50
-  const START_DEG = 90 + GAP_DEG / 2
+  const R_MID = (R_OUTER + R_INNER) / 2
+  const CAP_R = (R_OUTER - R_INNER) / 2
+  const GAP_DEG = 56
+  const START_DEG = 180 + GAP_DEG / 2   // gap centered at the bottom
   const SWEEP_DEG = 360 - GAP_DEG
 
   function polarToXY(cx, cy, r, angleDeg) {
@@ -72,6 +74,12 @@ function HealthDial({ score, status, smartTrend, color }) {
     const s2 = polarToXY(cx, cy, rI, e), e2 = polarToXY(cx, cy, rI, s)
     const large = (e - s) > 180 ? 1 : 0
     return `M ${s1.x} ${s1.y} A ${rO} ${rO} 0 ${large} 1 ${e1.x} ${e1.y} L ${s2.x} ${s2.y} A ${rI} ${rI} 0 ${large} 0 ${e2.x} ${e2.y} Z`
+  }
+  // Centerline arc (for the stroked track — gives free rounded ends).
+  function arcLine(cx, cy, r, s, e) {
+    const p1 = polarToXY(cx, cy, r, s), p2 = polarToXY(cx, cy, r, e)
+    const large = (e - s) > 180 ? 1 : 0
+    return `M ${p1.x} ${p1.y} A ${r} ${r} 0 ${large} 1 ${p2.x} ${p2.y}`
   }
 
   const target = Math.min(Math.max(score, 0), 100) / 100
@@ -97,7 +105,8 @@ function HealthDial({ score, status, smartTrend, color }) {
     return () => cancelAnimationFrame(raf)
   }, [target])
 
-  const trackPath = arcPath(CX, CY, R_OUTER, R_INNER, START_DEG, START_DEG + SWEEP_DEG)
+  // Number counts up in lockstep with the arc sweep.
+  const displayScore = Math.round(animPct * 100)
 
   // Zone bands on the unfilled track, with labeled ticks at the thresholds
   const zonePaths = DIAL_ZONES.map(z => ({
@@ -114,6 +123,11 @@ function HealthDial({ score, status, smartTrend, color }) {
       label: polarToXY(CX, CY, R_OUTER + 13, deg),
     }
   })
+  // Scale anchors at the open ends of the dial.
+  const ends = [0, 100].map(v => ({
+    value: v,
+    label: polarToXY(CX, CY, R_OUTER + 13, START_DEG + SWEEP_DEG * (v / 100)),
+  }))
 
   const delta = smartTrend?.delta
   const trendLabel = smartTrend?.label
@@ -139,45 +153,62 @@ function HealthDial({ score, status, smartTrend, color }) {
     })
   }
   const tipColor = `hsl(${dialHue(animPct)}, 90%, 52%)`
-  // The glow lives on a dedicated tip cap — a blur filter on a sub-degree
-  // sliver renders as noise, so give it a few degrees of its own.
-  const tipPath = animPct > 0.01
-    ? arcPath(CX, CY, R_OUTER, R_INNER,
-        START_DEG + SWEEP_DEG * Math.max(0, animPct - 0.012),
-        START_DEG + SWEEP_DEG * animPct)
-    : null
+  const startColor = `hsl(${dialHue(0)}, 90%, 52%)`
+  const glowColor = `hsl(${dialHue(target)}, 90%, 52%)`
+  // Rounded end caps: a circle the width of the ring rounds each butt end of
+  // the wedge fill. The tip cap also carries the (soft, contained) glow.
+  const fillEndDeg = START_DEG + SWEEP_DEG * animPct
+  const startCap = polarToXY(CX, CY, R_MID, START_DEG)
+  const tipCap = polarToXY(CX, CY, R_MID, fillEndDeg)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-      <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-        {/* Track */}
-        <path d={trackPath} fill="var(--surface3)" />
-        {/* Faint zone bands — where Poor/Fair, Good, and Excellent live */}
-        {zonePaths.map((z, i) => (
-          <path key={i} d={z.path} fill={z.color} fillOpacity="0.10" />
-        ))}
-        {/* Color-swept filled segments */}
-        {arcSegments.map((seg, i) => (
-          <path key={i} d={seg.path} fill={seg.color} />
-        ))}
-        {/* Tip cap with glow */}
-        {tipPath && (
-          <path d={tipPath} fill={tipColor}
-            style={{ filter: 'drop-shadow(0 0 6px ' + tipColor + ')' }} />
-        )}
-        {/* Threshold ticks + labels */}
-        {ticks.map((t, i) => (
-          <g key={i}>
-            <line x1={t.inner.x} y1={t.inner.y} x2={t.outer.x} y2={t.outer.y}
-              stroke="var(--bg)" strokeWidth="2.5" />
-            <text x={t.label.x} y={t.label.y + 3} textAnchor="middle"
-              fontFamily="var(--mono)" fontSize="9" fill="var(--text-dim)">{t.value}</text>
-          </g>
-        ))}
-        <text x={CX} y={CY - 6} textAnchor="middle" fontFamily="var(--mono)" fontSize="38" fontWeight="700" fill={color}>{score}</text>
-        <text x={CX} y={CY + 12} textAnchor="middle" fontFamily="var(--mono)" fontSize="11" fill="var(--text-dim)">/ 100</text>
-        <text x={CX} y={CY + 28} textAnchor="middle" fontFamily="var(--mono)" fontSize="11" fontWeight="600" fill={color} letterSpacing="1.5">{status?.toUpperCase()}</text>
-      </svg>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+      <div style={{ position: 'relative', width: SIZE, height: SIZE }}>
+        {/* Ambient zone glow — the card quietly breathes the current health color */}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          <div style={{ width: '58%', height: '58%', borderRadius: '50%', background: `radial-gradient(circle, ${glowColor} 0%, transparent 68%)`, opacity: 0.18, filter: 'blur(14px)' }} />
+        </div>
+        <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ position: 'relative' }}>
+          {/* Recessed track with rounded ends */}
+          <path d={arcLine(CX, CY, R_MID, START_DEG, START_DEG + SWEEP_DEG)}
+            fill="none" stroke="var(--surface3)" strokeWidth={R_OUTER - R_INNER} strokeLinecap="round" />
+          {/* Faint zone bands — where Poor/Fair, Good, and Excellent live */}
+          {zonePaths.map((z, i) => (
+            <path key={i} d={z.path} fill={z.color} fillOpacity="0.10" />
+          ))}
+          {/* Color-swept filled segments */}
+          {arcSegments.map((seg, i) => (
+            <path key={i} d={seg.path} fill={seg.color} />
+          ))}
+          {/* Rounded start cap */}
+          {animPct > 0.01 && <circle cx={startCap.x} cy={startCap.y} r={CAP_R} fill={startColor} />}
+          {/* Rounded tip cap with contained glow */}
+          {animPct > 0.01 && (
+            <circle cx={tipCap.x} cy={tipCap.y} r={CAP_R} fill={tipColor}
+              style={{ filter: `drop-shadow(0 0 5px ${tipColor})` }} />
+          )}
+          {/* Threshold ticks + labels */}
+          {ticks.map((t, i) => (
+            <g key={i}>
+              <line x1={t.inner.x} y1={t.inner.y} x2={t.outer.x} y2={t.outer.y}
+                stroke="var(--bg)" strokeWidth="2.5" />
+              <text x={t.label.x} y={t.label.y + 3} textAnchor="middle"
+                fontFamily="var(--mono)" fontSize="10" fill="var(--text-dim)">{t.value}</text>
+            </g>
+          ))}
+          {/* Scale anchors at the open ends */}
+          {ends.map((e, i) => (
+            <text key={i} x={e.label.x} y={e.label.y + 3} textAnchor="middle"
+              fontFamily="var(--mono)" fontSize="9" fill="var(--text-dim)" opacity="0.65">{e.value}</text>
+          ))}
+        </svg>
+        {/* Center readout — HTML overlay for crisp text + status chip */}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 700, color, lineHeight: 1 }}>{displayScore}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>/ 100</span>
+          <span style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, letterSpacing: 1.5, color, background: color + '1a', border: `1px solid ${color}40`, borderRadius: 99, padding: '2px 10px' }}>{status?.toUpperCase()}</span>
+        </div>
+      </div>
       {delta != null && (
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -315,7 +346,7 @@ function TrendPill({ trend }) {
   if (!trend) return null
   const m = TREND_META[trend.sentiment]
   return (
-    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: m.color, background: m.color + '14', border: '1px solid ' + m.color + '30', borderRadius: 5, padding: '2px 8px' }}>
+    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: m.color, background: m.color + '14', border: '1px solid ' + m.color + '30', borderRadius: 5, padding: '2px 8px' }}>
       <TrendIcon sentiment={trend.sentiment} />{m.label}
     </div>
   )
@@ -350,16 +381,18 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color, borderRadius: '12px 12px 0 0' }} />
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginTop: 4 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>{label}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, background: color + '18', border: '1px solid ' + color + '35', borderRadius: 4, padding: '1px 6px' }}>{pts}</span>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start' }}>{label}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, background: color + '18', border: '1px solid ' + color + '35', borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap' }}>{pts}</span>
       </div>
       <div style={{ marginTop: 10 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1 }}>{value}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, whiteSpace: 'nowrap' }}>{value}</span>
       </div>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
+      <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
+        <TrendPill trend={trend} />
+      </div>
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6 }}>{desc}</p>
-      <TrendPill trend={trend} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto', paddingTop: 14 }}>
         {enrichedRows.map((row, rowIdx) => {
           const visibleActions = row.filter(a => !a.hidden)
