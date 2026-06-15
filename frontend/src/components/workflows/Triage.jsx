@@ -32,15 +32,21 @@ const VERDICTS = [
 ]
 
 // Superseded sub-buckets — what to do depends on how the orphaned torrent's
-// quality compares to the library file it duplicates.
+// quality compares to the library file it duplicates. The 'duplicate' bucket
+// is special: it's a byte-identical copy (not just same quality), so it goes
+// first and points at Dedupe instead of being a keep/delete judgement call.
 const QUALITY_BUCKETS = [
+  {
+    key: 'duplicate', label: 'Duplicate of an existing copy', color: 'var(--purple)',
+    desc: 'A byte-identical copy already exists on disk but isn’t hardlinked — wasted space. Hardlink it in the Dedupe workflow to reclaim the space losslessly, no need to stop seeding.',
+  },
   {
     key: 'higher', label: 'Higher quality than library', color: 'var(--green)',
     desc: 'Better than what you imported — consider a manual import in Sonarr/Radarr to upgrade your library copy before doing anything else.',
   },
   {
     key: 'same', label: 'Same quality as library', color: 'var(--blue)',
-    desc: 'An alternate copy at the same quality — pure ratio padding. Keep seeding or delete, nothing to upgrade.',
+    desc: 'A separate release at the same quality (not a byte-identical copy) — pure ratio padding. Keep seeding or delete, nothing to upgrade.',
   },
   {
     key: 'lower', label: 'Lower quality than library', color: 'var(--yellow)',
@@ -54,6 +60,14 @@ const QUALITY_BUCKETS = [
 
 function itemKey(item) {
   return item.hash || item.rep_path
+}
+
+// Which superseded sub-bucket an item belongs to. A byte-identical duplicate
+// always wins over its quality comparison — it's a Dedupe target, not a
+// keep/delete call — so it never also shows up under same/higher/lower.
+function qualityBucket(item) {
+  if (item.is_duplicate) return 'duplicate'
+  return item.library?.quality_cmp || 'unknown'
 }
 
 // Default delete scope: a superseded torrent whose library copy is the better
@@ -144,7 +158,7 @@ function QualityChip({ label, hdr, dim }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
+function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate }) {
   const p = item.parsed || {}
   const seTag = p.season != null
     ? ` · S${String(p.season).padStart(2, '0')}${p.episode != null ? 'E' + String(p.episode).padStart(2, '0') : ' pack'}`
@@ -201,6 +215,18 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient }) {
           )}
           {item.tracker_health === 'not_working' && !item.tracker_msg && (
             <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.8 }}>tracker not responding</span>
+          )}
+          {item.is_duplicate && (
+            <button
+              onClick={e => { e.stopPropagation(); onNavigate && onNavigate({ tab: 'dedupe' }) }}
+              title="A byte-identical copy exists on disk — open the Dedupe workflow to hardlink it and reclaim the space (lossless)"
+              style={{
+                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                background: 'var(--purple)18', color: 'var(--purple)', border: '1px solid var(--purple)40',
+              }}
+            >
+              Dedupe ↗
+            </button>
           )}
         </div>
       </div>
@@ -571,6 +597,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
                     onToggle={() => toggle(itemKey(item))}
                     client={client}
                     onOpenClient={openInClient}
+                    onNavigate={onNavigate}
                   />
                 ))}
               </div>
@@ -591,7 +618,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
                 </p>
                 {v.key !== 'superseded' ? renderRows(sectionItems) : (
                   QUALITY_BUCKETS.map(b => {
-                    const bucketItems = sectionItems.filter(i => (i.library?.quality_cmp || 'unknown') === b.key)
+                    const bucketItems = sectionItems.filter(i => qualityBucket(i) === b.key)
                     if (bucketItems.length === 0) return null
                     const bKeys = bucketItems.map(itemKey)
                     const bAll  = bKeys.every(k => selected.has(k))

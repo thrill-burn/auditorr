@@ -1369,6 +1369,11 @@ def workflows_triage():
                 'quality_cmp':  'unknown',
             }
 
+        # A byte-identical copy of this torrent's data already exists on disk
+        # (audit duplicate detection) but isn't hardlinked — a lossless Dedupe
+        # target. Distinct from a "same quality" alternate, which is separate data.
+        is_duplicate = any(f.get('duplicate_paths') for f in g['files'])
+
         items.append({
             'hash':           g['hash'],
             'instance_id':    g['instance_id'],
@@ -1378,6 +1383,7 @@ def workflows_triage():
             'total_size':     g['total_size'],
             'trackers':       sorted(g['trackers']),
             'verdict':        verdict,
+            'is_duplicate':   is_duplicate,
             'parsed':         parsed,
             'library':        lib_payload,
             'tracker_health': tracker_health,

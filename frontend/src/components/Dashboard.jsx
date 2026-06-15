@@ -691,7 +691,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
               </div>
               <div style={{ height: 160 }}>
                 <ResponsiveContainer width="100%" height={160}>
-                  <AreaChart data={trendData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                  <AreaChart data={trendData} margin={{ top: 4, right: 20, left: 4, bottom: 0 }}>
                     <defs>
                       <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={activeTab.color} stopOpacity={0.25} />
@@ -701,6 +701,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                     <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
                     <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
                     <YAxis
+                      width={44}
                       tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
                       tickLine={false} axisLine={false}
                       domain={chartTab === 'seeding' ? ['auto', 'auto'] : [0, 'auto']}
@@ -1039,7 +1040,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={filteredHistory} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+            <AreaChart data={filteredHistory} margin={{ top: 4, right: 20, left: 4, bottom: 0 }}>
               <defs>
                 <linearGradient id="grafanaGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={c} stopOpacity={0.25} />
@@ -1048,7 +1049,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               </defs>
               <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
               <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
-              <YAxis domain={[minScore, maxScore]} ticks={yTicks} allowDecimals={false} tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+              <YAxis domain={[minScore, maxScore]} ticks={yTicks} allowDecimals={false} width={30} tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
               <Tooltip content={<GrafanaTooltip color={c} />} cursor={{ stroke: c + '40', strokeWidth: 1, strokeDasharray: '3 3' }} />
               <Area type="linear" dataKey="avg_score" stroke={c} strokeWidth={1.5} fill="url(#grafanaGrad)" dot={false} activeDot={{ r: 4, fill: c, stroke: 'var(--bg)', strokeWidth: 2 }} />
             </AreaChart>
@@ -1136,10 +1137,11 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 ? <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No trackers selected</div>
                 : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
+                    <BarChart data={uploadChartData.data} margin={{ top: 4, right: 20, left: 4, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
                       <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
                       <YAxis
+                        width={44}
                         tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
                         tickLine={false} axisLine={false}
                         tickFormatter={formatBytesCompact}
