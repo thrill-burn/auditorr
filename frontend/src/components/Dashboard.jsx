@@ -6,6 +6,18 @@ import FilterBar from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
 
+// Shared section-header label style — keeps every dashboard card title uniform.
+const SECTION_LABEL = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// Accepts a full ISO date (YYYY-MM-DD) and renders e.g. "Jun 12"; passes
+// through anything that isn't a date so it's safe as a tooltip formatter too.
+const fmtChartDate = v => {
+  if (typeof v !== 'string') return v
+  const p = v.split('-')
+  return p.length === 3 ? `${MONTHS[+p[1] - 1]} ${+p[2]}` : v
+}
+
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 function Skeleton({ w = '100%', h = 16, style = {} }) {
   return <div className="skeleton" style={{ width: w, height: h, borderRadius: 5, ...style }} />
@@ -224,7 +236,7 @@ function GrafanaTooltip({ active, payload, label, color }) {
   if (!active || !payload?.length) return null
   return (
     <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 130 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
         <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{payload[0].value}</span>
@@ -246,7 +258,7 @@ function UploadActivityTooltip({ active, payload, label }) {
   const total = payload.reduce((s, p) => s + (p.value || 0), 0)
   return (
     <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 160 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
       {items.map(p => (
         <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
           <div style={{ width: 8, height: 8, borderRadius: 2, background: p.fill, flexShrink: 0 }} />
@@ -581,14 +593,14 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
     const byDate = {}
     for (const day of (uploadStats.daily_uploads || [])) {
       const d = day.date
-      if (!byDate[d]) byDate[d] = { date: d.slice(5) }
+      if (!byDate[d]) byDate[d] = { date: d }
       byDate[d].uploaded = day.by_tracker?.[trackerName] || 0
     }
     for (const day of (uploadStats.daily_tracker_stats || [])) {
       const s = day.by_tracker?.[trackerName]
       if (!s) continue
       const d = day.date
-      if (!byDate[d]) byDate[d] = { date: d.slice(5) }
+      if (!byDate[d]) byDate[d] = { date: d }
       byDate[d].seeding_size      = s.seeding_size || 0
       byDate[d].orphaned_size     = s.orphaned_size || 0
       byDate[d].not_imported_size = s.not_imported_size || 0
@@ -674,7 +686,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
         {uploadStats && (
           hasTrendData ? (
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 10 }}>
+              <div style={{ ...SECTION_LABEL, marginBottom: 10 }}>
                 {activeTab.label} Trend
               </div>
               <div style={{ height: 160 }}>
@@ -687,7 +699,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
                     <YAxis
                       tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
                       tickLine={false} axisLine={false}
@@ -702,7 +714,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                         const val = payload[0].value
                         return (
                           <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>{label}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>{fmtChartDate(label)}</div>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>
                               {val != null ? activeTab.fmt(val) : '—'}
                             </div>
@@ -897,8 +909,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   })()
 
   const scores = filteredHistory.map(d => d.avg_score).filter(Boolean)
-  const minScore = scores.length ? Math.max(0, Math.min(...scores) - 5) : 0
-  const maxScore = scores.length ? Math.min(100, Math.max(...scores) + 5) : 100
+  // Snap the y-axis to a round grid so ticks land on even multiples instead of
+  // arbitrary rounded fractions (which produced uneven gaps like 75/79/83/86/90).
+  const rawMin = scores.length ? Math.min(...scores) : 0
+  const rawMax = scores.length ? Math.max(...scores) : 100
+  const yStep = (rawMax - rawMin) <= 15 ? 5 : (rawMax - rawMin) <= 40 ? 10 : 20
+  const minScore = Math.max(0, Math.floor((rawMin - yStep * 0.5) / yStep) * yStep)
+  const maxScore = Math.min(100, Math.ceil((rawMax + yStep * 0.5) / yStep) * yStep)
+  const yTicks = []
+  for (let v = minScore; v <= maxScore + 0.001; v += yStep) yTicks.push(v)
 
   // Smart trend: delta vs timeRange days ago (fallback to oldest entry)
   const smartTrend = (() => {
@@ -940,7 +959,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       }, {})
     ).filter(h => effectiveTrackers.includes(h))
     const chartData = (uploadStats.daily_uploads || []).map(day => {
-      const row = { date: day.date.slice(5) }  // MM-DD
+      const row = { date: day.date }
       for (const h of activeTrackers) row[h] = day.by_tracker[h] || 0
       return row
     })
@@ -991,7 +1010,11 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
             {alerts.map((a, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 8, background: a.color + '10', border: `1px solid ${a.color}30` }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ color: a.color, fontSize: 14 }}>⚠</span>
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }} aria-hidden="true">
+                    <path d="M8 2l7 12H1L8 2z" stroke={a.color} strokeWidth="1.5" strokeLinejoin="round" />
+                    <path d="M8 6.5v3" stroke={a.color} strokeWidth="1.5" strokeLinecap="round" />
+                    <circle cx="8" cy="11.6" r="0.9" fill={a.color} />
+                  </svg>
                   <span style={{ fontSize: 12, color: 'var(--text)' }}>{a.msg}</span>
                 </div>
                 <button onClick={() => onNavigate(a.action)} style={{ padding: '4px 12px', borderRadius: 6, border: `1px solid ${a.color}40`, background: a.color + '15', color: a.color, fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0, marginLeft: 12 }}>
@@ -1006,17 +1029,13 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       {/* Row 1: dial + chart */}
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', alignSelf: 'flex-start' }}>Library Health</span>
+          <span style={{ ...SECTION_LABEL, alignSelf: 'flex-start' }}>Library Health</span>
           <HealthDial score={score} status={status} smartTrend={smartTrend} color={c} />
         </div>
 
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 14px', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase' }}>Score History</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>avg_score</span>
-            </div>
+          <div style={{ marginBottom: 18 }}>
+            <span style={SECTION_LABEL}>Score History</span>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -1028,8 +1047,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-              <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickFormatter={v => v.slice(5)} />
-              <YAxis domain={[minScore, maxScore]} tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} tickCount={5} tickFormatter={v => Math.round(v)} />
+              <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
+              <YAxis domain={[minScore, maxScore]} ticks={yTicks} allowDecimals={false} tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
               <Tooltip content={<GrafanaTooltip color={c} />} cursor={{ stroke: c + '40', strokeWidth: 1, strokeDasharray: '3 3' }} />
               <Area type="linear" dataKey="avg_score" stroke={c} strokeWidth={1.5} fill="url(#grafanaGrad)" dot={false} activeDot={{ r: 4, fill: c, stroke: 'var(--bg)', strokeWidth: 2 }} />
             </AreaChart>
@@ -1051,7 +1070,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>Cross-Seed Effectiveness</div>
+                <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-Seed Effectiveness</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--blue)', lineHeight: 1 }}>{csMultDisplay}×</span>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>avg seed multiplier</span>
@@ -1072,7 +1091,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           {/* Tracker leaderboard */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Top Trackers by Disk Space</div>
+              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Top Trackers by Disk Space</div>
               <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
             </div>
             <TrackerLeaderboard trackerStats={filteredTrackerStats} onTrackerDetail={setTrackerDetail} />
@@ -1110,7 +1129,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           {/* Upload Activity */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>Upload Activity</div>
+              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Upload Activity</div>
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               {effectiveTrackers.length === 0
@@ -1119,7 +1138,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={uploadChartData.data} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
                       <YAxis
                         tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
                         tickLine={false} axisLine={false}
@@ -1145,7 +1164,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
+                <div style={SECTION_LABEL}>
                   {yieldPanelTab === 'upload' ? 'Upload by Tracker' : 'Library Yield'}
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
