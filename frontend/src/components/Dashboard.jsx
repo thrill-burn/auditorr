@@ -255,29 +255,74 @@ function RoundedStackedBar({ x, y, width, height, fill, allTrackers, host, paylo
   return <rect x={x} y={y} width={width} height={height} fill={fill} />
 }
 
-// ── Sparkline ─────────────────────────────────────────────────────────────────
-function Sparkline({ data, color, title }) {
+// ── Trend pill ────────────────────────────────────────────────────────────────
+// Sentiment-based, NOT directional: it reports whether the metric's *health* is
+// improving/worsening, decoupled from whether the raw number went up or down.
+// `lowerIsBetter` flips the mapping (orphaned/not-imported/dupes shrink = good;
+// hardlinked % grows = good).
+const TREND_META = {
+  good:    { label: 'Improving', color: 'var(--green)' },
+  neutral: { label: 'Steady',    color: 'var(--text-dim)' },
+  bad:     { label: 'Worsening', color: 'var(--red)' },
+}
+
+function computeTrend(data, lowerIsBetter) {
   if (!data || data.length < 2) return null
-  const W = 110, H = 26, P = 2
-  const max = Math.max(...data)
-  const min = Math.min(...data)
-  const range = max - min || 1
-  const pts = data.map((v, i) => {
-    const x = P + (i / (data.length - 1)) * (W - 2 * P)
-    const y = H - P - ((v - min) / range) * (H - 2 * P)
-    return `${x},${y}`
-  }).join(' ')
+  const first = data[0], last = data[data.length - 1]
+  const delta = last - first
+  const base = Math.max(Math.abs(first), Math.abs(last), 1)
+  if (Math.abs(delta / base) < 0.02) return { sentiment: 'neutral', delta }
+  const improving = lowerIsBetter ? delta < 0 : delta > 0
+  return { sentiment: improving ? 'good' : 'bad', delta }
+}
+
+function makeTrend(data, lowerIsBetter, unit) {
+  const t = computeTrend(data, lowerIsBetter)
+  if (!t) return null
+  const days = data.length
+  const mag = unit === 'pct'
+    ? Math.abs(t.delta).toFixed(1) + ' pts'
+    : formatBytes(Math.abs(t.delta))
+  const sign = t.delta < 0 ? '−' : '+'
+  t.detail = t.sentiment === 'neutral'
+    ? `Roughly flat over the last ${days} days`
+    : `${sign}${mag} over the last ${days} days`
+  return t
+}
+
+function TrendIcon({ sentiment }) {
+  const c = 'currentColor'
+  if (sentiment === 'good') return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 8.5l3 3 7-7.5" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+  if (sentiment === 'bad') return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 2l7 12H1L8 2z" stroke={c} strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M8 6.5v3" stroke={c} strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="8" cy="11.6" r="0.9" fill={c} />
+    </svg>
+  )
   return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ flexShrink: 0, opacity: 0.85 }}>
-      {title && <title>{title}</title>}
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5"
-        strokeLinejoin="round" strokeLinecap="round" />
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 8h10" stroke={c} strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
 }
 
+function TrendPill({ trend }) {
+  if (!trend) return null
+  const m = TREND_META[trend.sentiment]
+  return (
+    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: m.color, background: m.color + '14', border: '1px solid ' + m.color + '30', borderRadius: 5, padding: '2px 8px' }}>
+      <TrendIcon sentiment={trend.sentiment} />{m.label}
+    </div>
+  )
+}
+
 // ── Metric card ───────────────────────────────────────────────────────────────
-function MetricCard({ label, value, sub, pts, desc, color, spark, actionRows, onNavigate, onScript, toast }) {
+function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
 
   const handleAction = async (a) => {
@@ -309,12 +354,12 @@ function MetricCard({ label, value, sub, pts, desc, color, spark, actionRows, on
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>{label}</span>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, background: color + '18', border: '1px solid ' + color + '35', borderRadius: 4, padding: '1px 6px' }}>{pts}</span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8, marginTop: 10 }}>
+      <div style={{ marginTop: 10 }}>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1 }}>{value}</span>
-        {spark && <Sparkline data={spark.data} color={color} title={spark.title} />}
       </div>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6, flexGrow: 1 }}>{desc}</p>
+      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6 }}>{desc}</p>
+      <TrendPill trend={trend} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto', paddingTop: 14 }}>
         {enrichedRows.map((row, rowIdx) => {
           const visibleActions = row.filter(a => !a.hidden)
@@ -733,10 +778,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     ? Math.round((det.hardlinked_media_size / det.total_media_size) * 100) : 100
   const c = scoreColor(score)
 
-  // Per-day series from upload snapshots — feeds the card sparklines.
+  // Per-day series from upload snapshots — feeds the card trend pills.
   // Orphaned/Not Imported sum the per-tracker stats; Hardlinked %/Duplicates
   // come from the snapshot's library-wide '_library' block.
-  const sparkSeries = (() => {
+  const trendSeries = (() => {
     const series = {}
     const days = uploadStats?.daily_tracker_stats
     if (days && days.length >= 2) {
@@ -770,7 +815,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.hl_score} / 70 pts`,
       desc: 'Percentage of your media library that is hardlinked back to a torrent file. 100% means everything is connected.',
       color: 'var(--blue)',
-      spark: sparkSeries.hardlinked ? { data: sparkSeries.hardlinked, title: 'Hardlinked % trend' } : null,
+      trend: makeTrend(trendSeries.hardlinked, false, 'pct'),
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
         [{ type: 'navigate', label: 'Open Backfill Workflow', tab: 'backfill' }],
@@ -782,7 +827,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.or_score} / 10 pts`,
       desc: 'Files in your torrent folder that qBittorrent has no knowledge of. Safe to delete unless you added them manually.',
       color: 'var(--yellow)',
-      spark: sparkSeries.orphaned ? { data: sparkSeries.orphaned, title: 'Orphaned size trend' } : null,
+      trend: makeTrend(trendSeries.orphaned, true, 'bytes'),
       actionRows: [
         [{ type: 'navigate', label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
         [{ type: 'navigate', label: 'Open Cleanup Workflow', tab: 'cleanup' }],
@@ -794,7 +839,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.ni_score} / 10 pts`,
       desc: 'Seeding torrents with no matching file in your media folder. Sonarr/Radarr may have skipped or failed to import these.',
       color: 'var(--red)',
-      spark: sparkSeries.notImported ? { data: sparkSeries.notImported, title: 'Not-imported size trend' } : null,
+      trend: makeTrend(trendSeries.notImported, true, 'bytes'),
       actionRows: [
         [{ type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' }],
         [{ type: 'navigate', label: 'Open Triage Workflow', tab: 'triage' }],
@@ -806,7 +851,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       pts: `${det.dup_score} / 10 pts`,
       desc: 'Bit-for-bit identical files that share no inode — true copies wasting disk space.',
       color: 'var(--purple)',
-      spark: sparkSeries.duplicates ? { data: sparkSeries.duplicates, title: 'Duplicate size trend' } : null,
+      trend: makeTrend(trendSeries.duplicates, true, 'bytes'),
       actionRows: [
         [{ type: 'navigate', label: 'View Media Dupes', tab: 'media', status: 'Duplicate' },
          { type: 'navigate', label: 'View Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
