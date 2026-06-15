@@ -58,7 +58,7 @@ function dialHue(t) {
 function HealthDial({ score, status, smartTrend, color }) {
   const SIZE = 220
   const CX = SIZE / 2, CY = SIZE / 2
-  const R_OUTER = 90, R_INNER = 68
+  const R_OUTER = 90, R_INNER = 60
   const R_MID = (R_OUTER + R_INNER) / 2
   const CAP_R = (R_OUTER - R_INNER) / 2
   const GAP_DEG = 56
@@ -154,7 +154,6 @@ function HealthDial({ score, status, smartTrend, color }) {
   }
   const tipColor = `hsl(${dialHue(animPct)}, 90%, 52%)`
   const startColor = `hsl(${dialHue(0)}, 90%, 52%)`
-  const glowColor = `hsl(${dialHue(target)}, 90%, 52%)`
   // Rounded end caps: a circle the width of the ring rounds each butt end of
   // the wedge fill. The tip cap also carries the (soft, contained) glow.
   const fillEndDeg = START_DEG + SWEEP_DEG * animPct
@@ -164,10 +163,6 @@ function HealthDial({ score, status, smartTrend, color }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
       <div style={{ position: 'relative', width: SIZE, height: SIZE }}>
-        {/* Ambient zone glow — the card quietly breathes the current health color */}
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          <div style={{ width: '58%', height: '58%', borderRadius: '50%', background: `radial-gradient(circle, ${glowColor} 0%, transparent 68%)`, opacity: 0.18, filter: 'blur(14px)' }} />
-        </div>
         <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ position: 'relative' }}>
           {/* Recessed track with rounded ends */}
           <path d={arcLine(CX, CY, R_MID, START_DEG, START_DEG + SWEEP_DEG)}
