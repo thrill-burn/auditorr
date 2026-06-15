@@ -56,9 +56,9 @@ function dialHue(t) {
 }
 
 function HealthDial({ score, status, smartTrend, color }) {
-  const SIZE = 220
+  const SIZE = 244
   const CX = SIZE / 2, CY = SIZE / 2
-  const R_OUTER = 90, R_INNER = 60
+  const R_OUTER = 100, R_INNER = 70
   const R_MID = (R_OUTER + R_INNER) / 2
   const CAP_R = (R_OUTER - R_INNER) / 2
   const GAP_DEG = 56
