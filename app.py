@@ -33,7 +33,7 @@ from db import (
     db_get_meta, db_set_meta, db_delete_meta,
 )
 from state import get_state, set_state, try_start_scanning
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, _norm_release_name
 from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
@@ -406,6 +406,12 @@ def handle_config():
                 if media_files and torrent_files:
                     new_dashboard = process_health_metrics(
                         media_files, torrent_files, new_conf, update_history=False)
+                    # cross_seed_stats is added by the audit, not process_health_metrics —
+                    # recompute it here so the config-save dashboard refresh doesn't drop
+                    # the Cross-Seed Effectiveness / Tracker Leaderboard panels.
+                    cs_stats = _compute_cross_seed_stats(media_files)
+                    if cs_stats:
+                        new_dashboard['cross_seed_stats'] = cs_stats
                     curr['dashboard'] = new_dashboard
                     db_save_results(curr)
         except Exception as e:

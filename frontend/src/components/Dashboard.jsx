@@ -48,23 +48,53 @@ function DashboardSkeleton() {
 }
 
 // ── SVG Arc Dial ──────────────────────────────────────────────────────────────
-// Gradient hue stops aligned with the scoreColor() status thresholds:
-// red below 75, yellow 75–89, green 90+. The arc tip color therefore always
-// agrees with the status text and the score number.
-const DIAL_HUE_STOPS = [[0, 0], [0.75, 55], [0.9, 100], [1, 125]]
+// Colorblind-friendly (deuteranopia) warm→cool palette: orange (poor) → amber →
+// gold → teal → cyan (excellent). The bad/good ends sit on the blue–yellow axis
+// (visible to green-deficient vision) AND carry a dark→bright luminance ramp, so
+// the scale is distinguishable by more than hue alone. Stops align with the
+// scoreColor() thresholds: poor <75, good 75–89, excellent 90+. Each stop is
+// [t, hue, sat%, light%] — interpolated in HSL.
+const DIAL_COLOR_STOPS = [
+  [0.00,  20, 90, 44],   // orange-red (Poor) — warm, dim
+  [0.50,  38, 92, 52],   // amber
+  [0.75,  46, 90, 56],   // gold (Good begins)
+  [0.90, 178, 55, 50],   // teal (Excellent begins)
+  [1.00, 188, 68, 57],   // bright cyan-teal (perfect)
+]
 const DIAL_ZONES = [
-  { from: 0,    to: 0.75, color: 'hsl(0, 80%, 50%)'   },   // Poor/Fair
-  { from: 0.75, to: 0.9,  color: 'hsl(55, 85%, 50%)'  },   // Good
-  { from: 0.9,  to: 1,    color: 'hsl(115, 70%, 45%)' },   // Excellent
+  { from: 0,    to: 0.75, color: 'hsl(28, 90%, 50%)'  },   // Poor/Fair (warm)
+  { from: 0.75, to: 0.9,  color: 'hsl(46, 90%, 52%)'  },   // Good (gold)
+  { from: 0.9,  to: 1,    color: 'hsl(184, 60%, 50%)' },   // Excellent (teal)
 ]
 
-function dialHue(t) {
-  for (let i = 1; i < DIAL_HUE_STOPS.length; i++) {
-    const [t1, h1] = DIAL_HUE_STOPS[i - 1]
-    const [t2, h2] = DIAL_HUE_STOPS[i]
-    if (t <= t2) return h1 + (h2 - h1) * ((t - t1) / (t2 - t1))
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100
+  const k = n => (n + h / 30) % 12
+  const a = s * Math.min(l, 1 - l)
+  const f = n => {
+    const c = l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))
+    return Math.round(255 * c).toString(16).padStart(2, '0')
   }
-  return DIAL_HUE_STOPS[DIAL_HUE_STOPS.length - 1][1]
+  return `#${f(0)}${f(8)}${f(4)}`
+}
+
+// Interpolates hue, sat AND light so the endpoints can be deep/rich rather than
+// two equally-bright mid-tones. Returns hex (not hsl) so callers can append an
+// alpha suffix (e.g. `${dialColor(t)}1a`) the same way they do with scoreColor.
+function dialColor(t) {
+  const stops = DIAL_COLOR_STOPS
+  const last = stops[stops.length - 1]
+  if (t <= stops[0][0]) return hslToHex(stops[0][1], stops[0][2], stops[0][3])
+  if (t >= last[0])     return hslToHex(last[1], last[2], last[3])
+  for (let i = 1; i < stops.length; i++) {
+    const [t1, h1, s1, l1] = stops[i - 1]
+    const [t2, h2, s2, l2] = stops[i]
+    if (t <= t2) {
+      const f = (t - t1) / (t2 - t1)
+      return hslToHex(h1 + (h2 - h1) * f, s1 + (s2 - s1) * f, l1 + (l2 - l1) * f)
+    }
+  }
+  return hslToHex(last[1], last[2], last[3])
 }
 
 function HealthDial({ score, status, smartTrend, color }) {
@@ -161,11 +191,11 @@ function HealthDial({ score, status, smartTrend, color }) {
     const segEnd   = START_DEG + SWEEP_DEG * t1
     arcSegments.push({
       path:  arcPath(CX, CY, R_OUTER, R_INNER, segStart, segEnd),
-      color: `hsl(${dialHue(Math.min((t0 + t1) / 2, animPct))}, 90%, 52%)`,
+      color: dialColor(Math.min((t0 + t1) / 2, animPct)),
     })
   }
-  const tipColor = `hsl(${dialHue(animPct)}, 90%, 52%)`
-  const startColor = `hsl(${dialHue(0)}, 90%, 52%)`
+  const tipColor = dialColor(animPct)
+  const startColor = dialColor(0)
   // Rounded end caps: a circle the width of the ring rounds each butt end of
   // the wedge fill. The tip cap also carries the (soft, contained) glow.
   const fillEndDeg = START_DEG + SWEEP_DEG * animPct
@@ -211,9 +241,9 @@ function HealthDial({ score, status, smartTrend, color }) {
         </svg>
         {/* Center readout — HTML overlay for crisp text + status chip */}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 700, color, lineHeight: 1 }}>{displayScore}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 700, color: tipColor, lineHeight: 1 }}>{displayScore}</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>/ 100</span>
-          <span style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, letterSpacing: 1.5, color, background: color + '1a', border: `1px solid ${color}40`, borderRadius: 99, padding: '2px 10px' }}>{status?.toUpperCase()}</span>
+          <span style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, letterSpacing: 1.5, color: tipColor, background: tipColor + '1a', border: `1px solid ${tipColor}40`, borderRadius: 99, padding: '2px 10px' }}>{status?.toUpperCase()}</span>
         </div>
       </div>
       {delta != null && (
