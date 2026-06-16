@@ -48,23 +48,25 @@ function DashboardSkeleton() {
 }
 
 // ── SVG Arc Dial ──────────────────────────────────────────────────────────────
-// Colorblind-friendly (deuteranopia) warm→cool palette: orange (poor) → amber →
-// gold → teal → cyan (excellent). The bad/good ends sit on the blue–yellow axis
-// (visible to green-deficient vision) AND carry a dark→bright luminance ramp, so
-// the scale is distinguishable by more than hue alone. Stops align with the
-// scoreColor() thresholds: poor <75, good 75–89, excellent 90+. Each stop is
-// [t, hue, sat%, light%] — interpolated in HSL.
+// Full-spectrum health palette: red (poor) → orange → yellow → green → cyan
+// (perfect), interpolated in HSL. The hue progression is intentionally nonlinear
+// — the warm bottom half holds (red→orange across 0–50%), then ramps faster
+// through yellow→green→cyan across the top half so the "good" range carries more
+// visual variety. The endpoints (red ↔ cyan) stay distinguishable for
+// deuteranopia, and the brightness ramp adds a non-hue cue. Stops align with the
+// scoreColor() thresholds: poor <75, good 75–89 (yellow), excellent 90+
+// (green→cyan). Each stop is [t, hue, sat%, light%].
 const DIAL_COLOR_STOPS = [
-  [0.00,  20, 90, 44],   // orange-red (Poor) — warm, dim
-  [0.50,  38, 92, 52],   // amber
-  [0.75,  46, 90, 56],   // gold (Good begins)
-  [0.90, 178, 55, 50],   // teal (Excellent begins)
-  [1.00, 188, 68, 57],   // bright cyan-teal (perfect)
+  [0.00,   8, 88, 47],   // red (Poor) — dim
+  [0.50,  30, 92, 51],   // orange (mid-poor)
+  [0.75,  52, 95, 56],   // yellow (Good begins)
+  [0.90, 135, 58, 50],   // green (Excellent begins)
+  [1.00, 188, 70, 57],   // cyan (perfect) — bright
 ]
 const DIAL_ZONES = [
-  { from: 0,    to: 0.75, color: 'hsl(28, 90%, 50%)'  },   // Poor/Fair (warm)
-  { from: 0.75, to: 0.9,  color: 'hsl(46, 90%, 52%)'  },   // Good (gold)
-  { from: 0.9,  to: 1,    color: 'hsl(184, 60%, 50%)' },   // Excellent (teal)
+  { from: 0,    to: 0.75, color: 'hsl(30, 90%, 50%)'  },   // Poor/Fair (red→orange)
+  { from: 0.75, to: 0.9,  color: 'hsl(90, 70%, 50%)'  },   // Good (yellow→green)
+  { from: 0.9,  to: 1,    color: 'hsl(170, 60%, 50%)' },   // Excellent (green→cyan)
 ]
 
 function hslToHex(h, s, l) {
@@ -243,7 +245,7 @@ function HealthDial({ score, status, smartTrend, color }) {
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 700, color: tipColor, lineHeight: 1 }}>{displayScore}</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>/ 100</span>
-          <span style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, letterSpacing: 1.5, color: tipColor, background: tipColor + '1a', border: `1px solid ${tipColor}40`, borderRadius: 99, padding: '2px 10px' }}>{status?.toUpperCase()}</span>
+          <span style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: tipColor }}>{status?.toUpperCase()}</span>
         </div>
       </div>
       {delta != null && (
