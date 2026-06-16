@@ -53,7 +53,12 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = scriptType + '.sh'
+    // Local timestamp postfix (with seconds) so each generated script gets a
+    // unique, sortable filename and re-runs never overwrite an earlier one.
+    const d = new Date()
+    const p = n => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+    a.download = `${scriptType}_${stamp}.sh`
     a.click()
     URL.revokeObjectURL(url)
   }

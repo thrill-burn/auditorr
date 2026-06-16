@@ -349,12 +349,30 @@ def _build_dedupe_script(results, cfg, now_str, selection):
         f'#   cd <directory on your host that maps to {script_root}>',
         '#   bash dedupe.sh',
         '#',
+        '# TIP: install "pv" (e.g. apt install pv) for a live progress bar while',
+        '#      large files are verified — without it you get a heartbeat instead.',
+        '#',
         f'# All paths are relative to {script_root} (auditorr\'s view).',
         '',
         f'TOTAL={total_non_skipped}',
         'DONE=0',
         'SKIPPED=0',
         'RECLAIMED=0',
+        '',
+        '# Re-verify two files are byte-identical before hardlinking. cmp has no',
+        '# progress output of its own, so wrap it: a live progress bar via pv when',
+        '# installed, otherwise a heartbeat so large-file checks are never silent.',
+        'verify_identical() {',
+        '  if command -v pv >/dev/null 2>&1; then',
+        '    cmp -s <(pv -N "  comparing" "$1") "$2"',
+        '  else',
+        '    cmp -s "$1" "$2" &',
+        '    local _pid=$!',
+        '    while kill -0 "$_pid" 2>/dev/null; do printf "."; sleep 1; done',
+        '    printf "\\n"',
+        '    wait "$_pid"',
+        '  fi',
+        '}',
         '',
     ]
 
@@ -398,10 +416,11 @@ def _build_dedupe_script(results, cfg, now_str, selection):
             qnc    = shlex.quote(nc_path)
             qname  = shlex.quote(filename)
             lines.append(f'# Duplicate: {nc_path}')
-            lines.append(f'printf "[{group_num}/{total_non_skipped}] Verifying %s...\\n" {qname}')
+            lines.append(f'printf "[{group_num}/{total_non_skipped}] Verifying %s ({size_human})...\\n" {qname}')
             # cmp stops at the first differing byte — md5sum would read both
-            # files in full (and hash them) even when they differ immediately
-            lines.append(f'if ! cmp -s {qcanon} {qnc}; then')
+            # files in full (and hash them) even when they differ immediately.
+            # verify_identical wraps cmp with a progress bar / heartbeat.
+            lines.append(f'if ! verify_identical {qcanon} {qnc}; then')
             lines.append('  echo "  SKIP: Files differ — skipping this group"')
             lines.append('  SKIPPED=$((SKIPPED+1))')
             lines.append('else')

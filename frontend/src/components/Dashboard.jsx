@@ -406,25 +406,41 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
           if (visibleActions.length === 0) return <div key={rowIdx} style={{ height: 31 }} />
           return (
             <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
-              {visibleActions.map((a, i) => (
-                <button
-                  key={i}
-                  onClick={() => handleAction(a)}
-                  disabled={a.loading}
-                  style={{
-                    flex: 1, padding: '7px 10px', borderRadius: 7,
-                    border: `1px solid ${color}35`,
-                    background: a.loading ? `${color}08` : `${color}12`,
-                    color: a.loading ? `${color}88` : color,
-                    fontSize: 12, fontWeight: 500, cursor: a.loading ? 'default' : 'pointer',
-                    transition: 'background 0.15s',
-                  }}
-                  onMouseEnter={e => { if (!a.loading) e.currentTarget.style.background = `${color}22` }}
-                  onMouseLeave={e => { if (!a.loading) e.currentTarget.style.background = `${color}12` }}
-                >
-                  {a.loading ? (a.loadingLabel || '…') : a.label}
-                </button>
-              ))}
+              {visibleActions.map((a, i) => {
+                // Primary = the workflow ("fix it") action: filled accent, bold.
+                // Secondary = the "just look" view link: quiet ghost button.
+                const isPrimary = a.variant === 'primary'
+                const baseBg  = isPrimary ? `${color}26` : 'transparent'
+                const hoverBg = isPrimary ? `${color}3a` : `${color}14`
+                return (
+                  <button
+                    key={i}
+                    onClick={() => handleAction(a)}
+                    disabled={a.loading}
+                    style={{
+                      flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 7,
+                      border: isPrimary ? `1.5px solid ${color}` : '1px solid var(--border2)',
+                      background: a.loading ? `${color}10` : baseBg,
+                      color: a.loading ? `${color}88` : (isPrimary ? color : 'var(--text-dim)'),
+                      fontSize: isPrimary ? 12.5 : 12, fontWeight: isPrimary ? 600 : 500,
+                      cursor: a.loading ? 'default' : 'pointer',
+                      transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                    }}
+                    onMouseEnter={e => {
+                      if (a.loading) return
+                      e.currentTarget.style.background = hoverBg
+                      if (!isPrimary) { e.currentTarget.style.color = color; e.currentTarget.style.borderColor = `${color}55` }
+                    }}
+                    onMouseLeave={e => {
+                      if (a.loading) return
+                      e.currentTarget.style.background = baseBg
+                      if (!isPrimary) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'var(--border2)' }
+                    }}
+                  >
+                    {a.loading ? (a.loadingLabel || '…') : a.label}
+                  </button>
+                )
+              })}
             </div>
           )
         })}
@@ -858,8 +874,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--blue)',
       trend: makeTrend(trendSeries.hardlinked, false, 'pct'),
       actionRows: [
+        [{ type: 'navigate', label: 'Backfill →', tab: 'backfill', variant: 'primary' }],
         [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
-        [{ type: 'navigate', label: 'Open Backfill Workflow', tab: 'backfill' }],
       ],
     },
     {
@@ -870,8 +886,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--yellow)',
       trend: makeTrend(trendSeries.orphaned, true, 'bytes'),
       actionRows: [
+        [{ type: 'navigate', label: 'Cleanup →', tab: 'cleanup', variant: 'primary' }],
         [{ type: 'navigate', label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
-        [{ type: 'navigate', label: 'Open Cleanup Workflow', tab: 'cleanup' }],
       ],
     },
     {
@@ -882,8 +898,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--red)',
       trend: makeTrend(trendSeries.notImported, true, 'bytes'),
       actionRows: [
+        [{ type: 'navigate', label: 'Triage →', tab: 'triage', variant: 'primary' }],
         [{ type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' }],
-        [{ type: 'navigate', label: 'Open Triage Workflow', tab: 'triage' }],
       ],
     },
     {
@@ -894,9 +910,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--purple)',
       trend: makeTrend(trendSeries.duplicates, true, 'bytes'),
       actionRows: [
+        [{ type: 'navigate', label: 'Dedupe →', tab: 'dedupe', variant: 'primary' }],
         [{ type: 'navigate', label: 'View Media Dupes', tab: 'media', status: 'Duplicate' },
          { type: 'navigate', label: 'View Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
-        [{ type: 'navigate', label: 'Open Dedupe Workflow', tab: 'dedupe' }],
       ],
     },
   ]
