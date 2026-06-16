@@ -423,7 +423,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                       background: a.loading ? `${color}10` : baseBg,
                       color: a.loading ? `${color}88` : (isPrimary ? color : 'var(--text-dim)'),
                       fontSize: isPrimary ? 12.5 : 12, fontWeight: isPrimary ? 600 : 500,
-                      cursor: a.loading ? 'default' : 'pointer',
+                      cursor: a.loading ? 'default' : 'pointer', whiteSpace: 'nowrap',
                       transition: 'background 0.15s, color 0.15s, border-color 0.15s',
                     }}
                     onMouseEnter={e => {
@@ -911,8 +911,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       trend: makeTrend(trendSeries.duplicates, true, 'bytes'),
       actionRows: [
         [{ type: 'navigate', label: 'Dedupe →', tab: 'dedupe', variant: 'primary' }],
-        [{ type: 'navigate', label: 'View Media Dupes', tab: 'media', status: 'Duplicate' },
-         { type: 'navigate', label: 'View Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
+        [{ type: 'navigate', label: 'Media Dupes', tab: 'media', status: 'Duplicate' },
+         { type: 'navigate', label: 'Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
       ],
     },
   ]
