@@ -324,6 +324,13 @@ def _process_instance(session, base, inst, remote_path, local_path,
             entry['hash']           = th
             entry['instance_id']    = inst_id
             entry['instance_name']  = inst_name
+        # Record every unregistered claimant of this path (see _qbit.py) so a
+        # dead cross-seed whose payload is alive on a working sibling can still
+        # be surfaced in Triage as a removable dead registration.
+        if health == 'unregistered':
+            entry.setdefault('unreg_claimants', {})[th] = {
+                'hash': th, 'instance_id': inst_id, 'tracker_msg': health_msg,
+            }
         if status == 'Seeding' or entry['status'] == 'Seeding':
             entry['status'] = 'Seeding'
         elif entry['status'] == 'Paused':

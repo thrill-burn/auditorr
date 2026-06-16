@@ -14,6 +14,10 @@ const VERDICTS = [
     desc: 'Tracker-dead (trumped, deleted, or nuked) but already imported: your library holds a hardlink to the same data, so deleting these via the client is completely lossless. The safest cleanup there is.',
   },
   {
+    key: 'dead_registration', label: 'Dead Registration — payload alive', color: 'var(--green)',
+    desc: 'The tracker dropped this torrent, but its data is still alive — seeding on a working cross-seed and/or hardlinked in your library. Remove just the dead registration: auditorr keeps the file when a live seed shares it, and deletes it only when it is this torrent’s own hardlink, so nothing is ever orphaned or broken.',
+  },
+  {
     key: 'unregistered', label: 'Unregistered — not imported', color: 'var(--red)',
     desc: 'Tracker-dead and NOT in your library — this torrent holds the only copy of the data. Seeding earns nothing, but deleting loses the files, so decide whether anything here is worth keeping first.',
   },
@@ -438,8 +442,14 @@ export default function Triage({ onNavigate, cleanupCount }) {
   const handleClientDelete = async () => {
     setBusy('delete')
     try {
-      const resp = await api.removeTorrents(buildRemovalItems())
-      toast(`Removed ${resp.removed} torrent${resp.removed !== 1 ? 's' : ''} and their files via ${client?.name || 'the client'}`, 'success')
+      // 'auto': the server deletes each torrent's files only when no surviving
+      // torrent shares them, so a live cross-seed sibling is never broken and a
+      // distinct hardlink is never left orphaned — safe across every topology.
+      const resp = await api.removeTorrents(buildRemovalItems(), 'auto')
+      const parts = [`Removed ${resp.removed} torrent${resp.removed !== 1 ? 's' : ''} via ${client?.name || 'the client'}`]
+      if (resp.files_deleted) parts.push(`${resp.files_deleted} with files deleted`)
+      if (resp.files_kept)    parts.push(`${resp.files_kept} kept (still seeded elsewhere)`)
+      toast(parts.join(' · '), 'success')
       const keys = new Set(deletableItems.map(itemKey))
       setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
       setSelected(new Set())
@@ -657,8 +667,8 @@ export default function Triage({ onNavigate, cleanupCount }) {
                 <ActionButton danger onClick={openConfirm} disabled={busy != null || deletableItems.length === 0}
                   title={deletableItems.length === 0
                     ? 'None of the selected items have a torrent hash'
-                    : `Remove the selected torrents AND their downloaded files via ${client.name}`}>
-                  Delete from {client.name}
+                    : `Remove the selected torrents via ${client.name} — files deleted only where no live seed shares them`}>
+                  Remove from {client.name}
                 </ActionButton>
               )}
             </ActionBar>
@@ -766,10 +776,11 @@ function ConfirmDeleteModal({
         }}
       >
         <div style={{ padding: '18px 20px 0' }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>Delete from {clientName}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>Remove from {clientName}</div>
           <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
-            This permanently removes <b>{torrentCount} torrent{torrentCount !== 1 ? 's' : ''}</b> from {clientName} and
-            deletes their files (<b>{formatBytes(totalSize)}</b> of data) from disk. There is no undo.
+            Removes <b>{torrentCount} torrent{torrentCount !== 1 ? 's' : ''}</b> (<b>{formatBytes(totalSize)}</b>) from {clientName}.
+            Each torrent’s files are deleted <b>only</b> where no surviving torrent still shares them — any file still
+            seeded by a cross-seed sibling is kept, so no live seed is broken. {clientName} reports the split afterwards. There is no undo.
           </p>
           {skippedCount > 0 && (
             <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0' }}>
@@ -783,7 +794,7 @@ function ConfirmDeleteModal({
           )}
           {anyGroups && !resolving && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 0', fontSize: 11.5, color: 'var(--text-dim)' }}>
-              <span>Cross-seeds are hardlinked — deleting one never harms the others. Apply to all:</span>
+              <span>Choose how much of each cross-seed group to remove (files are kept or dropped automatically per torrent). Apply to all:</span>
               <button onClick={() => onSetAllScopes('one')} style={miniBtn}>This torrent only</button>
               <button onClick={() => onSetAllScopes('all')} style={miniBtn}>All cross-seeds</button>
             </div>
@@ -825,18 +836,28 @@ function ConfirmDeleteModal({
                     </div>
                     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
                       {grp.map(m => {
-                        const willDelete = scope === 'all' || m.hash === item.hash
+                        const willRemove = scope === 'all' || m.hash === item.hash
+                        // Files survive removal when a kept sibling shares them.
+                        // scope 'all' leaves no kept member → files are deleted;
+                        // scope 'one' keeps the rest → a shared path is kept.
+                        const fileKept = willRemove && scope === 'one' && m.shares_path
                         return (
                           <div key={m.hash} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 10, fontFamily: 'var(--mono)' }}>
                             <span style={{
-                              flexShrink: 0, width: 42, color: willDelete ? 'var(--red)' : 'var(--text-dim)',
-                              fontWeight: willDelete ? 700 : 400,
+                              flexShrink: 0, width: 48, color: willRemove ? 'var(--red)' : 'var(--text-dim)',
+                              fontWeight: willRemove ? 700 : 400,
                             }}>
-                              {willDelete ? 'delete' : 'keep'}
+                              {willRemove ? 'remove' : 'keep'}
                             </span>
-                            <span style={{ flex: 1, minWidth: 0, color: willDelete ? 'var(--text)' : 'var(--text-dim)', opacity: willDelete ? 1 : 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <span style={{ flex: 1, minWidth: 0, color: willRemove ? 'var(--text)' : 'var(--text-dim)', opacity: willRemove ? 1 : 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {m.name}
                             </span>
+                            {willRemove && (
+                              <span title={fileKept ? 'A surviving cross-seed shares this file — it is kept' : 'No surviving torrent shares this file — it is deleted'}
+                                    style={{ flexShrink: 0, color: fileKept ? 'var(--text-dim)' : 'var(--red)' }}>
+                                {fileKept ? 'file kept' : 'file deleted'}
+                              </span>
+                            )}
                             {m.tracker && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{m.tracker}</span>}
                             {m.seeding_time != null && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{formatDuration(m.seeding_time)}</span>}
                           </div>
@@ -872,13 +893,13 @@ function ConfirmDeleteModal({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
           {busy && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
-              <Spinner /> Deleting via {clientName}…
+              <Spinner /> Removing via {clientName}…
             </span>
           )}
           <span style={{ flex: 1 }} />
           <ActionButton onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</ActionButton>
           <ActionButton danger onClick={onConfirm} disabled={busy || resolving}>
-            {busy ? 'Deleting…' : `Delete ${torrentCount} torrent${torrentCount !== 1 ? 's' : ''} + files`}
+            {busy ? 'Removing…' : `Remove ${torrentCount} torrent${torrentCount !== 1 ? 's' : ''}`}
           </ActionButton>
         </div>
       </div>

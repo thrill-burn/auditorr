@@ -84,6 +84,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
                     'instance_id': None, 'instance_name': None,
                     'tracker_health': 'unknown', 'tracker_msg': '',
+                    'unreg_claimants': {},
                     'size': 0,
                     'torrent_nlink': 0, 'torrent_rel_path': None, 'torrent_excluded': False,
                     'media_rel_path': None, 'media_excluded': False,
@@ -98,18 +99,32 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         inode_map[file_key]['torrent_excluded'] = excluded
                     qbit_info = qbit_file_map.get(full_path)
                     if qbit_info:
-                        inode_map[file_key]['trackers'].update(qbit_info['trackers'])
-                        inode_map[file_key]['hash']           = qbit_info.get('hash', '')
-                        inode_map[file_key]['instance_id']    = qbit_info.get('instance_id')
-                        inode_map[file_key]['instance_name']  = qbit_info.get('instance_name')
-                        inode_map[file_key]['category']       = qbit_info.get('category', '')
-                        inode_map[file_key]['tracker_health'] = qbit_info.get('tracker_health', 'unknown')
-                        inode_map[file_key]['tracker_msg']    = qbit_info.get('tracker_msg', '')
-                        cur = inode_map[file_key]['status']
+                        info = inode_map[file_key]
+                        info['trackers'].update(qbit_info['trackers'])
+                        info['category'] = qbit_info.get('category', '') or info.get('category', '')
+                        # Cross-seeds via distinct hardlinks share an inode but
+                        # have distinct paths, so each is a separate qbit_file_map
+                        # entry merged here. Keep the HEALTHIEST claimant across
+                        # all of this inode's paths (a path with any live torrent
+                        # must never read as dead); hash/instance follow it.
+                        new_health = qbit_info.get('tracker_health', 'unknown')
+                        if info['hash'] == '' or \
+                                sources.HEALTH_RANK.get(new_health, 1) > \
+                                sources.HEALTH_RANK.get(info['tracker_health'], 1):
+                            info['hash']           = qbit_info.get('hash', '')
+                            info['instance_id']    = qbit_info.get('instance_id')
+                            info['instance_name']  = qbit_info.get('instance_name')
+                            info['tracker_health'] = new_health
+                            info['tracker_msg']    = qbit_info.get('tracker_msg', '')
+                        # Union unregistered claimants across every path of this
+                        # inode so a dead cross-seed sibling survives the merge.
+                        for h, c in (qbit_info.get('unreg_claimants') or {}).items():
+                            info['unreg_claimants'][h] = c
+                        cur = info['status']
                         if qbit_info['status'] == 'Seeding' or cur == 'Seeding':
-                            inode_map[file_key]['status'] = 'Seeding'
+                            info['status'] = 'Seeding'
                         elif cur == 'Orphaned':
-                            inode_map[file_key]['status'] = qbit_info['status']
+                            info['status'] = qbit_info['status']
                 else:
                     inode_map[file_key]['media_paths'].append(full_path)
                     if inode_map[file_key]['media_rel_path'] is None:
@@ -203,7 +218,14 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         seen_torrent_keys.add(file_key)
         info    = inode_map[file_key]
         file_id = f"{file_key[0]}:{file_key[1]}"
-        torrent_files_data.append({
+        # Unregistered cross-seed claimants other than the kept (healthiest) one:
+        # dead torrent registrations whose payload is still alive on this inode.
+        # Only meaningful (and only emitted) when the kept claimant is itself
+        # alive — a fully-dead path is a dead_seed, handled separately.
+        kept_hash     = info.get('hash', '')
+        dead_siblings = [c for h, c in info.get('unreg_claimants', {}).items()
+                         if h != kept_hash] if info.get('tracker_health') != 'unregistered' else []
+        record = {
             "path": info['torrent_rel_path'], "size": info['size'], "inode": file_key[1],
             "file_id": file_id,
             "status": info['status'],
@@ -218,7 +240,10 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "instance_name": info.get('instance_name'),
             "tracker_health": info.get('tracker_health', 'unknown'),
             "tracker_msg":    info.get('tracker_msg', ''),
-        })
+        }
+        if dead_siblings:
+            record["dead_siblings"] = dead_siblings
+        torrent_files_data.append(record)
     media_files_data = []
     seen_media_keys = set()
     for file_key in media_key_order:

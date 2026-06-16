@@ -846,10 +846,60 @@ def workflows_exclude():
     return jsonify({"status": "success", "added": added, "total": len(existing)})
 
 
+def _partition_removal_by_file_sharing(cfg, items):
+    """Split a removal set by whether each torrent's files survive its removal.
+
+    A cross-seed can share its files with another torrent in one of two ways:
+      - shared path (one file, several registrations): deleting the file breaks
+        every other torrent pointing at it → those files must be KEPT.
+      - distinct hardlink (own path, shared inode): deleting drops only this
+        torrent's link; the library and sibling hardlinks survive → safe to
+        DELETE, and deleting avoids leaving an orphaned file behind.
+
+    The deciding question is per torrent: is any of its files also owned by a
+    torrent that is NOT being removed? If so, keep files; otherwise delete them.
+    Only same-size torrents can share a file, so the live path lookup is bounded
+    to that candidate set (mirrors the Trumped group resolver).
+
+    Returns (delete_items, keep_items).
+    """
+    remove_hashes = {i['hash'] for i in items if i.get('hash')}
+    rows      = sources.list_torrents(cfg)
+    by_hash   = {r['hash']: r for r in rows}
+    seeds     = [by_hash[i['hash']] for i in items if i.get('hash') in by_hash]
+    sizes     = {s['size'] for s in seeds}
+    # Removed torrents + any same-size torrent that could share a path with them.
+    candidates = [r for r in rows if r['size'] in sizes]
+    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
+
+    owners = {}  # path -> set(hashes referencing it)
+    for h, paths in paths_map.items():
+        for p in paths:
+            owners.setdefault(p, set()).add(h)
+
+    delete_items, keep_items = [], []
+    for it in items:
+        h = it.get('hash')
+        if not h:
+            continue
+        my_paths = paths_map.get(h, [])
+        shared = any(any(o not in remove_hashes for o in owners.get(p, ()))
+                     for p in my_paths)
+        (keep_items if shared else delete_items).append(it)
+    return delete_items, keep_items
+
+
 @app.route('/api/workflows/remove_torrents', methods=['POST'])
 @require_auth
 def workflows_remove_torrents():
-    """Delete selected torrents AND their files via the torrent client.
+    """Remove selected torrents from the client, optionally deleting their files.
+
+    `delete_files` accepts true / false / "auto":
+      true  — delete each torrent's files (caller asserts it is safe)
+      false — remove the registration only, keep every file
+      auto  — per torrent, delete files only when they are not shared with a
+              surviving torrent (cross-seed safe across every topology); files
+              shared with a still-seeding sibling are kept so it is never broken.
 
     Destructive — gated behind the ALLOW_CLIENT_DELETE config flag (off by
     default) so conservative users can keep auditorr strictly read-only
@@ -868,13 +918,24 @@ def workflows_remove_torrents():
     ]
     if not items:
         return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
+
+    mode = data.get('delete_files', True)
     try:
-        removed = sources.remove_torrents(cfg, items, delete_files=bool(data.get('delete_files', True)))
+        if mode == 'auto':
+            delete_items, keep_items = _partition_removal_by_file_sharing(cfg, items)
+            removed  = sources.remove_torrents(cfg, delete_items, delete_files=True) if delete_items else 0
+            removed += sources.remove_torrents(cfg, keep_items, delete_files=False) if keep_items else 0
+            files_deleted, files_kept = len(delete_items), len(keep_items)
+        else:
+            removed = sources.remove_torrents(cfg, items, delete_files=bool(mode))
+            files_deleted = removed if bool(mode) else 0
+            files_kept    = 0 if bool(mode) else removed
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
-    log.info("Client delete: removed %d/%d torrent(s) (delete_files=%s)",
-             removed, len(items), data.get('delete_files', True))
-    return jsonify({"status": "success", "removed": removed, "requested": len(items)})
+    log.info("Client delete: removed %d/%d torrent(s) (mode=%s, files_deleted=%d, files_kept=%d)",
+             removed, len(items), mode, files_deleted, files_kept)
+    return jsonify({"status": "success", "removed": removed, "requested": len(items),
+                    "files_deleted": files_deleted, "files_kept": files_kept})
 
 
 @app.route('/api/workflows/triage/resolve_groups', methods=['POST'])
@@ -885,8 +946,15 @@ def workflows_triage_resolve_groups():
     Triage records keep one hash per path (the healthiest claimant), so the
     sibling cross-seeds are invisible in the report. This queries the client
     directly so the delete modal can offer 'this torrent only' vs 'all N
-    cross-seeds' — deletion is hardlink-safe either way (each torrent holds its
-    own hardlink to the shared inode).
+    cross-seeds'.
+
+    Cross-seed file topology is NOT uniform: siblings may each hold a distinct
+    hardlink to a shared inode (deleting one's files is safe), OR several may
+    register against one shared file at the same path (deleting that file breaks
+    the others). Each member therefore carries `shares_path` — true when it
+    shares a content path with another member — so the UI can warn, and the
+    server's delete_files='auto' mode keeps shared files while dropping
+    distinct-hardlink ones.
     """
     data   = request.json or {}
     hashes = [str(h) for h in (data.get('hashes') or []) if h]
@@ -925,6 +993,12 @@ def workflows_triage_resolve_groups():
         members = []
         for t in g:
             det = details.get(t['hash'], {})
+            t_paths = set(t.get('paths') or [])
+            # Does this member share a content path with another group member?
+            # If so, deleting its files would break that sibling (shared file);
+            # if not, its files are its own distinct hardlink (safe to delete).
+            shares_path = any(o is not t and t_paths and t_paths & set(o.get('paths') or [])
+                              for o in g)
             members.append({
                 'hash':           t['hash'],
                 'instance_id':    t.get('instance_id'),
@@ -935,6 +1009,7 @@ def workflows_triage_resolve_groups():
                 'uploaded':       det.get('uploaded'),
                 'tracker_health': det.get('tracker_health', 'unknown'),
                 'tracker_msg':    det.get('tracker_msg', ''),
+                'shares_path':    shares_path,
             })
         members.sort(key=lambda m: m['name'])
         out[h] = members
@@ -1400,7 +1475,77 @@ def workflows_triage():
             'added_on':       det.get('added_on'),
         })
 
-    verdict_order = {'dead_seed': 0, 'unregistered': 1, 'superseded': 2, 'import_pending': 3, 'not_in_library': 4}
+    # Dead registrations: torrents the tracker dropped whose payload is still
+    # alive — on a working cross-seed sibling and/or the hardlinked library copy.
+    # The audit merge keeps the healthy claimant per inode and stashes the dead
+    # ones in `dead_siblings`; they are invisible everywhere else. Surface each
+    # as its own removable registration (delete_files='auto' keeps shared files,
+    # drops a distinct hardlink's own file so nothing is orphaned).
+    seen_hashes  = {i['hash'] for i in items if i['hash']}
+    dead_reg = {}
+    for f in torrent_files:
+        if f.get('excluded') or not f.get('dead_siblings'):
+            continue
+        for s in f['dead_siblings']:
+            h = s.get('hash')
+            if not h or h in seen_hashes:
+                continue
+            g = dead_reg.setdefault(h, {
+                'hash': h, 'instance_id': s.get('instance_id'),
+                'files': [], 'total_size': 0, 'trackers': set(),
+                'stored_msg': s.get('tracker_msg') or '',
+                'alive_library': False, 'alive_sibling': False,
+            })
+            g['files'].append(f)
+            g['total_size'] += f['size']
+            g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
+            if f.get('imported'):
+                g['alive_library'] = True
+            if f.get('tracker_health') == 'working':
+                g['alive_sibling'] = True
+
+    dead_reg_list = sorted(dead_reg.values(), key=lambda g: -g['total_size'])[:_TRIAGE_GROUP_CAP]
+    dead_details = {}
+    if dead_reg_list:
+        try:
+            dead_details = sources.fetch_torrent_details(cfg, [
+                {'hash': g['hash'], 'instance_id': g['instance_id']} for g in dead_reg_list
+            ])
+        except Exception as e:
+            log.warning("Triage: dead-registration detail fetch failed: %s", e)
+    for g in dead_reg_list:
+        det = dead_details.get(g['hash'], {})
+        # Live re-verify: a registration the tracker now answers for has
+        # recovered (re-registered) — drop it, exactly like dead_seed.
+        if det.get('tracker_health') == 'working':
+            continue
+        videos = [f for f in g['files']
+                  if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
+        rep = max(videos or g['files'], key=lambda f: f['size'])
+        items.append({
+            'hash':           g['hash'],
+            'instance_id':    g['instance_id'],
+            'rep_path':       rep['path'],
+            'paths':          [f['path'] for f in g['files']],
+            'file_count':     len(g['files']),
+            'total_size':     g['total_size'],
+            'trackers':       sorted(g['trackers']),
+            'verdict':        'dead_registration',
+            'is_duplicate':   False,
+            'parsed':         parse_release_info_for_path(rep['path']),
+            'library':        None,
+            'tracker_health': 'unregistered',
+            'tracker_msg':    det.get('tracker_msg') or g['stored_msg'],
+            'uploaded':       det.get('uploaded'),
+            'ratio':          det.get('ratio'),
+            'seeding_time':   det.get('seeding_time'),
+            'added_on':       det.get('added_on'),
+            'alive_library':  g['alive_library'],
+            'alive_sibling':  g['alive_sibling'],
+        })
+
+    verdict_order = {'dead_seed': 0, 'dead_registration': 1, 'unregistered': 2,
+                     'superseded': 3, 'import_pending': 4, 'not_in_library': 5}
     items.sort(key=lambda i: (verdict_order.get(i['verdict'], 9), -i['total_size']))
     counts = {}
     for i in items:

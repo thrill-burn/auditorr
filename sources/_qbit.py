@@ -135,6 +135,14 @@ def _fetch_inner(cfg):
                 entry["tracker_health"] = health
                 entry["tracker_msg"]    = health_msg
                 entry["hash"]           = torrent.hash
+            # Record every unregistered claimant of this path. The merge above
+            # keeps only the healthiest hash, so a dead cross-seed whose payload
+            # is alive on a working sibling would otherwise vanish. Retaining it
+            # lets Triage surface the dead registration (remove it, keep files).
+            if health == 'unregistered':
+                entry.setdefault("unreg_claimants", {})[torrent.hash] = {
+                    "hash": torrent.hash, "instance_id": None, "tracker_msg": health_msg,
+                }
             if status == 'Seeding' or entry["status"] == 'Seeding':
                 entry["status"] = 'Seeding'
             elif entry["status"] == 'Paused':
