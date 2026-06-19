@@ -156,7 +156,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               <circle cx="34" cy="100" r="10" fill="#f57c00" opacity="0.85"/>
             </svg>
           </div>
-          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, color: 'var(--accent)', letterSpacing: '-0.3px' }}>auditorr</span>
+          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, color: 'var(--text)', letterSpacing: '-0.3px' }}>auditorr</span>
         </div>
       </div>
 
