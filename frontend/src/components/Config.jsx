@@ -147,7 +147,7 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
 function Card({ title, children }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', padding: 24, marginBottom: 16 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'center', color: 'var(--text)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
       {children}
     </div>
   )

@@ -221,7 +221,7 @@ export function CountPicker({ value, onChange, max }) {
 // ── Section label ─────────────────────────────────────────────────────────────
 export function SectionLabel({ children }) {
   return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 8 }}>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'center', color: 'var(--text)', marginBottom: 8 }}>
       {children}
     </div>
   )
@@ -232,7 +232,7 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 4 }}>Workflows</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'center', marginBottom: 4 }}>Workflows</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {accent && <span style={{ width: 10, height: 10, borderRadius: 3, background: accent, flexShrink: 0 }} />}
           <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>

@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap');
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
@@ -16,8 +18,8 @@
   --red:       #ef4444;
   --blue:      #38bdf8;
   --purple:    #a78bfa;
-  --mono:      'IBM Plex Mono', monospace;
-  --sans:      'DM Sans', sans-serif;
+  --mono:      'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans:      'Geist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --r:         6px;
   --rl:        12px;
   /* Type scale */
@@ -62,7 +64,7 @@ html, body, #root {
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
 
 button { cursor: pointer; font-family: var(--sans); }
-input, select { font-family: var(--sans); }
+input, select, textarea { font-family: var(--sans); }
 
 @keyframes shimmer {
   0%   { background-position: -400px 0; }

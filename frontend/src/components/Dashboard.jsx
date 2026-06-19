@@ -7,7 +7,15 @@ import { api } from '../api'
 import { useToast } from './Toast'
 
 // Shared section-header label style — keeps every dashboard card title uniform.
-const SECTION_LABEL = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }
+const SECTION_LABEL = {
+  fontFamily: 'var(--sans)',
+  fontSize: 13,
+  fontWeight: 600,
+  color: 'var(--text)',
+  letterSpacing: 0,
+  textTransform: 'none',
+  textAlign: 'center',
+}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 // Accepts a full ISO date (YYYY-MM-DD) and renders e.g. "Jun 12"; passes
@@ -177,11 +185,8 @@ function HealthDial({ score, status, smartTrend, color }) {
   const trendLabel = smartTrend?.label
   const up = delta != null && delta >= 0
 
-  // Thin segments sweeping the threshold-aligned gradient up to the
-  // (animated) fill position — a conic gradient the dial actually earns.
-  // Each segment overlaps into the next so antialiased edges blend against
-  // same-colored paint instead of the track (butted edges leave a faint
-  // radial seam at every junction — the "grainy" look).
+  // Thin segments sweeping a single status color up to the animated fill
+  // position. Color stays a state marker instead of becoming decoration.
   const SEGMENTS = 120
   const OVERLAP  = 0.6 / SEGMENTS
   const arcSegments = []
@@ -193,11 +198,11 @@ function HealthDial({ score, status, smartTrend, color }) {
     const segEnd   = START_DEG + SWEEP_DEG * t1
     arcSegments.push({
       path:  arcPath(CX, CY, R_OUTER, R_INNER, segStart, segEnd),
-      color: dialColor(Math.min((t0 + t1) / 2, animPct)),
+      color: color || scoreColor(score),
     })
   }
-  const tipColor = dialColor(animPct)
-  const startColor = dialColor(0)
+  const tipColor = color || scoreColor(score)
+  const startColor = tipColor
   // Rounded end caps: a circle the width of the ring rounds each butt end of
   // the wedge fill. The tip cap also carries the (soft, contained) glow.
   const fillEndDeg = START_DEG + SWEEP_DEG * animPct
@@ -213,7 +218,7 @@ function HealthDial({ score, status, smartTrend, color }) {
             fill="none" stroke="var(--surface3)" strokeWidth={R_OUTER - R_INNER} strokeLinecap="round" />
           {/* Faint zone bands — where Poor/Fair, Good, and Excellent live */}
           {zonePaths.map((z, i) => (
-            <path key={i} d={z.path} fill={z.color} fillOpacity="0.10" />
+            <path key={i} d={z.path} fill="var(--surface2)" fillOpacity="0.55" />
           ))}
           {/* Color-swept filled segments */}
           {arcSegments.map((seg, i) => (
@@ -243,20 +248,23 @@ function HealthDial({ score, status, smartTrend, color }) {
         </svg>
         {/* Center readout — HTML overlay for crisp text + status chip */}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 700, color: tipColor, lineHeight: 1 }}>{displayScore}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{displayScore}</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>/ 100</span>
-          <span style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: tipColor }}>{status?.toUpperCase()}</span>
+          <span style={{ marginTop: 6, fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 7, height: 7, borderRadius: 99, background: tipColor }} />
+            {status}
+          </span>
         </div>
       </div>
       {delta != null && (
         <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-          color: up ? 'var(--green)' : 'var(--red)',
-          background: up ? 'var(--green)12' : 'var(--red)12',
-          border: `1px solid ${up ? 'var(--green)' : 'var(--red)'}30`,
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
+          color: 'var(--text-dim)',
+          border: '1px solid var(--border2)',
           borderRadius: 99, padding: '3px 10px',
         }}>
+          <span style={{ width: 6, height: 6, borderRadius: 99, background: up ? 'var(--green)' : 'var(--red)' }} />
           {up ? '↑' : '↓'} {Math.abs(delta)} pts {trendLabel}
         </div>
       )}
@@ -385,7 +393,8 @@ function TrendPill({ trend }) {
   if (!trend) return null
   const m = TREND_META[trend.sentiment]
   return (
-    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: m.color, background: m.color + '14', border: '1px solid ' + m.color + '30', borderRadius: 5, padding: '2px 8px' }}>
+    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', border: '1px solid var(--border2)', borderRadius: 5, padding: '2px 8px' }}>
+      <span style={{ width: 6, height: 6, borderRadius: 99, background: m.color, flexShrink: 0 }} />
       <TrendIcon sentiment={trend.sentiment} />{m.label}
     </div>
   )
@@ -419,13 +428,15 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
 
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: color, borderRadius: '12px 12px 0 0' }} />
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start' }}>{label}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color, background: color + '18', border: '1px solid ' + color + '35', borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap' }}>{pts}</span>
+        <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start', gap: 7 }}>
+          <span style={{ width: 7, height: 7, borderRadius: 99, background: color, marginTop: 4, flexShrink: 0 }} />
+          {label}
+        </span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap' }}>{pts}</span>
       </div>
       <div style={{ marginTop: 10 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color, lineHeight: 1, whiteSpace: 'nowrap' }}>{value}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color: 'var(--text)', lineHeight: 1, whiteSpace: 'nowrap' }}>{value}</span>
       </div>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
@@ -442,8 +453,8 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                 // Primary = the workflow ("fix it") action: filled accent, bold.
                 // Secondary = the "just look" view link: quiet ghost button.
                 const isPrimary = a.variant === 'primary'
-                const baseBg  = isPrimary ? `${color}26` : 'transparent'
-                const hoverBg = isPrimary ? `${color}3a` : `${color}14`
+                const baseBg  = isPrimary ? 'var(--surface2)' : 'transparent'
+                const hoverBg = isPrimary ? 'var(--surface3)' : 'var(--surface2)'
                 return (
                   <button
                     key={i}
@@ -451,9 +462,9 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                     disabled={a.loading}
                     style={{
                       flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 7,
-                      border: isPrimary ? `1.5px solid ${color}` : '1px solid var(--border2)',
-                      background: a.loading ? `${color}10` : baseBg,
-                      color: a.loading ? `${color}88` : (isPrimary ? color : 'var(--text-dim)'),
+                      border: isPrimary ? '1.5px solid var(--border2)' : '1px solid var(--border2)',
+                      background: a.loading ? 'var(--surface2)' : baseBg,
+                      color: a.loading ? 'var(--text-dim)' : (isPrimary ? 'var(--text)' : 'var(--text-dim)'),
                       fontSize: isPrimary ? 12.5 : 12, fontWeight: isPrimary ? 600 : 500,
                       cursor: a.loading ? 'default' : 'pointer', whiteSpace: 'nowrap',
                       transition: 'background 0.15s, color 0.15s, border-color 0.15s',
@@ -461,7 +472,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                     onMouseEnter={e => {
                       if (a.loading) return
                       e.currentTarget.style.background = hoverBg
-                      if (!isPrimary) { e.currentTarget.style.color = color; e.currentTarget.style.borderColor = `${color}55` }
+                      if (!isPrimary) { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--border2)' }
                     }}
                     onMouseLeave={e => {
                       if (a.loading) return
@@ -716,14 +727,17 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                 key={s.label}
                 onClick={() => setChartTab(s.tabKey)}
                 style={{
-                  background: active ? s.color + '10' : 'var(--surface2)',
-                  border: `1px solid ${active ? s.color : 'var(--border)'}`,
+                  background: active ? 'var(--surface3)' : 'var(--surface2)',
+                  border: `1px solid ${active ? 'var(--border2)' : 'var(--border)'}`,
                   borderRadius: 'var(--r)', padding: '10px 14px',
                   cursor: 'pointer', transition: 'border-color 0.12s, background 0.12s',
                 }}
               >
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: active ? s.color : 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 6 }}>{s.label}</div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+                <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'none', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: 99, background: s.color, flexShrink: 0 }} />
+                  {s.label}
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{s.value}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
               </div>
             )
@@ -1078,13 +1092,13 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       {/* Row 1: dial + chart */}
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <span style={{ ...SECTION_LABEL, alignSelf: 'flex-start' }}>Library Health</span>
+          <span style={{ ...SECTION_LABEL, width: '100%' }}>Library health</span>
           <HealthDial score={score} status={status} smartTrend={smartTrend} color={c} />
         </div>
 
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 14px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ marginBottom: 18 }}>
-            <span style={SECTION_LABEL}>Score History</span>
+            <span style={{ ...SECTION_LABEL, display: 'block' }}>Score history</span>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -1119,9 +1133,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
-                <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-Seed Effectiveness</div>
+                <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--blue)', lineHeight: 1 }}>{csMultDisplay}×</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{csMultDisplay}×</span>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>avg seed multiplier</span>
                 </div>
                 <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6, maxWidth: 340 }}>
@@ -1132,7 +1146,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
             {/* Distribution bar */}
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 }}>Disk Space by Seed Count</div>
+              <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Disk space by seed count</div>
               <CrossSeedBar segments={cs.segments} totalSize={cs.total_size} onNavigate={onNavigate} />
             </div>
           </div>
@@ -1140,7 +1154,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           {/* Tracker leaderboard */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Top Trackers by Disk Space</div>
+              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Top trackers by disk space</div>
               <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
             </div>
             <TrackerLeaderboard trackerStats={filteredTrackerStats} onTrackerDetail={setTrackerDetail} />
@@ -1178,7 +1192,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           {/* Upload Activity */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
-              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Upload Activity</div>
+              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Upload activity</div>
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               {effectiveTrackers.length === 0
@@ -1215,14 +1229,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                 <div style={SECTION_LABEL}>
-                  {yieldPanelTab === 'upload' ? 'Upload by Tracker' : 'Library Yield'}
+                  {yieldPanelTab === 'upload' ? 'Upload by tracker' : 'Library yield'}
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
                   {['upload', 'yield'].map(tab => (
                     <button key={tab} onClick={() => setYieldPanelTab(tab)} style={{
                       background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                      fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
-                      color: yieldPanelTab === tab ? 'var(--accent)' : 'var(--text-dim)',
+                      fontFamily: 'var(--sans)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
+                      color: yieldPanelTab === tab ? 'var(--text)' : 'var(--text-dim)',
                       fontWeight: yieldPanelTab === tab ? 700 : 400,
                     }}>{tab}</button>
                   ))}
@@ -1231,7 +1245,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               {yieldPanelTab === 'upload' ? (
                 <>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
                       {formatBytes(yieldRows.reduce((s, t) => s + t.uploaded, 0))}
                     </span>
                   </div>
@@ -1242,7 +1256,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               ) : (
                 <>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--green)', lineHeight: 1 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
                       {(() => {
                         const filteredUploaded = yieldRows.reduce((s, t) => s + t.uploaded, 0)
                         const filteredSeeding  = yieldRows.reduce((s, t) => s + t.seeding_size, 0)
