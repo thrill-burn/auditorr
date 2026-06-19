@@ -62,7 +62,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
 
   const btnBase = {
     background: 'none', border: 'none', cursor: 'pointer',
-    fontFamily: 'var(--mono)', borderRadius: 5, transition: 'background 0.1s',
+    fontFamily: 'var(--sans)', borderRadius: 5, transition: 'background 0.1s',
   }
 
   return (
@@ -74,7 +74,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
           border: `1px solid ${value ? 'var(--accent)66' : 'var(--border2)'}`,
           background: value ? 'var(--surface2)' : 'transparent',
           color: value ? 'var(--text)' : 'var(--text-dim)',
-          fontFamily: 'var(--mono)', cursor: 'pointer', whiteSpace: 'nowrap',
+          fontFamily: 'var(--sans)', cursor: 'pointer', whiteSpace: 'nowrap',
           transition: 'border-color 0.12s',
         }}
       >
@@ -94,7 +94,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
             <button onClick={prevMonth} style={{ ...btnBase, fontSize: 16, padding: '0 8px', color: 'var(--text-dim)' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
               onMouseLeave={e => e.currentTarget.style.background = 'none'}>‹</button>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
               {MONTHS[viewMonth]} {viewYear}
             </span>
             <button onClick={nextMonth} style={{ ...btnBase, fontSize: 16, padding: '0 8px', color: 'var(--text-dim)' }}
@@ -105,7 +105,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
           {/* Day-of-week headers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: 4 }}>
             {DOW.map(d => (
-              <div key={d} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '2px 0' }}>{d}</div>
+              <div key={d} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '2px 0' }}>{d}</div>
             ))}
           </div>
 

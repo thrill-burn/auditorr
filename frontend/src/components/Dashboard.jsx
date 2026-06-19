@@ -14,7 +14,7 @@ const SECTION_LABEL = {
   color: 'var(--text)',
   letterSpacing: 0,
   textTransform: 'none',
-  textAlign: 'center',
+  textAlign: 'left',
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -429,7 +429,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
-        <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start', gap: 7 }}>
+        <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start', gap: 7 }}>
           <span style={{ width: 7, height: 7, borderRadius: 99, background: color, marginTop: 4, flexShrink: 0 }} />
           {label}
         </span>
@@ -1286,7 +1286,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <th key={h} style={{
                                 textAlign: h === 'Tracker' ? 'left' : 'right',
                                 padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                letterSpacing: 1, fontSize: 11, textTransform: 'uppercase',
+                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 11, textTransform: 'none',
                                 borderBottom: '1px solid var(--border)',
                               }}>{h}</th>
                             ))}
@@ -1321,7 +1321,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <th key={h} style={{
                                 textAlign: h === 'Tracker' ? 'left' : 'right',
                                 padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                letterSpacing: 1, fontSize: 11, textTransform: 'uppercase',
+                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 11, textTransform: 'none',
                                 borderBottom: '1px solid var(--border)',
                               }}>{h}</th>
                             ))}

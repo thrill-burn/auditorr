@@ -193,7 +193,7 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
 
         {linkedPaths?.length > 0 && (
           <div style={{ marginBottom: duplicatePaths?.length > 0 ? 16 : 0 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 6 }}>
               Hardlinks ({linkedPaths.length})
             </div>
             {linkedPaths.map((p, i) => (
@@ -204,7 +204,7 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
 
         {duplicatePaths?.length > 0 && (
           <div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--purple)', marginBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 6 }}>
               Duplicates ({duplicatePaths.length})
             </div>
             {duplicatePaths.map((p, i) => (
@@ -920,7 +920,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   }
 
   const emptyMsg = (
-    <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--mono)', fontSize:12 }}>
+      <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--sans)', fontSize:12 }}>
       No files match the current filters.
     </div>
   )
@@ -931,13 +931,16 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       {/* ── Summary cards ── */}
       <div style={{ padding: '16px 0 14px', display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, flexShrink: 0 }}>
         {[
-          { label:'Total Files', val:stats.total,    size:stats.totalSize,    color:'var(--text)' },
+          { label:'Total files', val:stats.total,    size:stats.totalSize,    color:'var(--text)' },
           { label:'Seeding',     val:stats.seeding,  size:stats.seedingSize,  color:'var(--green)' },
           { label:'Orphaned',    val:stats.orphaned, size:stats.orphanedSize, color:'var(--yellow)' },
         ].map(c => (
           <div key={c.label} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--r)', padding:'10px 14px' }}>
-            <div style={{ fontFamily:'var(--mono)', fontSize:9, color:'var(--text-dim)', textTransform:'uppercase', letterSpacing:1 }}>{c.label}</div>
-            <div style={{ fontFamily:'var(--mono)', fontSize:22, fontWeight:700, color:c.color }}>{c.val.toLocaleString()}</div>
+            <div style={{ fontFamily:'var(--sans)', fontSize:12, fontWeight:600, color:'var(--text)', textTransform:'none', letterSpacing:0, display:'flex', alignItems:'center', gap:7 }}>
+              {c.color !== 'var(--text)' && <span className="ui-status-dot" style={{ background:c.color }} />}
+              {c.label}
+            </div>
+            <div style={{ fontFamily:'var(--mono)', fontSize:22, fontWeight:700, color:'var(--text)' }}>{c.val.toLocaleString()}</div>
             <div style={{ fontSize:11, color:'var(--text-dim)' }}>{formatBytes(c.size)}</div>
           </div>
         ))}
@@ -1087,7 +1090,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           background: 'var(--surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--r)', padding: '12px 16px', marginBottom: 14, flexShrink: 0,
         }}>
-          <div style={{ fontFamily:'var(--mono)', fontSize:9, color:'var(--text-dim)', letterSpacing:2, textTransform:'uppercase', marginBottom:10 }}>
+          <div style={{ fontFamily:'var(--sans)', fontSize:12, fontWeight:600, color:'var(--text)', letterSpacing:0, textTransform:'none', marginBottom:10 }}>
             + include &nbsp;/&nbsp; − exclude
           </div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>

@@ -27,14 +27,14 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
       {onDateFromChange ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <DatePicker value={dateFrom || ''} onChange={onDateFromChange} placeholder="From" />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>—</span>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>—</span>
           <DatePicker value={dateTo || ''} onChange={onDateToChange} placeholder="To" />
           {(dateFrom || dateTo) && (
             <button
               onClick={() => { onDateFromChange(''); onDateToChange('') }}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px',
-                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
+                fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text-dim)',
               }}
             >✕</button>
           )}
@@ -44,9 +44,9 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
           {[7, 30, 90, 0].map(d => (
             <button key={d} onClick={() => onTimeRangeChange(d)} style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-              fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
-              color: timeRange === d ? 'var(--accent)' : 'var(--text-dim)',
-              fontWeight: timeRange === d ? 700 : 400,
+              fontFamily: 'var(--sans)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
+              color: timeRange === d ? 'var(--text)' : 'var(--text-dim)',
+              fontWeight: timeRange === d ? 700 : 500,
             }}>{d === 0 ? 'All' : d + 'd'}</button>
           ))}
         </div>
@@ -61,7 +61,7 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
       <div ref={dropdownRef} style={{ position: 'relative' }}>
         <button onClick={() => setDropdownOpen(o => !o)} style={{
           background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-          fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
+          fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none',
           color: 'var(--text-dim)',
         }}>
           Trackers ({effectiveTrackers.length}/{allTrackers.length})
@@ -73,11 +73,11 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
             borderRadius: 8, padding: '8px 0', minWidth: 180, zIndex: 100,
           }}>
             <div style={{ display: 'flex', gap: 10, padding: '0 10px 6px', borderBottom: '1px solid var(--border)' }}>
-              <button onClick={() => onTrackersChange(allTrackers)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>Select All</button>
-              <button onClick={() => onTrackersChange([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Clear</button>
+              <button onClick={() => onTrackersChange(allTrackers)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>Select all</button>
+              <button onClick={() => onTrackersChange([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text-dim)' }}>Clear</button>
             </div>
             {allTrackers.map(tracker => (
-              <label key={tracker} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>
+              <label key={tracker} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>
                 <input
                   type="checkbox"
                   checked={effectiveTrackers.includes(tracker)}

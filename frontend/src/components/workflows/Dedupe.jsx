@@ -12,8 +12,11 @@ function StatBox({ label, value, sub, color }) {
       padding: '12px 16px', borderRadius: 9, flex: 1, minWidth: 140,
       background: 'var(--surface)', border: '1px solid var(--border)',
     }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 5 }}>{label}</div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: color || 'var(--text)', lineHeight: 1 }}>{value}</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
+        {color && <span className="ui-status-dot" style={{ background: color }} />}
+        {label}
+      </div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
     </div>
   )

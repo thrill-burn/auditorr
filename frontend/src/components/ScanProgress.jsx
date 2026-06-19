@@ -36,7 +36,7 @@ const LOGO = (
 function PhaseBar({ label, fillPct, pulse, phaseStatus }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1.5, width: 56, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'none', letterSpacing: 0, width: 56, flexShrink: 0 }}>{label}</span>
       <div style={{ flex: 1, height: 6, background: 'var(--border2)', borderRadius: 99, overflow: 'hidden' }}>
         <div
           className={pulse ? 'audit-pulse' : undefined}

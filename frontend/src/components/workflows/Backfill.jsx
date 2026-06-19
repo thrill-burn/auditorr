@@ -366,8 +366,8 @@ function ResultItem({ item }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 110px 65px 44px 90px 46px 46px 72px', gap: 8, padding: '2px 10px' }}>
             {['Title', 'Tracker', 'Size', 'Peers', 'Quality', 'Score', 'HDR', ''].map((h, i) => (
               <span key={i} style={{
-                fontSize: 9, fontFamily: 'var(--mono)', letterSpacing: 1.5, textTransform: 'uppercase',
-                color: 'var(--text-dim)', opacity: 0.6,
+                fontSize: 11, fontFamily: 'var(--sans)', fontWeight: 600, letterSpacing: 0, textTransform: 'none',
+                color: 'var(--text-dim)', opacity: 0.75,
                 textAlign: i >= 2 && i <= 5 ? 'right' : 'left',
               }}>{h}</span>
             ))}
@@ -736,7 +736,7 @@ export default function Backfill({ onNavigate }) {
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2.5, textTransform: 'uppercase', marginBottom: 2 }}>Workflows</div>
+          <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'center', marginBottom: 2 }}>Workflows</div>
           <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>{phaseLabel}</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>

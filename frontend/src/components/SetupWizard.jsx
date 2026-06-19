@@ -164,7 +164,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
 
   return (
     <>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>Step 1 of 3</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 1 of 3</div>
       <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Torrent Source</div>
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16, lineHeight: 1.55 }}>
         Connect auditorr to your torrent client. Choose qBittorrent for a single instance, or qui for multi-instance setups.
@@ -290,7 +290,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
 
   return (
     <>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>Step 2 of 3</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 2 of 3</div>
       <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Data Paths</div>
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
         Tell auditorr where your media library and torrent downloads live inside this container.
@@ -347,7 +347,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
       )}
 
       <div style={{ marginTop: 20, marginBottom: 8 }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>Container Filesystem</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Container filesystem</div>
         <DataBrowser
           onSelectMedia={v => { onChange('MEDIA_PATH', v); clearStatus() }}
           onSelectTorrents={v => { onChange('LOCAL_PATH', v); clearStatus() }}
@@ -402,7 +402,7 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
 
   return (
     <>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>Step 3 of 3</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 3 of 3</div>
       <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Optional: Sonarr & Radarr</div>
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
         Can be set up later. Required only for interactive search in the Media explorer. API keys are in each app under Settings → General.

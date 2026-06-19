@@ -218,8 +218,8 @@ export default function ChangeLog({ onNavigate }) {
 
       {/* Page header */}
       <div style={{ padding: '16px 0 14px' }}>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 2, textTransform: 'uppercase', color: 'var(--text-dim)', marginBottom: 6 }}>
-          Change Log
+        <div className="ui-section-title" style={{ marginBottom: 6 }}>
+          Change log
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
           <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>Audit History</span>
@@ -265,7 +265,7 @@ export default function ChangeLog({ onNavigate }) {
                   border: `1px solid ${active ? cat.color : cat.color + '40'}`,
                   background: active ? cat.color + '18' : 'transparent',
                   color: active ? cat.color : 'var(--text-dim)',
-                  fontFamily: 'var(--mono)', transition: 'all 0.12s',
+                  fontFamily: 'var(--sans)', transition: 'all 0.12s',
                 }}
               >
                 {cat.label}{n ? ` (${n.toLocaleString()})` : ''}
@@ -275,7 +275,7 @@ export default function ChangeLog({ onNavigate }) {
         </div>
         {/* Row 2: date range + search + export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '4px 0 8px' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Date:</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text-dim)' }}>Date:</span>
           <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" />
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>—</span>
           <DatePicker value={dateTo} onChange={setDateTo} placeholder="To" />
@@ -368,8 +368,8 @@ export default function ChangeLog({ onNavigate }) {
               }}>
                 {['Date', 'Trigger', 'Type', 'Path', 'Size'].map((col, i) => (
                   <span key={col} style={{
-                    fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
-                    letterSpacing: 1.5, textTransform: 'uppercase',
+                    fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)',
+                    letterSpacing: 0, textTransform: 'none',
                     textAlign: i === 4 ? 'right' : 'left',
                   }}>{col}</span>
                 ))}

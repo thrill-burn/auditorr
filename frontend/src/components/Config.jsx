@@ -1005,7 +1005,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
             }}>
               {['Time', 'Trigger', 'Source', 'Score', 'Duration', 'Status'].map(h => (
-                <div key={h} style={{ padding: '8px 12px', fontSize: 11, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 600, fontFamily: 'var(--mono)' }}>{h}</div>
+                <div key={h} style={{ padding: '8px 12px' }} className="ui-table-header">{h}</div>
               ))}
             </div>
             <FixedSizeList

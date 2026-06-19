@@ -66,6 +66,54 @@ html, body, #root {
 button { cursor: pointer; font-family: var(--sans); }
 input, select, textarea { font-family: var(--sans); }
 
+.ui-section-title,
+.ui-card-title {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: center;
+  color: var(--text);
+}
+
+.ui-metric-label,
+.ui-field-label {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+.ui-table-header {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+.ui-muted-text {
+  font-family: var(--sans);
+  color: var(--text-dim);
+}
+
+.ui-data-text {
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.ui-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  flex-shrink: 0;
+}
+
 @keyframes shimmer {
   0%   { background-position: -400px 0; }
   100% { background-position:  400px 0; }

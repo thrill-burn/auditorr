@@ -277,8 +277,10 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               background: scoreC + '10', border: '1px solid ' + scoreC + '25',
               display: 'flex', flexDirection: 'column', gap: 2,
             }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1, textTransform: 'uppercase' }}>Health</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: scoreC, lineHeight: 1 }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span className="ui-status-dot" style={{ width: 6, height: 6, background: scoreC }} />Health
+              </span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
                 {score}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
               </span>
             </div>
@@ -290,8 +292,10 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 background: 'var(--blue)10', border: '1px solid var(--blue)25',
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Cross-seed</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--blue)', lineHeight: 1 }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span className="ui-status-dot" style={{ width: 6, height: 6, background: 'var(--blue)' }} />Cross-seed
+                </span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
                   {csDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
                 </span>
               </div>

@@ -66,9 +66,9 @@ export default function Trackers({ trackerFileStats, onNavigate, timeRange, sele
       ].map(({ key, label }) => (
         <button key={key} onClick={() => handleSortClick(key)} style={{
           background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px',
-          fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase',
-          color: sortKey === key ? 'var(--accent)' : 'var(--text-dim)',
-          fontWeight: sortKey === key ? 700 : 400,
+          fontFamily: 'var(--sans)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
+          color: sortKey === key ? 'var(--text)' : 'var(--text-dim)',
+          fontWeight: sortKey === key ? 700 : 500,
         }}>
           {label}{sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
         </button>

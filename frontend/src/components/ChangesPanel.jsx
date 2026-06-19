@@ -80,7 +80,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
         borderBottom: showBody ? '1px solid var(--border)' : 'none',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 2, textTransform: 'uppercase' }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none' }}>
             Changes since last scan
           </span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
@@ -88,12 +88,13 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
           </span>
           {scoreDelta != null && (
             <span style={{
-              fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-              color: scoreDelta >= 0 ? 'var(--green)' : 'var(--red)',
-              background: (scoreDelta >= 0 ? 'var(--green)' : 'var(--red)') + '15',
-              border: `1px solid ${(scoreDelta >= 0 ? 'var(--green)' : 'var(--red)')}30`,
+              fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
+              color: 'var(--text-dim)',
+              border: '1px solid var(--border2)',
               borderRadius: 99, padding: '2px 8px',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
             }}>
+              <span className="ui-status-dot" style={{ width: 6, height: 6, background: scoreDelta >= 0 ? 'var(--green)' : 'var(--red)' }} />
               {scoreDelta >= 0 ? '+' : ''}{scoreDelta} pts
             </span>
           )}
@@ -106,7 +107,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button onClick={handleCollapse} style={{
             background: 'none', border: 'none', color: 'var(--text-dim)',
-            fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer', lineHeight: 1, padding: '2px 5px',
+            fontFamily: 'var(--sans)', fontSize: 11, cursor: 'pointer', lineHeight: 1, padding: '2px 5px',
           }}>{collapsed ? '▶' : '▼'}</button>
           <button onClick={handleDismiss} style={{
             background: 'none', border: 'none', color: 'var(--text-dim)',
@@ -130,7 +131,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
                 border: `1px solid ${activeFilter === null ? 'var(--accent)' : 'var(--border2)'}`,
                 background: activeFilter === null ? 'var(--accent)22' : 'transparent',
                 color: activeFilter === null ? 'var(--accent)' : 'var(--text-dim)',
-                cursor: 'pointer', fontFamily: 'var(--mono)',
+                cursor: 'pointer', fontFamily: 'var(--sans)',
               }}
             >
               All ({allRows.length})
@@ -147,7 +148,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
                     border: `1px solid ${active ? cat.color : 'var(--border2)'}`,
                     background: active ? cat.color + '22' : 'transparent',
                     color: active ? cat.color : 'var(--text-dim)',
-                    cursor: 'pointer', fontFamily: 'var(--mono)',
+                    cursor: 'pointer', fontFamily: 'var(--sans)',
                   }}
                 >
                   {cat.label} ({n})
@@ -164,9 +165,9 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
             borderBottom: '1px solid var(--border)',
             background: 'var(--surface2)',
           }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Type</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Path</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', letterSpacing: 1.5, textTransform: 'uppercase', textAlign: 'right' }}>Size</span>
+            <span className="ui-table-header">Type</span>
+            <span className="ui-table-header">Path</span>
+            <span className="ui-table-header" style={{ textAlign: 'right' }}>Size</span>
           </div>
 
           {/* Rows */}
