@@ -73,7 +73,7 @@ function ChangeRow({ index, style, data }) {
           <span style={{
             fontFamily: 'var(--mono)', fontSize: 11,
             color: 'var(--text-dim)', background: 'var(--surface2)',
-            border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 6px',
+            border: '1px solid var(--border2)', borderRadius: 'var(--r-sm)', padding: '1px 6px',
             whiteSpace: 'nowrap',
           }}>
             {TRIGGER_LABELS[row.trigger] ?? row.trigger}
@@ -86,7 +86,7 @@ function ChangeRow({ index, style, data }) {
           fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
           color: 'var(--text)',
           border: '1px solid var(--border2)',
-          borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap',
+          borderRadius: 'var(--r)', padding: '1px 7px', whiteSpace: 'nowrap',
           display: 'inline-flex', alignItems: 'center', gap: 6,
         }}>
           <span className="ui-status-dot" style={{ width: 6, height: 6, background: row.cat.color }} />
@@ -239,10 +239,10 @@ export default function ChangeLog({ onNavigate }) {
           <button
             onClick={() => setCatFilter(null)}
             style={{
-              padding: '4px 12px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
-              border: '1px solid var(--border2)',
-              background: catFilter === null ? 'var(--surface2)' : 'transparent',
-              color: catFilter === null ? 'var(--text)' : 'var(--text-dim)',
+              padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, cursor: 'pointer',
+              border: catFilter === null ? '1px solid var(--accent)' : '1px solid var(--border2)',
+              background: catFilter === null ? 'var(--accent)18' : 'transparent',
+              color: catFilter === null ? 'var(--accent)' : 'var(--text-dim)',
               transition: 'all 0.12s',
             }}
           >All</button>
@@ -254,10 +254,10 @@ export default function ChangeLog({ onNavigate }) {
               <button key={cat.key}
                 onClick={() => setCatFilter(active ? null : cat.key)}
                 style={{
-                  padding: '4px 12px', borderRadius: 99, fontSize: 11, cursor: 'pointer',
-                  border: '1px solid var(--border2)',
-                  background: active ? 'var(--surface2)' : 'transparent',
-                  color: active ? 'var(--text)' : 'var(--text-dim)',
+                  padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 11, cursor: 'pointer',
+                  border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
+                  background: active ? 'var(--accent)18' : 'transparent',
+                  color: active ? 'var(--accent)' : 'var(--text-dim)',
                   fontFamily: 'var(--sans)', transition: 'all 0.12s',
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                 }}
@@ -278,7 +278,7 @@ export default function ChangeLog({ onNavigate }) {
             <button
               onClick={() => { setDateFrom(''); setDateTo('') }}
               style={{
-                padding: '2px 7px', borderRadius: 99, fontSize: 11,
+                padding: '2px 7px', borderRadius: 'var(--r-pill)', fontSize: 11,
                 border: '1px solid var(--border2)', background: 'transparent',
                 color: 'var(--text-dim)', cursor: 'pointer',
               }}
@@ -296,7 +296,7 @@ export default function ChangeLog({ onNavigate }) {
               placeholder="🔎 search path…"
               style={{
                 width: 200, height: 28, padding: '0 10px',
-                borderRadius: 99, fontSize: 12,
+                borderRadius: 'var(--r-pill)', fontSize: 12,
                 border: `1px solid ${pathQuery ? 'var(--accent)66' : 'var(--border2)'}`,
                 background: pathQuery ? 'var(--surface2)' : 'transparent',
                 color: 'var(--text)', fontFamily: 'var(--mono)',
@@ -308,7 +308,7 @@ export default function ChangeLog({ onNavigate }) {
           </div>
           {pathQuery && (
             <button onClick={() => setPathQuery('')} style={{
-              padding: '2px 7px', borderRadius: 99, fontSize: 11,
+              padding: '2px 7px', borderRadius: 'var(--r-pill)', fontSize: 11,
               border: '1px solid var(--border2)', background: 'transparent',
               color: 'var(--text-dim)', cursor: 'pointer',
             }}>✕</button>
@@ -317,7 +317,7 @@ export default function ChangeLog({ onNavigate }) {
           <div style={{ flex: 1 }} />
 
           <button onClick={exportCSV} style={{
-            padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
+            padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, flexShrink: 0,
             border: '1px solid var(--border2)', background: 'transparent',
             color: 'var(--text-dim)', cursor: 'pointer',
           }}>Export CSV</button>
@@ -326,7 +326,7 @@ export default function ChangeLog({ onNavigate }) {
 
       {/* Error */}
       {error && (
-        <div style={{ padding: '12px 16px', borderRadius: 8, background: 'var(--red)12', border: '1px solid var(--red)30', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>
+        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: 'var(--red)12', border: '1px solid var(--red)30', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>
           Failed to load change log: {error}
         </div>
       )}
