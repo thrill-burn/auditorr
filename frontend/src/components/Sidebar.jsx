@@ -86,6 +86,7 @@ const WORKFLOW_TAB_IDS = ['backfill', 'triage', 'cleanup', 'dedupe', 'trumped']
 
 export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel, workflowCounts }) {
   const scoreC = score != null ? scoreColor(score) : 'var(--text-dim)'
+  const scoreDisplay = score != null ? Math.round(Number(score)) : null
   const csDisplay = crossSeedMultiplier != null ? crossSeedMultiplier.toFixed(2) : null
 
   const [openGroups, setOpenGroups] = useState(() => {
@@ -282,7 +283,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 <span className="ui-status-dot" style={{ width: 6, height: 6, background: scoreC }} />Health
               </span>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
-                {score}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
+                {scoreDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
               </span>
             </div>
 

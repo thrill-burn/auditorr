@@ -91,6 +91,148 @@ function Chip({ active, color, onClick, children, style }) {
   )
 }
 
+function TrackerChoiceButton({ active, tone, onClick, children, style }) {
+  const color = tone === 'exclude' ? 'var(--red)' : 'var(--green)'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={Object.assign({
+        padding: '4px 10px',
+        borderRadius: 6,
+        fontSize: 12,
+        fontWeight: active ? 700 : 500,
+        border: `1px solid ${active ? color : 'var(--border2)'}`,
+        background: active ? 'var(--surface2)' : 'transparent',
+        color: active ? color : 'var(--text-dim)',
+        cursor: 'pointer',
+        transition: 'all 0.12s',
+        whiteSpace: 'nowrap',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontFamily: 'var(--sans)',
+      }, style)}
+    >
+      {children}
+    </button>
+  )
+}
+
+function seedCountValue(file) {
+  return (file.trackers || []).filter(t => t !== 'None').length
+}
+
+function seedCountMatches(selected, count) {
+  if (selected === null) return true
+  if (selected === '5plus' || selected >= 5) return count >= 5
+  return count === selected
+}
+
+function seedCountLabel(value) {
+  if (value === null) return 'All'
+  if (value === '5plus' || value >= 5) return '5x+'
+  return `${value}x`
+}
+
+function SeedCountMenu({ value, options, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  const active = value !== null
+  const label = seedCountLabel(value)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = e => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          height: 28,
+          padding: '0 10px',
+          borderRadius: 6,
+          border: '1px solid var(--border2)',
+          background: active ? 'var(--surface2)' : 'transparent',
+          color: active ? 'var(--text)' : 'var(--text-dim)',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 7,
+          fontFamily: 'var(--sans)',
+          fontSize: 12,
+          fontWeight: active ? 600 : 500,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {active && <span className="ui-status-dot" style={{ width: 6, height: 6, background: value === 0 ? 'var(--yellow)' : 'var(--blue)' }} />}
+        <span>Seed count: {label}</span>
+        <span style={{ color: 'var(--text-dim)', fontSize: 10 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute',
+          right: 0,
+          top: '100%',
+          marginTop: 6,
+          minWidth: 150,
+          zIndex: 120,
+          background: 'var(--surface2)',
+          border: '1px solid var(--border2)',
+          borderRadius: 8,
+          boxShadow: 'var(--shadow-pop)',
+          padding: 4,
+        }}>
+          {options.map(opt => {
+            const selected = opt.value === null
+              ? value === null
+              : opt.value === '5plus'
+                ? value === '5plus' || value >= 5
+                : value === opt.value
+            return (
+              <button
+                key={String(opt.value)}
+                type="button"
+                onClick={() => { onChange(opt.value); setOpen(false) }}
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: 'none',
+                  borderRadius: 6,
+                  background: selected ? 'var(--surface3)' : 'transparent',
+                  color: selected ? 'var(--text)' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  fontFamily: 'var(--sans)',
+                  fontSize: 12,
+                  fontWeight: selected ? 700 : 500,
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                  {opt.value !== null && <span className="ui-status-dot" style={{ width: 6, height: 6, background: opt.value === 0 ? 'var(--yellow)' : 'var(--blue)' }} />}
+                  {opt.label}
+                </span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{opt.count.toLocaleString()}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FilterInput({ value, onChange, placeholder, width = 160 }) {
   const [focused, setFocused] = useState(false)
   return (
@@ -839,11 +981,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       (trackerInc.length === 0 || trackerInc.some(t => (f.trackers||[]).includes(t))) &&
       (trackerExc.length === 0 || !trackerExc.some(t => (f.trackers||[]).includes(t)))
 
-    const scMatch = seedCount === null || (() => {
-      const n = (f.trackers||[]).filter(t => t !== 'None').length
-      if (seedCount === '2plus') return n >= 2
-      return n === seedCount
-    })()
+    const scMatch = seedCountMatches(seedCount, seedCountValue(f))
 
     const nMatch = !nameLower || f.path.toLowerCase().includes(nameLower)
 
@@ -890,6 +1028,25 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   const [copied, setCopied] = useState(false)
 
+  const seedCountOptions = useMemo(() => {
+    const counts = new Map()
+    for (const f of files || []) {
+      if (hideExcluded && f.excluded === true && statusFilter !== 'Excluded') continue
+      const n = seedCountValue(f)
+      const bucket = n >= 5 ? '5plus' : n
+      counts.set(bucket, (counts.get(bucket) || 0) + 1)
+    }
+
+    const options = [{ value: null, label: 'All', count: Array.from(counts.values()).reduce((s, n) => s + n, 0) }]
+    for (let n = 0; n <= 4; n++) {
+      if (counts.has(n) || seedCount === n) options.push({ value: n, label: `${n}x`, count: counts.get(n) || 0 })
+    }
+    if (counts.has('5plus') || seedCount === '5plus' || seedCount >= 5) {
+      options.push({ value: '5plus', label: '5x+', count: counts.get('5plus') || 0 })
+    }
+    return options
+  }, [files, hideExcluded, statusFilter, seedCount])
+
   const exportCSV = () => {
     const rows = ['RelativePath,Size,Status,Imported,Trackers,LinkedPaths,DuplicatePaths',
       ...filtered.map(f =>
@@ -907,6 +1064,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   if (!files || !files.length) return <ExplorerSkeleton />
 
   const activeTrackerCount = trackerInc.length + trackerExc.length
+  const trackerPanelOpen = tab === 'torrents' || showTrackers
   const hasSizeFilter = sizeMinVal || sizeMaxVal
 
   const copyPaths = () => {
@@ -966,8 +1124,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
               onClick={() => setStatusFilter(id)}>{label}</Chip>
           ))}
           {trackers.length > 0 && (
-            <Chip active={showTrackers} color="var(--blue)"
-              onClick={() => setShowTrackers(s => !s)}>
+            <Chip active={trackerPanelOpen} color="var(--blue)"
+              onClick={tab === 'torrents' ? undefined : () => setShowTrackers(s => !s)}
+              style={tab === 'torrents' ? { cursor: 'default' } : null}>
               {'🔍 Trackers' + (activeTrackerCount > 0 ? ' (' + activeTrackerCount + ')' : '')}
             </Chip>
           )}
@@ -979,36 +1138,8 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
               onClick={() => setImportFilter('notImported')}>Not imported</Chip>
           </>}
           <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />
-          <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginLeft: 4 }}>Seed count</span>
-          {[
-            { value: null, label: 'All' },
-            { value: 0, label: '0x' },
-            { value: 1, label: '1x' },
-            { value: '2plus', label: '2x+' },
-          ].map(opt => {
-            const active = opt.value === null
-              ? seedCount === null
-              : opt.value === '2plus'
-                ? seedCount === '2plus' || seedCount >= 2
-                : seedCount === opt.value
-            return (
-              <Chip
-                key={String(opt.value)}
-                active={active}
-                color={opt.value === 0 ? 'var(--yellow)' : opt.value === '2plus' ? 'var(--blue)' : undefined}
-                onClick={() => setSeedCount(opt.value)}
-              >
-                {opt.label}
-              </Chip>
-            )
-          })}
+          <SeedCountMenu value={seedCount} options={seedCountOptions} onChange={setSeedCount} />
           <div style={{ flex: 1 }} />
-
-          {seedCount !== null && (
-            <Chip active color="var(--blue)" onClick={() => setSeedCount(null)}>
-              {seedCount === 0 ? '0× (orphaned)' : seedCount === '2plus' ? '2×+ seeded' : `${seedCount}× seeded`} ✕
-            </Chip>
-          )}
 
           {/* View toggle */}
           {(() => {
@@ -1117,28 +1248,32 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       </div>
 
       {/* ── Tracker panel ── */}
-      {showTrackers && trackers.length > 0 && (
+      {trackerPanelOpen && trackers.length > 0 && (
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)', padding: '12px 16px', marginBottom: 14, flexShrink: 0,
         }}>
           <div style={{ fontFamily:'var(--sans)', fontSize:12, fontWeight:600, color:'var(--text)', letterSpacing:0, textTransform:'none', marginBottom:10 }}>
-            + include &nbsp;/&nbsp; − exclude
+            + include / - exclude
           </div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
             {trackers.map(t => (
               <div key={t} style={{ display:'flex' }}>
-                <Chip active={trackerInc.includes(t)} color="var(--green)"
+                <TrackerChoiceButton active={trackerInc.includes(t)} tone="include"
                   onClick={() => toggleTracker('inc', t)}
-                  style={{ borderRadius:'99px 0 0 99px', borderRight:'none' }}>+ {t}</Chip>
-                <Chip active={trackerExc.includes(t)} color="var(--red)"
+                  style={{ borderRadius:'6px 0 0 6px', borderRight:'none' }}>
+                  + {t}
+                </TrackerChoiceButton>
+                <TrackerChoiceButton active={trackerExc.includes(t)} tone="exclude"
                   onClick={() => toggleTracker('exc', t)}
-                  style={{ borderRadius:'0 99px 99px 0', padding:'4px 10px' }}>−</Chip>
+                  style={{ borderRadius:'0 6px 6px 0', padding:'4px 10px' }}>
+                  -
+                </TrackerChoiceButton>
               </div>
             ))}
             {activeTrackerCount > 0 && (
               <button onClick={() => { setTrackerInc([]); setTrackerExc([]) }} style={{
-                padding:'4px 10px', borderRadius:99, fontSize:11,
+                padding:'4px 10px', borderRadius:6, fontSize:11,
                 border:'1px solid var(--border2)', background:'transparent',
                 color:'var(--text-dim)', cursor:'pointer',
               }}>clear</button>
