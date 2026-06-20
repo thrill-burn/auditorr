@@ -296,7 +296,7 @@ export default function ChangeLog({ onNavigate }) {
               placeholder="🔎 search path…"
               style={{
                 width: 200, height: 28, padding: '0 10px',
-                borderRadius: 'var(--r-pill)', fontSize: 12,
+                borderRadius: 'var(--r)', fontSize: 12,
                 border: `1px solid ${pathQuery ? 'var(--accent)66' : 'var(--border2)'}`,
                 background: pathQuery ? 'var(--surface2)' : 'transparent',
                 color: 'var(--text)', fontFamily: 'var(--mono)',

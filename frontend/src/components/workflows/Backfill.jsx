@@ -670,7 +670,7 @@ export default function Backfill({ onNavigate }) {
                   onChange={e => setTitleSearch(e.target.value)}
                   placeholder="Filter by title…"
                   style={{
-                    padding: '6px 10px', borderRadius: 6, fontSize: 13,
+                    padding: '6px 10px', borderRadius: 'var(--r)', fontSize: 13,
                     border: '1px solid var(--border)',
                     background: 'var(--surface2)',
                     color: 'var(--text)',

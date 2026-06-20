@@ -59,7 +59,7 @@ function Field({ label, value, onChange, mono }) {
       <input
         value={value} onChange={e => onChange(e.target.value)}
         style={{
-          padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border2)',
+          padding: '7px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)',
           background: 'var(--surface2)', color: 'var(--text)',
           fontFamily: mono ? 'var(--mono)' : 'inherit', fontSize: 12,
         }}
@@ -204,7 +204,7 @@ export default function Trumped({ onNavigate }) {
                 placeholder={SAMPLE_PM}
                 rows={7}
                 style={{
-                  width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 7,
+                  width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 'var(--r)',
                   border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
                   fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 1.5, resize: 'vertical',
                 }}
@@ -233,7 +233,7 @@ export default function Trumped({ onNavigate }) {
               <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Indexer (optional — narrows the release search)</span>
               <select
                 value={indexer} onChange={e => setIndexer(e.target.value)}
-                style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 12, minWidth: 220 }}
+                style={{ padding: '7px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 12, minWidth: 220 }}
               >
                 <option value="">Any indexer</option>
                 {indexers.map(name => <option key={name} value={name}>{name}</option>)}

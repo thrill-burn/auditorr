@@ -245,7 +245,7 @@ function FilterInput({ value, onChange, placeholder, width = 160 }) {
       onBlur={() => setFocused(false)}
       style={{
         width, height: 28, padding: '0 10px',
-        borderRadius: 99, fontSize: 12,
+        borderRadius: 'var(--r)', fontSize: 12,
         border: `1px solid ${focused ? 'var(--accent)' : value ? 'var(--accent)66' : 'var(--border2)'}`,
         background: focused || value ? 'var(--surface2)' : 'transparent',
         color: 'var(--text)', fontFamily: 'var(--mono)',
@@ -268,7 +268,7 @@ function SizeInput({ value, onChange, placeholder }) {
       onBlur={() => setFocused(false)}
       style={{
         width: 80, height: 28, padding: '0 8px',
-        borderRadius: 99, fontSize: 12,
+        borderRadius: 'var(--r)', fontSize: 12,
         border: `1px solid ${focused ? 'var(--accent)' : value ? 'var(--accent)66' : 'var(--border2)'}`,
         background: focused || value ? 'var(--surface2)' : 'transparent',
         color: 'var(--text)', fontFamily: 'var(--mono)',
@@ -871,7 +871,7 @@ function UnitSelect({ value, onChange }) {
       value={value}
       onChange={e => onChange(e.target.value)}
       style={{
-        height: 28, padding: '0 6px', borderRadius: 99, fontSize: 11,
+        height: 28, padding: '0 6px', borderRadius: 'var(--r)', fontSize: 11,
         border: '1px solid var(--border2)', background: 'var(--surface2)',
         color: 'var(--text-dim)', fontFamily: 'var(--mono)', cursor: 'pointer',
         outline: 'none',
