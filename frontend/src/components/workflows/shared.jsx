@@ -30,6 +30,11 @@ export const HDR_STYLE = {
 }
 
 // ── Chip ──────────────────────────────────────────────────────────────────────
+// TODO: API differs — not re-exported from ../ui. components/ui.jsx is
+// currently unused (nothing imports it) and its Chip has a different shape:
+// className-driven with no padding + a {color, style, className, ...props}
+// API, vs this inline-styled {active, onClick, children}. Re-exporting it
+// would change how every workflow chip renders, so consolidation is deferred.
 export function Chip({ active, onClick, children }) {
   return (
     <button
@@ -221,6 +226,10 @@ export function CountPicker({ value, onChange, max }) {
 }
 
 // ── Section label ─────────────────────────────────────────────────────────────
+// TODO: API differs — not re-exported from ../ui. ui.jsx's SectionLabel is
+// center-aligned (.ui-section-title) with an {eyebrow, style} API, while this
+// one is left-aligned with {children} only. Re-exporting would re-center every
+// workflow section header, so consolidation is deferred.
 export function SectionLabel({ children }) {
   return (
     <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
