@@ -160,8 +160,9 @@ function HealthDial({ score, status, smartTrend, color }) {
 
   // Number counts up in lockstep with the arc sweep.
   const displayScore = Math.round(animPct * 100)
+  const [showThresholdLabels, setShowThresholdLabels] = useState(false)
 
-  // Zone bands on the unfilled track, with labeled ticks at the thresholds
+  // Zone bands on the unfilled track, with quiet threshold labels on hover.
   const zonePaths = DIAL_ZONES.map(z => ({
     path: arcPath(CX, CY, R_OUTER, R_INNER,
       START_DEG + SWEEP_DEG * z.from, START_DEG + SWEEP_DEG * z.to),
@@ -171,16 +172,9 @@ function HealthDial({ score, status, smartTrend, color }) {
     const deg = START_DEG + SWEEP_DEG * (v / 100)
     return {
       value: v,
-      inner: polarToXY(CX, CY, R_INNER - 4, deg),
-      outer: polarToXY(CX, CY, R_OUTER + 4, deg),
-      label: polarToXY(CX, CY, R_OUTER + 13, deg),
+      label: polarToXY(CX, CY, R_OUTER + 15, deg),
     }
   })
-  // Scale anchors at the open ends of the dial.
-  const ends = [0, 100].map(v => ({
-    value: v,
-    label: polarToXY(CX, CY, R_OUTER + 13, START_DEG + SWEEP_DEG * (v / 100)),
-  }))
 
   const delta = smartTrend?.delta
   const trendLabel = smartTrend?.label
@@ -212,7 +206,11 @@ function HealthDial({ score, status, smartTrend, color }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-      <div style={{ position: 'relative', width: SIZE, height: SIZE }}>
+      <div
+        onMouseEnter={() => setShowThresholdLabels(true)}
+        onMouseLeave={() => setShowThresholdLabels(false)}
+        style={{ position: 'relative', width: SIZE, height: SIZE }}
+      >
         <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ position: 'relative' }}>
           {/* Recessed track with rounded ends */}
           <path d={arcLine(CX, CY, R_MID, START_DEG, START_DEG + SWEEP_DEG)}
@@ -232,19 +230,12 @@ function HealthDial({ score, status, smartTrend, color }) {
             <circle cx={tipCap.x} cy={tipCap.y} r={CAP_R} fill={tipColor}
               style={{ filter: `drop-shadow(0 0 5px ${tipColor})` }} />
           )}
-          {/* Threshold ticks + labels */}
-          {ticks.map((t, i) => (
-            <g key={i}>
-              <line x1={t.inner.x} y1={t.inner.y} x2={t.outer.x} y2={t.outer.y}
-                stroke="var(--bg)" strokeWidth="2.5" />
+          {/* Threshold labels */}
+          {showThresholdLabels && ticks.map((t, i) => (
+            <g key={i} style={{ transition: 'opacity 0.12s ease' }}>
               <text x={t.label.x} y={t.label.y + 3} textAnchor="middle"
-                fontFamily="var(--mono)" fontSize="10" fill="var(--text-dim)">{t.value}</text>
+                fontFamily="var(--mono)" fontSize="9" fill="var(--text-dim)" opacity="0.48">{t.value}</text>
             </g>
-          ))}
-          {/* Scale anchors at the open ends */}
-          {ends.map((e, i) => (
-            <text key={i} x={e.label.x} y={e.label.y + 3} textAnchor="middle"
-              fontFamily="var(--mono)" fontSize="9" fill="var(--text-dim)" opacity="0.65">{e.value}</text>
           ))}
         </svg>
         {/* Center readout — HTML overlay for crisp text + status chip */}
