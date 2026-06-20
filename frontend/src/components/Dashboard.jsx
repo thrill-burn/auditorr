@@ -400,8 +400,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
-        <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start', gap: 7 }}>
-          <span style={{ width: 7, height: 7, borderRadius: 99, background: color, marginTop: 4, flexShrink: 0 }} />
+        <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start' }}>
           {label}
         </span>
         <span style={{

@@ -208,9 +208,6 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                         }}
                          onMouseEnter={e => { if (!childActive) { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.background = 'var(--surface2)' } }}
                          onMouseLeave={e => { if (!childActive) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.background = 'transparent' } }}>
-                          {child.accent && (
-                            <span style={{ width: 7, height: 7, borderRadius: 2, background: child.accent, flexShrink: 0, opacity: childActive ? 1 : 0.6 }} />
-                          )}
                           <span style={{ flex: 1 }}>{child.label}</span>
                           {count != null && count > 0 && (
                             <span
