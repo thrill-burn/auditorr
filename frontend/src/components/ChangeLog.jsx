@@ -247,9 +247,9 @@ export default function ChangeLog({ onNavigate }) {
             onClick={() => setCatFilter(null)}
             style={{
               padding: '4px 12px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
-              border: `1px solid ${catFilter === null ? 'var(--accent)' : 'var(--border2)'}`,
-              background: catFilter === null ? 'var(--accent)22' : 'transparent',
-              color: catFilter === null ? 'var(--accent)' : 'var(--text-dim)',
+              border: '1px solid var(--border2)',
+              background: catFilter === null ? 'var(--surface2)' : 'transparent',
+              color: catFilter === null ? 'var(--text)' : 'var(--text-dim)',
               transition: 'all 0.12s',
             }}
           >All</button>
@@ -262,12 +262,14 @@ export default function ChangeLog({ onNavigate }) {
                 onClick={() => setCatFilter(active ? null : cat.key)}
                 style={{
                   padding: '4px 12px', borderRadius: 99, fontSize: 11, cursor: 'pointer',
-                  border: `1px solid ${active ? cat.color : cat.color + '40'}`,
-                  background: active ? cat.color + '18' : 'transparent',
-                  color: active ? cat.color : 'var(--text-dim)',
+                  border: '1px solid var(--border2)',
+                  background: active ? 'var(--surface2)' : 'transparent',
+                  color: active ? 'var(--text)' : 'var(--text-dim)',
                   fontFamily: 'var(--sans)', transition: 'all 0.12s',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
                 }}
               >
+                <span className="ui-status-dot" style={{ width: 6, height: 6, background: cat.color }} />
                 {cat.label}{n ? ` (${n.toLocaleString()})` : ''}
               </button>
             )
@@ -340,15 +342,15 @@ export default function ChangeLog({ onNavigate }) {
       {!error && (
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--rl)', overflow: 'hidden',
+          borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden',
           flex: 1, minHeight: 0,
         }}>
           {entries == null ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 12 }}>
               Loading…
             </div>
           ) : rows.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 12 }}>
               {allRows.length === 0
                 ? 'No changes recorded yet. Changes appear after two or more successful audits.'
                 : 'No entries match the current filters.'}

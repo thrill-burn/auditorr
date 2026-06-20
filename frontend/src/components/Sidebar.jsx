@@ -119,8 +119,9 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
     <>
     <style>{`@keyframes sidebarBadgePulse { 0%,100% { opacity:0.8 } 50% { opacity:1; box-shadow:0 0 6px var(--accent)60 } }`}</style>
     <aside style={{
-      width: 220, flexShrink: 0,
+      width: 'var(--sidebar-w)', flexShrink: 0,
       background: 'var(--surface)', borderRight: '1px solid var(--border)',
+      boxShadow: 'var(--elev-1)',
       display: 'flex', flexDirection: 'column',
       position: 'sticky', top: 0, height: '100vh', overflow: 'hidden',
     }}>
@@ -171,14 +172,14 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 <button onClick={() => handleGroupClick(id)} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '9px 10px', borderRadius: 7, border: 'none',
-                  background: isGroupActive ? 'var(--accent)18' : 'transparent',
-                  color: isGroupActive ? 'var(--accent)' : 'var(--text-dim)',
+                  background: isGroupActive ? 'var(--surface2)' : 'transparent',
+                  color: isGroupActive ? 'var(--text)' : 'var(--text-dim)',
                   fontSize: 13, fontWeight: isGroupActive ? 600 : 400,
                   cursor: 'pointer', transition: 'all 0.12s',
                   textAlign: 'left', width: '100%',
                 }}
-                onMouseEnter={e => { if (!isGroupActive) e.currentTarget.style.color = 'var(--text)' }}
-                onMouseLeave={e => { if (!isGroupActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
+                onMouseEnter={e => { if (!isGroupActive) { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.background = 'var(--surface2)' } }}
+                onMouseLeave={e => { if (!isGroupActive) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.background = 'transparent' } }}>
                   <span style={{ flexShrink: 0, opacity: isGroupActive ? 1 : 0.7 }}>{icon}</span>
                   <span style={{ flex: 1 }}>{label}</span>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
@@ -196,14 +197,14 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                         <button key={child.label} onClick={() => onChange(child.id)} style={{
                           display: 'flex', alignItems: 'center', gap: 8,
                           padding: '6px 10px 6px 18px', borderRadius: 7, border: 'none',
-                          background: childActive ? 'var(--accent)12' : 'transparent',
-                          color: childActive ? 'var(--accent)' : 'var(--text-dim)',
+                           background: childActive ? 'var(--surface2)' : 'transparent',
+                           color: childActive ? 'var(--text)' : 'var(--text-dim)',
                           fontSize: 13, fontWeight: childActive ? 600 : 400,
                           cursor: 'pointer', transition: 'all 0.12s',
                           textAlign: 'left', width: '100%',
                         }}
-                        onMouseEnter={e => { if (!childActive) e.currentTarget.style.color = 'var(--text)' }}
-                        onMouseLeave={e => { if (!childActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
+                         onMouseEnter={e => { if (!childActive) { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.background = 'var(--surface2)' } }}
+                         onMouseLeave={e => { if (!childActive) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.background = 'transparent' } }}>
                           {child.accent && (
                             <span style={{ width: 7, height: 7, borderRadius: 2, background: child.accent, flexShrink: 0, opacity: childActive ? 1 : 0.6 }} />
                           )}
@@ -250,14 +251,14 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
             <button key={id} onClick={() => onChange(id)} style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '9px 10px', borderRadius: 7, border: 'none',
-              background: isActive ? 'var(--accent)18' : 'transparent',
-              color: isActive ? 'var(--accent)' : 'var(--text-dim)',
+              background: isActive ? 'var(--surface2)' : 'transparent',
+              color: isActive ? 'var(--text)' : 'var(--text-dim)',
               fontSize: 13, fontWeight: isActive ? 600 : 400,
               cursor: 'pointer', transition: 'all 0.12s',
               textAlign: 'left', width: '100%',
             }}
-            onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'var(--text)' }}
-            onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'var(--text-dim)' }}>
+            onMouseEnter={e => { if (!isActive) { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.background = 'var(--surface2)' } }}
+            onMouseLeave={e => { if (!isActive) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.background = 'transparent' } }}>
               <span style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7 }}>{icon}</span>
               <span>{label}</span>
             </button>
@@ -274,7 +275,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
             {/* Library health */}
             <div style={{
               padding: '8px 10px', borderRadius: 7,
-              background: scoreC + '10', border: '1px solid ' + scoreC + '25',
+              background: 'var(--surface2)', border: '1px solid var(--border2)',
               display: 'flex', flexDirection: 'column', gap: 2,
             }}>
               <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -289,7 +290,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
             {csDisplay != null && (
               <div style={{
                 padding: '8px 10px', borderRadius: 7,
-                background: 'var(--blue)10', border: '1px solid var(--blue)25',
+                background: 'var(--surface2)', border: '1px solid var(--border2)',
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}>
                 <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>

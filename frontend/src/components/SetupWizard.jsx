@@ -99,7 +99,7 @@ function btnPrimary(disabled) {
   return {
     padding: '8px 20px', borderRadius: 'var(--r)', border: 'none',
     background: disabled ? 'var(--border2)' : 'var(--accent)',
-    color: disabled ? 'var(--text-dim)' : '#000',
+    color: disabled ? 'var(--text-dim)' : 'var(--bg)',
     fontWeight: 700, fontSize: 12, cursor: disabled ? 'default' : 'pointer',
     transition: 'all 0.12s',
   }
@@ -108,8 +108,8 @@ function btnPrimary(disabled) {
 function btnSecondary() {
   return {
     padding: '8px 16px', borderRadius: 'var(--r)',
-    border: '1px solid var(--border2)', background: 'transparent',
-    color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer',
+    border: '1px solid var(--border2)', background: 'var(--surface2)',
+    color: 'var(--text)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
   }
 }
 

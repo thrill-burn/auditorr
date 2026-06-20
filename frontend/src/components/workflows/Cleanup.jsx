@@ -20,7 +20,7 @@ function StatBox({ label, value, sub, color }) {
   return (
     <div style={{
       padding: '12px 16px', borderRadius: 9, flex: 1, minWidth: 140,
-      background: 'var(--surface)', border: '1px solid var(--border)',
+      background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
     }}>
       <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
         {color && <span className="ui-status-dot" style={{ background: color }} />}
@@ -40,7 +40,7 @@ function FolderGroup({ group, selected, onToggleFile, onToggleGroup }) {
   const oldest = group.files.reduce((m, f) => (f.mtime && (!m || f.mtime < m) ? f.mtime : m), null)
 
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden' }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
       {/* Group header */}
       <div
         onClick={() => setOpen(o => !o)}

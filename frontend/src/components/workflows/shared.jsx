@@ -36,9 +36,9 @@ export function Chip({ active, onClick, children }) {
       onClick={onClick}
       style={{
         padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
-        border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-        background: active ? 'var(--accent)18' : 'transparent',
-        color: active ? 'var(--accent)' : 'var(--text-dim)',
+        border: '1px solid var(--border2)',
+        background: active ? 'var(--surface2)' : 'transparent',
+        color: active ? 'var(--text)' : 'var(--text-dim)',
         fontWeight: active ? 600 : 400,
       }}
     >
@@ -114,9 +114,10 @@ export function SortPicker({ options, value, onChange }) {
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
               padding: '8px 14px', borderRadius: 8, cursor: 'pointer', minWidth: 110,
-              border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-              background: active ? 'var(--accent)12' : 'var(--surface)',
-              color: active ? 'var(--accent)' : 'var(--text)',
+              border: '1px solid var(--border)',
+              background: active ? 'var(--surface2)' : 'var(--surface)',
+              color: 'var(--text)',
+              boxShadow: 'var(--elev-1)',
             }}
           >
             <span style={{ fontSize: 13, fontWeight: 600 }}>{opt.label}</span>
@@ -161,15 +162,16 @@ export function CountPicker({ value, onChange, max }) {
   const cardStyle = (active) => ({
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     padding: '10px 22px', borderRadius: 8, minWidth: 90,
-    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-    background: active ? 'var(--accent)12' : 'var(--surface)',
-    color: active ? 'var(--accent)' : 'var(--text)',
+    border: `1px solid ${active ? 'var(--border2)' : 'var(--border)'}`,
+    background: active ? 'var(--surface2)' : 'var(--surface)',
+    color: 'var(--text)',
+    boxShadow: 'var(--elev-1)',
   })
 
   const numStyle = (active) => ({
     fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: '26px',
     height: 26, display: 'flex', alignItems: 'center',
-    color: active ? 'var(--accent)' : 'inherit',
+    color: 'var(--text)',
   })
 
   const subStyle = { fontSize: 11, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }
@@ -221,7 +223,7 @@ export function CountPicker({ value, onChange, max }) {
 // ── Section label ─────────────────────────────────────────────────────────────
 export function SectionLabel({ children }) {
   return (
-    <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'center', color: 'var(--text)', marginBottom: 8 }}>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
       {children}
     </div>
   )
@@ -232,9 +234,9 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'center', marginBottom: 4 }}>Workflows</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'left', marginBottom: 4 }}>Workflows</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {accent && <span style={{ width: 10, height: 10, borderRadius: 3, background: accent, flexShrink: 0 }} />}
+          {accent && <span className="ui-status-dot" style={{ width: 9, height: 9, background: accent }} />}
           <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>
         </div>
         {blurb && (
@@ -343,7 +345,7 @@ export function ActionBar({ children, summary }) {
       position: 'sticky', bottom: 16, zIndex: 50,
       background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 10,
       padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
-      boxShadow: '0 8px 30px rgba(0,0,0,0.35)',
+      boxShadow: 'var(--shadow-pop)',
     }}>
       <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>{summary}</div>
       <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>{children}</div>
@@ -362,8 +364,8 @@ export function ActionButton({ onClick, disabled, danger, primary, children, tit
         fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 7,
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
         border: `1px solid ${danger ? 'var(--red)40' : primary ? 'var(--accent)' : 'var(--border2)'}`,
-        background: danger ? 'var(--red)12' : primary ? 'var(--accent)' : 'var(--surface2)',
-        color: primary ? '#fff' : color,
+        background: danger ? 'var(--surface2)' : primary ? 'var(--accent)' : 'var(--surface2)',
+        color: primary ? 'var(--bg)' : color,
       }}
     >
       {children}

@@ -79,11 +79,15 @@ function Chip({ active, color, onClick, children, style }) {
   return (
     <button onClick={onClick} style={Object.assign({
       padding: '4px 12px', borderRadius: 99, fontSize: 12, fontWeight: 500,
-      border: '1px solid ' + (active ? color : 'var(--border2)'),
-      background: active ? color + '22' : 'transparent',
-      color: active ? color : 'var(--text-dim)',
+      border: '1px solid var(--border2)',
+      background: active ? 'var(--surface2)' : 'transparent',
+      color: active ? 'var(--text)' : 'var(--text-dim)',
       cursor: 'pointer', transition: 'all 0.12s', whiteSpace: 'nowrap',
-    }, style)}>{children}</button>
+      display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--sans)',
+    }, style)}>
+      {color && <span className="ui-status-dot" style={{ width: 6, height: 6, background: color }} />}
+      {children}
+    </button>
   )
 }
 
@@ -224,14 +228,14 @@ function ExplorerSkeleton() {
     <div style={{ padding: '14px 24px 48px' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 14 }}>
         {[0,1,2].map(i => (
-          <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '12px 14px' }}>
+          <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)', padding: '12px 14px' }}>
             <div className="skeleton" style={{ width: 60, height: 10, marginBottom: 8 }} />
             <div className="skeleton" style={{ width: 40, height: 24, marginBottom: 4 }} />
             <div className="skeleton" style={{ width: 80, height: 10 }} />
           </div>
         ))}
       </div>
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)' }}>
         {[...Array(10)].map((_, i) => (
           <div key={i} style={{ padding: '9px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
             <div className="skeleton" style={{ width: (30 + i*5%30) + '%', height: 11 }} />
@@ -837,6 +841,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
     const scMatch = seedCount === null || (() => {
       const n = (f.trackers||[]).filter(t => t !== 'None').length
+      if (seedCount === '2plus') return n >= 2
       return n === seedCount
     })()
 
@@ -935,7 +940,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           { label:'Seeding',     val:stats.seeding,  size:stats.seedingSize,  color:'var(--green)' },
           { label:'Orphaned',    val:stats.orphaned, size:stats.orphanedSize, color:'var(--yellow)' },
         ].map(c => (
-          <div key={c.label} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--r)', padding:'10px 14px' }}>
+          <div key={c.label} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--r)', boxShadow:'var(--elev-1)', padding:'10px 14px' }}>
             <div style={{ fontFamily:'var(--sans)', fontSize:12, fontWeight:600, color:'var(--text)', textTransform:'none', letterSpacing:0, display:'flex', alignItems:'center', gap:7 }}>
               {c.color !== 'var(--text)' && <span className="ui-status-dot" style={{ background:c.color }} />}
               {c.label}
@@ -953,8 +958,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
         marginBottom: 14,
         flexShrink: 0,
       }}>
-        {/* Row 1: chips */}
+        {/* Row 1: filter groups */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 0 6px' }}>
+          <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginRight: 2 }}>Status</span>
           {STATUS_FILTERS.map(({ id, label, color }) => (
             <Chip key={id} active={statusFilter===id} color={color}
               onClick={() => setStatusFilter(id)}>{label}</Chip>
@@ -967,15 +973,40 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           )}
           {tab === 'torrents' && <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />}
           {tab === 'torrents' && <>
+            <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginLeft: 4 }}>Import</span>
             <Chip active={importFilter==='all'} onClick={() => setImportFilter('all')}>All</Chip>
             <Chip active={importFilter==='notImported'} color="var(--red)"
-              onClick={() => setImportFilter('notImported')}>Not Imported</Chip>
+              onClick={() => setImportFilter('notImported')}>Not imported</Chip>
           </>}
+          <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />
+          <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginLeft: 4 }}>Seed count</span>
+          {[
+            { value: null, label: 'All' },
+            { value: 0, label: '0x' },
+            { value: 1, label: '1x' },
+            { value: '2plus', label: '2x+' },
+          ].map(opt => {
+            const active = opt.value === null
+              ? seedCount === null
+              : opt.value === '2plus'
+                ? seedCount === '2plus' || seedCount >= 2
+                : seedCount === opt.value
+            return (
+              <Chip
+                key={String(opt.value)}
+                active={active}
+                color={opt.value === 0 ? 'var(--yellow)' : opt.value === '2plus' ? 'var(--blue)' : undefined}
+                onClick={() => setSeedCount(opt.value)}
+              >
+                {opt.label}
+              </Chip>
+            )
+          })}
           <div style={{ flex: 1 }} />
 
           {seedCount !== null && (
             <Chip active color="var(--blue)" onClick={() => setSeedCount(null)}>
-              {seedCount === 0 ? '0× (orphaned)' : `${seedCount}× seeded`} ✕
+              {seedCount === 0 ? '0× (orphaned)' : seedCount === '2plus' ? '2×+ seeded' : `${seedCount}× seeded`} ✕
             </Chip>
           )}
 
@@ -983,15 +1014,16 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           {(() => {
             const forced = !!debouncedNameQuery.trim() || !!revealPath
             return (
-              <div style={{ display: 'flex', flexShrink: 0 }}>
+              <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 4 }}>
+                <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginRight: 2 }}>View</span>
                 <button
                   onClick={() => { if (!forced) { setUserFlat(false); localStorage.setItem('auditorr_view_flat', '0') } }}
                   style={{
-                    padding: '4px 10px', borderRadius: '99px 0 0 99px', fontSize: 11,
-                    border: `1px solid ${!isFlat ? 'var(--accent)' : 'var(--border2)'}`,
+                    padding: '4px 10px', borderRadius: 6, fontSize: 12,
+                    border: '1px solid var(--border2)',
                     borderRight: 'none',
-                    background: !isFlat ? 'var(--accent)22' : 'transparent',
-                    color: !isFlat ? 'var(--accent)' : 'var(--text-dim)',
+                    background: !isFlat ? 'var(--surface2)' : 'transparent',
+                    color: !isFlat ? 'var(--text)' : 'var(--text-dim)',
                     cursor: forced ? 'default' : 'pointer',
                     opacity: forced ? 0.45 : 1,
                   }}
@@ -999,10 +1031,10 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
                 <button
                   onClick={() => { if (!forced) { setUserFlat(true); localStorage.setItem('auditorr_view_flat', '1') } }}
                   style={{
-                    padding: '4px 10px', borderRadius: '0 99px 99px 0', fontSize: 11,
-                    border: `1px solid ${isFlat ? 'var(--accent)' : 'var(--border2)'}`,
-                    background: isFlat ? 'var(--accent)22' : 'transparent',
-                    color: isFlat ? 'var(--accent)' : 'var(--text-dim)',
+                    padding: '4px 10px', borderRadius: 6, fontSize: 12,
+                    border: '1px solid var(--border2)',
+                    background: isFlat ? 'var(--surface2)' : 'transparent',
+                    color: isFlat ? 'var(--text)' : 'var(--text-dim)',
                     cursor: forced ? 'default' : 'pointer',
                     opacity: forced ? 0.45 : 1,
                   }}
@@ -1013,25 +1045,25 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
           {isFlat && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Sort:</span>
+              <span className="ui-field-label" style={{ color: 'var(--text-dim)' }}>Sort</span>
               <button
                 onClick={() => setSortBy('name')}
                 style={{
-                  padding: '4px 8px', borderRadius: '99px 0 0 99px', fontSize: 11,
-                  border: `1px solid ${sortBy === 'name' ? 'var(--accent)' : 'var(--border2)'}`,
+                  padding: '4px 8px', borderRadius: 6, fontSize: 12,
+                  border: '1px solid var(--border2)',
                   borderRight: 'none',
-                  background: sortBy === 'name' ? 'var(--accent)22' : 'transparent',
-                  color: sortBy === 'name' ? 'var(--accent)' : 'var(--text-dim)',
+                  background: sortBy === 'name' ? 'var(--surface2)' : 'transparent',
+                  color: sortBy === 'name' ? 'var(--text)' : 'var(--text-dim)',
                   cursor: 'pointer',
                 }}
               >Name</button>
               <button
                 onClick={() => setSortBy('size')}
                 style={{
-                  padding: '4px 8px', borderRadius: '0 99px 99px 0', fontSize: 11,
-                  border: `1px solid ${sortBy === 'size' ? 'var(--accent)' : 'var(--border2)'}`,
-                  background: sortBy === 'size' ? 'var(--accent)22' : 'transparent',
-                  color: sortBy === 'size' ? 'var(--accent)' : 'var(--text-dim)',
+                  padding: '4px 8px', borderRadius: 6, fontSize: 12,
+                  border: '1px solid var(--border2)',
+                  background: sortBy === 'size' ? 'var(--surface2)' : 'transparent',
+                  color: sortBy === 'size' ? 'var(--text)' : 'var(--text-dim)',
                   cursor: 'pointer',
                 }}
               >Size</button>
@@ -1088,7 +1120,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       {showTrackers && trackers.length > 0 && (
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 'var(--r)', padding: '12px 16px', marginBottom: 14, flexShrink: 0,
+          borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)', padding: '12px 16px', marginBottom: 14, flexShrink: 0,
         }}>
           <div style={{ fontFamily:'var(--sans)', fontSize:12, fontWeight:600, color:'var(--text)', letterSpacing:0, textTransform:'none', marginBottom:10 }}>
             + include &nbsp;/&nbsp; − exclude
@@ -1118,7 +1150,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       {/* ── Virtualized file list ── */}
       <div style={{
         background:'var(--surface)', border:'1px solid var(--border)',
-        borderRadius:'var(--rl)', overflow:'hidden',
+        borderRadius:'var(--rl)', boxShadow:'var(--elev-1)', overflow:'hidden',
         flex: 1, minHeight: 0,
       }}>
         {isFlat ? (

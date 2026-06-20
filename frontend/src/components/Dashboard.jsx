@@ -34,19 +34,19 @@ function DashboardSkeleton() {
   return (
     <div style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <Skeleton w={90} h={10} />
           <Skeleton w={180} h={180} style={{ borderRadius: '50%' }} />
           <Skeleton w={80} h={22} style={{ borderRadius: 99 }} />
         </div>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 28 }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: 28 }}>
           <Skeleton w={130} h={10} style={{ marginBottom: 20 }} />
           <Skeleton w="100%" h={160} />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
         {[0,1,2,3].map(i => (
-          <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 22, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: 22, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Skeleton w={80} h={9} /><Skeleton w={60} h={36} /><Skeleton w="100%" h={9} /><Skeleton w="100%" h={48} style={{ marginTop: 'auto' }} />
           </div>
         ))}
@@ -427,7 +427,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
   )
 
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
         <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start', gap: 7 }}>
           <span style={{ width: 7, height: 7, borderRadius: 99, background: color, marginTop: 4, flexShrink: 0 }} />
@@ -701,7 +701,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
   const btnLeave = e => e.currentTarget.style.background = 'var(--accent)12'
 
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
@@ -1091,12 +1091,12 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
       {/* Row 1: dial + chart */}
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '20px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
           <span style={{ ...SECTION_LABEL, width: '100%' }}>Library health</span>
           <HealthDial score={score} status={status} smartTrend={smartTrend} color={c} />
         </div>
 
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '20px 20px 14px', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '20px 20px 14px', display: 'flex', flexDirection: 'column' }}>
           <div style={{ marginBottom: 18 }}>
             <span style={{ ...SECTION_LABEL, display: 'block' }}>Score history</span>
           </div>
@@ -1130,7 +1130,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
           {/* Cross-seed effectiveness */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
@@ -1152,7 +1152,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           </div>
 
           {/* Tracker leaderboard */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Top trackers by disk space</div>
               <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
@@ -1190,7 +1190,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
           {/* Upload Activity */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Upload activity</div>
             </div>
@@ -1225,7 +1225,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           </div>
 
           {/* Library Yield */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                 <div style={SECTION_LABEL}>

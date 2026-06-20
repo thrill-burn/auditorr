@@ -597,7 +597,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
             const someChecked = !allChecked && keys.some(k => selected.has(k))
 
             const renderRows = (rowItems) => (
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden' }}>
+              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
                 {rowItems.map(item => (
                   <TriageRow
                     key={itemKey(item)}

@@ -194,7 +194,7 @@ export default function Trumped({ onNavigate }) {
 
       <WorkflowError message={error} />
 
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '20px 22px' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: 'var(--elev-1)', padding: '20px 22px' }}>
         {/* Step 1 — paste PM */}
         <StepShell n={1} active done={parsed} title="Paste the trump PM">
           {!parsed ? (

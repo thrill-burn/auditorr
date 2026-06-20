@@ -128,9 +128,9 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
               onClick={() => setActiveFilter(null)}
               style={{
                 padding: '2px 10px', borderRadius: 99, fontSize: 11, fontWeight: 500,
-                border: `1px solid ${activeFilter === null ? 'var(--accent)' : 'var(--border2)'}`,
-                background: activeFilter === null ? 'var(--accent)22' : 'transparent',
-                color: activeFilter === null ? 'var(--accent)' : 'var(--text-dim)',
+                border: '1px solid var(--border2)',
+                background: activeFilter === null ? 'var(--surface2)' : 'transparent',
+                color: activeFilter === null ? 'var(--text)' : 'var(--text-dim)',
                 cursor: 'pointer', fontFamily: 'var(--sans)',
               }}
             >
@@ -145,12 +145,14 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
                   onClick={() => setActiveFilter(active ? null : cat.key)}
                   style={{
                     padding: '2px 10px', borderRadius: 99, fontSize: 11, fontWeight: 500,
-                    border: `1px solid ${active ? cat.color : 'var(--border2)'}`,
-                    background: active ? cat.color + '22' : 'transparent',
-                    color: active ? cat.color : 'var(--text-dim)',
+                    border: '1px solid var(--border2)',
+                    background: active ? 'var(--surface2)' : 'transparent',
+                    color: active ? 'var(--text)' : 'var(--text-dim)',
                     cursor: 'pointer', fontFamily: 'var(--sans)',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
                   }}
                 >
+                  <span className="ui-status-dot" style={{ width: 6, height: 6, background: cat.color }} />
                   {cat.label} ({n})
                 </button>
               )
@@ -188,12 +190,15 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onNavigate
                 <div>
                   <span style={{
                     fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-                    color: row.cat.color,
-                    background: row.cat.color + '18',
-                    border: `1px solid ${row.cat.color}30`,
+                    color: 'var(--text-dim)',
+                    border: '1px solid var(--border2)',
                     borderRadius: 4, padding: '1px 6px',
                     whiteSpace: 'nowrap',
-                  }}>{row.cat.label}</span>
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                  }}>
+                    <span className="ui-status-dot" style={{ width: 6, height: 6, background: row.cat.color }} />
+                    {row.cat.label}
+                  </span>
                 </div>
                 {/* Path */}
                 <div style={{ overflow: 'hidden', paddingRight: 8 }}>

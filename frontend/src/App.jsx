@@ -21,7 +21,7 @@ import { api } from './api'
 
 // ── Script Modal ──────────────────────────────────────────────────────────────
 function _btnStyle(bg, color) {
-  return { padding: '7px 14px', borderRadius: 6, border: 'none', background: bg, color, fontSize: 12, fontWeight: 500, cursor: 'pointer' }
+  return { padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border2)', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
 }
 
 function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
@@ -85,6 +85,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
           background: 'var(--surface)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--rl)',
+          boxShadow: 'var(--shadow-pop)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -97,7 +98,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
         </div>
-        <div style={{ padding: '10px 16px', background: 'rgba(234,179,8,0.13)', borderLeft: '3px solid var(--yellow)', margin: '12px 16px 0', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>
+        <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 12, color: 'var(--text-dim)', flexShrink: 0 }}>
           ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>

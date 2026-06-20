@@ -65,7 +65,9 @@ export default function Trackers({ trackerFileStats, onNavigate, timeRange, sele
         { key: 'yield',       label: 'Yield %'  },
       ].map(({ key, label }) => (
         <button key={key} onClick={() => handleSortClick(key)} style={{
-          background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px',
+          background: sortKey === key ? 'var(--surface2)' : 'transparent',
+          border: '1px solid var(--border2)', borderRadius: 6,
+          cursor: 'pointer', padding: '3px 9px',
           fontFamily: 'var(--sans)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
           color: sortKey === key ? 'var(--text)' : 'var(--text-dim)',
           fontWeight: sortKey === key ? 700 : 500,
@@ -90,11 +92,11 @@ export default function Trackers({ trackerFileStats, onNavigate, timeRange, sele
     />
       {/* Cards */}
       {sortedTrackers.length === 0 ? (
-        <div className="fade-in" style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '48px 28px' }}>
+        <div className="fade-in" style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text-dim)', textAlign: 'center', padding: '48px 28px' }}>
           No trackers selected
         </div>
       ) : (
-        <div className="fade-in" style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', padding: '20px 28px 48px' }}>
+        <div className="fade-in" style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--card-gap)', padding: '20px var(--page-gutter) 48px' }}>
           {sortedTrackers.map(tracker => (
             <div key={tracker} style={{ width: '860px', flexShrink: 0 }}>
               <TrackerCard

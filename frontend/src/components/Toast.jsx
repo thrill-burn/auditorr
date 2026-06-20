@@ -19,13 +19,14 @@ export function ToastProvider({ children }) {
       <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 999, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {toasts.map(t => (
           <div key={t.id} className="fade-in" style={{
-            background: 'var(--surface2)', border: `1px solid ${colors[t.type]}44`,
-            borderLeft: `3px solid ${colors[t.type]}`,
+            background: 'var(--surface)', border: '1px solid var(--border2)',
             borderRadius: 'var(--r)', padding: '10px 16px',
-            fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+            fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)',
+            boxShadow: 'var(--shadow-pop)',
             maxWidth: 340, animation: 'slideDown 0.2s ease both',
+            display: 'flex', alignItems: 'center', gap: 8,
           }}>
+            <span className="ui-status-dot" style={{ width: 7, height: 7, background: colors[t.type] }} />
             {t.message}
           </div>
         ))}

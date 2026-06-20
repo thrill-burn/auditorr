@@ -766,7 +766,7 @@ export default function Backfill({ onNavigate }) {
 
       {/* Results list */}
       {results.length > 0 && (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
           {results.map((item, i) => <ResultItem key={i} item={item} />)}
         </div>
       )}

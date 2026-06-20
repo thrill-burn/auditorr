@@ -146,7 +146,7 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
 
 function Card({ title, children }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', padding: 24, marginBottom: 16 }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 24, marginBottom: 16 }}>
       <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'center', color: 'var(--text)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
       {children}
     </div>
@@ -396,15 +396,16 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     padding: '6px 12px',
     borderRadius: 'var(--r)',
     border: '1px solid var(--border2)',
-    background: 'transparent',
-    color: 'var(--text-dim)',
+    background: 'var(--surface2)',
+    color: 'var(--text)',
     fontSize: 12,
+    fontWeight: 600,
     cursor: 'pointer',
   }
   const smallMonoButton = {
     ...ghostButton,
-    fontFamily: 'var(--mono)',
-    fontSize: 11,
+    fontFamily: 'var(--sans)',
+    fontSize: 12,
   }
 
   const toggleMediaPreset = id => {
