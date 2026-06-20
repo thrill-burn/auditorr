@@ -23,7 +23,6 @@ function StatBox({ label, value, sub, color }) {
       background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
     }}>
       <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
-        {color && <span className="ui-status-dot" style={{ background: color }} />}
         {label}
       </div>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
