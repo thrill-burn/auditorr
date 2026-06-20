@@ -37,7 +37,7 @@ export function Chip({ active, onClick, children }) {
       style={{
         padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
         border: '1px solid var(--border2)',
-        background: active ? 'var(--surface2)' : 'transparent',
+        background: active ? 'var(--surface3)' : 'transparent',
         color: active ? 'var(--text)' : 'var(--text-dim)',
         fontWeight: active ? 600 : 400,
       }}
@@ -115,7 +115,7 @@ export function SortPicker({ options, value, onChange }) {
               display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
               padding: '8px 14px', borderRadius: 8, cursor: 'pointer', minWidth: 110,
               border: '1px solid var(--border)',
-              background: active ? 'var(--surface2)' : 'var(--surface)',
+              background: active ? 'var(--surface3)' : 'var(--surface)',
               color: 'var(--text)',
               boxShadow: 'var(--elev-1)',
             }}
@@ -163,7 +163,7 @@ export function CountPicker({ value, onChange, max }) {
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     padding: '10px 22px', borderRadius: 8, minWidth: 90,
     border: `1px solid ${active ? 'var(--border2)' : 'var(--border)'}`,
-    background: active ? 'var(--surface2)' : 'var(--surface)',
+    background: active ? 'var(--surface3)' : 'var(--surface)',
     color: 'var(--text)',
     boxShadow: 'var(--elev-1)',
   })
