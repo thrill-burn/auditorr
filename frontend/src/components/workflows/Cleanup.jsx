@@ -19,7 +19,7 @@ function ageLabel(mtime) {
 function StatBox({ label, value, sub, color }) {
   return (
     <div style={{
-      padding: '12px 16px', borderRadius: 9, flex: 1, minWidth: 140,
+      padding: '12px 16px', borderRadius: 'var(--rl)', flex: 1, minWidth: 140,
       background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
     }}>
       <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -40,7 +40,7 @@ function FolderGroup({ group, selected, onToggleFile, onToggleGroup }) {
   const oldest = group.files.reduce((m, f) => (f.mtime && (!m || f.mtime < m) ? f.mtime : m), null)
 
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
       {/* Group header */}
       <div
         onClick={() => setOpen(o => !o)}
@@ -215,7 +215,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
         blurb="Files in your torrent folder that qBittorrent has no knowledge of. Review them by release folder, then generate a delete script for your selection — or exclude the ones you put there on purpose."
         right={!loading && (
           <button onClick={load} style={{
-            fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
+            fontSize: 12, padding: '6px 16px', borderRadius: 'var(--r)', cursor: 'pointer',
             border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
           }}>↻ Refresh</button>
         )}
@@ -257,7 +257,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
 
           <div>
             <button onClick={selectAll} style={{
-              fontSize: 12, padding: '5px 14px', borderRadius: 99, cursor: 'pointer',
+              fontSize: 12, padding: '5px 14px', borderRadius: 'var(--r-pill)', cursor: 'pointer',
               border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)',
             }}>
               {selected.size === totalFiles ? 'Deselect all' : 'Select all'}

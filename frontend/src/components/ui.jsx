@@ -70,7 +70,7 @@ export function SegmentedControl({ options, value, onChange, getLabel = x => x, 
             key={String(v)}
             onClick={() => onChange(v)}
             className={`ui-chip${active ? ' ui-chip-active' : ''}`}
-            style={{ padding: '4px 10px', borderRadius: 6 }}
+            style={{ padding: '4px 10px', borderRadius: 'var(--r)' }}
           >
             {getLabel(opt)}
           </button>

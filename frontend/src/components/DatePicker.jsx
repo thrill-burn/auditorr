@@ -62,7 +62,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
 
   const btnBase = {
     background: 'none', border: 'none', cursor: 'pointer',
-    fontFamily: 'var(--sans)', borderRadius: 5, transition: 'background 0.1s',
+    fontFamily: 'var(--sans)', borderRadius: 'var(--r-sm)', transition: 'background 0.1s',
   }
 
   return (
@@ -70,7 +70,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
       <button
         onClick={handleOpen}
         style={{
-          height: 26, padding: '0 10px', borderRadius: 6, fontSize: 11,
+          height: 26, padding: '0 10px', borderRadius: 'var(--r)', fontSize: 11,
           border: `1px solid ${value ? 'var(--accent)66' : 'var(--border2)'}`,
           background: value ? 'var(--surface2)' : 'transparent',
           color: value ? 'var(--text)' : 'var(--text-dim)',
@@ -85,7 +85,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
         <div style={{
           position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 300,
           background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 10, padding: '12px 10px',
+          borderRadius: 'var(--rl)', padding: '12px 10px',
           boxShadow: '0 8px 28px rgba(0,0,0,0.45)',
           width: 220,
         }}>

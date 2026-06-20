@@ -172,7 +172,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               <React.Fragment key={id}>
                 <button onClick={() => handleGroupClick(id)} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '9px 10px', borderRadius: 7, border: 'none',
+                  padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
                   background: isGroupActive ? 'var(--surface2)' : 'transparent',
                   boxShadow: isGroupActive ? 'inset 2px 0 var(--accent)' : 'none',
                   color: isGroupActive ? 'var(--text)' : 'var(--text-dim)',
@@ -198,7 +198,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                       return (
                         <button key={child.label} onClick={() => onChange(child.id)} style={{
                           display: 'flex', alignItems: 'center', gap: 8,
-                          padding: '6px 10px 6px 18px', borderRadius: 7, border: 'none',
+                          padding: '6px 10px 6px 18px', borderRadius: 'var(--r)', border: 'none',
                            background: childActive ? 'var(--surface2)' : 'transparent',
                            boxShadow: childActive ? 'inset 2px 0 var(--accent)' : 'none',
                            color: childActive ? 'var(--text)' : 'var(--text-dim)',
@@ -216,7 +216,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                             <span
                               title={`${count} item${count !== 1 ? 's' : ''} need attention`}
                               style={{
-                                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
+                                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-pill)',
                                 background: child.accent ? 'transparent' : 'var(--surface2)',
                                 border: `1px solid ${child.accent || 'var(--border2)'}40`,
                                 color: child.accent || 'var(--text-dim)',
@@ -231,7 +231,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                               onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
                               title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
                               style={{
-                                fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 99,
+                                fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 'var(--r-pill)',
                                 background: 'var(--accent)', color: '#fff',
                                 flexShrink: 0, lineHeight: 1.5, cursor: 'pointer',
                                 animation: 'sidebarBadgePulse 2s ease-in-out infinite',
@@ -253,7 +253,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
           return (
             <button key={id} onClick={() => onChange(id)} style={{
               display: 'flex', alignItems: 'center', gap: 10,
-              padding: '9px 10px', borderRadius: 7, border: 'none',
+              padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
               background: isActive ? 'var(--surface2)' : 'transparent',
               boxShadow: isActive ? 'inset 2px 0 var(--accent)' : 'none',
               color: isActive ? 'var(--text)' : 'var(--text-dim)',
@@ -278,7 +278,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
             {/* Library health */}
             <div style={{
-              padding: '8px 10px', borderRadius: 7,
+              padding: '8px 10px', borderRadius: 'var(--r)',
               background: 'var(--surface2)', border: '1px solid var(--border2)',
               display: 'flex', flexDirection: 'column', gap: 2,
             }}>
@@ -293,7 +293,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
             {/* Cross-seed multiplier */}
             {csDisplay != null && (
               <div style={{
-                padding: '8px 10px', borderRadius: 7,
+                padding: '8px 10px', borderRadius: 'var(--r)',
                 background: 'var(--surface2)', border: '1px solid var(--border2)',
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}>
@@ -315,8 +315,8 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>Scanning…</span>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>{progress}%</span>
             </div>
-            <div style={{ height: 3, background: 'var(--border2)', borderRadius: 99, overflow: 'hidden' }}>
-              <div style={{ width: progress + '%', height: '100%', background: 'var(--accent)', borderRadius: 99, transition: 'width 0.4s ease' }} />
+            <div style={{ height: 3, background: 'var(--border2)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
+              <div style={{ width: progress + '%', height: '100%', background: 'var(--accent)', borderRadius: 'var(--r-pill)', transition: 'width 0.4s ease' }} />
             </div>
             {statusMessage && (
               <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
@@ -325,7 +325,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {lastScanStatus === 'error' && statusMessage && (
-              <div style={{ padding: '5px 8px', borderRadius: 5, background: 'var(--red)12', border: '1px solid var(--red)30', marginBottom: 2 }}>
+              <div style={{ padding: '5px 8px', borderRadius: 'var(--r-sm)', background: 'var(--red)12', border: '1px solid var(--red)30', marginBottom: 2 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
                   ✗ {statusMessage}
                 </span>

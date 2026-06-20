@@ -35,7 +35,7 @@ export function Chip({ active, onClick, children }) {
     <button
       onClick={onClick}
       style={{
-        padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
+        padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 12, cursor: 'pointer',
         border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
         background: active ? 'var(--accent)18' : 'transparent',
         color: active ? 'var(--accent)' : 'var(--text-dim)',
@@ -113,7 +113,7 @@ export function SortPicker({ options, value, onChange }) {
             onClick={() => onChange(opt.value)}
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-              padding: '8px 14px', borderRadius: 8, cursor: 'pointer', minWidth: 110,
+              padding: '8px 14px', borderRadius: 'var(--r)', cursor: 'pointer', minWidth: 110,
               border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
               background: active ? 'var(--surface3)' : 'var(--surface)',
               color: 'var(--text)',
@@ -161,7 +161,7 @@ export function CountPicker({ value, onChange, max }) {
 
   const cardStyle = (active) => ({
     display: 'flex', flexDirection: 'column', alignItems: 'center',
-    padding: '10px 22px', borderRadius: 8, minWidth: 90,
+    padding: '10px 22px', borderRadius: 'var(--r)', minWidth: 90,
     border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
     background: active ? 'var(--surface3)' : 'var(--surface)',
     color: 'var(--text)',
@@ -258,7 +258,7 @@ export function WorkflowCrossLink({ text, linkLabel, count, onClick }) {
       onClick={onClick}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-        padding: '6px 12px', borderRadius: 7, fontSize: 12, cursor: 'pointer',
+        padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12, cursor: 'pointer',
         border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-dim)',
         transition: 'all 0.12s',
       }}
@@ -307,7 +307,7 @@ export function SpinKeyframes() {
 export function WorkflowError({ message }) {
   if (!message) return null
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 8, color: 'var(--red)', fontSize: 13 }}>
+    <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', color: 'var(--red)', fontSize: 13 }}>
       {message}
     </div>
   )
@@ -319,7 +319,7 @@ export function Checkbox({ checked, indeterminate, onChange }) {
     <span
       onClick={e => { e.stopPropagation(); onChange() }}
       style={{
-        width: 15, height: 15, borderRadius: 4, flexShrink: 0, cursor: 'pointer',
+        width: 15, height: 15, borderRadius: 'var(--r-sm)', flexShrink: 0, cursor: 'pointer',
         border: `1.5px solid ${checked || indeterminate ? 'var(--accent)' : 'var(--border2)'}`,
         background: checked || indeterminate ? 'var(--accent)' : 'transparent',
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -343,7 +343,7 @@ export function ActionBar({ children, summary }) {
   return (
     <div style={{
       position: 'sticky', bottom: 16, zIndex: 50,
-      background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 10,
+      background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 'var(--rl)',
       padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
       boxShadow: 'var(--shadow-pop)',
     }}>
@@ -361,7 +361,7 @@ export function ActionButton({ onClick, disabled, danger, primary, children, tit
       disabled={disabled}
       title={title}
       style={{
-        fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 7,
+        fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)',
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
         border: `1px solid ${danger ? 'var(--red)40' : primary ? 'var(--accent)' : 'var(--border2)'}`,
         background: danger ? 'var(--surface2)' : primary ? 'var(--accent)' : 'var(--surface2)',
