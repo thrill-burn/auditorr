@@ -259,10 +259,9 @@ function HealthDial({ score, status, smartTrend, color }) {
       {delta != null && (
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 6,
-          fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
+          fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600,
           color: 'var(--text-dim)',
-          border: '1px solid var(--border2)',
-          borderRadius: 99, padding: '3px 10px',
+          lineHeight: 1.35,
         }}>
           <span style={{ width: 6, height: 6, borderRadius: 99, background: up ? 'var(--green)' : 'var(--red)' }} />
           {up ? '↑' : '↓'} {Math.abs(delta)} pts {trendLabel}
@@ -368,34 +367,13 @@ function makeTrend(data, lowerIsBetter, unit) {
   return t
 }
 
-function TrendIcon({ sentiment }) {
-  const c = 'currentColor'
-  if (sentiment === 'good') return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M3 8.5l3 3 7-7.5" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-  if (sentiment === 'bad') return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M8 2l7 12H1L8 2z" stroke={c} strokeWidth="1.5" strokeLinejoin="round" />
-      <path d="M8 6.5v3" stroke={c} strokeWidth="1.5" strokeLinecap="round" />
-      <circle cx="8" cy="11.6" r="0.9" fill={c} />
-    </svg>
-  )
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M3 8h10" stroke={c} strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  )
-}
-
 function TrendPill({ trend }) {
   if (!trend) return null
   const m = TREND_META[trend.sentiment]
   return (
-    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', border: '1px solid var(--border2)', borderRadius: 5, padding: '2px 8px' }}>
+    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', lineHeight: 1.35 }}>
       <span style={{ width: 6, height: 6, borderRadius: 99, background: m.color, flexShrink: 0 }} />
-      <TrendIcon sentiment={trend.sentiment} />{m.label}
+      {m.label}
     </div>
   )
 }
@@ -403,6 +381,7 @@ function TrendPill({ trend }) {
 // ── Metric card ───────────────────────────────────────────────────────────────
 function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
+  const scoreText = String(pts || '').replace(/\s*pts$/i, '').replace(/\s*\/\s*/g, '/')
 
   const handleAction = async (a) => {
     if (a.type === 'script') {
@@ -433,7 +412,16 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
           <span style={{ width: 7, height: 7, borderRadius: 99, background: color, marginTop: 4, flexShrink: 0 }} />
           {label}
         </span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap' }}>{pts}</span>
+        <span style={{
+          fontFamily: 'var(--sans)',
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--text)',
+          letterSpacing: 0,
+          textTransform: 'none',
+          lineHeight: 1.35,
+          whiteSpace: 'nowrap',
+        }}>{scoreText}</span>
       </div>
       <div style={{ marginTop: 10 }}>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color: 'var(--text)', lineHeight: 1, whiteSpace: 'nowrap' }}>{value}</span>
@@ -450,11 +438,12 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
           return (
             <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
               {visibleActions.map((a, i) => {
-                // Primary = the workflow ("fix it") action: filled accent, bold.
-                // Secondary = the "just look" view link: quiet ghost button.
+                // Primary = the workflow ("fix it") action: raised, bold.
+                // Secondary = the "just look" view link: quiet until hover.
                 const isPrimary = a.variant === 'primary'
                 const baseBg  = isPrimary ? 'var(--surface2)' : 'transparent'
                 const hoverBg = isPrimary ? 'var(--surface3)' : 'var(--surface2)'
+                const baseBorder = isPrimary ? 'var(--border2)' : 'transparent'
                 return (
                   <button
                     key={i}
@@ -462,7 +451,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                     disabled={a.loading}
                     style={{
                       flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 7,
-                      border: isPrimary ? '1.5px solid var(--border2)' : '1px solid var(--border2)',
+                      border: `1px solid ${baseBorder}`,
                       background: a.loading ? 'var(--surface2)' : baseBg,
                       color: a.loading ? 'var(--text-dim)' : (isPrimary ? 'var(--text)' : 'var(--text-dim)'),
                       fontSize: isPrimary ? 12.5 : 12, fontWeight: isPrimary ? 600 : 500,
@@ -477,7 +466,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                     onMouseLeave={e => {
                       if (a.loading) return
                       e.currentTarget.style.background = baseBg
-                      if (!isPrimary) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'var(--border2)' }
+                      if (!isPrimary) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'transparent' }
                     }}
                   >
                     {a.loading ? (a.loadingLabel || '…') : a.label}
@@ -692,13 +681,21 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
   ]
 
   const btnStyle = {
-    padding: '9px 14px', borderRadius: 8, border: '1px solid var(--accent)35',
-    background: 'var(--accent)12', color: 'var(--accent)',
+    padding: '9px 14px', borderRadius: 7, border: '1px solid transparent',
+    background: 'transparent', color: 'var(--text-dim)',
     fontSize: 13, fontWeight: 500, cursor: 'pointer', textAlign: 'left',
-    transition: 'background 0.15s', width: '100%',
+    transition: 'background 0.15s, color 0.15s, border-color 0.15s', width: '100%',
   }
-  const btnHover = e => e.currentTarget.style.background = 'var(--accent)22'
-  const btnLeave = e => e.currentTarget.style.background = 'var(--accent)12'
+  const btnHover = e => {
+    e.currentTarget.style.background = 'var(--surface2)'
+    e.currentTarget.style.borderColor = 'var(--border2)'
+    e.currentTarget.style.color = 'var(--text)'
+  }
+  const btnLeave = e => {
+    e.currentTarget.style.background = 'transparent'
+    e.currentTarget.style.borderColor = 'transparent'
+    e.currentTarget.style.color = 'var(--text-dim)'
+  }
 
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
@@ -812,19 +809,19 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
           {seedingCount > 0 && (
             <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
-              View Seeding Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seedingCount} files · {formatBytes(seedingSize)})</span>
+              View seeding files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seedingCount} files · {formatBytes(seedingSize)})</span>
             </button>
           )}
           {orphanedCount > 0 && (
             <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
-              View Orphaned Files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphanedCount} files · {formatBytes(orphanedSize)})</span>
+              View orphaned files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphanedCount} files · {formatBytes(orphanedSize)})</span>
             </button>
           )}
           {notImportedCount > 0 && (
             <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
-              View Not Imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImportedCount} files · {formatBytes(notImportedSize)})</span>
+              View not imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImportedCount} files · {formatBytes(notImportedSize)})</span>
             </button>
           )}
         </div>
@@ -921,7 +918,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       trend: makeTrend(trendSeries.hardlinked, false, 'pct'),
       actionRows: [
         [{ type: 'navigate', label: 'Backfill →', tab: 'backfill', variant: 'primary' }],
-        [{ type: 'navigate', label: 'View Orphaned Media', tab: 'media', status: 'Orphaned' }],
+        [{ type: 'navigate', label: 'View orphaned media', tab: 'media', status: 'Orphaned' }],
       ],
     },
     {
@@ -933,7 +930,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       trend: makeTrend(trendSeries.orphaned, true, 'bytes'),
       actionRows: [
         [{ type: 'navigate', label: 'Cleanup →', tab: 'cleanup', variant: 'primary' }],
-        [{ type: 'navigate', label: 'View Orphaned Torrents', tab: 'torrents', status: 'Orphaned' }],
+        [{ type: 'navigate', label: 'View orphaned torrents', tab: 'torrents', status: 'Orphaned' }],
       ],
     },
     {
@@ -945,7 +942,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       trend: makeTrend(trendSeries.notImported, true, 'bytes'),
       actionRows: [
         [{ type: 'navigate', label: 'Triage →', tab: 'triage', variant: 'primary' }],
-        [{ type: 'navigate', label: 'View Not Imported', tab: 'torrents', importFilter: 'notImported' }],
+        [{ type: 'navigate', label: 'View not imported', tab: 'torrents', importFilter: 'notImported' }],
       ],
     },
     {
@@ -957,8 +954,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       trend: makeTrend(trendSeries.duplicates, true, 'bytes'),
       actionRows: [
         [{ type: 'navigate', label: 'Dedupe →', tab: 'dedupe', variant: 'primary' }],
-        [{ type: 'navigate', label: 'Media Dupes', tab: 'media', status: 'Duplicate' },
-         { type: 'navigate', label: 'Torrent Dupes', tab: 'torrents', status: 'Duplicate' }],
+        [{ type: 'navigate', label: 'Media dupes', tab: 'media', status: 'Duplicate' },
+         { type: 'navigate', label: 'Torrent dupes', tab: 'torrents', status: 'Duplicate' }],
       ],
     },
   ]
@@ -1167,13 +1164,13 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                     key={t.name}
                     onClick={() => setTrackerDetail(t.name)}
                     style={{
-                      fontFamily: 'var(--mono)', fontSize: 11, padding: '3px 8px',
-                      borderRadius: 99, border: '1px solid var(--border2)',
+                      fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600, padding: '3px 8px',
+                      borderRadius: 6, border: '1px solid transparent',
                       background: 'transparent', color: 'var(--text-dim)',
                       cursor: 'pointer', transition: 'all 0.12s',
                     }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)' }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border2)'; e.currentTarget.style.color = 'var(--text-dim)' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)'; e.currentTarget.style.borderColor = 'var(--border2)'; e.currentTarget.style.color = 'var(--text)' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' }}
                   >
                     {t.name}
                   </button>
