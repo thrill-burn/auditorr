@@ -188,9 +188,9 @@ input, select, textarea { font-family: var(--sans); }
 }
 
 .ui-chip-active {
-  color: var(--text);
-  background: var(--surface2);
-  border-color: var(--border2);
+  color: var(--accent);
+  background: var(--accent)18;
+  border-color: var(--accent);
 }
 
 .ui-input {

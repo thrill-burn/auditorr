@@ -36,9 +36,9 @@ export function Chip({ active, onClick, children }) {
       onClick={onClick}
       style={{
         padding: '3px 10px', borderRadius: 99, fontSize: 12, cursor: 'pointer',
-        border: '1px solid var(--border2)',
-        background: active ? 'var(--surface3)' : 'transparent',
-        color: active ? 'var(--text)' : 'var(--text-dim)',
+        border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
+        background: active ? 'var(--accent)18' : 'transparent',
+        color: active ? 'var(--accent)' : 'var(--text-dim)',
         fontWeight: active ? 600 : 400,
       }}
     >
@@ -114,7 +114,7 @@ export function SortPicker({ options, value, onChange }) {
             style={{
               display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
               padding: '8px 14px', borderRadius: 8, cursor: 'pointer', minWidth: 110,
-              border: '1px solid var(--border)',
+              border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
               background: active ? 'var(--surface3)' : 'var(--surface)',
               color: 'var(--text)',
               boxShadow: 'var(--elev-1)',
@@ -162,7 +162,7 @@ export function CountPicker({ value, onChange, max }) {
   const cardStyle = (active) => ({
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     padding: '10px 22px', borderRadius: 8, minWidth: 90,
-    border: `1px solid ${active ? 'var(--border2)' : 'var(--border)'}`,
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
     background: active ? 'var(--surface3)' : 'var(--surface)',
     color: 'var(--text)',
     boxShadow: 'var(--elev-1)',
