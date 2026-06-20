@@ -125,7 +125,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
                     fontSize: 11, textAlign: 'center', padding: '5px 0',
                     border: isToday && !isSelected ? '1px solid var(--border2)' : '1px solid transparent',
                     background: isSelected ? 'var(--accent)' : 'transparent',
-                    color: isSelected ? 'var(--bg)' : isToday ? 'var(--accent)' : 'var(--text)',
+                    color: isSelected ? '#0a0a0a' : isToday ? 'var(--accent)' : 'var(--text)',
                     fontWeight: isSelected || isToday ? 600 : 400,
                   }}
                   onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--surface2)' }}

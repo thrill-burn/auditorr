@@ -78,10 +78,10 @@ function Chip({ active, color, onClick, children, style }) {
   style = style || {}
   return (
     <button onClick={onClick} style={Object.assign({
-      padding: '4px 12px', borderRadius: 99, fontSize: 12, fontWeight: 500,
-      border: '1px solid var(--border2)',
-      background: active ? 'var(--surface2)' : 'transparent',
-      color: active ? 'var(--text)' : 'var(--text-dim)',
+      padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, fontWeight: 500,
+      border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
+      background: active ? 'var(--accent)18' : 'transparent',
+      color: active ? 'var(--accent)' : 'var(--text-dim)',
       cursor: 'pointer', transition: 'all 0.12s', whiteSpace: 'nowrap',
       display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--sans)',
     }, style)}>
