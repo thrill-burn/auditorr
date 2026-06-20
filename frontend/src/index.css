@@ -17,6 +17,7 @@
   --yellow:    #c99a2e;
   --red:       #e5604d;
   --blue:      #5b9bd9;
+  --cyan:      #55b6c2;
   --purple:    #a78bd0;
   --neutral:   #353a40;
   --mono:      'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -53,6 +54,7 @@
   --yellow:    #ca8a04;
   --red:       #dc2626;
   --blue:      #0284c7;
+  --cyan:      #0891b2;
   --purple:    #7c3aed;
   --neutral:   #78716c;
   --elev-1:    0 1px 2px rgba(28, 25, 23, 0.08);

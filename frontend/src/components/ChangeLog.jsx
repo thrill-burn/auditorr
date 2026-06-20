@@ -4,6 +4,7 @@ import { FixedSizeList } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
 import { api } from '../api'
 import { formatBytes } from '../utils'
+import { CHANGE_CATEGORIES } from './changeCategories'
 
 function useDebounce(value, delay) {
   const [debounced, setDebounced] = useState(value)
@@ -13,18 +14,6 @@ function useDebounce(value, delay) {
   }, [value, delay])
   return debounced
 }
-
-// diffKey: the key in entry.diff; tab: optional tab filter within that list
-const CATEGORIES = [
-  { key: 'newly_orphaned',      diffKey: 'newly_orphaned',      tab: null,        label: 'Orphaned',         color: 'var(--yellow)'   },
-  { key: 'new_duplicates',      diffKey: 'new_duplicates',      tab: null,        label: 'New Dupe',          color: 'var(--purple)'   },
-  { key: 'newly_imported',      diffKey: 'newly_imported',      tab: null,        label: 'Imported',          color: 'var(--green)'    },
-  { key: 'resolved_duplicates', diffKey: 'resolved_duplicates', tab: null,        label: 'Dupe Resolved',     color: 'var(--blue)'     },
-  { key: 'new_torrent',         diffKey: 'new_files',           tab: 'torrents',  label: 'New Torrent',       color: 'var(--text-dim)' },
-  { key: 'new_media',           diffKey: 'new_files',           tab: 'media',     label: 'New Media',         color: 'var(--text-dim)' },
-  { key: 'removed_torrent',     diffKey: 'removed_files',       tab: 'torrents',  label: 'Removed Torrent',   color: 'var(--text-dim)' },
-  { key: 'removed_media',       diffKey: 'removed_files',       tab: 'media',     label: 'Removed Media',     color: 'var(--text-dim)' },
-]
 
 const TRIGGER_LABELS = {
   watchdog:  'watchdog',
@@ -94,11 +83,15 @@ function ChangeRow({ index, style, data }) {
       {/* Type */}
       <div>
         <span style={{
-          fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-          color: row.cat.color, background: row.cat.color + '18',
-          border: `1px solid ${row.cat.color}30`,
-          borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap',
-        }}>{row.cat.label}</span>
+          fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
+          color: 'var(--text)',
+          border: '1px solid var(--border2)',
+          borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap',
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+        }}>
+          <span className="ui-status-dot" style={{ width: 6, height: 6, background: row.cat.color }} />
+          {row.cat.label}
+        </span>
       </div>
       {/* Path */}
       <div style={{ overflow: 'hidden', paddingRight: 8 }}>
@@ -152,7 +145,7 @@ export default function ChangeLog({ onNavigate }) {
     if (!entries) return []
     const rows = []
     for (const entry of entries) {
-      for (const cat of CATEGORIES) {
+      for (const cat of CHANGE_CATEGORIES) {
         const items = (entry.diff[cat.diffKey] || []).filter(item =>
           cat.tab == null || item.tab === cat.tab
         )
@@ -206,7 +199,7 @@ export default function ChangeLog({ onNavigate }) {
 
   const counts = useMemo(() => {
     const c = {}
-    for (const cat of CATEGORIES) c[cat.key] = 0
+    for (const cat of CHANGE_CATEGORIES) c[cat.key] = 0
     for (const r of allRows) c[r.cat.key] = (c[r.cat.key] ?? 0) + 1
     return c
   }, [allRows])
@@ -253,7 +246,7 @@ export default function ChangeLog({ onNavigate }) {
               transition: 'all 0.12s',
             }}
           >All</button>
-          {CATEGORIES.map(cat => {
+          {CHANGE_CATEGORIES.map(cat => {
             const n = counts[cat.key] ?? 0
             if (!n && entries != null) return null
             const active = catFilter === cat.key
