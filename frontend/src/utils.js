@@ -44,8 +44,9 @@ export function parseReleaseTitle(name) {
 }
 
 export function scoreColor(score) {
-  if (score >= 90) return 'var(--green)'
-  if (score >= 75) return 'var(--yellow)'
+  if (score >= 90) return 'var(--cyan)'
+  if (score >= 75) return 'var(--green)'
+  if (score >= 50) return 'var(--yellow)'
   return 'var(--red)'
 }
 

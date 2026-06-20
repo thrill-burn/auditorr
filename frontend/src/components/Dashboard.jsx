@@ -62,19 +62,20 @@ function DashboardSkeleton() {
 // through yellow→green→cyan across the top half so the "good" range carries more
 // visual variety. The endpoints (red ↔ cyan) stay distinguishable for
 // deuteranopia, and the brightness ramp adds a non-hue cue. Stops align with the
-// scoreColor() thresholds: poor <75, good 75–89 (yellow), excellent 90+
-// (green→cyan). Each stop is [t, hue, sat%, light%].
+// scoreColor() thresholds: poor <50, fair 50-74, good 75-89, great 90+.
+// Each stop is [t, hue, sat%, light%].
 const DIAL_COLOR_STOPS = [
   [0.00,   8, 88, 47],   // red (Poor) — dim
-  [0.50,  30, 92, 51],   // orange (mid-poor)
-  [0.75,  52, 95, 56],   // yellow (Good begins)
-  [0.90, 135, 58, 50],   // green (Excellent begins)
+  [0.50,  52, 95, 56],   // yellow (Fair begins)
+  [0.75, 135, 58, 50],   // green (Good begins)
+  [0.90, 188, 70, 57],   // cyan (Great begins)
   [1.00, 188, 70, 57],   // cyan (perfect) — bright
 ]
 const DIAL_ZONES = [
-  { from: 0,    to: 0.75, color: 'hsl(30, 90%, 50%)'  },   // Poor/Fair (red→orange)
-  { from: 0.75, to: 0.9,  color: 'hsl(90, 70%, 50%)'  },   // Good (yellow→green)
-  { from: 0.9,  to: 1,    color: 'hsl(170, 60%, 50%)' },   // Excellent (green→cyan)
+  { from: 0,    to: 0.5,  color: 'hsl(8, 88%, 47%)'   },   // Poor
+  { from: 0.5,  to: 0.75, color: 'hsl(52, 95%, 56%)'  },   // Fair
+  { from: 0.75, to: 0.9,  color: 'hsl(135, 58%, 50%)' },   // Good
+  { from: 0.9,  to: 1,    color: 'hsl(188, 70%, 57%)' },   // Great
 ]
 
 function hslToHex(h, s, l) {
@@ -166,7 +167,7 @@ function HealthDial({ score, status, smartTrend, color }) {
       START_DEG + SWEEP_DEG * z.from, START_DEG + SWEEP_DEG * z.to),
     color: z.color,
   }))
-  const ticks = [75, 90].map(v => {
+  const ticks = [50, 75, 90].map(v => {
     const deg = START_DEG + SWEEP_DEG * (v / 100)
     return {
       value: v,
@@ -216,7 +217,7 @@ function HealthDial({ score, status, smartTrend, color }) {
           {/* Recessed track with rounded ends */}
           <path d={arcLine(CX, CY, R_MID, START_DEG, START_DEG + SWEEP_DEG)}
             fill="none" stroke="var(--surface3)" strokeWidth={R_OUTER - R_INNER} strokeLinecap="round" />
-          {/* Faint zone bands — where Poor/Fair, Good, and Excellent live */}
+          {/* Faint zone bands — where Poor, Fair, Good, and Great live */}
           {zonePaths.map((z, i) => (
             <path key={i} d={z.path} fill="var(--surface2)" fillOpacity="0.55" />
           ))}

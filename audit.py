@@ -304,7 +304,7 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
     dup_penalty = (dup_size / dup_limit) * 10 if dup_limit > 0 else (10 if dup_size > 0 else 0)
     dup_score   = max(0, 10 - dup_penalty)
     final_score = round(max(0, min(100, hl_score + or_score + ni_score + dup_score)), 1)
-    if   final_score >= 90: status_text = "Excellent"
+    if   final_score >= 90: status_text = "Great"
     elif final_score >= 75: status_text = "Good"
     elif final_score >= 50: status_text = "Fair"
     else:                   status_text = "Poor"

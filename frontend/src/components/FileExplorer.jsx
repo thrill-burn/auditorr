@@ -918,7 +918,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const [importFilter, setImportFilter] = useState(initialImportFilter || 'all')
   const [trackerInc,   setTrackerInc]   = useState(initialTracker ? [initialTracker] : [])
   const [trackerExc,   setTrackerExc]   = useState([])
-  const [showTrackers, setShowTrackers] = useState(!!initialTracker)
+  const [showTrackers, setShowTrackers] = useState(tab === 'torrents' || !!initialTracker)
   const [seedCount,    setSeedCount]    = useState(initialSeedCount != null ? initialSeedCount : null)
   const [userFlat, setUserFlat] = useState(() => localStorage.getItem('auditorr_view_flat') === '1')
   const [sortBy, setSortBy] = useState('name')
@@ -1064,7 +1064,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   if (!files || !files.length) return <ExplorerSkeleton />
 
   const activeTrackerCount = trackerInc.length + trackerExc.length
-  const trackerPanelOpen = tab === 'torrents' || showTrackers
+  const trackerPanelOpen = showTrackers
   const hasSizeFilter = sizeMinVal || sizeMaxVal
 
   const copyPaths = () => {
@@ -1125,8 +1125,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           ))}
           {trackers.length > 0 && (
             <Chip active={trackerPanelOpen} color="var(--blue)"
-              onClick={tab === 'torrents' ? undefined : () => setShowTrackers(s => !s)}
-              style={tab === 'torrents' ? { cursor: 'default' } : null}>
+              onClick={() => setShowTrackers(s => !s)}>
               {'🔍 Trackers' + (activeTrackerCount > 0 ? ' (' + activeTrackerCount + ')' : '')}
             </Chip>
           )}
