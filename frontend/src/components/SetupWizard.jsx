@@ -99,7 +99,7 @@ function btnPrimary(disabled) {
   return {
     padding: '8px 20px', borderRadius: 'var(--r)', border: 'none',
     background: disabled ? 'var(--border2)' : 'var(--accent)',
-    color: disabled ? 'var(--text-dim)' : 'var(--bg)',
+    color: disabled ? 'var(--text-dim)' : '#0a0a0a',
     fontWeight: 700, fontSize: 12, cursor: disabled ? 'default' : 'pointer',
     transition: 'all 0.12s',
   }

@@ -166,7 +166,7 @@ input, select, textarea { font-family: var(--sans); }
 .ui-button-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--bg);
+  color: #0a0a0a;
 }
 
 .ui-button-ghost {

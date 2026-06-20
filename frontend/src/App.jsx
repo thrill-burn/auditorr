@@ -113,7 +113,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
           {!loading && script && (
             <>
               <button onClick={handleDownload} style={_btnStyle('var(--surface2)', 'var(--text)')}>Download .sh</button>
-              <button onClick={handleCopy} style={_btnStyle('var(--accent)', 'var(--bg)')}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</button>
+              <button onClick={handleCopy} style={_btnStyle('var(--accent)', '#0a0a0a')}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</button>
             </>
           )}
         </div>

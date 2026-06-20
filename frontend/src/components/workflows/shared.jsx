@@ -365,7 +365,7 @@ export function ActionButton({ onClick, disabled, danger, primary, children, tit
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
         border: `1px solid ${danger ? 'var(--red)40' : primary ? 'var(--accent)' : 'var(--border2)'}`,
         background: danger ? 'var(--surface2)' : primary ? 'var(--accent)' : 'var(--surface2)',
-        color: primary ? 'var(--bg)' : color,
+        color: primary ? '#0a0a0a' : color,
       }}
     >
       {children}
