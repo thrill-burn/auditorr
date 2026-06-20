@@ -40,11 +40,18 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
           )}
         </div>
       ) : (
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 3, padding: 3,
+          background: 'var(--surface3)', borderRadius: 'var(--r)',
+        }}>
           {[7, 30, 90, 0].map(d => (
             <button key={d} onClick={() => onTimeRangeChange(d)} style={{
-              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-              fontFamily: 'var(--sans)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              minHeight: 28, padding: '4px 10px', borderRadius: 'var(--r)',
+              border: 'none', cursor: 'pointer',
+              fontFamily: 'var(--mono)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
+              background: timeRange === d ? 'var(--surface)' : 'transparent',
+              boxShadow: timeRange === d ? 'var(--elev-1)' : 'none',
               color: timeRange === d ? 'var(--text)' : 'var(--text-dim)',
               fontWeight: timeRange === d ? 700 : 500,
             }}>{d === 0 ? 'All' : d + 'd'}</button>
@@ -60,7 +67,8 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
       {/* Right: tracker dropdown */}
       <div ref={dropdownRef} style={{ position: 'relative' }}>
         <button onClick={() => setDropdownOpen(o => !o)} style={{
-          background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+          background: 'transparent', border: '1px solid var(--border2)', cursor: 'pointer',
+          padding: '6px 12px', borderRadius: 'var(--r)',
           fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none',
           color: 'var(--text-dim)',
         }}>
@@ -72,9 +80,9 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
             background: 'var(--surface2)', border: '1px solid var(--border)',
             borderRadius: 8, padding: '8px 0', minWidth: 180, zIndex: 100,
           }}>
-            <div style={{ display: 'flex', gap: 10, padding: '0 10px 6px', borderBottom: '1px solid var(--border)' }}>
-              <button onClick={() => onTrackersChange(allTrackers)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>Select all</button>
-              <button onClick={() => onTrackersChange([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text-dim)' }}>Clear</button>
+            <div style={{ display: 'flex', gap: 8, padding: '0 10px 8px', borderBottom: '1px solid var(--border)' }}>
+              <button onClick={() => onTrackersChange(allTrackers)} style={{ background: 'transparent', border: '1px solid var(--border2)', cursor: 'pointer', padding: '6px 12px', borderRadius: 'var(--r)', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>Select all</button>
+              <button onClick={() => onTrackersChange([])} style={{ background: 'transparent', border: '1px solid var(--border2)', cursor: 'pointer', padding: '6px 12px', borderRadius: 'var(--r)', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text-dim)' }}>Clear</button>
             </div>
             {allTrackers.map(tracker => (
               <label key={tracker} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>
