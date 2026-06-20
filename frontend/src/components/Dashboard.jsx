@@ -330,9 +330,9 @@ function RoundedStackedBar({ x, y, width, height, fill, allTrackers, host, paylo
 // `lowerIsBetter` flips the mapping (orphaned/not-imported/dupes shrink = good;
 // hardlinked % grows = good).
 const TREND_META = {
-  good:    { label: 'Improving', color: 'var(--green)' },
-  neutral: { label: 'Steady',    color: 'var(--text-dim)' },
-  bad:     { label: 'Worsening', color: 'var(--red)' },
+  good:    { label: 'Improving', color: 'var(--green)',    icon: '▲' },
+  neutral: { label: 'Steady',    color: 'var(--text-dim)', icon: '—' },
+  bad:     { label: 'Worsening', color: 'var(--red)',      icon: '▼' },
 }
 
 function computeTrend(data, lowerIsBetter) {
@@ -363,8 +363,8 @@ function TrendPill({ trend }) {
   if (!trend) return null
   const m = TREND_META[trend.sentiment]
   return (
-    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', lineHeight: 1.35 }}>
-      <span style={{ width: 6, height: 6, borderRadius: 99, background: m.color, flexShrink: 0 }} />
+    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: m.color, lineHeight: 1.35 }}>
+      <span style={{ fontSize: 10, lineHeight: 1, flexShrink: 0 }}>{m.icon}</span>
       {m.label}
     </div>
   )
