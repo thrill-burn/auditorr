@@ -173,8 +173,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 <button onClick={() => handleGroupClick(id)} style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
-                  background: isGroupActive ? 'var(--surface2)' : 'transparent',
-                  boxShadow: isGroupActive ? 'inset 2px 0 var(--accent)' : 'none',
+                  background: isGroupActive ? 'var(--surface3)' : 'transparent',
                   color: isGroupActive ? 'var(--text)' : 'var(--text-dim)',
                   fontSize: 13, fontWeight: isGroupActive ? 600 : 400,
                   cursor: 'pointer', transition: 'all 0.12s',
@@ -199,8 +198,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                         <button key={child.label} onClick={() => onChange(child.id)} style={{
                           display: 'flex', alignItems: 'center', gap: 8,
                           padding: '6px 10px 6px 18px', borderRadius: 'var(--r)', border: 'none',
-                           background: childActive ? 'var(--surface2)' : 'transparent',
-                           boxShadow: childActive ? 'inset 2px 0 var(--accent)' : 'none',
+                           background: childActive ? 'var(--surface3)' : 'transparent',
                            color: childActive ? 'var(--text)' : 'var(--text-dim)',
                           fontSize: 13, fontWeight: childActive ? 600 : 400,
                           cursor: 'pointer', transition: 'all 0.12s',
@@ -251,8 +249,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
             <button key={id} onClick={() => onChange(id)} style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
-              background: isActive ? 'var(--surface2)' : 'transparent',
-              boxShadow: isActive ? 'inset 2px 0 var(--accent)' : 'none',
+              background: isActive ? 'var(--surface3)' : 'transparent',
               color: isActive ? 'var(--text)' : 'var(--text-dim)',
               fontSize: 13, fontWeight: isActive ? 600 : 400,
               cursor: 'pointer', transition: 'all 0.12s',
