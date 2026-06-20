@@ -59,7 +59,7 @@ def _is_excluded(rel_path, filename, patterns):
 def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None):
     # Returns an ordered list of file_keys (one per filesystem entry, including
     # cross-seed duplicates) instead of full record dicts. Per-file metadata
-    # (rel_path, size, nlink, excluded) is folded directly into inode_map to
+    # (rel_path, size, excluded) is folded directly into inode_map to
     # avoid holding a second equally-large data structure in memory during the walk.
     key_order   = []
     scanned     = scanned_so_far
@@ -74,7 +74,6 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 st       = os.stat(full_path)
                 file_key = (st.st_dev, st.st_ino)
                 size     = st.st_size
-                nlink    = st.st_nlink
                 rel_path = os.path.relpath(full_path, base_path)
                 excluded = (compiled_exclusions.match(full_path, rel_path, filename)
                             if compiled_exclusions is not None
@@ -86,7 +85,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     'tracker_health': 'unknown', 'tracker_msg': '',
                     'unreg_claimants': {},
                     'size': 0,
-                    'torrent_nlink': 0, 'torrent_rel_path': None, 'torrent_excluded': False,
+                    'torrent_rel_path': None, 'torrent_excluded': False,
                     'media_rel_path': None, 'media_excluded': False,
                 })
                 if source_label == 'Torrent':
@@ -94,7 +93,6 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     if inode_map[file_key]['torrent_rel_path'] is None:
                         # First occurrence wins for cross-seeded inodes
                         inode_map[file_key]['size']             = size
-                        inode_map[file_key]['torrent_nlink']    = nlink
                         inode_map[file_key]['torrent_rel_path'] = rel_path
                         inode_map[file_key]['torrent_excluded'] = excluded
                     qbit_info = qbit_file_map.get(full_path)
@@ -229,7 +227,12 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "path": info['torrent_rel_path'], "size": info['size'], "inode": file_key[1],
             "file_id": file_id,
             "status": info['status'],
-            "imported": info['torrent_nlink'] > 1 or len(info['media_paths']) > 0,
+            # A torrent is imported iff a hardlink to its inode exists inside the
+            # media library (the media walk populates media_paths). nlink > 1 is
+            # NOT a valid proxy: cross-seeding hardlinks the same release across
+            # several tracker dirs, so nlink > 1 is true for never-imported files
+            # too (issue #15).
+            "imported": len(info['media_paths']) > 0,
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['media_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),

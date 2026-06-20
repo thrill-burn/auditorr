@@ -19,6 +19,26 @@ def _inode(**over):
     return base
 
 
+class ImportDetectionTests(unittest.TestCase):
+    """A torrent is imported iff a hardlink exists in the media library
+    (media_paths), never because nlink > 1 — cross-seeding hardlinks the same
+    release across tracker dirs without importing it (issue #15)."""
+
+    def test_cross_seed_without_library_link_is_not_imported(self):
+        # Issue #15: payload cross-seeded across two trackers (torrent_nlink 2)
+        # but absent from the media library must read as NOT imported.
+        key = (1, 100)
+        imap = {key: _inode(torrent_nlink=2, media_paths=[])}
+        torrents, _ = _assemble_records([key], [], imap, {})
+        self.assertFalse(torrents[0]['imported'])
+
+    def test_library_link_is_imported(self):
+        key = (1, 100)
+        imap = {key: _inode(media_paths=['/data/media/Movie.mkv'])}
+        torrents, _ = _assemble_records([key], [], imap, {})
+        self.assertTrue(torrents[0]['imported'])
+
+
 class AssembleDeadSiblingsTests(unittest.TestCase):
     def test_dead_sibling_surfaced_when_kept_claimant_alive(self):
         key = (1, 100)
