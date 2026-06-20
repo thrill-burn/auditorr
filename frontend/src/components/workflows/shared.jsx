@@ -236,7 +236,6 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'left', marginBottom: 4 }}>Workflows</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {accent && <span className="ui-status-dot" style={{ width: 9, height: 9, background: accent }} />}
           <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>
         </div>
         {blurb && (
