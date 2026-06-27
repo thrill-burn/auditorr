@@ -127,7 +127,7 @@ function ChangeRow({ index, style, data }) {
 export default function ChangeLog({ onNavigate }) {
   const [entries,   setEntries]   = useState(null)
   const [error,     setError]     = useState(null)
-  const [catFilter, setCatFilter] = useState(null)
+  const [catFilter, setCatFilter] = useState([]) // selected category keys; empty = all
   const [dateFrom,  setDateFrom]  = useState('')
   const [dateTo,    setDateTo]    = useState('')
   const [pathQuery, setPathQuery] = useState('')
@@ -176,7 +176,7 @@ export default function ChangeLog({ onNavigate }) {
       const to = new Date(dateTo).getTime() + 86400_000
       r = r.filter(row => new Date(row.ran_at).getTime() < to)
     }
-    if (catFilter) r = r.filter(row => row.cat.key === catFilter)
+    if (catFilter.length) r = r.filter(row => catFilter.includes(row.cat.key))
     if (debouncedPath.trim()) {
       const q = debouncedPath.trim().toLowerCase()
       r = r.filter(row => row.path.toLowerCase().includes(q))
@@ -253,22 +253,22 @@ export default function ChangeLog({ onNavigate }) {
         {/* Row 1: category chips */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 0 4px' }}>
           <button
-            onClick={() => setCatFilter(null)}
+            onClick={() => setCatFilter([])}
             style={{
               padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, cursor: 'pointer',
-              border: catFilter === null ? '1px solid var(--accent)' : '1px solid var(--border2)',
-              background: catFilter === null ? 'var(--accent)18' : 'transparent',
-              color: catFilter === null ? 'var(--accent)' : 'var(--text-dim)',
+              border: catFilter.length === 0 ? '1px solid var(--accent)' : '1px solid var(--border2)',
+              background: catFilter.length === 0 ? 'var(--accent)18' : 'transparent',
+              color: catFilter.length === 0 ? 'var(--accent)' : 'var(--text-dim)',
               transition: 'all 0.12s',
             }}
           >All</button>
           {CHANGE_CATEGORIES.map(cat => {
             const n = counts[cat.key] ?? 0
             if (!n && entries != null) return null
-            const active = catFilter === cat.key
+            const active = catFilter.includes(cat.key)
             return (
               <button key={cat.key}
-                onClick={() => setCatFilter(active ? null : cat.key)}
+                onClick={() => setCatFilter(prev => active ? prev.filter(k => k !== cat.key) : [...prev, cat.key])}
                 style={{
                   padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 11, cursor: 'pointer',
                   border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
