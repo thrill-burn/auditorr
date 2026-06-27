@@ -422,9 +422,7 @@ function AppInner() {
               trackerFileStats={results?.tracker_file_stats || {}}
               onNavigate={handleNavigate}
               timeRange={timeRange}
-              selectedTrackers={selectedTrackers}
               allTrackers={allTrackers}
-              onTrackersChange={setSelectedTrackers}
             />
           )}
           {tab === 'changes' && (
