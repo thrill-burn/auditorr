@@ -19,7 +19,7 @@ function fmtDisplay(str) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export default function DatePicker({ value, onChange, placeholder = 'Pick a date' }) {
+export default function DatePicker({ value, onChange, placeholder = 'Pick a date', align = 'left' }) {
   const [open, setOpen] = useState(false)
   const ref  = useRef(null)
 
@@ -83,7 +83,8 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
 
       {open && (
         <div style={{
-          position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 300,
+          position: 'absolute', top: 'calc(100% + 6px)',
+          left: align === 'right' ? 'auto' : 0, right: align === 'right' ? 0 : 'auto', zIndex: 300,
           background: 'var(--surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--rl)', padding: '12px 10px',
           boxShadow: '0 8px 28px rgba(0,0,0,0.45)',

@@ -176,9 +176,9 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
     <div className="fade-in" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Date range — scopes both the chart and the table's Uploaded/Yield columns */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>
-        <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" />
+        <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" align="right" />
         <span>—</span>
-        <DatePicker value={dateTo} onChange={setDateTo} placeholder="To" />
+        <DatePicker value={dateTo} onChange={setDateTo} placeholder="To" align="right" />
       </div>
 
       {/* Chart card */}
