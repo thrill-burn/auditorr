@@ -204,27 +204,43 @@ export default function ChangeLog({ onNavigate }) {
     return c
   }, [allRows])
 
+  // Summary-card stats over the *filtered* rows — mirrors the file browsers'
+  // boxes, so they respond to the date/category/search filters below.
+  const boxStats = useMemo(() => {
+    const s = { total: 0, totalSize: 0, imported: 0, importedSize: 0, orphaned: 0, orphanedSize: 0, removed: 0, removedSize: 0 }
+    for (const r of rows) {
+      const sz = r.size || 0
+      s.total++; s.totalSize += sz
+      const k = r.cat.key
+      if (k === 'newly_imported')                            { s.imported++; s.importedSize += sz }
+      else if (k === 'newly_orphaned')                       { s.orphaned++; s.orphanedSize += sz }
+      else if (k === 'removed_torrent' || k === 'removed_media') { s.removed++;  s.removedSize  += sz }
+    }
+    return s
+  }, [rows])
+
   const itemData = useMemo(() => ({ rows, onNavigate }), [rows, onNavigate])
 
   return (
     <div className="fade-in" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
 
-      {/* Page header */}
-      <div style={{ padding: '16px 0 14px' }}>
-        <div className="ui-section-title" style={{ marginBottom: 6 }}>
-          Change log
-        </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>Audit History</span>
-          {entries != null && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-              {rows.length.toLocaleString()} {(catFilter || dateFrom || dateTo || debouncedPath.trim()) ? 'matching' : 'changes'}
-            </span>
-          )}
-        </div>
-        <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.55 }}>
-          File-level changes detected between consecutive audits, kept indefinitely.
-        </p>
+      {/* Summary cards — mirror the file-browser stat boxes */}
+      <div style={{ padding: '16px 0 14px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, flexShrink: 0 }}>
+        {[
+          { label: 'Changes',  val: boxStats.total,    size: boxStats.totalSize,    color: 'var(--text)' },
+          { label: 'Imported', val: boxStats.imported, size: boxStats.importedSize, color: 'var(--green)' },
+          { label: 'Orphaned', val: boxStats.orphaned, size: boxStats.orphanedSize, color: 'var(--yellow)' },
+          { label: 'Removed',  val: boxStats.removed,  size: boxStats.removedSize,  color: 'var(--red)' },
+        ].map(c => (
+          <div key={c.label} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)', padding: '10px 14px' }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', textTransform: 'none', letterSpacing: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
+              {c.color !== 'var(--text)' && <span className="ui-status-dot" style={{ background: c.color }} />}
+              {c.label}
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>{entries == null ? '—' : c.val.toLocaleString()}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{entries == null ? '' : formatBytes(c.size)}</div>
+          </div>
+        ))}
       </div>
 
       {/* Filter bar */}
