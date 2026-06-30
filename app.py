@@ -34,7 +34,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match
 from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -1088,17 +1088,35 @@ def _cross_seed_group(rows, paths_map, seed):
     return group
 
 
+def _trump_pick_row(row):
+    """Trim a live torrent row to the fields the candidate picker needs."""
+    return {
+        'hash':          row.get('hash'),
+        'name':          row.get('name') or '',
+        'tracker':       row.get('tracker') or '',
+        'size':          row.get('size') or 0,
+        'instance_id':   row.get('instance_id'),
+        'instance_name': row.get('instance_name'),
+        'match_score':   row.get('match_score'),
+        'match':         row.get('match'),
+    }
+
+
 @app.route('/api/workflows/trump/resolve_group', methods=['POST'])
 @require_auth
 def workflows_trump_resolve_group():
     """Resolve the trumped release(s) to their full cross-seed group(s), live.
 
-    Audit records keep one hash per path (the healthiest claimant), so they
-    cannot enumerate cross-seed siblings — this queries the client directly:
-    name-match each old title, then group every torrent with the same payload
-    size that shares at least one content file path. A season-pack trump passes
-    several old titles (one per episode); each resolves to its own distinct
-    payload and the groups are unioned.
+    Two phases on one endpoint. **Phase 1** (no `seed_hashes`): for each old
+    title, return a ranked list of candidate torrents the user picks from
+    (`status: needs_pick`) — the confident exact/subset match is pre-selected,
+    but the user always confirms before anything is expanded or deleted. Soft
+    matching can mis-rank a PM whose rendering differs from the torrent name, so
+    a list the user vets beats a single guess. **Phase 2** (with `seed_hashes`):
+    take the confirmed seeds and expand each into its cross-seed group — every
+    torrent with the same payload size that shares ≥1 content file path. Audit
+    records keep one hash per path, so siblings are enumerated live from the
+    client, not from records.
     """
     data = request.json or {}
     old_titles = data.get('old_titles')
@@ -1114,25 +1132,34 @@ def workflows_trump_resolve_group():
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
 
-    # One representative seed per matched title (deduped — two titles can resolve
-    # to the same payload, e.g. duplicate PM lines or cross-seeds of each other).
-    seeds, matched_titles, unmatched = [], [], []
-    seen_hashes = set()
-    for title in old_titles:
-        seed = match_trumped_torrent(rows, title)
-        if seed is None:
-            unmatched.append(title)
-            continue
-        matched_titles.append(title)
-        if seed['hash'] not in seen_hashes:
-            seen_hashes.add(seed['hash'])
-            seeds.append(seed)
+    seed_hashes = [str(h).strip() for h in (data.get('seed_hashes') or []) if str(h).strip()]
+
+    # Phase 1 — rank candidates per title; the user confirms the seed set.
+    if not seed_hashes:
+        picks = []
+        for title in old_titles:
+            ranked = rank_release_matches(rows, title, name_key='name', limit=8)
+            auto   = match_trumped_torrent(rows, title)
+            # The conservative exact/subset matcher is the trusted pre-selection;
+            # make sure it's present in (and at the head of) the ranked list.
+            if auto is not None and all(c['hash'] != auto['hash'] for c in ranked):
+                s, brk = score_release_match(title, auto['name'])
+                ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
+            auto_hash = auto['hash'] if auto is not None else (ranked[0]['hash'] if ranked else None)
+            picks.append({
+                'title':      title,
+                'auto':       auto_hash,
+                'candidates': [_trump_pick_row(c) for c in ranked],
+            })
+        return jsonify({"status": "needs_pick", "picks": picks})
+
+    # Phase 2 — expand the confirmed seeds into their full cross-seed groups.
+    by_hash = {r['hash']: r for r in rows}
+    seeds   = [by_hash[h] for h in dict.fromkeys(seed_hashes) if h in by_hash]
     if not seeds:
         return jsonify({
             "status": "error",
-            "message": ("None of the trumped releases were found in the client — "
-                        "check the titles or that the torrents still exist."),
-            "unmatched": unmatched,
+            "message": "None of the selected torrents are still in the client — re-run the search.",
         }), 404
 
     # Cross-seed siblings share a payload size; only those rows can join a group.
@@ -1164,12 +1191,10 @@ def workflows_trump_resolve_group():
         g['tracker_msg']    = det.get('tracker_msg', '')
     group.sort(key=lambda g: g['name'])
     return jsonify({
-        "status":         "success",
-        "torrents":       group,
-        "total_size":     total_size,
-        "matched_titles": matched_titles,
-        "unmatched":      unmatched,
-        "matched_name":   seeds[0]['name'],
+        "status":       "success",
+        "torrents":     group,
+        "total_size":   total_size,
+        "matched_name": seeds[0]['name'],
     })
 
 
@@ -1223,17 +1248,25 @@ def workflows_trump_search_release():
         return jsonify({"status": "error", "message": f"Release search failed: {e}",
                         "fallback_url": fallback_url}), 502
 
-    release = match_trump_release(releases, new_title, indexer)
+    # The exact match is the trusted auto-pick; the ranked list is the fallback
+    # when the PM's rendering of the new title doesn't match any release name
+    # exactly, and an "other matches" affordance when it does. Restrict the pool
+    # to the PM's indexer first (when given) so the candidate list stays focused.
+    pool = [r for r in releases
+            if not indexer or (r.get('indexer') or '').lower() == indexer.lower()]
+    release    = match_trump_release(releases, new_title, indexer)
+    candidates = rank_release_matches(pool or releases, new_title, name_key='title', limit=8)
     return jsonify({
-        "status":        "success",
-        "release":       release,
-        "service":       item['service'],
-        "connection_id": item['connection_id'],
-        "arr_id":        item['arr_id'],
-        "arr_title":     item.get('title') or '',
-        "arr_year":      item.get('year'),
-        "fallback_url":  fallback_url,
-        "candidates":    len(releases),
+        "status":          "success",
+        "release":         release,
+        "candidates":      candidates,
+        "candidate_count": len(releases),
+        "service":         item['service'],
+        "connection_id":   item['connection_id'],
+        "arr_id":          item['arr_id'],
+        "arr_title":       item.get('title') or '',
+        "arr_year":        item.get('year'),
+        "fallback_url":    fallback_url,
     })
 
 

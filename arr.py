@@ -317,6 +317,165 @@ def match_trump_release(releases, new_title, indexer=''):
     return max(exact, key=lambda r: r.get('seeders') or 0)
 
 
+# ── Graded release matching (Trumped candidate lists) ───────────────────────
+# match_trumped_torrent / match_trump_release above pick one confident result or
+# nothing. When nothing matches — a PM that renders a token differently than the
+# client/indexer (DD+ vs DDP), a typo, a missing release — the Trumped wizard
+# shows a ranked candidate list the user picks from instead of dead-ending. The
+# score is graded, never a hard gate: soft title core (decisive), strong quality
+# fields (resolution/source/group), light audio/HDR, and a differing season/
+# episode anchor sinks the candidate. The breakdown lets the UI show exactly why
+# each candidate ranks where it does, so the (always user-confirmed) pick is
+# fully informed.
+
+_AUDIO_PATTERNS = [
+    ('truehd', r'true ?hd'),
+    ('dtshd',  r'dts[ .]?hd'),
+    ('dts',    r'\bdts'),
+    ('ddp',    r'\b(?:ddp|dd\+|e[ -]?ac3|eac3)'),
+    ('dd',     r'\b(?:dd|ac3)\b'),
+    ('aac',    r'\baac'),
+    ('flac',   r'\bflac'),
+    ('opus',   r'\bopus'),
+]
+
+
+def _audio_codec(name):
+    """Primary audio-codec family of a release name, normalized across the many
+    renderings of one codec (DD+/DDP/E-AC3 → 'ddp', DTS-HD → 'dtshd'), or '' when
+    none is detected. Channel layout (5.1/7.1) and Atmos are ignored — only the
+    base codec, the part that actually distinguishes two encodes."""
+    s = re.sub(r'[._\-]', ' ', str(name or '').lower())
+    for fam, pat in _AUDIO_PATTERNS:
+        if re.search(pat, s):
+            return fam
+    return ''
+
+
+_QUALITY_NOISE = {
+    '2160p', '1080p', '1080i', '720p', '480p', '4k', 'uhd', 'sdtv',
+    'web', 'dl', 'webdl', 'webrip', 'bluray', 'blu', 'ray', 'bdrip', 'brrip',
+    'remux', 'hdtv', 'dvd', 'dvdrip', 'bd',
+    'hdr', 'hdr10', 'dv', 'dovi', 'dolby', 'vision', 'hlg', 'plus',
+    'atmos', 'hd', 'ma',
+    'x', 'h', 'hevc', 'avc',
+    'amzn', 'nf', 'dsnp', 'atvp', 'hmax', 'max', 'hulu', 'pcok', 'stan', 'it',
+    'repack', 'proper', 'internal', 'extended', 'remastered', 'remaster',
+    'imax', 'real', 'uncut', 'directors', 'cut',
+}
+
+# Tokens that are noise regardless of any trailing digits (fused channel layout,
+# codec versions): ddp5, dd+5, x265, h264, eac3, dts5, the bare 7/1 of "7.1".
+_CORE_DROP_RE = re.compile(
+    r'^(?:'
+    r'(?:19|20)\d{2}'                                      # year
+    r'|s\d{1,2}(?:e\d{1,4})?'                              # season/episode anchor
+    r'|\d{1,2}'                                            # stray channel/disc digits
+    r'|(?:x|h)?26[45]'                                     # codec
+    r'|(?:dd\+?|ddp|dts|e?ac3|aac|flac|opus|truehd|atmos)\d*'  # audio
+    r')$'
+)
+
+
+def _title_core_tokens(norm, group=''):
+    """Title-only tokens of a normalized release name — quality/source/audio/
+    codec/year/episode/group noise stripped — for the soft title match."""
+    out = set()
+    for tok in re.split(r'[\s\-]+', norm):
+        if not tok or tok == group or tok in _QUALITY_NOISE:
+            continue
+        if _CORE_DROP_RE.match(tok):
+            continue
+        out.add(tok)
+    return out
+
+
+def _release_match_features(name):
+    norm  = _norm_release_name(name)
+    info  = parse_release_info(name)
+    group = _release_group_tag(name)
+    return {
+        'core':   _title_core_tokens(norm, group),
+        'res':    info['resolution'],
+        'source': info['source'],
+        'hdr':    info['hdr'],
+        'audio':  _audio_codec(name),
+        'group':  group,
+        'anchor': _season_ep_anchor(norm),
+    }
+
+
+def score_release_match(query, cand_name):
+    """Graded similarity (0..1) of a candidate release name to a query title,
+    with a per-field agreement breakdown for the UI.
+
+    Returns (score, breakdown) where breakdown maps each of title/res/source/
+    group/audio/hdr/anchor to 'same' | 'diff' | 'partial' | '' (missing on a
+    side). Soft title core is decisive; resolution/source/group are strong;
+    audio/HDR light; a differing episode anchor sinks the candidate (different
+    episode = different payload). Never a gate — a weak match still scores >0 so
+    the wizard can offer it.
+    """
+    q = _release_match_features(query)
+    c = _release_match_features(cand_name)
+    b = {}
+
+    if q['core'] and c['core']:
+        inter = len(q['core'] & c['core'])
+        union = len(q['core'] | c['core'])
+        title_sim = inter / union if union else 0.0
+        b['title'] = 'same' if q['core'] == c['core'] else ('partial' if inter else 'diff')
+    else:
+        title_sim, b['title'] = 0.0, ''
+    score = 0.5 * title_sim
+
+    def field(key, w_same, w_diff):
+        qv, cv = q[key], c[key]
+        if not qv or not cv:
+            b[key] = ''
+            return 0.0
+        if qv == cv:
+            b[key] = 'same'
+            return w_same
+        b[key] = 'diff'
+        return -w_diff
+
+    score += field('res',    0.15, 0.35)
+    score += field('source', 0.12, 0.18)
+    score += field('group',  0.20, 0.20)
+    score += field('audio',  0.10, 0.06)
+    score += field('hdr',    0.08, 0.06)
+
+    if q['anchor'] and c['anchor']:
+        b['anchor'] = 'same' if q['anchor'] == c['anchor'] else 'diff'
+        if q['anchor'] != c['anchor']:
+            score -= 0.6
+    else:
+        b['anchor'] = ''
+
+    return max(0.0, min(1.0, score)), b
+
+
+def rank_release_matches(items, query, name_key='name', limit=8, min_score=0.2):
+    """Rank `items` by name similarity to `query`, best first.
+
+    Each returned item is a shallow copy with 'match_score' (0..1) and 'match'
+    (the field breakdown). Items with no overlap at all are dropped; ties break
+    on seeders. Returns the top `limit` at or above `min_score`, but never empty
+    when anything scored — the best few always surface so the wizard offers a
+    choice instead of a dead-end.
+    """
+    scored = []
+    for it in items:
+        s, brk = score_release_match(query, it.get(name_key) or '')
+        if s <= 0:
+            continue
+        scored.append({**it, 'match_score': round(s, 3), 'match': brk})
+    scored.sort(key=lambda x: (x['match_score'], x.get('seeders') or 0), reverse=True)
+    top = [x for x in scored if x['match_score'] >= min_score][:limit]
+    return top if top else scored[:3]
+
+
 def grab_release(cfg, service, connection_id, guid, indexer_id):
     """Trigger a release grab on the given Arr instance (equivalent to clicking Grab in the UI)."""
     conns = normalize_arr_connections(cfg, service=service)

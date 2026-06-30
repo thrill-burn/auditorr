@@ -1,6 +1,9 @@
 import unittest
 
-from arr import parse_trump_pm, match_trump_release, match_trumped_torrent, _norm_release_name
+from arr import (
+    parse_trump_pm, match_trump_release, match_trumped_torrent, _norm_release_name,
+    rank_release_matches, score_release_match, _audio_codec,
+)
 
 
 class TrumpPMParseTests(unittest.TestCase):
@@ -133,6 +136,78 @@ class TrumpReleaseMatchTests(unittest.TestCase):
         ]
         m = match_trump_release(rels, "A Movie 2020 1080p-GRP")
         self.assertEqual(m["seeders"], 99)
+
+
+class AudioCodecTests(unittest.TestCase):
+    def test_renderings_normalize_to_one_family(self):
+        for name in ("Show DD+ 5.1", "Show DDP5.1", "Show.E-AC3.5.1", "Show EAC3"):
+            self.assertEqual(_audio_codec(name), 'ddp', name)
+        self.assertEqual(_audio_codec("Show TrueHD 7.1 Atmos"), 'truehd')
+        self.assertEqual(_audio_codec("Show DTS-HD MA 5.1"), 'dtshd')
+        self.assertEqual(_audio_codec("Show DTS 5.1"), 'dts')
+        self.assertEqual(_audio_codec("Show x265 no audio"), '')
+
+
+class RankReleaseMatchesTests(unittest.TestCase):
+    def _rows(self, *names):
+        return [{"name": n, "hash": n, "size": 1, "seeders": 0} for n in names]
+
+    def test_exact_match_scores_top(self):
+        rows = self._rows(
+            "FROM.S04E01.The.Arrival.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
+            "Completely.Different.Show.S01E01.1080p-XYZ",
+        )
+        ranked = rank_release_matches(
+            rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune", "name")
+        self.assertTrue(ranked[0]["name"].startswith("FROM.S04E01"))
+        self.assertEqual(ranked[0]["match_score"], 1.0)
+
+    def test_audio_rendering_does_not_break_the_top_match(self):
+        # PM prints "DD+ 5.1"; torrent says "DDP5.1" — still the #1 candidate.
+        rows = self._rows("FROM.S04E01.The.Arrival.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        ranked = rank_release_matches(
+            rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune", "name")
+        self.assertEqual(ranked[0]["match"]["audio"], "same")
+        self.assertEqual(ranked[0]["match"]["anchor"], "same")
+
+    def test_codec_notation_difference_does_not_penalize_title(self):
+        # PM writes "H.265", torrent writes "x265" — title core must still match.
+        score, brk = score_release_match(
+            "Movie 2020 2160p BluRay H.265-GRP", "Movie 2020 2160p BluRay x265-GRP")
+        self.assertEqual(brk["title"], "same")
+
+    def test_different_episode_is_kept_out_of_the_top(self):
+        rows = self._rows(
+            "FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
+            "FROM.S04E02.Fray.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
+        )
+        ranked = rank_release_matches(
+            rows, "FROM S04E01 The Arrival 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
+            "name", min_score=0.2)
+        self.assertTrue(ranked[0]["name"].startswith("FROM.S04E01"))
+        self.assertTrue(all("S04E02" not in r["name"] for r in ranked))
+
+    def test_never_empty_when_anything_is_related(self):
+        # All weak matches (wrong resolution + group) — still returns the closest
+        # few rather than an empty list, so the wizard offers a choice.
+        rows = self._rows("Jumanji.1995.1080p.BluRay.DTS.x264-GRP")
+        ranked = rank_release_matches(
+            rows, "Jumanji 1995 2160p UHD BluRay TrueHD Atmos DV HDR x265-RandomBytes", "name")
+        self.assertEqual(len(ranked), 1)
+
+    def test_unrelated_titles_drop_out(self):
+        rows = self._rows("Totally.Unrelated.Movie.2001.1080p-ABC")
+        ranked = rank_release_matches(rows, "Jumanji 1995 2160p BluRay x265-XYZ", "name")
+        self.assertEqual(ranked, [])
+
+    def test_hdr_difference_is_reported(self):
+        # The classic trump: same encode chain, HDR → DV. Breakdown must flag it.
+        score, brk = score_release_match(
+            "Jumanji 1995 2160p UHD BluRay TrueHD Atmos HDR x265-HQMUX",
+            "Jumanji 1995 2160p UHD BluRay TrueHD Atmos DV HDR x265-RandomBytes")
+        self.assertEqual(brk["hdr"], "diff")
+        self.assertEqual(brk["group"], "diff")
+        self.assertEqual(brk["title"], "same")
 
 
 class NormalizeReleaseNameTests(unittest.TestCase):

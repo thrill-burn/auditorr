@@ -83,6 +83,74 @@ function QualityChip({ label, hdr }) {
   )
 }
 
+// ── Match feedback ────────────────────────────────────────────────────────────
+// Hue as text only (never a fill): green agrees with the PM, red differs, amber
+// is a partial title overlap. Lets the user see at a glance exactly why a
+// candidate ranks where it does before committing to a delete or a grab.
+const MATCH_FIELDS = [['res', 'RES'], ['source', 'SRC'], ['audio', 'AUD'], ['hdr', 'HDR'], ['group', 'GRP']]
+const MATCH_COLOR  = { same: 'var(--green)', diff: 'var(--red)', partial: 'var(--yellow)' }
+const MATCH_MARK   = { same: '✓', diff: '✗', partial: '~' }
+
+function MatchChips({ match }) {
+  if (!match) return null
+  const items = MATCH_FIELDS.filter(([k]) => match[k])
+  if (!items.length) return null
+  return (
+    <span style={{ display: 'inline-flex', gap: 7, flexShrink: 0 }}>
+      {items.map(([k, label]) => (
+        <span key={k} title={`${label}: ${match[k]}`} style={{
+          fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
+          color: MATCH_COLOR[match[k]] || 'var(--text-dim)',
+        }}>{label}{MATCH_MARK[match[k]] || ''}</span>
+      ))}
+    </span>
+  )
+}
+
+function ScoreBadge({ score }) {
+  if (score == null) return null
+  const pct = Math.round(score * 100)
+  const color = score >= 0.8 ? 'var(--green)' : score >= 0.5 ? 'var(--text-dim)' : 'var(--red)'
+  return <span style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700, color, flexShrink: 0, width: 34, textAlign: 'right' }}>{pct}%</span>
+}
+
+// A selectable candidate row — works for both client torrents (name/tracker) and
+// arr releases (title/indexer/seeders/quality).
+function CandidateRow({ cand, selected, onSelect }) {
+  const name = cand.name || cand.title || ''
+  const sub  = cand.tracker || cand.indexer || ''
+  return (
+    <div onClick={onSelect} style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer',
+      borderBottom: '1px solid var(--border)',
+      background: selected ? `${ACCENT}0e` : 'transparent',
+      borderLeft: `2px solid ${selected ? ACCENT : 'transparent'}`,
+    }}>
+      <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+      {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
+      <MatchChips match={cand.match} />
+      {sub && <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{sub}</span>}
+      {cand.seeders != null && <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{cand.seeders}S</span>}
+      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(cand.size)}</span>
+      <ScoreBadge score={cand.match_score} />
+    </div>
+  )
+}
+
+function NoneRow({ selected, onSelect, label }) {
+  return (
+    <div onClick={onSelect} style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px', cursor: 'pointer',
+      background: selected ? 'var(--surface3)' : 'transparent',
+      borderLeft: `2px solid ${selected ? 'var(--text-dim)' : 'transparent'}`,
+    }}>
+      <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? 'var(--text-dim)' : 'var(--border2)'}`, background: selected ? 'var(--text-dim)' : 'transparent' }} />
+      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{label}</span>
+    </div>
+  )
+}
+
 export default function Trumped({ onNavigate }) {
   const toast = useToast()
 
@@ -94,8 +162,11 @@ export default function Trumped({ onNavigate }) {
   const [indexers, setIndexers] = useState([])
   const [indexer, setIndexer]   = useState('')
 
-  const [group, setGroup]       = useState(null)   // {torrents, total_size, matched_name}
+  const [picks, setPicks]       = useState(null)   // phase 1: [{title, auto, candidates:[…]}]
+  const [selected, setSelected] = useState({})     // title -> chosen hash | null
+  const [group, setGroup]       = useState(null)   // phase 2: {torrents, total_size, matched_name}
   const [search, setSearch]     = useState(null)   // search_release response
+  const [chosenRelease, setChosenRelease] = useState(null)
   const [clientDeleteAllowed, setClientDeleteAllowed] = useState(false)
   const [clientName, setClientName] = useState('the client')
 
@@ -113,7 +184,8 @@ export default function Trumped({ onNavigate }) {
 
   const reset = useCallback(() => {
     setPmText(''); setOldTitles([]); setNewTitle(''); setParsed(false)
-    setIndexer(''); setGroup(null); setSearch(null); setError(null); setResult(null)
+    setIndexer(''); setPicks(null); setSelected({}); setGroup(null)
+    setSearch(null); setChosenRelease(null); setError(null); setResult(null)
   }, [])
 
   const handleParse = async () => {
@@ -129,10 +201,27 @@ export default function Trumped({ onNavigate }) {
     setBusy(null)
   }
 
-  const handleResolveGroup = async () => {
+  // Phase 1 — fetch the ranked candidate torrents for each trumped title.
+  const handleFindTorrents = async () => {
     setBusy('group'); setError(null)
     try {
-      setGroup(await api.trumpResolveGroup(oldTitles.filter(t => t.trim())))
+      const r = await api.trumpResolveGroup(oldTitles.filter(t => t.trim()))
+      setPicks(r.picks || [])
+      const sel = {}
+      ;(r.picks || []).forEach(p => { sel[p.title] = p.auto })
+      setSelected(sel)
+    } catch (e) {
+      setError(e.message)
+    }
+    setBusy(null)
+  }
+
+  // Phase 2 — expand the confirmed seeds into their full cross-seed group.
+  const handleExpandGroup = async () => {
+    setBusy('group'); setError(null)
+    try {
+      const hashes = Object.values(selected).filter(Boolean)
+      setGroup(await api.trumpResolveGroup(oldTitles.filter(t => t.trim()), hashes))
     } catch (e) {
       setError(e.message)
     }
@@ -142,9 +231,12 @@ export default function Trumped({ onNavigate }) {
   const handleSearch = async () => {
     setBusy('search'); setError(null)
     try {
-      setSearch(await api.trumpSearchRelease({ new_title: newTitle, indexer }))
+      const r = await api.trumpSearchRelease({ new_title: newTitle, indexer })
+      setSearch(r)
+      setChosenRelease(r.release || (r.candidates && r.candidates[0]) || null)
     } catch (e) {
-      setSearch(e.fallback_url ? { release: null, fallback_url: e.fallback_url, error: e.message } : null)
+      setSearch(e.fallback_url ? { release: null, candidates: [], fallback_url: e.fallback_url, error: e.message } : null)
+      setChosenRelease(null)
       setError(e.message)
     }
     setBusy(null)
@@ -155,9 +247,9 @@ export default function Trumped({ onNavigate }) {
     try {
       const r = await api.trumpExecute({
         hashes: group.torrents.map(t => ({ hash: t.hash, instance_id: t.instance_id })),
-        release: search?.release ? {
-          guid: search.release.guid,
-          indexer_id: search.release.indexer_id,
+        release: chosenRelease ? {
+          guid: chosenRelease.guid,
+          indexer_id: chosenRelease.indexer_id,
         } : null,
         service: search?.service,
         connection_id: search?.connection_id,
@@ -173,11 +265,21 @@ export default function Trumped({ onNavigate }) {
     setBusy(null)
   }
 
+  // Releases to choose from: ranked candidates, with the exact auto-match pinned
+  // to the top if the ranker didn't already include it.
+  const releaseList = (() => {
+    if (!search) return []
+    const list = [...(search.candidates || [])]
+    if (search.release && !list.some(c => c.guid === search.release.guid)) list.unshift(search.release)
+    return list
+  })()
+  const skippedTitles = picks ? picks.filter(p => !selected[p.title]).map(p => p.title) : []
+
   // Step gating
   const step2 = parsed
-  const step3 = step2 && group != null
-  const step4 = step3
-  const step5 = step4 && search != null
+  const step3 = parsed && picks != null
+  const step4 = step3 && search != null
+  const step5 = step4
 
   return (
     <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 980 }}>
@@ -185,7 +287,7 @@ export default function Trumped({ onNavigate }) {
         title="Trumped"
         accent={ACCENT}
         blurb="When a tracker trumps one of your releases, paste the PM here: auditorr finds the whole hardlink group (every cross-seed), removes it from the client with its files, and grabs the replacement through Sonarr/Radarr — the manual multi-step swap, automated and confirmed at every step."
-        right={(parsed || group) && (
+        right={(parsed || picks) && (
           <button onClick={reset} style={{ fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)' }}>
             ↺ Start over
           </button>
@@ -241,7 +343,7 @@ export default function Trumped({ onNavigate }) {
         </StepShell>
 
         {/* Step 2 — select tracker */}
-        <StepShell n={2} active={step2} done={group != null} title="Which tracker sent the PM?">
+        <StepShell n={2} active={step2} done={picks != null} title="Which tracker sent the PM?">
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Indexer (optional — narrows the release search)</span>
@@ -253,31 +355,57 @@ export default function Trumped({ onNavigate }) {
                 {indexers.map(name => <option key={name} value={name}>{name}</option>)}
               </select>
             </label>
-            {group == null && (
-              <ActionButton primary onClick={handleResolveGroup} disabled={busy != null || !oldTitles.some(t => t.trim())}>
-                {busy === 'group' ? 'Finding torrents…' : 'Find hardlink group →'}
+            {picks == null && (
+              <ActionButton primary onClick={handleFindTorrents} disabled={busy != null || !oldTitles.some(t => t.trim())}>
+                {busy === 'group' ? 'Finding torrents…' : 'Find matching torrents →'}
               </ActionButton>
             )}
           </div>
         </StepShell>
 
-        {/* Step 3 — confirm the group */}
+        {/* Step 3 — pick the torrents, then confirm the expanded group */}
         <StepShell n={3} active={step3} done={search != null} title="Confirm the hardlink group to remove">
+          {picks && !group && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                Pick the torrent that matches each trumped release — the best match is pre-selected. Once you confirm, every cross-seed of the chosen torrents is added automatically.
+              </div>
+              {picks.map(p => (
+                <div key={p.title} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', wordBreak: 'break-all' }}>{p.title}</div>
+                  {p.candidates.length === 0 ? (
+                    <div style={{ fontSize: 11, color: 'var(--yellow)' }}>No match found in {clientName} — this release will be skipped.</div>
+                  ) : (
+                    <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                      {p.candidates.map(c => (
+                        <CandidateRow key={c.hash} cand={c}
+                          selected={selected[p.title] === c.hash}
+                          onSelect={() => setSelected(s => ({ ...s, [p.title]: c.hash }))} />
+                      ))}
+                      <NoneRow label="None of these — skip this release"
+                        selected={selected[p.title] == null}
+                        onSelect={() => setSelected(s => ({ ...s, [p.title]: null }))} />
+                    </div>
+                  )}
+                </div>
+              ))}
+              <ActionButton primary onClick={handleExpandGroup} disabled={busy != null || !Object.values(selected).some(Boolean)}>
+                {busy === 'group' ? 'Expanding…' : 'Confirm & find cross-seeds →'}
+              </ActionButton>
+            </div>
+          )}
+
           {group && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
                 <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b>
-                {group.matched_titles && group.matched_titles.length > 1
-                  ? <> across <b style={{ color: 'var(--text)' }}>{group.matched_titles.length} trumped releases</b></>
-                  : ' (with cross-seeds)'}
-                {' '}({formatBytes(group.total_size)}) will be removed from {clientName} <b>with their files</b> — your library hardlinks
-                survive until Sonarr/Radarr imports the replacement.
+                {' '}(the selected releases plus every cross-seed, {formatBytes(group.total_size)}) will be removed from {clientName} <b>with their files</b> — your library hardlinks survive until Sonarr/Radarr imports the replacement.
               </div>
-              {group.unmatched && group.unmatched.length > 0 && (
+              {skippedTitles.length > 0 && (
                 <div style={{ fontSize: 11, color: 'var(--yellow)', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
-                  Not found in {clientName} (left untouched — already removed, or the name differs):
+                  Skipped (no torrent selected):
                   <div style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 4 }}>
-                    {group.unmatched.map(t => <div key={t}>{t}</div>)}
+                    {skippedTitles.map(t => <div key={t}>{t}</div>)}
                   </div>
                 </div>
               )}
@@ -292,34 +420,42 @@ export default function Trumped({ onNavigate }) {
                 ))}
               </div>
               {search == null && (
-                <ActionButton primary onClick={handleSearch} disabled={busy != null}>
-                  {busy === 'search' ? 'Searching…' : 'Find replacement release →'}
-                </ActionButton>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <ActionButton primary onClick={handleSearch} disabled={busy != null}>
+                    {busy === 'search' ? 'Searching…' : 'Find replacement release →'}
+                  </ActionButton>
+                  <button onClick={() => setGroup(null)} disabled={busy != null} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text-dim)' }}>
+                    ← Change selection
+                  </button>
+                </div>
               )}
             </div>
           )}
         </StepShell>
 
         {/* Step 4 — replacement release */}
-        <StepShell n={4} active={step4 && search != null} done={result != null} title="Replacement release">
+        <StepShell n={4} active={step4} done={result != null} title="Replacement release">
           {search && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {search.release ? (
-                <div style={{ border: `1px solid ${ACCENT}40`, borderRadius: 8, padding: '10px 12px', background: `${ACCENT}08` }}>
-                  <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', wordBreak: 'break-all' }}>{search.release.title}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, flexWrap: 'wrap', fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
-                    <QualityChip label={search.release.quality_name} hdr={search.release.hdr} />
-                    <span>{search.release.indexer}</span>
-                    <span>{formatBytes(search.release.size)}</span>
-                    <span style={{ color: search.release.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{search.release.seeders} seeders</span>
-                  </div>
+              <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                {search.release
+                  ? <>Exact match found — confirm it below, or pick another release.</>
+                  : <>No exact-title match in {search.candidate_count ?? 0} release{search.candidate_count !== 1 ? 's' : ''}. Pick the closest{search.fallback_url && <>, or grab it manually in <a href={search.fallback_url} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT }}>Sonarr/Radarr ↗</a></>}.</>}
+              </div>
+              {releaseList.length > 0 ? (
+                <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                  {releaseList.map(r => (
+                    <CandidateRow key={r.guid} cand={r}
+                      selected={chosenRelease?.guid === r.guid}
+                      onSelect={() => setChosenRelease(r)} />
+                  ))}
+                  <NoneRow label="Don't grab — I'll handle the replacement myself"
+                    selected={chosenRelease == null}
+                    onSelect={() => setChosenRelease(null)} />
                 </div>
               ) : (
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.6 }}>
-                  No exact match found in {search.candidates ?? 0} release{search.candidates !== 1 ? 's' : ''}.
-                  {search.fallback_url && (
-                    <> Grab it manually in <a href={search.fallback_url} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT }}>Sonarr/Radarr ↗</a>, then run the removal below.</>
-                  )}
+                <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                  No releases returned. {search.fallback_url && <>Grab manually in <a href={search.fallback_url} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT }}>Sonarr/Radarr ↗</a>, then run the removal below.</>}
                 </div>
               )}
             </div>
@@ -345,10 +481,10 @@ export default function Trumped({ onNavigate }) {
               )}
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
                 This removes <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b> ({formatBytes(group.total_size)}) from {clientName} with their files
-                {search?.release ? ', then grabs the replacement.' : '.'} There is no undo.
+                {chosenRelease ? ', then grabs the replacement.' : '.'} There is no undo.
               </div>
               <ActionButton danger onClick={handleExecute} disabled={busy != null || !clientDeleteAllowed}>
-                {busy === 'execute' ? 'Executing…' : (search?.release ? 'Remove group + grab replacement' : 'Remove group')}
+                {busy === 'execute' ? 'Executing…' : (chosenRelease ? 'Remove group + grab replacement' : 'Remove group')}
               </ActionButton>
             </div>
           )}
