@@ -395,9 +395,21 @@ const WORKFLOW_ICONS = {
   ),
 }
 
+// Split a formatted metric value ("15.8 GB", "82%", "0 B") into its numeric
+// lead and trailing unit, so the unit can render small + dim per the design
+// system (value leads near-white; unit is a quiet caption).
+function splitValueUnit(s) {
+  const str = String(s ?? '')
+  if (str.endsWith('%')) return { num: str.slice(0, -1), unit: '%' }
+  const sp = str.lastIndexOf(' ')
+  if (sp !== -1) return { num: str.slice(0, sp), unit: str.slice(sp + 1) }
+  return { num: str, unit: '' }
+}
+
 function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
   const scoreText = String(pts || '').replace(/\s*pts$/i, '').replace(/\s*\/\s*/g, '/')
+  const { num: numPart, unit: unitPart } = splitValueUnit(value)
 
   const handleAction = async (a) => {
     if (a.type === 'script') {
@@ -426,23 +438,23 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
         <span style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minHeight: '2.7em' }}>
           <span className="ui-status-dot" style={{ background: color, marginTop: 5 }} />
-          <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35 }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 500, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.25 }}>
             {label}
           </span>
         </span>
         <span style={{
-          fontFamily: 'var(--sans)',
-          fontSize: 12,
-          fontWeight: 600,
-          color: 'var(--text)',
-          letterSpacing: 0,
-          textTransform: 'none',
-          lineHeight: 1.35,
+          fontFamily: 'var(--mono)',
+          fontSize: 11,
+          color: 'var(--text-faint)',
+          fontVariantNumeric: 'tabular-nums',
           whiteSpace: 'nowrap',
+          flexShrink: 0,
+          marginTop: 2,
         }}>{scoreText}</span>
       </div>
-      <div style={{ marginTop: 10 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 34, fontWeight: 700, color: 'var(--text)', lineHeight: 1, whiteSpace: 'nowrap' }}>{value}</span>
+      <div style={{ marginTop: 14, display: 'flex', alignItems: 'baseline', gap: 3, whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 33, fontWeight: 500, color: 'var(--text)', lineHeight: 1, letterSpacing: '-0.5px', fontVariantNumeric: 'tabular-nums' }}>{numPart}</span>
+        {unitPart && <span style={{ fontFamily: 'var(--mono)', fontSize: 18, fontWeight: 500, color: 'var(--text-dim)' }}>{unitPart}</span>}
       </div>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
@@ -936,7 +948,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       label: 'Hardlinked Media', value: hlPct + '%',
       sub: `${formatBytes(det.hardlinked_media_size)} of ${formatBytes(det.total_media_size)}`,
       pts: `${det.hl_score} / 70 pts`,
-      desc: 'Percentage of your media library that is hardlinked back to a torrent file. 100% means everything is connected.',
+      desc: 'Percentage of your media library hardlinked back to a torrent file.',
       color: 'var(--blue)',
       trend: makeTrend(trendSeries.hardlinked, false, 'pct'),
       actionRows: [
@@ -948,7 +960,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       label: 'Orphaned Torrents', value: formatBytes(det.orphaned_torrent_size),
       sub: `${det.orphaned_torrent_count} file${det.orphaned_torrent_count !== 1 ? 's' : ''} · threshold ${formatBytes(det.or_limit)}`,
       pts: `${det.or_score} / 10 pts`,
-      desc: 'Files in your torrent folder that qBittorrent has no knowledge of. Safe to delete unless you added them manually.',
+      desc: 'Files in your torrent folder that qBittorrent has no knowledge of.',
       color: 'var(--yellow)',
       trend: makeTrend(trendSeries.orphaned, true, 'bytes'),
       actionRows: [
@@ -960,7 +972,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       label: 'Not Imported', value: formatBytes(det.not_imported_size),
       sub: `${det.not_imported_count} file${det.not_imported_count !== 1 ? 's' : ''} · threshold ${formatBytes(det.ni_limit)}`,
       pts: `${det.ni_score} / 10 pts`,
-      desc: 'Seeding torrents with no matching file in your media folder. Sonarr/Radarr may have skipped or failed to import these.',
+      desc: 'Seeding torrents with no matching file in your media folder.',
       color: 'var(--red)',
       trend: makeTrend(trendSeries.notImported, true, 'bytes'),
       actionRows: [
@@ -972,7 +984,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       label: 'Duplicate Files', value: formatBytes(det.duplicate_size),
       sub: `${det.duplicate_count} file${det.duplicate_count !== 1 ? 's' : ''} · threshold ${formatBytes(det.dup_limit)}`,
       pts: `${det.dup_score} / 10 pts`,
-      desc: 'Bit-for-bit identical files that share no inode — true copies wasting disk space.',
+      desc: 'Bit-for-bit identical files that share no inode.',
       color: 'var(--purple)',
       trend: makeTrend(trendSeries.duplicates, true, 'bytes'),
       actionRows: [
