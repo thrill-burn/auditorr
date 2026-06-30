@@ -424,8 +424,11 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
-        <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35, minHeight: '2.7em', display: 'flex', alignItems: 'flex-start' }}>
-          {label}
+        <span style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minHeight: '2.7em' }}>
+          <span className="ui-status-dot" style={{ background: color, marginTop: 5 }} />
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.35 }}>
+            {label}
+          </span>
         </span>
         <span style={{
           fontFamily: 'var(--sans)',
@@ -453,13 +456,14 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
           return (
             <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
               {visibleActions.map((a, i) => {
-                // Primary = the workflow ("fix it") action: tinted in the card's
-                // own accent so it maps to that workflow's sidebar color.
+                // Primary = the lead workflow action: a quiet raised surface
+                // whose label + icon carry the card's workflow hue (color rides
+                // on the text, never a fill — per the design system).
                 // Secondary = the "just look" view link: quiet until hover.
                 const isPrimary = a.variant === 'primary'
-                const baseBg  = isPrimary ? color + '1f' : 'transparent'
-                const hoverBg = isPrimary ? color + '2e' : 'var(--surface2)'
-                const baseBorder = isPrimary ? color : 'transparent'
+                const baseBg  = isPrimary ? 'var(--surface2)' : 'transparent'
+                const hoverBg = isPrimary ? 'var(--surface3)' : 'var(--surface2)'
+                const baseBorder = isPrimary ? 'var(--border2)' : 'transparent'
                 const icon = isPrimary ? WORKFLOW_ICONS[a.tab] : null
                 return (
                   <button
@@ -467,7 +471,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                     onClick={() => handleAction(a)}
                     disabled={a.loading}
                     style={{
-                      flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 7,
+                      flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 'var(--r)',
                       border: `1px solid ${baseBorder}`,
                       background: a.loading ? 'var(--surface2)' : baseBg,
                       color: a.loading ? 'var(--text-dim)' : (isPrimary ? color : 'var(--text-dim)'),
@@ -936,7 +940,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--blue)',
       trend: makeTrend(trendSeries.hardlinked, false, 'pct'),
       actionRows: [
-        [{ type: 'navigate', label: 'Backfill →', tab: 'backfill', variant: 'primary' }],
+        [{ type: 'navigate', label: 'Backfill', tab: 'backfill', variant: 'primary' }],
         [{ type: 'navigate', label: 'View orphaned media', tab: 'media', status: 'Orphaned' }],
       ],
     },
@@ -948,7 +952,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--yellow)',
       trend: makeTrend(trendSeries.orphaned, true, 'bytes'),
       actionRows: [
-        [{ type: 'navigate', label: 'Cleanup →', tab: 'cleanup', variant: 'primary' }],
+        [{ type: 'navigate', label: 'Cleanup', tab: 'cleanup', variant: 'primary' }],
         [{ type: 'navigate', label: 'View orphaned torrents', tab: 'torrents', status: 'Orphaned' }],
       ],
     },
@@ -960,7 +964,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--red)',
       trend: makeTrend(trendSeries.notImported, true, 'bytes'),
       actionRows: [
-        [{ type: 'navigate', label: 'Triage →', tab: 'triage', variant: 'primary' }],
+        [{ type: 'navigate', label: 'Triage', tab: 'triage', variant: 'primary' }],
         [{ type: 'navigate', label: 'View not imported', tab: 'torrents', importFilter: 'notImported' }],
       ],
     },
@@ -972,7 +976,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       color: 'var(--purple)',
       trend: makeTrend(trendSeries.duplicates, true, 'bytes'),
       actionRows: [
-        [{ type: 'navigate', label: 'Dedupe →', tab: 'dedupe', variant: 'primary' }],
+        [{ type: 'navigate', label: 'Dedupe', tab: 'dedupe', variant: 'primary' }],
         [{ type: 'navigate', label: 'Media dupes', tab: 'media', status: 'Duplicate' },
          { type: 'navigate', label: 'Torrent dupes', tab: 'torrents', status: 'Duplicate' }],
       ],
