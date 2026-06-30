@@ -86,10 +86,10 @@ function QualityChip({ label, hdr }) {
 export default function Trumped({ onNavigate }) {
   const toast = useToast()
 
-  const [pmText, setPmText]     = useState('')
-  const [oldTitle, setOldTitle] = useState('')
-  const [newTitle, setNewTitle] = useState('')
-  const [parsed, setParsed]     = useState(false)
+  const [pmText, setPmText]       = useState('')
+  const [oldTitles, setOldTitles] = useState([])   // one per trumped release (a season pack lists many)
+  const [newTitle, setNewTitle]   = useState('')
+  const [parsed, setParsed]       = useState(false)
 
   const [indexers, setIndexers] = useState([])
   const [indexer, setIndexer]   = useState('')
@@ -112,7 +112,7 @@ export default function Trumped({ onNavigate }) {
   }, [])
 
   const reset = useCallback(() => {
-    setPmText(''); setOldTitle(''); setNewTitle(''); setParsed(false)
+    setPmText(''); setOldTitles([]); setNewTitle(''); setParsed(false)
     setIndexer(''); setGroup(null); setSearch(null); setError(null); setResult(null)
   }, [])
 
@@ -120,7 +120,7 @@ export default function Trumped({ onNavigate }) {
     setBusy('parse'); setError(null)
     try {
       const r = await api.trumpParse(pmText)
-      setOldTitle(r.old_title); setNewTitle(r.new_title); setParsed(true)
+      setOldTitles(r.old_titles || []); setNewTitle(r.new_title); setParsed(true)
     } catch (e) {
       // Parse failure: drop into manual entry rather than blocking
       setParsed(true)
@@ -132,7 +132,7 @@ export default function Trumped({ onNavigate }) {
   const handleResolveGroup = async () => {
     setBusy('group'); setError(null)
     try {
-      setGroup(await api.trumpResolveGroup(oldTitle))
+      setGroup(await api.trumpResolveGroup(oldTitles.filter(t => t.trim())))
     } catch (e) {
       setError(e.message)
     }
@@ -219,8 +219,22 @@ export default function Trumped({ onNavigate }) {
               </div>
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <Field label="Trumped (old) release" value={oldTitle} onChange={setOldTitle} mono />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  Trumped (old) release{oldTitles.length > 1 ? `s — ${oldTitles.length} torrents, one per line` : ' — one per line'}
+                </span>
+                <textarea
+                  value={oldTitles.join('\n')}
+                  onChange={e => setOldTitles(e.target.value.split('\n'))}
+                  rows={Math.min(Math.max(oldTitles.length, 1), 12)}
+                  style={{
+                    width: '100%', boxSizing: 'border-box', padding: '7px 10px', borderRadius: 'var(--r)',
+                    border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
+                    fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 1.5, resize: 'vertical',
+                  }}
+                />
+              </label>
               <Field label="Replacement (new) release" value={newTitle} onChange={setNewTitle} mono />
             </div>
           )}
@@ -240,7 +254,7 @@ export default function Trumped({ onNavigate }) {
               </select>
             </label>
             {group == null && (
-              <ActionButton primary onClick={handleResolveGroup} disabled={busy != null || !oldTitle.trim()}>
+              <ActionButton primary onClick={handleResolveGroup} disabled={busy != null || !oldTitles.some(t => t.trim())}>
                 {busy === 'group' ? 'Finding torrents…' : 'Find hardlink group →'}
               </ActionButton>
             )}
@@ -252,10 +266,21 @@ export default function Trumped({ onNavigate }) {
           {group && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b> share this content
-                ({formatBytes(group.total_size)}). All of them will be removed from {clientName} <b>with their files</b> — your library hardlink
-                survives until Sonarr/Radarr imports the replacement.
+                <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b>
+                {group.matched_titles && group.matched_titles.length > 1
+                  ? <> across <b style={{ color: 'var(--text)' }}>{group.matched_titles.length} trumped releases</b></>
+                  : ' (with cross-seeds)'}
+                {' '}({formatBytes(group.total_size)}) will be removed from {clientName} <b>with their files</b> — your library hardlinks
+                survive until Sonarr/Radarr imports the replacement.
               </div>
+              {group.unmatched && group.unmatched.length > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--yellow)', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
+                  Not found in {clientName} (left untouched — already removed, or the name differs):
+                  <div style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 4 }}>
+                    {group.unmatched.map(t => <div key={t}>{t}</div>)}
+                  </div>
+                </div>
+              )}
               <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
                 {group.torrents.map(t => (
                   <div key={t.hash} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>

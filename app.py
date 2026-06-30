@@ -34,7 +34,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, _norm_release_name
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent
 from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -1054,15 +1054,19 @@ def _trump_find_arr_item(cfg, parsed):
 @app.route('/api/workflows/trump/parse', methods=['POST'])
 @require_auth
 def workflows_trump_parse():
-    """Extract old/new release titles from a pasted trump PM. Pure text parsing."""
+    """Extract old/new release titles from a pasted trump PM. Pure text parsing.
+
+    `old_titles` is a list — a season-pack trump lists one trumped episode per
+    line, all replaced by a single pack.
+    """
     data = request.json or {}
-    old_title, new_title = parse_trump_pm(data.get('pm_text') or '')
-    if not old_title and not new_title:
+    old_titles, new_title = parse_trump_pm(data.get('pm_text') or '')
+    if not old_titles and not new_title:
         return jsonify({
             "status": "error",
             "message": "Could not find the “will be replaced by” phrase — paste the full PM or fill in the titles manually.",
         }), 422
-    return jsonify({"status": "success", "old_title": old_title, "new_title": new_title})
+    return jsonify({"status": "success", "old_titles": old_titles, "new_title": new_title})
 
 
 def _cross_seed_group(rows, paths_map, seed):
@@ -1087,39 +1091,65 @@ def _cross_seed_group(rows, paths_map, seed):
 @app.route('/api/workflows/trump/resolve_group', methods=['POST'])
 @require_auth
 def workflows_trump_resolve_group():
-    """Resolve the trumped release to its full cross-seed group, live from the client.
+    """Resolve the trumped release(s) to their full cross-seed group(s), live.
 
     Audit records keep one hash per path (the healthiest claimant), so they
     cannot enumerate cross-seed siblings — this queries the client directly:
-    name-match the old title, then group every torrent with the same payload
-    size that shares at least one content file path.
+    name-match each old title, then group every torrent with the same payload
+    size that shares at least one content file path. A season-pack trump passes
+    several old titles (one per episode); each resolves to its own distinct
+    payload and the groups are unioned.
     """
     data = request.json or {}
-    old_title = str(data.get('old_title') or '').strip()
-    if not old_title:
-        return jsonify({"status": "error", "message": "old_title is required"}), 400
+    old_titles = data.get('old_titles')
+    if not old_titles:
+        single = str(data.get('old_title') or '').strip()
+        old_titles = [single] if single else []
+    old_titles = [str(t).strip() for t in old_titles if str(t).strip()]
+    if not old_titles:
+        return jsonify({"status": "error", "message": "old_titles is required"}), 400
     cfg = db_load_config()
     try:
         rows = sources.list_torrents(cfg)
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
 
-    target = _norm_release_name(old_title)
-    matches = [r for r in rows if _norm_release_name(r['name']) == target]
-    if not matches:
-        tokens = set(target.split())
-        matches = [r for r in rows
-                   if tokens and tokens.issubset(set(_norm_release_name(r['name']).split()))]
-    if not matches:
+    # One representative seed per matched title (deduped — two titles can resolve
+    # to the same payload, e.g. duplicate PM lines or cross-seeds of each other).
+    seeds, matched_titles, unmatched = [], [], []
+    seen_hashes = set()
+    for title in old_titles:
+        seed = match_trumped_torrent(rows, title)
+        if seed is None:
+            unmatched.append(title)
+            continue
+        matched_titles.append(title)
+        if seed['hash'] not in seen_hashes:
+            seen_hashes.add(seed['hash'])
+            seeds.append(seed)
+    if not seeds:
         return jsonify({
             "status": "error",
-            "message": f"No torrent matching “{old_title}” was found in the client.",
+            "message": ("None of the trumped releases were found in the client — "
+                        "check the titles or that the torrents still exist."),
+            "unmatched": unmatched,
         }), 404
 
-    seed      = matches[0]
-    same_size = [r for r in rows if r['size'] == seed['size']]
-    paths_map = sources.fetch_torrent_file_paths(cfg, same_size)
-    group     = _cross_seed_group(same_size, paths_map, seed)
+    # Cross-seed siblings share a payload size; only those rows can join a group.
+    sizes      = {s['size'] for s in seeds}
+    candidates = [r for r in rows if r['size'] in sizes]
+    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
+
+    group_by_hash, total_size = {}, 0
+    for seed in seeds:
+        # A seed already pulled into an earlier seed's group shares that payload —
+        # its torrents are present and its size is already counted.
+        if seed['hash'] in group_by_hash:
+            continue
+        total_size += seed['size']
+        for g in _cross_seed_group(candidates, paths_map, seed):
+            group_by_hash.setdefault(g['hash'], g)
+    group = list(group_by_hash.values())
 
     try:
         details = sources.fetch_torrent_details(cfg, group)
@@ -1134,10 +1164,12 @@ def workflows_trump_resolve_group():
         g['tracker_msg']    = det.get('tracker_msg', '')
     group.sort(key=lambda g: g['name'])
     return jsonify({
-        "status":       "success",
-        "torrents":     group,
-        "total_size":   seed['size'],
-        "matched_name": seed['name'],
+        "status":         "success",
+        "torrents":       group,
+        "total_size":     total_size,
+        "matched_titles": matched_titles,
+        "unmatched":      unmatched,
+        "matched_name":   seeds[0]['name'],
     })
 
 

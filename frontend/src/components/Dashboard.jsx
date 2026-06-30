@@ -409,7 +409,7 @@ function splitValueUnit(s) {
 // A dashboard hero stat: big near-white numeral + small, dim unit caption
 // (×, %, GB…). Weight 500, tabular figures, tight tracking — the "Instrument"
 // number treatment, shared across every panel so units read consistently.
-function HeroNumber({ value, unit, size = 40 }) {
+function HeroNumber({ value, unit, size = 33 }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 3, whiteSpace: 'nowrap' }}>
       <span style={{ fontFamily: 'var(--mono)', fontSize: size, fontWeight: 500, color: 'var(--text)', lineHeight: 1, letterSpacing: '-0.5px', fontVariantNumeric: 'tabular-nums' }}>{value}</span>
@@ -465,7 +465,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
         }}>{scoreText}</span>
       </div>
       <div style={{ marginTop: 14 }}>
-        <HeroNumber value={numPart} unit={unitPart} size={33} />
+        <HeroNumber value={numPart} unit={unitPart} />
       </div>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>

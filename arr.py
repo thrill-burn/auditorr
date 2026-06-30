@@ -184,36 +184,112 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
 
 
 def parse_trump_pm(pm_text):
-    """Extract (old_title, new_title) from a tracker trump PM.
+    """Extract (old_titles, new_title) from a tracker trump PM.
 
-    The PM convention: the trumped release name appears between "have been
-    trumped" and "(and) will be replaced by"; the replacement follows that
-    phrase, optionally terminated by a "Reason:" line. Returns ('', '') when
-    the delimiter phrase is absent — the UI falls back to manual fields.
+    A PM lists one or more trumped releases between the "...trumped" /
+    "following torrent" header and the "(and) will be replaced by" phrase, then
+    the single replacement (typically a season pack when several episodes are
+    trumped together), optionally terminated by a "Reason:" line. Returns
+    ([], '') when the delimiter phrase is absent — the UI falls back to manual
+    fields. The old side is a list to cover season-pack trumps (N episodes → 1
+    pack); a single-release trump just yields a one-element list.
     """
     text = re.sub(r'\r\n?', '\n', str(pm_text or ''))
     halves = re.split(r'(?i)\b(?:and\s+)?will\s+be\s+replaced\s+by\b', text, maxsplit=1)
     if len(halves) != 2:
-        return '', ''
+        return [], ''
     before, after = halves
 
-    old = ''
-    for line in reversed(before.split('\n')):
-        line = line.strip()
-        if not line:
-            continue
-        # Skip the boilerplate sentence itself; the release name is its own line
-        if re.search(r'(?i)have\s+been\s+trumped|following\s+torrent', line):
-            continue
-        old = line
-        break
+    # Old titles are every release line after the header. Anchor on the last
+    # header line so any greeting above it is ignored; "trumped" / "following
+    # torrent" never appear inside a release name, so the match is unambiguous.
+    lines = before.split('\n')
+    header_idx = -1
+    for i, line in enumerate(lines):
+        if re.search(r'(?i)trumped|following\s+torrent', line):
+            header_idx = i
+    # Trailing sentence periods (PMs end the phrase with "."); scene names never
+    # end in a bare dot, so stripping one is safe.
+    old_titles = [l.strip().rstrip('.').strip()
+                  for l in lines[header_idx + 1:] if l.strip()]
 
     after = re.split(r'(?i)\n\s*reason\s*:', after, maxsplit=1)[0]
     new = ' '.join(l.strip() for l in after.strip().split('\n') if l.strip())
 
-    # Trailing sentence period (PMs end the phrase with "."); scene names
-    # never end in a bare dot, so stripping one is safe
-    return old.rstrip('.').strip(), new.rstrip('.').strip()
+    return old_titles, new.rstrip('.').strip()
+
+
+_SEASON_EP_RE = re.compile(r'\bs\d{1,2}(?:e\d{1,4})?\b')
+
+
+def _season_ep_anchor(norm_name):
+    """Season/episode anchor token of a normalized release name, or '' — the
+    full 's04e01' when an episode is present, else the bare 's04' for a season
+    pack, else '' for a movie. Used as a hard gate so a trump match never crosses
+    to a different episode or to the season pack itself."""
+    m = _SEASON_EP_RE.search(norm_name or '')
+    return m.group(0) if m else ''
+
+
+def _release_group_tag(name):
+    """Release-group tag (lowercased, the token after the final hyphen), or '' —
+    'A.Movie.2020-GRP' → 'grp'. The encode identity that distinguishes two
+    same-episode releases; rejects sentence fragments so a hyphen inside a title
+    can't be mistaken for a group."""
+    s = str(name or '').strip()
+    if '-' not in s:
+        return ''
+    tag = s.rsplit('-', 1)[-1].strip()
+    if not tag or ' ' in tag or len(tag) > 20:
+        return ''
+    return re.sub(r'[^a-z0-9]', '', tag.lower())
+
+
+def match_trumped_torrent(rows, title):
+    """Find the client torrent matching a trumped release name from the PM.
+
+    Tiered, strongest first: exact normalized match, then PM-tokens-⊆-torrent
+    (both inherently can't cross episodes/groups), then a strong-overlap
+    fallback for PMs whose rendering differs from the torrent name (e.g. the
+    tracker prints "DD+ 5.1" where the torrent says "DDP5.1"). The fallback is
+    gated hard on the season/episode anchor and the release group, then ranked
+    by token overlap (≥0.6) — it tolerates cosmetic token differences but never
+    a different episode or a different encode. Used only for resolving the
+    delete group (always user-confirmed), never for the grab.
+    """
+    target = _norm_release_name(title)
+    if not target:
+        return None
+    t_tokens = set(target.split())
+
+    exact = next((r for r in rows if _norm_release_name(r['name']) == target), None)
+    if exact is not None:
+        return exact
+
+    subset = next((r for r in rows
+                   if t_tokens.issubset(set(_norm_release_name(r['name']).split()))), None)
+    if subset is not None:
+        return subset
+
+    t_anchor = _season_ep_anchor(target)
+    t_group  = _release_group_tag(title)
+    best, best_score = None, 0.0
+    for r in rows:
+        rn = _norm_release_name(r['name'])
+        r_tokens = set(rn.split())
+        if not r_tokens:
+            continue
+        # Episode/season must agree when either side declares one
+        if (t_anchor or _season_ep_anchor(rn)) and t_anchor != _season_ep_anchor(rn):
+            continue
+        # Release group must agree when both declare one (the encode identity)
+        r_group = _release_group_tag(r['name'])
+        if t_group and r_group and t_group != r_group:
+            continue
+        score = len(t_tokens & r_tokens) / max(len(t_tokens), len(r_tokens))
+        if score > best_score:
+            best, best_score = r, score
+    return best if best_score >= 0.6 else None
 
 
 def _norm_release_name(name):
