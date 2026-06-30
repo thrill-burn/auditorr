@@ -240,7 +240,7 @@ function HealthDial({ score, status, smartTrend, color }) {
         </svg>
         {/* Center readout — HTML overlay for crisp text + status chip */}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{displayScore}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 500, color: 'var(--text)', lineHeight: 1, letterSpacing: '-0.5px', fontVariantNumeric: 'tabular-nums' }}>{displayScore}</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>/ 100</span>
           <span style={{ marginTop: 6, fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: tipColor }} />
@@ -406,6 +406,18 @@ function splitValueUnit(s) {
   return { num: str, unit: '' }
 }
 
+// A dashboard hero stat: big near-white numeral + small, dim unit caption
+// (×, %, GB…). Weight 500, tabular figures, tight tracking — the "Instrument"
+// number treatment, shared across every panel so units read consistently.
+function HeroNumber({ value, unit, size = 40 }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 3, whiteSpace: 'nowrap' }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: size, fontWeight: 500, color: 'var(--text)', lineHeight: 1, letterSpacing: '-0.5px', fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+      {unit && <span style={{ fontFamily: 'var(--mono)', fontSize: Math.round(size * 0.55), fontWeight: 500, color: 'var(--text-dim)' }}>{unit}</span>}
+    </span>
+  )
+}
+
 function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
   const scoreText = String(pts || '').replace(/\s*pts$/i, '').replace(/\s*\/\s*/g, '/')
@@ -436,7 +448,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 18px 16px', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
-        <span style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minHeight: '2.7em' }}>
+        <span style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minHeight: 18 }}>
           <span className="ui-status-dot" style={{ background: color, marginTop: 5 }} />
           <span style={{ fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 500, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.25 }}>
             {label}
@@ -452,9 +464,8 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
           marginTop: 2,
         }}>{scoreText}</span>
       </div>
-      <div style={{ marginTop: 14, display: 'flex', alignItems: 'baseline', gap: 3, whiteSpace: 'nowrap' }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 33, fontWeight: 500, color: 'var(--text)', lineHeight: 1, letterSpacing: '-0.5px', fontVariantNumeric: 'tabular-nums' }}>{numPart}</span>
-        {unitPart && <span style={{ fontFamily: 'var(--mono)', fontSize: 18, fontWeight: 500, color: 'var(--text-dim)' }}>{unitPart}</span>}
+      <div style={{ marginTop: 14 }}>
+        <HeroNumber value={numPart} unit={unitPart} size={33} />
       </div>
       <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
@@ -769,7 +780,10 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                   <span style={{ width: 6, height: 6, borderRadius: 99, background: s.color, flexShrink: 0 }} />
                   {s.label}
                 </div>
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{s.value}</div>
+                <div>{(() => {
+                  const { num, unit } = splitValueUnit(s.value)
+                  return <HeroNumber value={num} unit={unit} size={22} />
+                })()}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
               </div>
             )
@@ -1167,12 +1181,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               <div>
                 <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{csMultDisplay}×</span>
+                  <HeroNumber value={csMultDisplay} unit="×" />
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>avg seed multiplier</span>
                 </div>
-                <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6, maxWidth: 340 }}>
-                  Weighted average of how many trackers each byte of media is seeded on. 1.0× = all files seeded once. Higher is better.
-                </p>
               </div>
             </div>
 
@@ -1185,10 +1196,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
 
           {/* Tracker leaderboard */}
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
-              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Top trackers by disk space</div>
-              <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>Click a tracker for detailed stats and navigation.</p>
-            </div>
+            <div style={SECTION_LABEL}>Top trackers by disk space</div>
             <TrackerLeaderboard trackerStats={filteredTrackerStats} onTrackerDetail={setTrackerDetail} />
 
             {/* All trackers summary */}
@@ -1277,9 +1285,10 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               {yieldPanelTab === 'upload' ? (
                 <>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
-                      {formatBytes(yieldRows.reduce((s, t) => s + t.uploaded, 0))}
-                    </span>
+                    {(() => {
+                      const { num, unit } = splitValueUnit(formatBytes(yieldRows.reduce((s, t) => s + t.uploaded, 0)))
+                      return <HeroNumber value={num} unit={unit} />
+                    })()}
                   </div>
                   <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
                     total uploaded · {uploadStats.period_days} day window
@@ -1288,14 +1297,13 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               ) : (
                 <>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 40, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
-                      {(() => {
-                        const filteredUploaded = yieldRows.reduce((s, t) => s + t.uploaded, 0)
-                        const filteredSeeding  = yieldRows.reduce((s, t) => s + t.seeding_size, 0)
-                        const filteredYield    = filteredSeeding > 0 ? filteredUploaded / filteredSeeding : null
-                        return filteredYield !== null ? (filteredYield * 100).toFixed(2) + '%' : '—'
-                      })()}
-                    </span>
+                    {(() => {
+                      const filteredUploaded = yieldRows.reduce((s, t) => s + t.uploaded, 0)
+                      const filteredSeeding  = yieldRows.reduce((s, t) => s + t.seeding_size, 0)
+                      const filteredYield    = filteredSeeding > 0 ? filteredUploaded / filteredSeeding : null
+                      const { num, unit } = splitValueUnit(filteredYield !== null ? (filteredYield * 100).toFixed(2) + '%' : '—')
+                      return <HeroNumber value={num} unit={unit} />
+                    })()}
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
                       over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
                     </span>
