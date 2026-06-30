@@ -147,8 +147,38 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
 function Card({ title, children }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 24, marginBottom: 16 }}>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'center', color: 'var(--text)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
       {children}
+    </div>
+  )
+}
+
+// Segmented selector — separate pill buttons, matching the app's standard
+// toggle style (Workflow torrent deletion, Theme, etc.). `value` is compared
+// to each option's `value` with ===; pass a normalized value for booleans.
+function SegToggle({ options, value, onChange, size = 'md' }) {
+  const pad = size === 'sm' ? '5px 12px' : '7px 18px'
+  const fontSize = size === 'sm' ? 11 : 12
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {options.map(opt => {
+        const active = value === opt.value
+        return (
+          <button
+            key={String(opt.value)}
+            onClick={() => onChange(opt.value)}
+            style={{
+              padding: pad, borderRadius: 'var(--r)', fontSize, fontWeight: 500,
+              border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
+              background: active ? 'var(--accent)18' : 'transparent',
+              color: active ? 'var(--accent)' : 'var(--text-dim)',
+              cursor: 'pointer', transition: 'all 0.12s',
+            }}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -474,18 +504,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
       <Card title="Torrent Source">
         {/* Source toggle */}
-        <div style={{ display: 'flex', marginBottom: 18 }}>
-          {['qbit', 'qui'].map((src, i) => (
-            <button key={src} onClick={() => { set('TORRENT_SOURCE')(src); setTestStatus(null); setSourceInfo(null); setIsDirty(true) }} style={{
-              padding: '6px 18px',
-              borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
-              border: `1px solid ${conf.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--border2)'}`,
-              borderRight: i === 0 ? 'none' : undefined,
-              background: conf.TORRENT_SOURCE === src ? 'var(--accent)22' : 'transparent',
-              color: conf.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--text-dim)',
-              fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
-            }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
-          ))}
+        <div style={{ marginBottom: 18 }}>
+          <SegToggle
+            options={[{ value: 'qbit', label: 'qBittorrent' }, { value: 'qui', label: 'qui' }]}
+            value={conf.TORRENT_SOURCE}
+            onChange={src => { set('TORRENT_SOURCE')(src); setTestStatus(null); setSourceInfo(null); setIsDirty(true) }}
+          />
         </div>
 
         {!isQui ? (
@@ -551,25 +575,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               Allow workflow pages to delete torrents and their files directly via {isQui ? 'qui' : 'qBittorrent'}. Off keeps auditorr read-only against your client.
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 24 }}>
-            {[
-              { value: false, label: 'Disallowed' },
-              { value: true,  label: 'Allowed'    },
-            ].map(opt => (
-              <button
-                key={String(opt.value)}
-                onClick={() => set('ALLOW_CLIENT_DELETE')(opt.value)}
-                style={{
-                  padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
-                  border: `1px solid ${!!conf.ALLOW_CLIENT_DELETE === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
-                  background: !!conf.ALLOW_CLIENT_DELETE === opt.value ? 'var(--accent)18' : 'transparent',
-                  color: !!conf.ALLOW_CLIENT_DELETE === opt.value ? 'var(--accent)' : 'var(--text-dim)',
-                  cursor: 'pointer', transition: 'all 0.12s',
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div style={{ flexShrink: 0, marginLeft: 24 }}>
+            <SegToggle
+              options={[{ value: false, label: 'Disallowed' }, { value: true, label: 'Allowed' }]}
+              value={!!conf.ALLOW_CLIENT_DELETE}
+              onChange={v => set('ALLOW_CLIENT_DELETE')(v)}
+            />
           </div>
         </div>
       </Card>
@@ -656,18 +667,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             <span style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 10, lineHeight: 1.45 }}>
               Re-audit automatically when files change. Disable to avoid constant rescans on large libraries with frequent downloads.
             </span>
-            <div style={{ display: 'flex', marginBottom: 14 }}>
-              {[{ label: 'Enabled', value: true }, { label: 'Disabled', value: false }].map((opt, i) => (
-                <button key={String(opt.value)} onClick={() => { setWatchdogEnabled(opt.value); setIsDirty(true) }} style={{
-                  padding: '7px 18px',
-                  borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
-                  border: `1px solid ${watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
-                  borderRight: i === 0 ? 'none' : undefined,
-                  background: watchdogEnabled === opt.value ? 'var(--accent)18' : 'transparent',
-                  color: watchdogEnabled === opt.value ? 'var(--accent)' : 'var(--text-dim)',
-                  fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
-                }}>{opt.label}</button>
-              ))}
+            <div style={{ marginBottom: 14 }}>
+              <SegToggle
+                options={[{ value: true, label: 'Enabled' }, { value: false, label: 'Disabled' }]}
+                value={watchdogEnabled}
+                onChange={v => { setWatchdogEnabled(v); setIsDirty(true) }}
+              />
             </div>
             <div style={{ opacity: watchdogEnabled ? 1 : 0.4, pointerEvents: watchdogEnabled ? undefined : 'none' }}>
               <Field label="Watchdog Cooldown (seconds)" type="number"
@@ -743,19 +748,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                   <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: 12, background: 'var(--surface2)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex' }}>
-                          {ARR_SERVICES.map((opt, i) => (
-                            <button key={opt.id} onClick={() => setArrConnection(index, 'service', opt.id)} style={{
-                              padding: '5px 10px',
-                              borderRadius: i === 0 ? 'var(--r) 0 0 var(--r)' : '0 var(--r) var(--r) 0',
-                              border: `1px solid ${service === opt.id ? 'var(--accent)' : 'var(--border2)'}`,
-                              borderRight: i === 0 ? 'none' : undefined,
-                              background: service === opt.id ? 'var(--accent)18' : 'transparent',
-                              color: service === opt.id ? 'var(--accent)' : 'var(--text-dim)',
-                              fontSize: 11, cursor: 'pointer',
-                            }}>{opt.label}</button>
-                          ))}
-                        </div>
+                        <SegToggle
+                          size="sm"
+                          options={ARR_SERVICES.map(s => ({ value: s.id, label: s.label }))}
+                          value={service}
+                          onChange={id => setArrConnection(index, 'service', id)}
+                        />
                         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {conn.id || `${service}-${index + 1}`}
                         </span>
@@ -939,25 +937,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>File explorer visibility</div>
             <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Control whether excluded files appear in the file explorer.</div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 24 }}>
-            {[
-              { value: false, label: 'Visible' },
-              { value: true,  label: 'Hidden'  },
-            ].map(opt => (
-              <button
-                key={String(opt.value)}
-                onClick={() => { setExclusionHideFromExplorer(opt.value); setIsDirty(true) }}
-                style={{
-                  padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
-                  border: `1px solid ${exclusionHideFromExplorer === opt.value ? 'var(--accent)' : 'var(--border2)'}`,
-                  background: exclusionHideFromExplorer === opt.value ? 'var(--accent)18' : 'transparent',
-                  color: exclusionHideFromExplorer === opt.value ? 'var(--accent)' : 'var(--text-dim)',
-                  cursor: 'pointer', transition: 'all 0.12s',
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div style={{ flexShrink: 0, marginLeft: 24 }}>
+            <SegToggle
+              options={[{ value: false, label: 'Visible' }, { value: true, label: 'Hidden' }]}
+              value={exclusionHideFromExplorer}
+              onChange={v => { setExclusionHideFromExplorer(v); setIsDirty(true) }}
+            />
           </div>
         </div>
       </Card>
@@ -968,22 +953,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Theme</div>
             <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Choose between dark and light mode. Dark is the default.</div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 24 }}>
-            {['dark', 'light'].map(t => (
-              <button
-                key={t}
-                onClick={() => onThemeChange && onThemeChange(t)}
-                style={{
-                  padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
-                  border: `1px solid ${theme === t ? 'var(--accent)' : 'var(--border2)'}`,
-                  background: theme === t ? 'var(--accent)18' : 'transparent',
-                  color: theme === t ? 'var(--accent)' : 'var(--text-dim)',
-                  cursor: 'pointer', transition: 'all 0.12s',
-                }}
-              >
-                {t === 'dark' ? '🌙 Dark' : '☀️ Light'}
-              </button>
-            ))}
+          <div style={{ flexShrink: 0, marginLeft: 24 }}>
+            <SegToggle
+              options={[{ value: 'dark', label: '🌙 Dark' }, { value: 'light', label: '☀️ Light' }]}
+              value={theme}
+              onChange={t => onThemeChange && onThemeChange(t)}
+            />
           </div>
         </div>
       </Card>

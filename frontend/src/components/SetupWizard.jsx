@@ -171,18 +171,19 @@ function Step1({ data, onChange, onNext, onSkip }) {
       </p>
 
       {/* Source toggle */}
-      <div style={{ display: 'flex', marginBottom: 20 }}>
-        {['qbit', 'qui'].map((src, i) => (
-          <button key={src} onClick={() => { onChange('TORRENT_SOURCE', src); setTestStatus(null); setSourceInfo(null) }} style={{
-            padding: '6px 18px',
-            borderRadius: i === 0 ? '99px 0 0 99px' : '0 99px 99px 0',
-            border: `1px solid ${data.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--border2)'}`,
-            borderRight: i === 0 ? 'none' : undefined,
-            background: data.TORRENT_SOURCE === src ? 'var(--accent)22' : 'transparent',
-            color: data.TORRENT_SOURCE === src ? 'var(--accent)' : 'var(--text-dim)',
-            fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
-          }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
-        ))}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {['qbit', 'qui'].map(src => {
+          const active = data.TORRENT_SOURCE === src
+          return (
+            <button key={src} onClick={() => { onChange('TORRENT_SOURCE', src); setTestStatus(null); setSourceInfo(null) }} style={{
+              padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
+              border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
+              background: active ? 'var(--accent)18' : 'transparent',
+              color: active ? 'var(--accent)' : 'var(--text-dim)',
+              cursor: 'pointer', transition: 'all 0.12s',
+            }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
+          )
+        })}
       </div>
 
       {!isQui ? (

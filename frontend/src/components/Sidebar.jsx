@@ -89,11 +89,9 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
   const scoreDisplay = score != null ? Math.round(Number(score)) : null
   const csDisplay = crossSeedMultiplier != null ? crossSeedMultiplier.toFixed(2) : null
 
-  const [openGroups, setOpenGroups] = useState(() => {
-    const s = new Set()
-    if (WORKFLOW_TAB_IDS.includes(active)) s.add('workflows')
-    return s
-  })
+  // Workflows starts expanded — the child rows surface useful at-a-glance
+  // counts. The user can still collapse it; we don't force it back open.
+  const [openGroups, setOpenGroups] = useState(() => new Set(['workflows']))
 
   useEffect(() => {
     if (WORKFLOW_TAB_IDS.includes(active)) setOpenGroups(s => new Set([...s, 'workflows']))

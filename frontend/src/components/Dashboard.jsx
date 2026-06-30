@@ -371,6 +371,30 @@ function TrendPill({ trend }) {
 }
 
 // ── Metric card ───────────────────────────────────────────────────────────────
+// Leading glyphs for the primary workflow buttons (keyed by destination tab).
+const WORKFLOW_ICONS = {
+  backfill: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+  ),
+  cleanup: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+    </svg>
+  ),
+  triage: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    </svg>
+  ),
+  dedupe: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    </svg>
+  ),
+}
+
 function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, onNavigate, onScript, toast }) {
   const [loadingKeys, setLoadingKeys] = useState({})
   const scoreText = String(pts || '').replace(/\s*pts$/i, '').replace(/\s*\/\s*/g, '/')
@@ -429,12 +453,14 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
           return (
             <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
               {visibleActions.map((a, i) => {
-                // Primary = the workflow ("fix it") action: raised, bold.
+                // Primary = the workflow ("fix it") action: tinted in the card's
+                // own accent so it maps to that workflow's sidebar color.
                 // Secondary = the "just look" view link: quiet until hover.
                 const isPrimary = a.variant === 'primary'
-                const baseBg  = isPrimary ? 'var(--surface2)' : 'transparent'
-                const hoverBg = isPrimary ? 'var(--surface3)' : 'var(--surface2)'
-                const baseBorder = isPrimary ? 'var(--border2)' : 'transparent'
+                const baseBg  = isPrimary ? color + '1f' : 'transparent'
+                const hoverBg = isPrimary ? color + '2e' : 'var(--surface2)'
+                const baseBorder = isPrimary ? color : 'transparent'
+                const icon = isPrimary ? WORKFLOW_ICONS[a.tab] : null
                 return (
                   <button
                     key={i}
@@ -444,10 +470,11 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                       flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 7,
                       border: `1px solid ${baseBorder}`,
                       background: a.loading ? 'var(--surface2)' : baseBg,
-                      color: a.loading ? 'var(--text-dim)' : (isPrimary ? 'var(--text)' : 'var(--text-dim)'),
+                      color: a.loading ? 'var(--text-dim)' : (isPrimary ? color : 'var(--text-dim)'),
                       fontSize: isPrimary ? 12.5 : 12, fontWeight: isPrimary ? 600 : 500,
                       cursor: a.loading ? 'default' : 'pointer', whiteSpace: 'nowrap',
                       transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
                     }}
                     onMouseEnter={e => {
                       if (a.loading) return
@@ -460,6 +487,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                       if (!isPrimary) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'transparent' }
                     }}
                   >
+                    {icon && <span style={{ display: 'inline-flex', flexShrink: 0 }}>{icon}</span>}
                     {a.loading ? (a.loadingLabel || '…') : a.label}
                   </button>
                 )
