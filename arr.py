@@ -236,7 +236,7 @@ def _release_group_tag(name):
     'A.Movie.2020-GRP' → 'grp'. The encode identity that distinguishes two
     same-episode releases; rejects sentence fragments so a hyphen inside a title
     can't be mistaken for a group."""
-    s = str(name or '').strip()
+    s = re.sub(r'\.(mkv|mp4|avi|ts|m2ts|iso)$', '', str(name or '').strip(), flags=re.I)
     if '-' not in s:
         return ''
     tag = s.rsplit('-', 1)[-1].strip()
@@ -321,12 +321,15 @@ def match_trump_release(releases, new_title, indexer=''):
 # match_trumped_torrent / match_trump_release above pick one confident result or
 # nothing. When nothing matches — a PM that renders a token differently than the
 # client/indexer (DD+ vs DDP), a typo, a missing release — the Trumped wizard
-# shows a ranked candidate list the user picks from instead of dead-ending. The
-# score is graded, never a hard gate: soft title core (decisive), strong quality
-# fields (resolution/source/group), light audio/HDR, and a differing season/
-# episode anchor sinks the candidate. The breakdown lets the UI show exactly why
-# each candidate ranks where it does, so the (always user-confirmed) pick is
-# fully informed.
+# shows a ranked candidate list the user picks from instead of dead-ending.
+#
+# The title is a REQUIRED soft match, then quality fields rank within it. The
+# title must actually overlap and the year/episode must agree; only then do
+# resolution/source/group/audio/HDR refine the ranking. Quality agreement alone
+# never makes a match — otherwise two unrelated 1080p WEB-DLs look like siblings
+# (the "Flow 2019" shown for "Obsession 2026" bug). When the real torrent isn't
+# in the client the list comes back empty, which the picker reports honestly,
+# rather than offering a confident wrong answer.
 
 _AUDIO_PATTERNS = [
     ('truehd', r'true ?hd'),
@@ -359,10 +362,14 @@ _QUALITY_NOISE = {
     'hdr', 'hdr10', 'dv', 'dovi', 'dolby', 'vision', 'hlg', 'plus',
     'atmos', 'hd', 'ma',
     'x', 'h', 'hevc', 'avc',
-    'amzn', 'nf', 'dsnp', 'atvp', 'hmax', 'max', 'hulu', 'pcok', 'stan', 'it',
+    'amzn', 'nf', 'dsnp', 'atvp', 'hmax', 'max', 'hulu', 'pcok', 'stan', 'ip', 'itunes',
     'repack', 'proper', 'internal', 'extended', 'remastered', 'remaster',
     'imax', 'real', 'uncut', 'directors', 'cut',
 }
+
+# Articles carry no discriminating power and cause spurious title overlap ("The
+# Matrix" vs "The Thing" share 'the'); dropped from the title core.
+_TITLE_STOPWORDS = {'the', 'of', 'a', 'an', 'and'}
 
 # Tokens that are noise regardless of any trailing digits (fused channel layout,
 # codec versions): ddp5, dd+5, x265, h264, eac3, dts5, the bare 7/1 of "7.1".
@@ -379,10 +386,12 @@ _CORE_DROP_RE = re.compile(
 
 def _title_core_tokens(norm, group=''):
     """Title-only tokens of a normalized release name — quality/source/audio/
-    codec/year/episode/group noise stripped — for the soft title match."""
+    codec/year/episode/group/article noise stripped, apostrophes folded — for
+    the soft title match."""
     out = set()
-    for tok in re.split(r'[\s\-]+', norm):
-        if not tok or tok == group or tok in _QUALITY_NOISE:
+    for raw in re.split(r'[\s\-]+', norm):
+        tok = raw.replace("'", '').replace('’', '')   # director's → directors
+        if not tok or tok == group or tok in _QUALITY_NOISE or tok in _TITLE_STOPWORDS:
             continue
         if _CORE_DROP_RE.match(tok):
             continue
@@ -401,33 +410,53 @@ def _release_match_features(name):
         'hdr':    info['hdr'],
         'audio':  _audio_codec(name),
         'group':  group,
+        'year':   info['year'],
         'anchor': _season_ep_anchor(norm),
     }
+
+
+_MIN_TITLE_SIM = 0.3
 
 
 def score_release_match(query, cand_name):
     """Graded similarity (0..1) of a candidate release name to a query title,
     with a per-field agreement breakdown for the UI.
 
-    Returns (score, breakdown) where breakdown maps each of title/res/source/
-    group/audio/hdr/anchor to 'same' | 'diff' | 'partial' | '' (missing on a
-    side). Soft title core is decisive; resolution/source/group are strong;
-    audio/HDR light; a differing episode anchor sinks the candidate (different
-    episode = different payload). Never a gate — a weak match still scores >0 so
-    the wizard can offer it.
+    The title is a REQUIRED soft match: the two title cores must actually
+    overlap (Jaccard ≥ _MIN_TITLE_SIM) and the year/episode anchor must agree —
+    otherwise the candidate is disqualified (score 0, dropped by the ranker), no
+    matter how well its resolution/source/audio line up. Quality agreement only
+    *refines the ranking among real title matches*; it never manufactures one.
+    This is what stops two unrelated 1080p WEB-DLs from looking like siblings.
+
+    Returns (score, breakdown) where breakdown maps title/res/source/group/
+    audio/hdr/anchor to 'same' | 'diff' | 'partial' | '' (missing on a side).
     """
     q = _release_match_features(query)
     c = _release_match_features(cand_name)
-    b = {}
+    b = {'title': '', 'res': '', 'source': '', 'group': '', 'audio': '', 'hdr': '', 'anchor': ''}
 
-    if q['core'] and c['core']:
-        inter = len(q['core'] & c['core'])
-        union = len(q['core'] | c['core'])
-        title_sim = inter / union if union else 0.0
-        b['title'] = 'same' if q['core'] == c['core'] else ('partial' if inter else 'diff')
-    else:
-        title_sim, b['title'] = 0.0, ''
-    score = 0.5 * title_sim
+    # Title gate — both sides must have parseable title words that overlap.
+    if not q['core'] or not c['core']:
+        return 0.0, b
+    inter = len(q['core'] & c['core'])
+    union = len(q['core'] | c['core'])
+    title_sim = inter / union if union else 0.0
+    b['title'] = 'same' if q['core'] == c['core'] else ('partial' if inter else 'diff')
+    if inter == 0 or title_sim < _MIN_TITLE_SIM:
+        return 0.0, b
+
+    # Year gate — a declared year that disagrees is a different release (remake).
+    if q['year'] and c['year'] and q['year'] != c['year']:
+        return 0.0, b
+    # Episode gate — a declared season/episode that disagrees is a different
+    # payload.
+    if q['anchor'] and c['anchor'] and q['anchor'] != c['anchor']:
+        b['anchor'] = 'diff'
+        return 0.0, b
+    b['anchor'] = 'same' if (q['anchor'] and c['anchor']) else ''
+
+    score = title_sim   # title dominates; quality only refines below
 
     def field(key, w_same, w_diff):
         qv, cv = q[key], c[key]
@@ -440,40 +469,54 @@ def score_release_match(query, cand_name):
         b[key] = 'diff'
         return -w_diff
 
-    score += field('res',    0.15, 0.35)
-    score += field('source', 0.12, 0.18)
-    score += field('group',  0.20, 0.20)
-    score += field('audio',  0.10, 0.06)
-    score += field('hdr',    0.08, 0.06)
+    score += field('res',    0.12, 0.20)
+    score += field('source', 0.10, 0.15)
+    score += field('group',  0.18, 0.18)
+    score += field('audio',  0.08, 0.05)
+    score += field('hdr',    0.06, 0.05)
 
-    if q['anchor'] and c['anchor']:
-        b['anchor'] = 'same' if q['anchor'] == c['anchor'] else 'diff'
-        if q['anchor'] != c['anchor']:
-            score -= 0.6
-    else:
-        b['anchor'] = ''
-
-    return max(0.0, min(1.0, score)), b
+    # A title-gated candidate always stays visible (min 0.05) so the user can
+    # vet it; only true gate failures return 0.
+    return max(0.05, min(1.0, score)), b
 
 
-def rank_release_matches(items, query, name_key='name', limit=8, min_score=0.2):
+def rank_release_matches(items, query, name_key='name', limit=8, min_score=0.0):
     """Rank `items` by name similarity to `query`, best first.
 
     Each returned item is a shallow copy with 'match_score' (0..1) and 'match'
-    (the field breakdown). Items with no overlap at all are dropped; ties break
-    on seeders. Returns the top `limit` at or above `min_score`, but never empty
-    when anything scored — the best few always surface so the wizard offers a
-    choice instead of a dead-end.
+    (the field breakdown). Only real title matches survive the gate in
+    `score_release_match`; ties break on seeders. Returns at most `limit`, and
+    **empty when nothing genuinely matches** — an honest empty list beats a
+    confident wrong answer (the caller reports "no match", offering manual entry
+    or the arr deep link).
     """
     scored = []
     for it in items:
         s, brk = score_release_match(query, it.get(name_key) or '')
-        if s <= 0:
+        if s <= 0 or s < min_score:
             continue
         scored.append({**it, 'match_score': round(s, 3), 'match': brk})
     scored.sort(key=lambda x: (x['match_score'], x.get('seeders') or 0), reverse=True)
-    top = [x for x in scored if x['match_score'] >= min_score][:limit]
-    return top if top else scored[:3]
+    return scored[:limit]
+
+
+def title_soft_match(query_title, candidate_title):
+    """Soft title-only similarity (0..1) between two titles — the shared title
+    core over their union, ignoring quality/year/episode/article noise.
+
+    For matching a release name to a managed arr title when exact keys differ: a
+    stray season token ('… Rides Again S01'), extra scene tokens, or punctuation
+    that would defeat `title_match_keys`. Returns 0 when either side has no
+    parseable title words or they don't overlap at all.
+    """
+    q = _title_core_tokens(_norm_release_name(query_title))
+    c = _title_core_tokens(_norm_release_name(candidate_title))
+    if not q or not c:
+        return 0.0
+    inter = len(q & c)
+    if not inter:
+        return 0.0
+    return inter / len(q | c)
 
 
 def grab_release(cfg, service, connection_id, guid, indexer_id):

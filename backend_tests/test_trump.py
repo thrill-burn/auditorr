@@ -2,7 +2,7 @@ import unittest
 
 from arr import (
     parse_trump_pm, match_trump_release, match_trumped_torrent, _norm_release_name,
-    rank_release_matches, score_release_match, _audio_codec,
+    rank_release_matches, score_release_match, _audio_codec, title_soft_match,
 )
 
 
@@ -187,9 +187,9 @@ class RankReleaseMatchesTests(unittest.TestCase):
         self.assertTrue(ranked[0]["name"].startswith("FROM.S04E01"))
         self.assertTrue(all("S04E02" not in r["name"] for r in ranked))
 
-    def test_never_empty_when_anything_is_related(self):
-        # All weak matches (wrong resolution + group) — still returns the closest
-        # few rather than an empty list, so the wizard offers a choice.
+    def test_same_title_other_quality_still_surfaces(self):
+        # Same movie/year, different encode — a genuine title match, so it shows
+        # (ranked lower via the quality diffs), letting the user vet it.
         rows = self._rows("Jumanji.1995.1080p.BluRay.DTS.x264-GRP")
         ranked = rank_release_matches(
             rows, "Jumanji 1995 2160p UHD BluRay TrueHD Atmos DV HDR x265-RandomBytes", "name")
@@ -199,6 +199,47 @@ class RankReleaseMatchesTests(unittest.TestCase):
         rows = self._rows("Totally.Unrelated.Movie.2001.1080p-ABC")
         ranked = rank_release_matches(rows, "Jumanji 1995 2160p BluRay x265-XYZ", "name")
         self.assertEqual(ranked, [])
+
+    def test_unrelated_title_with_matching_quality_is_excluded(self):
+        # The screenshot bug: quality (1080p WEB-DL) agrees but the titles have
+        # nothing in common — must NOT be offered as a match.
+        rows = self._rows(
+            "Flow.2019.1080p.WEB-DL.ARTE.AAC.H264.AYAKO.mkv",
+            "Superworm.2021.1080p.iP.WEB-DL.H264.AAC2.0.SNAKE.mkv",
+        )
+        ranked = rank_release_matches(
+            rows, "Obsession 2026 Director's Cut 1080p AMZN WEB-DL DD+ 5.1 H.264-KyoGo", "name")
+        self.assertEqual(ranked, [])
+
+    def test_real_title_matches_despite_edition_and_audio_rendering(self):
+        # Same title/year; PM has "Director's Cut" + "DD+", torrent has neither
+        # spelled the same — still the match.
+        rows = self._rows("Obsession.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-KyoGo")
+        ranked = rank_release_matches(
+            rows, "Obsession 2026 Director's Cut 1080p AMZN WEB-DL DD+ 5.1 H.264-KyoGo", "name")
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["match"]["title"], "same")
+
+    def test_year_gate_blocks_remakes(self):
+        rows = self._rows("Obsession.1976.1080p.BluRay.x264-OLD")
+        ranked = rank_release_matches(
+            rows, "Obsession 2026 1080p WEB-DL DD+ 5.1 H.264-KyoGo", "name")
+        self.assertEqual(ranked, [])
+
+
+class TitleSoftMatchTests(unittest.TestCase):
+    def test_stray_season_token_still_matches_series(self):
+        # The step-4 bug: parsed new title keeps "S01"; the series has none.
+        self.assertEqual(
+            title_soft_match("The Magic School Bus Rides Again S01",
+                             "The Magic School Bus Rides Again"), 1.0)
+
+    def test_unrelated_titles_score_zero(self):
+        self.assertEqual(title_soft_match("Obsession", "The Magic School Bus"), 0.0)
+
+    def test_empty_is_safe(self):
+        self.assertEqual(title_soft_match("", "Anything"), 0.0)
+        self.assertEqual(title_soft_match("2160p 1080p", "Anything"), 0.0)
 
     def test_hdr_difference_is_reported(self):
         # The classic trump: same encode chain, HDR → DV. Breakdown must flag it.

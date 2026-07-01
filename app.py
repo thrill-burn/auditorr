@@ -34,7 +34,7 @@ from db import (
 )
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match
 from scripts import generate_script, _build_dup_groups
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -1028,27 +1028,44 @@ def workflows_triage_resolve_groups():
 # Sonarr/Radarr.
 # ---------------------------------------------------------------------------
 
+def _trump_year_ok(parsed, t):
+    """Radarr year guard (±1) so same-title remakes can't cross-match."""
+    return not (parsed['year'] is not None and t.get('service') == 'radarr'
+                and t.get('year') and abs(int(t['year']) - parsed['year']) > 1)
+
+
 def _trump_find_arr_item(cfg, parsed):
     """Match a parsed release against managed arr titles (title + year aware).
 
-    Mirrors Triage's matching rules: diacritic/apostrophe-folded title keys,
-    radarr year enforcement (±1) so same-title remakes can't cross-match, and
-    content-type service preference (episodes → sonarr, otherwise radarr).
+    Exact first (diacritic/apostrophe-folded title keys, same as Triage), then a
+    **soft fallback** ranked by shared title core — a trump's new-release name
+    often carries a stray season token or extra scene tokens the exact key match
+    can't fold ('… Rides Again S01' vs the series 'The Magic School Bus Rides
+    Again'), so a graded title match beats a hard 404. Content-type service
+    preference (season/episode → sonarr, otherwise radarr) breaks ties.
     """
-    keys = title_match_keys(parsed['title'])
-    if not keys:
-        return None
-    candidates = []
-    for t in fetch_arr_all_titles(cfg):
-        if not (title_match_keys(t.get('title') or '') & keys):
-            continue
-        if (parsed['year'] is not None and t.get('service') == 'radarr'
-                and t.get('year') and abs(int(t['year']) - parsed['year']) > 1):
-            continue
-        candidates.append(t)
+    titles    = fetch_arr_all_titles(cfg)
     preferred = 'sonarr' if parsed['season'] is not None else 'radarr'
-    candidates.sort(key=lambda t: 0 if t.get('service') == preferred else 1)
-    return candidates[0] if candidates else None
+
+    keys = title_match_keys(parsed['title'])
+    exact = [t for t in titles
+             if (title_match_keys(t.get('title') or '') & keys) and _trump_year_ok(parsed, t)]
+    if exact:
+        exact.sort(key=lambda t: 0 if t.get('service') == preferred else 1)
+        return exact[0]
+
+    # Soft fallback — best title-core overlap above a real floor.
+    best, best_sim = None, 0.0
+    for t in titles:
+        if not _trump_year_ok(parsed, t):
+            continue
+        sim = title_soft_match(parsed['title'], t.get('title') or '')
+        # Nudge the preferred service so a movie/series tie goes the right way.
+        if t.get('service') == preferred:
+            sim += 0.001
+        if sim > best_sim:
+            best, best_sim = t, sim
+    return best if best_sim >= 0.5 else None
 
 
 @app.route('/api/workflows/trump/parse', methods=['POST'])
