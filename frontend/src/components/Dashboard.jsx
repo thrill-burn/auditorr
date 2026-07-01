@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, formatBytesCompact, scoreColor } from '../utils'
 import ChangesPanel from './ChangesPanel'
-import FilterBar from './FilterBar'
+import { RangePresets, TrackerDropdown } from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
 
@@ -32,7 +32,7 @@ function Skeleton({ w = '100%', h = 16, style = {} }) {
 }
 function DashboardSkeleton() {
   return (
-    <div style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <Skeleton w={90} h={10} />
@@ -1080,15 +1080,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     .filter(t => effectiveTrackers.includes(t.tracker))
 
   return (
-    <>
-    <FilterBar
-      timeRange={timeRange}
-      onTimeRangeChange={setTimeRange}
-      selectedTrackers={selectedTrackers}
-      allTrackers={allTrackers}
-      onTrackersChange={setSelectedTrackers}
-    />
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="fade-in" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+      {/* Time range presets + tracker filter — inline top row, aligned with the
+          panels below and matching the Trackers page's layout. */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <RangePresets isActive={v => timeRange === v} onSelect={setTimeRange} />
+        <TrackerDropdown selectedTrackers={selectedTrackers} allTrackers={allTrackers} onTrackersChange={setSelectedTrackers} />
+      </div>
 
       {/* Changes since last scan */}
       {changes?.changes && (
@@ -1405,6 +1404,5 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         />
       )}
     </div>
-    </>
   )
 }
