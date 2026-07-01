@@ -663,14 +663,28 @@ export default function Triage({ onNavigate, cleanupCount }) {
               <ActionButton onClick={handleExclude} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
                 {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
               </ActionButton>
-              {clientDeleteAllowed && client && (
+              {client && (clientDeleteAllowed ? (
                 <ActionButton danger onClick={openConfirm} disabled={busy != null || deletableItems.length === 0}
                   title={deletableItems.length === 0
                     ? 'None of the selected items have a torrent hash'
                     : `Remove the selected torrents via ${client.name} — files deleted only where no live seed shares them`}>
                   Remove from {client.name}
                 </ActionButton>
-              )}
+              ) : (
+                // Deletion is off: show the action greyed out (so users know it
+                // exists) with a one-click path to enable it, mirroring Trumped.
+                <>
+                  <span style={{ fontSize: 11, color: 'var(--text-dim)', alignSelf: 'center' }}>
+                    Deleting via {client.name} is off —{' '}
+                    <a onClick={() => onNavigate && onNavigate({ tab: 'config' })}
+                      style={{ color: 'var(--yellow)', cursor: 'pointer', textDecoration: 'underline' }}>enable in Config</a>
+                  </span>
+                  <ActionButton danger disabled
+                    title={`Client deletion is disabled — enable “Workflow torrent deletion” in Config → Torrent Source to remove torrents via ${client.name}`}>
+                    Remove from {client.name}
+                  </ActionButton>
+                </>
+              ))}
             </ActionBar>
           )}
 

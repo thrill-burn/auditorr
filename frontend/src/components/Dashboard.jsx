@@ -480,8 +480,9 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
             <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
               {visibleActions.map((a, i) => {
                 // Primary = the lead workflow action: a quiet raised surface
-                // whose label + icon carry the card's workflow hue (color rides
-                // on the text, never a fill — per the design system).
+                // with a near-white label; only the small leading icon carries
+                // the card's workflow hue (color rationed to a pointed accent,
+                // like the status dot — never a fill — per the design system).
                 // Secondary = the "just look" view link: quiet until hover.
                 const isPrimary = a.variant === 'primary'
                 const baseBg  = isPrimary ? 'var(--surface2)' : 'transparent'
@@ -497,11 +498,11 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                       flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 'var(--r)',
                       border: `1px solid ${baseBorder}`,
                       background: a.loading ? 'var(--surface2)' : baseBg,
-                      color: a.loading ? 'var(--text-dim)' : (isPrimary ? color : 'var(--text-dim)'),
+                      color: a.loading ? 'var(--text-dim)' : (isPrimary ? 'var(--text)' : 'var(--text-dim)'),
                       fontSize: isPrimary ? 12.5 : 12, fontWeight: isPrimary ? 600 : 500,
                       cursor: a.loading ? 'default' : 'pointer', whiteSpace: 'nowrap',
                       transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                      display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 7,
                     }}
                     onMouseEnter={e => {
                       if (a.loading) return
@@ -514,7 +515,7 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                       if (!isPrimary) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'transparent' }
                     }}
                   >
-                    {icon && <span style={{ display: 'inline-flex', flexShrink: 0 }}>{icon}</span>}
+                    {icon && <span style={{ display: 'inline-flex', flexShrink: 0, color: a.loading ? 'var(--text-dim)' : color }}>{icon}</span>}
                     {a.loading ? (a.loadingLabel || '…') : a.label}
                   </button>
                 )
@@ -1338,7 +1339,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <td style={{ padding: '5px 8px', maxWidth: 120 }}>
                                 <button
                                   onClick={() => setTrackerDetail(t.tracker)}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)' }}
+                                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--text)' }}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
                                 >{t.tracker}</button>
                               </td>
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
@@ -1373,7 +1376,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <td style={{ padding: '5px 8px', maxWidth: 120 }}>
                                 <button
                                   onClick={() => setTrackerDetail(t.tracker)}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}
+                                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)' }}
+                                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--text)' }}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
                                 >{t.tracker}</button>
                               </td>
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
