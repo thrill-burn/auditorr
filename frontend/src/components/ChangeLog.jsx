@@ -311,7 +311,7 @@ export default function ChangeLog({ onNavigate }) {
               onChange={e => setPathQuery(e.target.value)}
               placeholder="🔎 search path…"
               style={{
-                width: 200, height: 28, padding: '0 10px',
+                width: 200, height: 34, padding: '0 12px',
                 borderRadius: 'var(--r)', fontSize: 12,
                 border: `1px solid ${pathQuery ? 'var(--accent)66' : 'var(--border2)'}`,
                 background: pathQuery ? 'var(--surface2)' : 'transparent',
@@ -333,7 +333,8 @@ export default function ChangeLog({ onNavigate }) {
           <div style={{ flex: 1 }} />
 
           <button onClick={exportCSV} style={{
-            padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, flexShrink: 0,
+            height: 34, display: 'inline-flex', alignItems: 'center',
+            padding: '0 12px', borderRadius: 'var(--r-pill)', fontSize: 12, flexShrink: 0,
             border: '1px solid var(--border2)', background: 'transparent',
             color: 'var(--text-dim)', cursor: 'pointer',
           }}>Export CSV</button>

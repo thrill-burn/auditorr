@@ -70,7 +70,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
       <button
         onClick={handleOpen}
         style={{
-          height: 26, padding: '0 10px', borderRadius: 'var(--r)', fontSize: 11,
+          height: 34, padding: '0 12px', borderRadius: 'var(--r)', fontSize: 12,
           border: `1px solid ${value ? 'var(--accent)66' : 'var(--border2)'}`,
           background: value ? 'var(--surface2)' : 'transparent',
           color: value ? 'var(--text)' : 'var(--text-dim)',

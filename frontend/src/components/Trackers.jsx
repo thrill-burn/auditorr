@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import DatePicker from './DatePicker'
+import { RangePresets } from './FilterBar'
 import MultiLineChart from './MultiLineChart'
 import CompareTable from './CompareTable'
 import { api } from '../api'
@@ -174,7 +175,6 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
   // controls stay in sync. A preset sets From = today−Nd (To cleared); "All"
   // clears both. The active preset is derived back from the dates — so editing
   // a picker into a custom range naturally deselects every preset.
-  const PRESETS = [7, 30, 90, 0]
   const activePreset = useMemo(() => {
     if (!dateFrom && !dateTo) return 0
     if (dateTo) return null
@@ -183,30 +183,12 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
   }, [dateFrom, dateTo])
   const applyPreset = (d) => { setDateTo(''); setDateFrom(d === 0 ? '' : initialDateFrom(d)) }
 
-  const pill = { padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface2)' }
-
   return (
     <div className="fade-in" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Date range — quick presets (easy default) + precise From/To for drill-down.
           Both scope the chart and the table's Uploaded/Yield columns. */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: 3, background: 'var(--surface3)', borderRadius: 'var(--r)' }}>
-          {PRESETS.map(d => {
-            const active = activePreset === d
-            return (
-              <button key={d} onClick={() => applyPreset(d)} style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                minHeight: 20, padding: '0 12px', borderRadius: 'var(--r)',
-                border: 'none', cursor: 'pointer',
-                fontFamily: 'var(--mono)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
-                background: active ? 'var(--surface)' : 'transparent',
-                boxShadow: active ? 'var(--elev-1)' : 'none',
-                color: active ? 'var(--text)' : 'var(--text-dim)',
-                fontWeight: active ? 700 : 500, transition: 'all 0.12s',
-              }}>{d === 0 ? 'All' : d + 'd'}</button>
-            )
-          })}
-        </div>
+        <RangePresets isActive={v => activePreset === v} onSelect={applyPreset} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>
           <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" align="right" />
           <span>—</span>

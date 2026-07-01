@@ -1,6 +1,39 @@
 import React, { useState, useRef, useEffect } from 'react'
 import DatePicker from './DatePicker'
 
+export const RANGE_PRESETS = [
+  { value: 7,  label: '7d'  },
+  { value: 30, label: '30d' },
+  { value: 90, label: '90d' },
+  { value: 0,  label: 'All' },
+]
+
+// Segmented range-preset selector (7d/30d/90d/All). The single source of truth
+// for this control, shared by the Dashboard filter bar and the Trackers page so
+// the two can never drift in size or style. 34px tall (28 + 3px track padding),
+// matching the DatePicker and Trackers-dropdown heights.
+export function RangePresets({ options = RANGE_PRESETS, isActive, onSelect }) {
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: 3, background: 'var(--surface3)', borderRadius: 'var(--r)' }}>
+      {options.map(o => {
+        const active = isActive(o.value)
+        return (
+          <button key={o.value} onClick={() => onSelect(o.value)} style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            minHeight: 28, padding: '4px 12px', borderRadius: 'var(--r)',
+            border: 'none', cursor: 'pointer',
+            fontFamily: 'var(--mono)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
+            background: active ? 'var(--surface)' : 'transparent',
+            boxShadow: active ? 'var(--elev-1)' : 'none',
+            color: active ? 'var(--text)' : 'var(--text-dim)',
+            fontWeight: active ? 700 : 500, transition: 'all 0.12s',
+          }}>{o.label}</button>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, dateTo, onDateFromChange, onDateToChange, selectedTrackers, allTrackers, onTrackersChange, sortControls }) {
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef(null)
@@ -19,7 +52,7 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
   return (
     <div style={{
       position: 'sticky', top: 0, zIndex: 50,
-      background: 'var(--bg)', borderBottom: '1px solid var(--border)',
+      background: 'var(--bg)',
       padding: '8px 20px',
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     }}>
@@ -40,23 +73,7 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
           )}
         </div>
       ) : (
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 3, padding: 3,
-          background: 'var(--surface3)', borderRadius: 'var(--r)',
-        }}>
-          {[7, 30, 90, 0].map(d => (
-            <button key={d} onClick={() => onTimeRangeChange(d)} style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              minHeight: 28, padding: '4px 10px', borderRadius: 'var(--r)',
-              border: 'none', cursor: 'pointer',
-              fontFamily: 'var(--mono)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
-              background: timeRange === d ? 'var(--surface)' : 'transparent',
-              boxShadow: timeRange === d ? 'var(--elev-1)' : 'none',
-              color: timeRange === d ? 'var(--text)' : 'var(--text-dim)',
-              fontWeight: timeRange === d ? 700 : 500,
-            }}>{d === 0 ? 'All' : d + 'd'}</button>
-          ))}
-        </div>
+        <RangePresets isActive={v => timeRange === v} onSelect={onTimeRangeChange} />
       )}
 
       {/* Centre: sort controls */}
