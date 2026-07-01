@@ -67,8 +67,9 @@ export default function FilterBar({ timeRange, onTimeRangeChange, dateFrom, date
       {/* Right: tracker dropdown */}
       <div ref={dropdownRef} style={{ position: 'relative' }}>
         <button onClick={() => setDropdownOpen(o => !o)} style={{
+          display: 'inline-flex', alignItems: 'center', minHeight: 34,
           background: 'transparent', border: '1px solid var(--border2)', cursor: 'pointer',
-          padding: '6px 12px', borderRadius: 'var(--r)',
+          padding: '4px 12px', borderRadius: 'var(--r)',
           fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none',
           color: 'var(--text-dim)',
         }}>

@@ -679,7 +679,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
   const notImportedCount = trackerStats?.not_imported_count ?? 0
 
   const yieldData     = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
-  const yieldPct      = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(2) + '%' : '—'
+  const yieldPct      = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(1) + '%' : '—'
   const uploadedBytes = yieldData?.uploaded ?? null
 
   // Merge daily_uploads (delta bytes) + daily_tracker_stats (point-in-time) by date
@@ -713,7 +713,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
   const CHART_TABS = [
     { key: 'seeding',      label: 'Seeding',      dataKey: 'seeding_size',      color: 'var(--green)',  fmt: formatBytes },
     { key: 'upload',       label: 'Uploaded',     dataKey: 'uploaded',          color: 'var(--blue)',   fmt: formatBytes },
-    { key: 'yield',        label: 'Yield',        dataKey: 'yield_pct',         color: 'var(--accent)', fmt: v => v != null ? v.toFixed(3) + '%' : '—' },
+    { key: 'yield',        label: 'Yield',        dataKey: 'yield_pct',         color: 'var(--accent)', fmt: v => v != null ? v.toFixed(1) + '%' : '—' },
     { key: 'orphaned',     label: 'Orphaned',     dataKey: 'orphaned_size',     color: 'var(--yellow)', fmt: formatBytes },
     { key: 'not_imported', label: 'Not Imported', dataKey: 'not_imported_size', color: 'var(--red)',    fmt: formatBytes },
   ]
@@ -815,7 +815,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                       tickLine={false} axisLine={false}
                       domain={chartTab === 'seeding' ? ['auto', 'auto'] : [0, 'auto']}
                       tickFormatter={chartTab === 'yield'
-                        ? v => v != null ? v.toFixed(2) + '%' : ''
+                        ? v => v != null ? v.toFixed(1) + '%' : ''
                         : formatBytesCompact}
                     />
                     <Tooltip
@@ -1302,7 +1302,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                       const filteredUploaded = yieldRows.reduce((s, t) => s + t.uploaded, 0)
                       const filteredSeeding  = yieldRows.reduce((s, t) => s + t.seeding_size, 0)
                       const filteredYield    = filteredSeeding > 0 ? filteredUploaded / filteredSeeding : null
-                      const { num, unit } = splitValueUnit(filteredYield !== null ? (filteredYield * 100).toFixed(2) + '%' : '—')
+                      const { num, unit } = splitValueUnit(filteredYield !== null ? (filteredYield * 100).toFixed(1) + '%' : '—')
                       return <HeroNumber value={num} unit={unit} />
                     })()}
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
@@ -1347,7 +1347,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
                               <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
-                                {t.yield !== null ? (t.yield * 100).toFixed(2) + '%' : '—'}
+                                {t.yield !== null ? (t.yield * 100).toFixed(1) + '%' : '—'}
                               </td>
                             </tr>
                           ))}

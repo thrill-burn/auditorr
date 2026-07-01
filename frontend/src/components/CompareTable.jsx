@@ -13,7 +13,7 @@ function cellData(s, m) {
   if (m.key === 'yield') {
     const frac = s.yield
     const pct = frac == null ? null : frac * 100
-    return { raw: pct, display: frac == null ? '—' : pct.toFixed(2) + '%', zero: frac == null || frac === 0 }
+    return { raw: pct, display: frac == null ? '—' : pct.toFixed(1) + '%', zero: frac == null || frac === 0 }
   }
   const field = m.key === 'seeding' ? 'seeding_size'
               : m.key === 'uploaded' ? 'uploaded'

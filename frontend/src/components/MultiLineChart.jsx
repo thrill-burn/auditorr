@@ -8,7 +8,7 @@ import { formatBytes, formatBytesCompact } from '../utils'
 // `dates` are pre-formatted axis labels (one per point), `unit` is
 // 'bytes' | 'pct', `baseline` pins yMin to 0 for cumulative metrics.
 
-const fmtVal  = (v, unit) => unit === 'pct' ? v.toFixed(2) + '%' : formatBytes(v)
+const fmtVal  = (v, unit) => unit === 'pct' ? v.toFixed(1) + '%' : formatBytes(v)
 const fmtAxis = (v, unit) => unit === 'pct' ? v.toFixed(1) + '%' : formatBytesCompact(v)
 
 export default function MultiLineChart({ series, dates, unit, baseline, height = 320, hovered }) {
