@@ -28,6 +28,17 @@ def _compute_script_root(local_path, media_path):
     return common
 
 
+def dup_group_inputs(torrent_files, media_files, local_path, media_path):
+    """Tag files with their filesystem root for _build_dup_groups, keeping only
+    the files group building can actually use: excluded ones (they feed the
+    partner filter) and ones with duplicate partners. Copying every record just
+    to add the tag doubled the multi-GB parsed lists on very large libraries."""
+    def keep(f):
+        return f.get('excluded') or f.get('duplicate_paths')
+    return ([{**f, '_file_root': local_path} for f in torrent_files if keep(f)]
+            + [{**f, '_file_root': media_path} for f in media_files if keep(f)])
+
+
 def _build_dup_groups(all_files, local_path, media_path=''):
     """Group files with duplicate_paths into structured groups for the Actions page.
 
@@ -311,9 +322,9 @@ def _build_dedupe_script(results, cfg, now_str, selection):
     media_files    = results.get('media_files', [])
     local_path     = cfg.get('LOCAL_PATH', '')
     media_path     = cfg.get('MEDIA_PATH', '')
-    tagged_torrent = [{**f, '_file_root': local_path} for f in torrent_files]
-    tagged_media   = [{**f, '_file_root': media_path}  for f in media_files]
-    dup_result         = _build_dup_groups(tagged_torrent + tagged_media, local_path, media_path)
+    dup_result         = _build_dup_groups(
+        dup_group_inputs(torrent_files, media_files, local_path, media_path),
+        local_path, media_path)
     groups             = dup_result['groups']
     script_root        = dup_result['script_root']
     excluded_count     = dup_result.get('excluded_count', 0)

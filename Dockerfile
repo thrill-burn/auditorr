@@ -8,6 +8,11 @@ RUN npm run build
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
+# glibc gives each thread pool its own malloc arena (8 gthread workers → up to
+# 8×), multiplying heap fragmentation under scan-heavy allocation. Two arenas
+# is the standard setting for long-running Python services and materially
+# lowers steady-state RSS on very large libraries.
+ENV MALLOC_ARENA_MAX=2
 
 WORKDIR /app
 COPY requirements.txt .

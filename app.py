@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.error
 from datetime import datetime
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 import sources
@@ -35,10 +35,13 @@ from db import (
 from state import get_state, set_state, try_start_scanning
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match
-from scripts import generate_script, _build_dup_groups
+from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
-from debug import install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events
+from debug import (
+    install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events,
+    start_memory_monitor, record_heavy_request, malloc_trim, process_rss_mb,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
@@ -47,6 +50,11 @@ APP_VERSION = "1.7.0"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()
+
+# Always-on memory timeline (60s samples + persisted hourly aggregates) so the
+# debug report can show whether RSS climbs continuously (leak) or staircases at
+# scans / workflow page loads (allocator ratchet).
+start_memory_monitor()
 
 # Native crashes (SIGSEGV/SIGABRT) dump Python tracebacks to stderr → docker logs
 import faulthandler
@@ -117,6 +125,47 @@ def _is_source_error_status(status):
     ))
 
 # ---------------------------------------------------------------------------
+# Heavy-endpoint memory hooks
+# ---------------------------------------------------------------------------
+# These endpoints deserialize the stored file lists in full — a multi-GB object
+# graph on 500K+ file libraries. RSS is recorded around each call for the debug
+# report's heavy_requests ring, and freed pages are handed back to the OS after
+# the response is built so a workflow page visit doesn't permanently ratchet
+# the process footprint. Exact paths, so generate/status polls don't match.
+
+_HEAVY_MEM_PATHS = frozenset({
+    '/api/workflows/triage',
+    '/api/workflows/cleanup',
+    '/api/workflows/dedupe',
+    '/api/workflows/acquire_candidates',
+    '/api/workflows/generate',
+})
+
+
+def _is_heavy_mem_path(path):
+    return path in _HEAVY_MEM_PATHS or path.startswith('/api/actions/script/')
+
+
+@app.before_request
+def _heavy_request_mem_start():
+    if _is_heavy_mem_path(request.path):
+        g._heavy_mem_probe = (time.time(), process_rss_mb())
+
+
+@app.after_request
+def _heavy_request_mem_end(response):
+    probe = g.pop('_heavy_mem_probe', None)
+    if probe is not None:
+        started, rss_before = probe
+        rss_after = process_rss_mb()
+        # The handler's parsed file lists are unreferenced once it returns —
+        # trim so their pages actually leave the process instead of ratcheting.
+        malloc_trim()
+        record_heavy_request(request.path, rss_before, rss_after, process_rss_mb(),
+                             round((time.time() - started) * 1000))
+    return response
+
+# ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
@@ -169,7 +218,8 @@ def _handle_aborted_scan():
     log.warning(f"Aborted scan detected (streak: {streak}): {msg}")
     try:
         db_save_audit(marker.get('trigger', 'unknown'), None, 'aborted', msg, {},
-                      source=db_load_config().get('TORRENT_SOURCE', 'qbit'))
+                      source=db_load_config().get('TORRENT_SOURCE', 'qbit'),
+                      peak_rss_mb=marker.get('peak_rss_mb') or marker.get('last_rss_mb') or marker.get('rss_mb'))
     except Exception as e:
         log.warning(f"Could not record aborted audit run: {e}")
     return streak
@@ -248,7 +298,15 @@ def debug_report():
     No credentials; hosts/IPs/tokens redacted; media file and folder names
     replaced with stable short hashes.
     """
-    return jsonify(build_debug_report(APP_VERSION))
+    report = build_debug_report(APP_VERSION)
+    # In-memory job-store sizes (owned by this module) — gauges for the
+    # "slow unbounded growth" suspects.
+    report['app_gauges'] = {
+        'release_jobs':         len(_release_jobs),
+        'import_watches':       len(_import_watches),
+        'generate_job_results': len((_gen_state.get('job') or {}).get('results') or []),
+    }
+    return jsonify(report)
 
 
 @app.route('/api/results')
@@ -1765,9 +1823,9 @@ def workflows_dedupe():
     media_path = cfg.get('MEDIA_PATH', '')
     torrent_files = db_load_file_results('torrents')
     media_files   = db_load_file_results('media')
-    tagged = ([{**f, '_file_root': local_path} for f in torrent_files]
-              + [{**f, '_file_root': media_path} for f in media_files])
-    dup_result = _build_dup_groups(tagged, local_path, media_path)
+    dup_result = _build_dup_groups(
+        dup_group_inputs(torrent_files, media_files, local_path, media_path),
+        local_path, media_path)
 
     groups_out = []
     for g in dup_result['groups']:

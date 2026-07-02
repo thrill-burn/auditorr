@@ -21,7 +21,7 @@ from db import (
     db_get_meta, db_set_meta, db_delete_meta,
 )
 from state import get_state, set_state, update_progress
-from debug import process_rss_mb, container_memory, host_available_mb
+from debug import process_rss_mb, container_memory, host_available_mb, malloc_trim
 
 log = logging.getLogger(__name__)
 
@@ -761,6 +761,16 @@ def _memory_sampler(stop_event, interval=20):
                     f"may terminate the scan (no container memory limit is set).")
 
 
+def _scan_peak_rss():
+    """Best-effort per-scan peak RSS: the sampler folds highs into the scan
+    marker every 20s; fall back to the current reading. Persisted onto the
+    audit_runs row so peak-per-scan trends survive across days of history."""
+    try:
+        return (db_get_meta('scan_marker') or {}).get('peak_rss_mb') or process_rss_mb()
+    except Exception:
+        return None
+
+
 def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
@@ -905,7 +915,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot,
                       source=cfg.get('TORRENT_SOURCE', 'qbit'),
                       duration_seconds=round(time.time() - scan_start, 1),
-                      ran_at=ran_at)
+                      ran_at=ran_at, peak_rss_mb=_scan_peak_rss())
         # Scan finished — clear the crash-loop streak so future startups scan normally
         try:
             db_set_meta('consecutive_aborted_scans', 0)
@@ -925,7 +935,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         log.error(msg)
         if persist_source_errors:
             _save_error_status(msg)
-            db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
+            db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1), peak_rss_mb=_scan_peak_rss())
         set_state(status_message=msg, last_scan_status="error")
     except MemoryError:
         # Python-level allocation failure (the kernel OOM killer SIGKILLs instead —
@@ -962,7 +972,8 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         try:
             _save_error_status(msg)
             db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'),
-                          duration_seconds=round(time.time() - scan_start, 1))
+                          duration_seconds=round(time.time() - scan_start, 1),
+                          peak_rss_mb=_scan_peak_rss())
         except Exception as e2:
             log.error(f"Could not persist out-of-memory error status: {e2}")
         set_state(status_message=msg, last_scan_status="error")
@@ -970,7 +981,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         msg = f"Audit error: {e}"
         log.exception("Unexpected error during audit")
         _save_error_status(msg)
-        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1))
+        db_save_audit(trigger, None, 'error', msg, {}, source=cfg.get('TORRENT_SOURCE', 'qbit'), duration_seconds=round(time.time() - scan_start, 1), peak_rss_mb=_scan_peak_rss())
         set_state(status_message=msg, last_scan_status="error")
     finally:
         sampler_stop.set()
@@ -985,6 +996,22 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # found at next startup, which records an 'aborted' audit run.
         try:
             db_delete_meta('scan_marker')
+        except Exception:
+            pass
+        # Drop any scan structures this frame still references (assignment is
+        # NameError-proof across the success and error paths), then hand the
+        # freed pages back to the OS — glibc otherwise keeps the scan's peak
+        # resident for the container's lifetime, which on very large libraries
+        # ratchets RSS upward until the next restart.
+        qbit_file_map = inode_map = duplicate_map = None
+        torrent_key_order = media_key_order = None
+        torrent_files_data = media_files_data = None
+        result = not_imported_paths = None
+        try:
+            rss_before = process_rss_mb()
+            gc.collect()
+            if malloc_trim() and rss_before is not None:
+                log.info(f"Post-scan memory trim: rss {rss_before} -> {process_rss_mb()} MB")
         except Exception:
             pass
         scan_end = time.time()

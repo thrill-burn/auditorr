@@ -116,6 +116,7 @@ def init_db():
             "ALTER TABLE upload_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'",
             "ALTER TABLE audit_runs ADD COLUMN source TEXT NOT NULL DEFAULT 'qbit'",
             "ALTER TABLE audit_runs ADD COLUMN duration_seconds REAL",
+            "ALTER TABLE audit_runs ADD COLUMN peak_rss_mb INTEGER",
         ):
             try:
                 conn.execute(migration)
@@ -175,14 +176,14 @@ def _migrate_json_files():
 # Audit runs + snapshots
 # ---------------------------------------------------------------------------
 
-def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit', duration_seconds=None, ran_at=None):
+def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit', duration_seconds=None, ran_at=None, peak_rss_mb=None):
     if ran_at is None:
         ran_at = datetime.now().isoformat()
     conn = _db_conn()
     try:
         cur = conn.execute(
-            'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message, source, duration_seconds) VALUES (?,?,?,?,?,?,?)',
-            (ran_at, trigger, health_score, status, error_message, source, duration_seconds)
+            'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message, source, duration_seconds, peak_rss_mb) VALUES (?,?,?,?,?,?,?,?)',
+            (ran_at, trigger, health_score, status, error_message, source, duration_seconds, peak_rss_mb)
         )
         run_id = cur.lastrowid
         conn.execute(
@@ -221,12 +222,12 @@ def db_get_recent_runs(limit=None):
     try:
         if limit is not None:
             rows = conn.execute(
-                'SELECT id, ran_at, trigger, health_score, status, error_message, source, duration_seconds FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
+                'SELECT id, ran_at, trigger, health_score, status, error_message, source, duration_seconds, peak_rss_mb FROM audit_runs ORDER BY ran_at DESC LIMIT ?',
                 (limit,)
             ).fetchall()
         else:
             rows = conn.execute(
-                'SELECT id, ran_at, trigger, health_score, status, error_message, source, duration_seconds FROM audit_runs ORDER BY ran_at DESC'
+                'SELECT id, ran_at, trigger, health_score, status, error_message, source, duration_seconds, peak_rss_mb FROM audit_runs ORDER BY ran_at DESC'
             ).fetchall()
         return [dict(r) for r in rows]
     finally:

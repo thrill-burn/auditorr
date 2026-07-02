@@ -19,7 +19,7 @@ import traceback
 from collections import deque
 from datetime import datetime, timedelta
 
-from db import DATA_DIR, DB_FILE, db_load_config, db_load_results, db_get_meta
+from db import DATA_DIR, DB_FILE, db_load_config, db_load_results, db_get_meta, db_set_meta
 from state import get_state
 
 log = logging.getLogger(__name__)
@@ -313,6 +313,143 @@ def memory_pressure():
 
 
 # ---------------------------------------------------------------------------
+# Heap trimming
+# ---------------------------------------------------------------------------
+
+try:
+    import ctypes
+    _libc = ctypes.CDLL('libc.so.6')
+except Exception:
+    _libc = None
+
+
+def malloc_trim():
+    """Ask glibc to hand freed heap pages back to the OS.
+
+    CPython frees scan/request structures internally, but glibc keeps the pages
+    resident, so RSS stays at the worst peak ever reached for the container's
+    lifetime — the 'ratchet' very large libraries report as a leak. Returns
+    False (no-op) on musl/Windows/macOS."""
+    if _libc is None:
+        return False
+    try:
+        _libc.malloc_trim(0)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Memory timeline (always-on) + heavy-request attribution
+# ---------------------------------------------------------------------------
+# The in-scan sampler (audit._memory_sampler) only covers crashes; this covers
+# the slow-growth complaint: is RSS a staircase that jumps at scans, a
+# staircase that jumps at workflow page visits, or a continuous climb (a real
+# leak)? `blocks` is sys.getallocatedblocks() — flat blocks under high RSS
+# means allocator ratchet, monotonically climbing blocks means a genuine leak.
+
+_MEM_SAMPLE_INTERVAL = 60      # seconds between samples
+_MEM_RECENT_SAMPLES  = 180     # fine-grained ring: last ~3 hours (lost on restart)
+_MEM_HOURLY_KEPT     = 336     # persisted hourly aggregates: 14 days
+
+_mem_lock   = threading.Lock()
+_mem_recent = deque(maxlen=_MEM_RECENT_SAMPLES)
+_heavy_ring = deque(maxlen=50)
+_mem_monitor_started = False
+
+
+def record_heavy_request(path, rss_before, rss_after, rss_trimmed, duration_ms):
+    """Ring-buffer one heavy request's memory footprint for the debug report."""
+    with _mem_lock:
+        _heavy_ring.append({
+            'ts':          datetime.now().isoformat(timespec='seconds'),
+            'path':        path,
+            'rss_before':  rss_before,
+            'rss_after':   rss_after,
+            'rss_trimmed': rss_trimmed,
+            'duration_ms': duration_ms,
+        })
+
+
+def _memory_snapshot():
+    with _mem_lock:
+        return {'timeline_recent': list(_mem_recent), 'heavy_requests': list(_heavy_ring)}
+
+
+def _persist_hour(hour, agg):
+    hist = db_get_meta('memory_history') or []
+    hist.append({'hour': hour, **agg})
+    db_set_meta('memory_history', hist[-_MEM_HOURLY_KEPT:])
+
+
+def _memory_monitor():
+    hour, agg = None, None
+    while True:
+        time.sleep(_MEM_SAMPLE_INTERVAL)
+        try:
+            rss   = process_rss_mb()
+            state = get_state()
+            sample = {
+                'ts':     datetime.now().isoformat(timespec='seconds'),
+                'rss_mb': rss,
+                'blocks': sys.getallocatedblocks(),
+                'phase':  state.get('phase') if state.get('is_scanning') else None,
+            }
+            with _mem_lock:
+                _mem_recent.append(sample)
+            if rss is None:
+                continue  # non-Linux dev machine — nothing worth aggregating
+            hk = sample['ts'][:13]  # YYYY-MM-DDTHH
+            if agg is not None and hk != hour:
+                _persist_hour(hour, agg)
+                agg = None
+            if agg is None:
+                hour = hk
+                agg  = {'rss_min': rss, 'rss_max': rss, 'rss_end': rss,
+                        'blocks_end': sample['blocks'], 'scanned': False}
+            agg['rss_min']    = min(agg['rss_min'], rss)
+            agg['rss_max']    = max(agg['rss_max'], rss)
+            agg['rss_end']    = rss
+            agg['blocks_end'] = sample['blocks']
+            agg['scanned']    = agg['scanned'] or bool(state.get('is_scanning'))
+        except Exception:
+            pass  # the monitor must never die or take the app down
+
+
+def start_memory_monitor():
+    """Start the process-lifetime memory sampler (idempotent)."""
+    global _mem_monitor_started
+    if _mem_monitor_started:
+        return
+    _mem_monitor_started = True
+    threading.Thread(target=_memory_monitor, daemon=True, name='memory-monitor').start()
+
+
+def inotify_watch_stats():
+    """This process's inotify watch count vs the kernel limit (Linux only).
+
+    The filesystem watchdog holds one watch per directory, so on very large
+    libraries this both consumes kernel slots and measures watch-table RAM."""
+    try:
+        watches = 0
+        for fd in os.listdir('/proc/self/fdinfo'):
+            try:
+                with open(f'/proc/self/fdinfo/{fd}') as f:
+                    watches += sum(1 for line in f if line.startswith('inotify wd:'))
+            except OSError:
+                continue
+        limit = None
+        try:
+            with open('/proc/sys/fs/inotify/max_user_watches') as f:
+                limit = int(f.read().strip())
+        except (OSError, ValueError):
+            pass
+        return {'watches': watches, 'max_user_watches': limit}
+    except OSError:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Report builder
 # ---------------------------------------------------------------------------
 
@@ -404,7 +541,7 @@ def _recent_runs_sanitized(limit=20):
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
-                'SELECT ran_at, trigger, health_score, status, error_message, source, duration_seconds '
+                'SELECT ran_at, trigger, health_score, status, error_message, source, duration_seconds, peak_rss_mb '
                 'FROM audit_runs ORDER BY ran_at DESC LIMIT ?', (limit,)
             ).fetchall()
             runs = [{**dict(r), 'error_message': sanitize_text(r['error_message'])} for r in rows]
@@ -439,9 +576,15 @@ def build_debug_report(version):
             'cpu_count':         os.cpu_count(),
             'rss_mb':            process_rss_mb(),
             'peak_rss_mb':       process_peak_rss_mb(),
+            'allocated_blocks':  sys.getallocatedblocks(),
             'container_memory':  container_memory(),
             'cgroup_oom_events': cgroup_oom_events(),
             'host_available_mb': host_available_mb(),
+            'malloc_trim_available': _libc is not None,
+            'malloc_arena_max':  os.environ.get('MALLOC_ARENA_MAX'),
+            'thread_count':      threading.active_count(),
+            'thread_names':      sorted(t.name for t in threading.enumerate())[:40],
+            'inotify':           inotify_watch_stats(),
             'data_dir_set':      bool(os.environ.get('DATA_DIR')),
             'auth_enabled':      bool(os.environ.get('AUDITORR_SECRET', '').strip()),
         },
@@ -470,6 +613,18 @@ def build_debug_report(version):
                 {**h, 'message': sanitize_text(h.get('message'))}
                 for h in (db_get_meta('last_scan_phases') or [])
             ],
+        },
+        'memory': {
+            '_readme': (
+                'timeline_recent: 60s samples, last ~3h, lost on restart. '
+                'timeline_hourly: persisted hourly aggregates, 14 days. '
+                'heavy_requests: RSS around endpoints that deserialize the full '
+                'file lists (rss_trimmed = after handing freed pages back to the OS). '
+                'blocks = sys.getallocatedblocks(): flat blocks under high RSS means '
+                'allocator ratchet, climbing blocks means a genuine object leak.'
+            ),
+            **_memory_snapshot(),
+            'timeline_hourly': db_get_meta('memory_history') or [],
         },
         'library':       _library_stats(),
         'database':      _db_stats(),
