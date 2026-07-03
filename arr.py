@@ -324,8 +324,8 @@ def match_trump_release(releases, new_title, indexer=''):
 # shows a ranked candidate list the user picks from instead of dead-ending.
 #
 # The title is a REQUIRED soft match, then quality fields rank within it. The
-# title must actually overlap and the year/episode must agree; only then do
-# resolution/source/group/audio/HDR refine the ranking. Quality agreement alone
+# title must actually overlap and the year (±1) / episode must agree; only then
+# do resolution/source/group/audio/HDR refine the ranking. Quality agreement alone
 # never makes a match — otherwise two unrelated 1080p WEB-DLs look like siblings
 # (the "Flow 2019" shown for "Obsession 2026" bug). When the real torrent isn't
 # in the client the list comes back empty, which the picker reports honestly,
@@ -365,6 +365,7 @@ _QUALITY_NOISE = {
     'amzn', 'nf', 'dsnp', 'atvp', 'hmax', 'max', 'hulu', 'pcok', 'stan', 'ip', 'itunes',
     'repack', 'proper', 'internal', 'extended', 'remastered', 'remaster',
     'imax', 'real', 'uncut', 'directors', 'cut',
+    'mkv', 'mp4', 'avi', 'ts', 'm2ts', 'iso',
 }
 
 # Articles carry no discriminating power and cause spurious title overlap ("The
@@ -423,18 +424,20 @@ def score_release_match(query, cand_name):
     with a per-field agreement breakdown for the UI.
 
     The title is a REQUIRED soft match: the two title cores must actually
-    overlap (Jaccard ≥ _MIN_TITLE_SIM) and the year/episode anchor must agree —
-    otherwise the candidate is disqualified (score 0, dropped by the ranker), no
-    matter how well its resolution/source/audio line up. Quality agreement only
-    *refines the ranking among real title matches*; it never manufactures one.
-    This is what stops two unrelated 1080p WEB-DLs from looking like siblings.
+    overlap (Jaccard ≥ _MIN_TITLE_SIM) and the year (within ±1) / episode
+    anchor must agree — otherwise the candidate is disqualified (score 0,
+    dropped by the ranker), no matter how well its resolution/source/audio line
+    up. Quality agreement only *refines the ranking among real title matches*;
+    it never manufactures one. This is what stops two unrelated 1080p WEB-DLs
+    from looking like siblings.
 
-    Returns (score, breakdown) where breakdown maps title/res/source/group/
-    audio/hdr/anchor to 'same' | 'diff' | 'partial' | '' (missing on a side).
+    Returns (score, breakdown) where breakdown maps title/year/res/source/
+    group/audio/hdr/anchor to 'same' | 'diff' | 'partial' | '' (missing on a
+    side).
     """
     q = _release_match_features(query)
     c = _release_match_features(cand_name)
-    b = {'title': '', 'res': '', 'source': '', 'group': '', 'audio': '', 'hdr': '', 'anchor': ''}
+    b = {'title': '', 'year': '', 'res': '', 'source': '', 'group': '', 'audio': '', 'hdr': '', 'anchor': ''}
 
     # Title gate — both sides must have parseable title words that overlap.
     if not q['core'] or not c['core']:
@@ -446,9 +449,16 @@ def score_release_match(query, cand_name):
     if inter == 0 or title_sim < _MIN_TITLE_SIM:
         return 0.0, b
 
-    # Year gate — a declared year that disagrees is a different release (remake).
-    if q['year'] and c['year'] and q['year'] != c['year']:
-        return 0.0, b
+    # Year gate — a declared year off by more than one is a different release
+    # (remake). Exactly one year of drift is the same film: premiere year vs
+    # wide-release year renders one movie under either ("Snow White and the
+    # Seven Dwarfs" is 1937 or 1938 depending on who typed it), so PMs, torrent
+    # names, and indexer records routinely disagree by one. Same ±1 tolerance
+    # as _trump_year_ok; flagged 'partial' so the user sees the drift.
+    if q['year'] and c['year']:
+        if abs(q['year'] - c['year']) > 1:
+            return 0.0, b
+        b['year'] = 'same' if q['year'] == c['year'] else 'partial'
     # Episode gate — a declared season/episode that disagrees is a different
     # payload.
     if q['anchor'] and c['anchor'] and q['anchor'] != c['anchor']:
@@ -477,7 +487,12 @@ def score_release_match(query, cand_name):
 
     # A title-gated candidate always stays visible (min 0.05) so the user can
     # vet it; only true gate failures return 0.
-    return max(0.05, min(1.0, score)), b
+    score = max(0.05, min(1.0, score))
+    if b['year'] == 'partial':
+        # After the cap, so an exact-year twin outranks the ±1 rendering even
+        # when both saturate at 1.0.
+        score = max(0.05, score - 0.02)
+    return score, b
 
 
 def rank_release_matches(items, query, name_key='name', limit=8, min_score=0.0):

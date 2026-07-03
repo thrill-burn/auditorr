@@ -226,6 +226,34 @@ class RankReleaseMatchesTests(unittest.TestCase):
             rows, "Obsession 2026 1080p WEB-DL DD+ 5.1 H.264-KyoGo", "name")
         self.assertEqual(ranked, [])
 
+    def test_year_off_by_one_is_the_same_film(self):
+        # Real trump: the PM says 1938, Aither's API renders the same release as
+        # 1937 (premiere vs wide-release year) plus a .mkv file-name suffix.
+        # Must rank first — flagged 'partial' on year, not disqualified.
+        rows = self._rows(
+            "Snow.White.and.the.Seven.Dwarfs.1937.Hybrid.2160p.BluRay.DD.1.0.DV.HDR10.x265-Softboat.mkv",
+            "Snow White and the Seven Dwarfs 1938 2160p BluRay HDR10 DDP 7 1 x265-edge2020",
+        )
+        ranked = rank_release_matches(
+            rows, "Snow White and the Seven Dwarfs 1938 Hybrid 2160p UHD BluRay DD 1.0 DV HDR x265-Softboat",
+            "name")
+        self.assertTrue(ranked[0]["name"].endswith("Softboat.mkv"))
+        self.assertEqual(ranked[0]["match"]["year"], "partial")
+        # .mkv is not a title word — the cores are identical despite the suffix
+        self.assertEqual(ranked[0]["match"]["title"], "same")
+
+    def test_exact_year_outranks_off_by_one_twin(self):
+        rows = self._rows(
+            "A.Movie.2019.1080p.WEB-DL.DDP5.1.H.264-GRP",
+            "A.Movie.2020.1080p.WEB-DL.DDP5.1.H.264-GRP",
+        )
+        ranked = rank_release_matches(
+            rows, "A Movie 2020 1080p WEB-DL DD+ 5.1 H.264-GRP", "name")
+        self.assertEqual(len(ranked), 2)
+        self.assertIn("2020", ranked[0]["name"])
+        self.assertEqual(ranked[0]["match"]["year"], "same")
+        self.assertEqual(ranked[1]["match"]["year"], "partial")
+
 
 class TitleSoftMatchTests(unittest.TestCase):
     def test_stray_season_token_still_matches_series(self):

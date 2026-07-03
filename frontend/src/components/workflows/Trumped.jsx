@@ -87,7 +87,7 @@ function QualityChip({ label, hdr }) {
 // Hue as text only (never a fill): green agrees with the PM, red differs, amber
 // is a partial title overlap. Lets the user see at a glance exactly why a
 // candidate ranks where it does before committing to a delete or a grab.
-const MATCH_FIELDS = [['res', 'RES'], ['source', 'SRC'], ['audio', 'AUD'], ['hdr', 'HDR'], ['group', 'GRP']]
+const MATCH_FIELDS = [['year', 'YR'], ['res', 'RES'], ['source', 'SRC'], ['audio', 'AUD'], ['hdr', 'HDR'], ['group', 'GRP']]
 const MATCH_COLOR  = { same: 'var(--green)', diff: 'var(--red)', partial: 'var(--yellow)' }
 const MATCH_MARK   = { same: '✓', diff: '✗', partial: '~' }
 
@@ -127,7 +127,8 @@ function CandidateRow({ cand, selected, onSelect }) {
       borderLeft: `2px solid ${selected ? ACCENT : 'transparent'}`,
     }}>
       <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
-      <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+      {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
       {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
       <MatchChips match={cand.match} />
       {sub && <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{sub}</span>}
@@ -412,7 +413,7 @@ export default function Trumped({ onNavigate }) {
               <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
                 {group.torrents.map(t => (
                   <div key={t.hash} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
-                    <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.name}</span>
                     <span title={t.hash} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{t.tracker || 'no tracker'}</span>
                     {t.seeding_time != null && <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>seeded {formatDuration(t.seeding_time)}</span>}
                     <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(t.size)}</span>
