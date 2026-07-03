@@ -20,10 +20,10 @@ function formatDuration(secs) {
 
 const SAMPLE_PM = `The following torrent(s) have been trumped
 
-    Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX
+    The General 1926 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX
 
 and will be replaced by
-Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes.
+The General 1926 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes.
 
 Reason: DV/HDR replacing HDR`
 
