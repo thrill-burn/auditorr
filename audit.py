@@ -680,6 +680,26 @@ def _is_not_imported_torrent(f):
     )
 
 
+def _is_triage_relevant(f):
+    """Torrent-file records the Triage workflow reads: not-imported files,
+    imported dead seeds, and carriers of dead cross-seed registrations.
+
+    Persisted as the compact 'triage' file_results row at save time so the
+    Triage page never deserializes the full torrent list (a few hundred MB of
+    object graph on large libraries) for the ~2% of records it acts on.
+    Must stay in lockstep with the filters in app.workflows_triage.
+    """
+    if f.get('excluded'):
+        return False
+    if f.get('dead_siblings'):
+        return True
+    if f.get('status') == 'Orphaned':
+        return False
+    if not f.get('imported'):
+        return True
+    return f.get('tracker_health') == 'unregistered'
+
+
 def _not_imported_paths(torrent_files):
     return [f['path'] for f in torrent_files if _is_not_imported_torrent(f)]
 
@@ -906,6 +926,10 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         _enter_phase("post", "Saving file results...")
         db_save_file_results('media',    media_files_data)
         db_save_file_results('torrents', torrent_files_data)
+        # Compact Triage working set (references, not copies) — lets the
+        # Triage page skip deserializing the full torrent list.
+        db_save_file_results('triage',
+                             [f for f in torrent_files_data if _is_triage_relevant(f)])
         db_save_file_signatures('media',    file_signatures(media_files_data))
         db_save_file_signatures('torrents', file_signatures(torrent_files_data))
         _enter_phase("post", "Saving audit results...")

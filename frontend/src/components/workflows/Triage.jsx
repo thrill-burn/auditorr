@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../../api'
 import { formatBytes, copyText } from '../../utils'
@@ -64,6 +64,21 @@ const QUALITY_BUCKETS = [
 
 function itemKey(item) {
   return item.hash || item.rep_path
+}
+
+// Live-verify batch size. Batches go out sequentially and stay under the
+// server's per-request cap, so the tracker fan-out never runs wider than the
+// 8-worker ceiling qui/qBittorrent are known to tolerate.
+const VERIFY_CHUNK = 150
+
+// Resolve an item's verdict for a live tracker health answer using the
+// alternatives precomputed by phase 1 (null → recovered; the row drops).
+function verdictUnder(item, health) {
+  const alts = item.verdict_alternatives
+  if (!alts) return item.verdict
+  if (health === 'working') return alts.working
+  if (health === 'unregistered') return alts.unregistered
+  return alts.other
 }
 
 // Which superseded sub-bucket an item belongs to. A byte-identical duplicate
@@ -162,7 +177,7 @@ function QualityChip({ label, hdr, dim }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate }) {
+function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending }) {
   const p = item.parsed || {}
   const seTag = p.season != null
     ? ` · S${String(p.season).padStart(2, '0')}${p.episode != null ? 'E' + String(p.episode).padStart(2, '0') : ' pack'}`
@@ -247,16 +262,26 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
 
       {/* Earnings — the keep/delete tiebreaker. Seeding time matters more
           than per-torrent ratio on private trackers: it decides whether
-          deleting now means a hit-and-run. */}
+          deleting now means a hit-and-run. Live-only data: pulses until
+          this row's verification batch answers. */}
       <div style={{ flexShrink: 0, textAlign: 'right', width: 100 }}>
-        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: item.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
-          {item.uploaded != null ? `↑ ${formatBytes(item.uploaded)}` : '—'}
-        </div>
-        {item.seeding_time != null && (
-          <div title="Total time seeding — check your tracker's hit-and-run rules before deleting"
-            style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
-            seeded {formatDuration(item.seeding_time)}
+        {pending ? (
+          <div title="Verifying with the torrent client…"
+            style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)', animation: 'triagePulse 1.4s ease-in-out infinite' }}>
+            ···
           </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: item.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
+              {item.uploaded != null ? `↑ ${formatBytes(item.uploaded)}` : '—'}
+            </div>
+            {item.seeding_time != null && (
+              <div title="Total time seeding — check your tracker's hit-and-run rules before deleting"
+                style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+                seeded {formatDuration(item.seeding_time)}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -321,12 +346,92 @@ export default function Triage({ onNavigate, cleanupCount }) {
   const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui', url }
   const [clientDeleteAllowed, setClientDeleteAllowed] = useState(false)
 
+  // Phase 2 — live tracker verification. The report renders instantly from
+  // audit-time data; hashes are then re-checked against the torrent client in
+  // sequential batches and the rows updated in place.
+  // null | { running, done, total, removed, failed: string|null }
+  const [verify, setVerify] = useState(null)
+  const verifyGen = useRef(0)   // bumped to cancel a superseded verify loop
+
+  // Fold one batch of live details into the report: recovered torrents drop,
+  // verdicts re-resolve via their phase-1 alternatives, live stats fill in.
+  // Returns the keys of dropped (recovered) rows — computed purely from the
+  // batch inputs so the state updater stays side-effect free.
+  const applyDetails = useCallback((batchItems, details) => {
+    const droppedKeys = new Set(
+      batchItems
+        .filter(it => verdictUnder(it, (details[it.hash] || {}).tracker_health || 'unknown') == null)
+        .map(itemKey)
+    )
+    const batchHashes = new Set(batchItems.map(it => it.hash))
+    setReport(r => {
+      if (!r) return r
+      const items = []
+      for (const it of r.items) {
+        if (!it.hash || !batchHashes.has(it.hash)) { items.push(it); continue }
+        const det = details[it.hash] || {}
+        const health = det.tracker_health || 'unknown'
+        const verdict = verdictUnder(it, health)
+        if (verdict == null) continue   // recovered — re-registered on its tracker
+        items.push({
+          ...it,
+          verdict,
+          verified:       true,
+          tracker_health: health,
+          tracker_msg:    det.tracker_msg || it.tracker_msg,
+          uploaded:       det.uploaded ?? null,
+          ratio:          det.ratio ?? null,
+          seeding_time:   det.seeding_time ?? null,
+          added_on:       det.added_on ?? null,
+        })
+      }
+      return { ...r, items }
+    })
+    if (droppedKeys.size > 0) {
+      setSelected(prev => {
+        if (![...droppedKeys].some(k => prev.has(k))) return prev
+        const next = new Set(prev)
+        droppedKeys.forEach(k => next.delete(k))
+        return next
+      })
+    }
+    return droppedKeys.size
+  }, [])
+
+  const runVerify = useCallback(async (targets) => {
+    const gen = ++verifyGen.current
+    targets = (targets || []).filter(i => i.hash)
+    if (targets.length === 0) { setVerify(null); return }
+    setVerify({ running: true, done: 0, total: targets.length, removed: 0, failed: null })
+    let removed = 0
+    for (let off = 0; off < targets.length; off += VERIFY_CHUNK) {
+      const batch = targets.slice(off, off + VERIFY_CHUNK)
+      let resp
+      try {
+        resp = await api.triageVerify(batch.map(i => ({ hash: i.hash, instance_id: i.instance_id })))
+      } catch (e) {
+        if (gen !== verifyGen.current) return
+        setVerify(v => ({ ...(v || {}), running: false, failed: e.message }))
+        return
+      }
+      if (gen !== verifyGen.current) return   // superseded by a refresh/unmount
+      removed += applyDetails(batch, resp.details || {})
+      const done = Math.min(off + batch.length, targets.length)
+      setVerify({ running: done < targets.length, done, total: targets.length, removed, failed: null })
+    }
+    if (removed > 0) {
+      toast(`${removed} torrent${removed !== 1 ? 's' : ''} re-registered on its tracker since the last audit — removed from the list`, 'info')
+    }
+  }, [applyDetails, toast])
+
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
     setSelected(new Set())
+    setVerify(null)
+    verifyGen.current++   // cancel any in-flight verification
     api.triageReport()
-      .then(setReport)
+      .then(r => { setReport(r); runVerify(r?.items) })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
     api.getConfig().then(cfg => {
@@ -335,7 +440,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
       setClient(url ? { name: isQui ? 'qui' : 'qBittorrent', url } : null)
       setClientDeleteAllowed(!!cfg.ALLOW_CLIENT_DELETE)
     }).catch(() => {})
-  }, [])
+  }, [runVerify])
 
   const openInClient = useCallback((item, e) => {
     e.stopPropagation()
@@ -353,13 +458,19 @@ export default function Triage({ onNavigate, cleanupCount }) {
     toast(`“${term}” copied — paste it into the ${client.name} search box to find this torrent`, 'info')
   }, [client, toast])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    return () => { verifyGen.current++ }   // stop verifying after unmount
+  }, [load])
 
   const items = report?.items || []
   const byVerdict = useMemo(() => {
     const m = {}
     for (const v of VERDICTS) m[v.key] = []
     for (const item of items) (m[item.verdict] || (m[item.verdict] = [])).push(item)
+    // Largest-first within each verdict — keeps ordering stable when live
+    // verification moves an item into a different bucket.
+    for (const k of Object.keys(m)) m[k].sort((a, b) => b.total_size - a.total_size)
     return m
   }, [items])
 
@@ -537,7 +648,43 @@ export default function Triage({ onNavigate, cleanupCount }) {
         />
       )}
 
-      {loading && <LoadingRow label="Inspecting torrents — querying tracker status and your Sonarr/Radarr libraries…" />}
+      {loading && <LoadingRow label="Reading the last audit and matching against your Sonarr/Radarr libraries…" />}
+
+      {!loading && verify && (verify.running || verify.failed) && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', flexWrap: 'wrap',
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
+        }}>
+          {verify.running ? (
+            <>
+              <Spinner />
+              <span style={{ fontSize: 12.5, color: 'var(--text)' }}>Verifying live tracker status…</span>
+              <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                {verify.done}/{verify.total} checked{verify.removed > 0 ? ` · ${verify.removed} recovered` : ''}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--text-dim)', marginLeft: 'auto' }}>
+                Showing audit-time data meanwhile — rows may move or drop as trackers answer
+              </span>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: 12, color: 'var(--yellow)' }}>
+                Live tracker verification failed ({verify.failed}) — showing audit-time tracker data
+                {verify.done > 0 ? ` (${verify.done}/${verify.total} verified before the error)` : ''}.
+              </span>
+              <button
+                onClick={() => runVerify(items.filter(i => i.hash && !i.verified))}
+                style={{
+                  fontSize: 11, fontFamily: 'var(--mono)', padding: '2px 10px', borderRadius: 5, cursor: 'pointer',
+                  border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
+                }}
+              >
+                ↻ Retry
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {!loading && !error && items.length === 0 && (
         <EmptyState
@@ -608,6 +755,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
                     client={client}
                     onOpenClient={openInClient}
                     onNavigate={onNavigate}
+                    pending={!!verify?.running && !!item.hash && !item.verified}
                   />
                 ))}
               </div>
@@ -707,6 +855,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
         </>
       )}
       <SpinKeyframes />
+      <style>{`@keyframes triagePulse { 0%, 100% { opacity: .25 } 50% { opacity: .75 } }`}</style>
     </div>
   )
 }

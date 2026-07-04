@@ -97,6 +97,7 @@ export const api = {
   stopGenerate:   (jobId)  => req('/workflows/generate/stop',   { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
   workflowIndexers: ()   => req('/workflows/indexers'),
   triageReport:   ()         => req('/workflows/triage'),
+  triageVerify:   (items)    => req('/workflows/triage/verify', { method: 'POST', body: JSON.stringify({ items }) }),
   cleanupReport:  ()         => req('/workflows/cleanup'),
   dedupeReport:   ()         => req('/workflows/dedupe'),
   excludePatterns: (patterns) => req('/workflows/exclude', { method: 'POST', body: JSON.stringify({ patterns }) }),

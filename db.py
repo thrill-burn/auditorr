@@ -343,6 +343,22 @@ def db_load_file_results(tab):
         conn.close()
 
 
+def db_has_file_results(tab):
+    """Whether a stored row exists for this tab — distinct from an empty list.
+
+    Lets callers with a legacy fallback (e.g. the 'triage' subset, absent
+    until the first post-upgrade audit) tell "no row yet" apart from a
+    legitimately empty result.
+    """
+    conn = _db_conn()
+    try:
+        return conn.execute(
+            'SELECT 1 FROM file_results WHERE tab = ?', (tab,)
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def db_stream_file_results(tab, chunk_size=1 << 20):
     """Yield the stored file list as raw JSON byte chunks, without parsing it.
 

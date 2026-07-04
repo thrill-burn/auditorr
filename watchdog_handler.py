@@ -8,20 +8,28 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from db import db_load_config
-from state import get_state, set_state, try_start_scanning
+from state import get_state, set_state, try_start_scanning, workflow_active
 from audit import run_audit_process
 
 log = logging.getLogger(__name__)
 
 _observer = None
 
+# Background scans defer while a workflow session is active (scan RSS and
+# workflow-request RSS stack — the 751MB field peak was a watchdog scan under
+# a Triage session). Re-check every minute, but never hold a triggered audit
+# back more than 10 minutes so a long session can't starve scan freshness.
+_WORKFLOW_DEFER_RETRY_S = 60
+_MAX_WORKFLOW_DEFER_S   = 600
+
 
 class AuditDebounceHandler(FileSystemEventHandler):
     def __init__(self, cooldown_fn):
         super().__init__()
-        self._cooldown_fn = cooldown_fn
-        self._timer       = None
-        self._lock        = threading.Lock()
+        self._cooldown_fn    = cooldown_fn
+        self._timer          = None
+        self._lock           = threading.Lock()
+        self._deferred_since = None
 
     def _reset_timer(self):
         with self._lock:
@@ -53,6 +61,25 @@ class AuditDebounceHandler(FileSystemEventHandler):
                     self._timer.start()
                 set_state(next_scan_in=int(remaining))
                 return
+        # Someone is using a workflow page — defer so the scan doesn't stack
+        # its memory peak on top of the session's (and so the FS events from a
+        # session's deletions coalesce into one audit once the user is done).
+        if workflow_active():
+            with self._lock:
+                if self._deferred_since is None:
+                    self._deferred_since = time.time()
+                if time.time() - self._deferred_since < _MAX_WORKFLOW_DEFER_S:
+                    log.info("Watchdog: workflow in use, deferring audit %ds.",
+                             _WORKFLOW_DEFER_RETRY_S)
+                    self._timer = threading.Timer(_WORKFLOW_DEFER_RETRY_S, self._fire)
+                    self._timer.daemon = True
+                    self._timer.start()
+                    set_state(next_scan_in=_WORKFLOW_DEFER_RETRY_S)
+                    return
+                log.info("Watchdog: max workflow deferral (%ds) reached, scanning anyway.",
+                         _MAX_WORKFLOW_DEFER_S)
+        with self._lock:
+            self._deferred_since = None
         if try_start_scanning("watchdog"):
             log.info("Watchdog: cooldown elapsed, triggering audit.")
             threading.Thread(target=run_audit_process, args=("watchdog",), daemon=True).start()
@@ -93,6 +120,7 @@ def restart_watchdog():
 
 
 def _scheduled_audit_loop():
+    defer_logged = False
     while True:
         time.sleep(60)
         cfg              = db_load_config()
@@ -105,6 +133,18 @@ def _scheduled_audit_loop():
         except ValueError:
             continue
         elapsed = (datetime.now() - last_dt).total_seconds() / 60
-        if elapsed >= interval_minutes and try_start_scanning("scheduled"):
+        if elapsed < interval_minutes:
+            continue
+        # Due — but wait for any active workflow session to go quiet first.
+        # The loop re-checks every minute; no cap needed because the activity
+        # signal lapses 90s after the last real workflow request (polls are
+        # excluded), and the interval is measured in hours.
+        if workflow_active():
+            if not defer_logged:
+                log.info("Scheduled audit due, but a workflow is in use — deferring until quiet.")
+                defer_logged = True
+            continue
+        if try_start_scanning("scheduled"):
+            defer_logged = False
             log.info(f"Scheduled audit: {elapsed:.0f}m since last run, triggering.")
             threading.Thread(target=run_audit_process, args=("scheduled",), daemon=True).start()

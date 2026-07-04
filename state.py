@@ -1,3 +1,4 @@
+import time
 import threading
 
 _state_lock = threading.Lock()
@@ -46,3 +47,40 @@ def try_start_scanning(trigger):
         audit_state["is_scanning"] = True
         audit_state["trigger"] = trigger
         return True
+
+
+# ---------------------------------------------------------------------------
+# Workflow activity signal — lets background scans (watchdog / scheduled)
+# defer while someone is actively using a workflow page, so scan RSS and
+# workflow-request RSS don't stack. Manual scans ignore this: explicit intent.
+# ---------------------------------------------------------------------------
+
+# Grace after the last workflow request before background scans may run.
+# Workflow usage is bursty (page load, then verify batches, then a delete) —
+# in-flight-only checking would let a scan sneak into the gaps.
+WORKFLOW_GRACE_S = 90
+
+_workflow_inflight      = 0
+_workflow_last_activity = 0.0
+
+
+def note_workflow_request_start():
+    global _workflow_inflight, _workflow_last_activity
+    with _state_lock:
+        _workflow_inflight += 1
+        _workflow_last_activity = time.time()
+
+
+def note_workflow_request_end():
+    global _workflow_inflight, _workflow_last_activity
+    with _state_lock:
+        _workflow_inflight = max(0, _workflow_inflight - 1)
+        _workflow_last_activity = time.time()
+
+
+def workflow_active(grace_s=WORKFLOW_GRACE_S):
+    """True while a workflow request is in flight or one ended < grace_s ago."""
+    with _state_lock:
+        if _workflow_inflight > 0:
+            return True
+        return (time.time() - _workflow_last_activity) < grace_s

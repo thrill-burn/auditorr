@@ -21,7 +21,7 @@ from db import (
     init_db,
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
-    db_load_file_results, db_stream_file_results,
+    db_load_file_results, db_stream_file_results, db_has_file_results,
     db_save_history,
     db_get_recent_runs,
     db_clear_audit_history,
@@ -32,7 +32,10 @@ from db import (
     db_save_audit,
     db_get_meta, db_set_meta, db_delete_meta,
 )
-from state import get_state, set_state, try_start_scanning
+from state import (
+    get_state, set_state, try_start_scanning,
+    note_workflow_request_start, note_workflow_request_end, workflow_active,
+)
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
@@ -164,6 +167,38 @@ def _heavy_request_mem_end(response):
         record_heavy_request(request.path, rss_before, rss_after, process_rss_mb(),
                              round((time.time() - started) * 1000))
     return response
+
+
+# ---------------------------------------------------------------------------
+# Workflow activity hooks — background scans (watchdog / scheduled) defer
+# while a workflow session is in use so scan RSS and request RSS don't stack
+# (see state.workflow_active). Status/active polls are excluded: the frontend
+# polls watch_import/active every 5s unconditionally, and counting those
+# would keep the signal fresh forever.
+# ---------------------------------------------------------------------------
+
+def _is_workflow_activity_path(path):
+    if path.startswith('/api/actions/script/'):
+        return True
+    if not path.startswith('/api/workflows/'):
+        return False
+    return not path.endswith(('/status', '/active'))
+
+
+@app.before_request
+def _workflow_activity_start():
+    if _is_workflow_activity_path(request.path):
+        g._workflow_activity = True
+        note_workflow_request_start()
+
+
+@app.teardown_request
+def _workflow_activity_end(exc=None):
+    # teardown_request (not after_request) so the in-flight counter can't
+    # leak upward when a handler raises.
+    if g.pop('_workflow_activity', False):
+        note_workflow_request_end()
+
 
 # ---------------------------------------------------------------------------
 # Startup
@@ -305,6 +340,9 @@ def debug_report():
         'release_jobs':         len(_release_jobs),
         'import_watches':       len(_import_watches),
         'generate_job_results': len((_gen_state.get('job') or {}).get('results') or []),
+        # True while background scans are deferring to an active workflow
+        # session — evidence for "why didn't the watchdog scan run yet"
+        'workflow_active':      workflow_active(),
     }
     return jsonify(report)
 
@@ -880,6 +918,20 @@ def workflows_indexers():
 
 _VIDEO_EXTS = {'.mkv', '.mp4', '.avi', '.m2ts', '.ts', '.mov', '.wmv'}
 _TRIAGE_GROUP_CAP = 500
+# Hard cap per /triage/verify request. The client sends smaller batches
+# sequentially, so the per-torrent tracker fan-out (8-wide pools in sources/)
+# never runs longer than a few seconds per HTTP request and total concurrency
+# against qui/qBittorrent stays at the audit's own ceiling.
+_TRIAGE_VERIFY_BATCH_MAX = 200
+
+
+def _triage_verdict_under(alternatives, health):
+    """Select a verdict from its live-health alternatives (None → drop row)."""
+    if health == 'working':
+        return alternatives['working']
+    if health == 'unregistered':
+        return alternatives['unregistered']
+    return alternatives['other']
 
 
 @app.route('/api/workflows/exclude', methods=['POST'])
@@ -1393,7 +1445,7 @@ def workflows_trump_execute():
 @app.route('/api/workflows/triage')
 @require_auth
 def workflows_triage():
-    """Classify every problem torrent into an actionable verdict.
+    """Classify every problem torrent into an actionable verdict (phase 1).
 
     Covers two candidate sets: not-imported torrents, and imported torrents
     whose audit-time tracker check flagged the torrent as unregistered.
@@ -1405,9 +1457,22 @@ def workflows_triage():
       superseded      — the library already has this title (possibly different quality)
       import_pending  — title is managed by Sonarr/Radarr but has no library file
       not_in_library  — title matches nothing in any Arr instance
+
+    Two-phase contract: this endpoint answers from audit-time data only — no
+    torrent-client calls — so the page renders immediately. Each item carries
+    `verdict_alternatives` (its verdict under live health working/unregistered/
+    other; None = drop as recovered); the client then re-verifies hashes in
+    batches via /triage/verify and applies the alternatives, converging on
+    exactly what the old single-shot endpoint returned.
     """
     cfg = db_load_config()
-    torrent_files = db_load_file_results('torrents')
+    # Compact working set persisted by the audit (the only records the filters
+    # below can select). Databases whose last audit predates the subset row
+    # fall back to the full torrent list until the next scan.
+    if db_has_file_results('triage'):
+        torrent_files = db_load_file_results('triage')
+    else:
+        torrent_files = db_load_file_results('torrents')
     not_imported  = [f for f in torrent_files if _is_not_imported_torrent(f)]
     # Dead seeds: fully imported but the tracker no longer registers the
     # torrent (flag captured at audit time). Deleting these via the client is
@@ -1422,13 +1487,15 @@ def workflows_triage():
     for f in not_imported:
         key = f.get('hash') or f['path']
         g = groups.setdefault(key, {
-            'hash':        f.get('hash') or '',
-            'instance_id': f.get('instance_id'),
-            'files':       [],
-            'total_size':  0,
-            'trackers':    set(),
-            'imported':    False,
-            'stored_msg':  '',
+            'hash':          f.get('hash') or '',
+            'instance_id':   f.get('instance_id'),
+            'files':         [],
+            'total_size':    0,
+            'trackers':      set(),
+            'imported':      False,
+            # Audit-time health/msg: the phase-1 answer until live verify lands
+            'stored_health': f.get('tracker_health') or 'unknown',
+            'stored_msg':    f.get('tracker_msg') or '',
         })
         g['files'].append(f)
         g['total_size'] += f['size']
@@ -1439,13 +1506,14 @@ def workflows_triage():
         if existing is not None and not existing['imported']:
             continue  # partially-imported torrent — already triaged normally
         g = groups.setdefault(key, {
-            'hash':        f.get('hash') or '',
-            'instance_id': f.get('instance_id'),
-            'files':       [],
-            'total_size':  0,
-            'trackers':    set(),
-            'imported':    True,
-            'stored_msg':  f.get('tracker_msg') or '',
+            'hash':          f.get('hash') or '',
+            'instance_id':   f.get('instance_id'),
+            'files':         [],
+            'total_size':    0,
+            'trackers':      set(),
+            'imported':      True,
+            'stored_health': 'unregistered',   # the dead_seeds filter above
+            'stored_msg':    f.get('tracker_msg') or '',
         })
         g['files'].append(f)
         g['total_size'] += f['size']
@@ -1454,17 +1522,6 @@ def workflows_triage():
     group_list = sorted(groups.values(), key=lambda g: -g['total_size'])
     truncated  = len(group_list) > _TRIAGE_GROUP_CAP
     group_list = group_list[:_TRIAGE_GROUP_CAP]
-
-    # Live source lookup: upload stats + tracker registration status. The
-    # tracker message ("Unregistered torrent") is the strongest signal here.
-    details = {}
-    try:
-        details = sources.fetch_torrent_details(cfg, [
-            {'hash': g['hash'], 'instance_id': g['instance_id']}
-            for g in group_list if g['hash']
-        ])
-    except Exception as e:
-        log.warning("Triage: torrent detail fetch failed: %s", e)
 
     try:
         media_index = fetch_arr_media_index(cfg)
@@ -1504,8 +1561,7 @@ def workflows_triage():
         rep = max(videos or g['files'], key=lambda f: f['size'])
         parsed = parse_release_info_for_path(rep['path'])
 
-        det            = details.get(g['hash'], {})
-        tracker_health = det.get('tracker_health', 'unknown')
+        tracker_health = g.get('stored_health') or 'unknown'
         parsed_keys    = title_match_keys(parsed['title'])
         is_episode     = parsed['season'] is not None
 
@@ -1548,21 +1604,27 @@ def workflows_triage():
             None)
         in_arr = arr_title_hit is not None
 
-        if g['imported']:
-            # Live re-verify the audit-time flag: a torrent the tracker now
-            # answers for has recovered (re-registered) — drop it. Anything
-            # else (still unregistered, or tracker unreachable) stays.
-            if tracker_health == 'working':
-                continue
-            verdict = 'dead_seed'
-        elif tracker_health == 'unregistered':
-            verdict = 'unregistered'
-        elif library_match:
-            verdict = 'superseded'
+        # What this torrent is when the tracker doesn't say 'unregistered' —
+        # health is the only live input to classification, so precomputing the
+        # verdict under every health outcome lets the client apply the live
+        # answer without re-running any of this.
+        if library_match:
+            fallback = 'superseded'
         elif in_arr or lib_rows:
-            verdict = 'import_pending'
+            fallback = 'import_pending'
         else:
-            verdict = 'not_in_library'
+            fallback = 'not_in_library'
+
+        if g['imported']:
+            # 'working' → None: a torrent the tracker answers for again has
+            # recovered (re-registered) — the row disappears on live verify.
+            alternatives = {'working': None, 'unregistered': 'dead_seed', 'other': 'dead_seed'}
+        else:
+            alternatives = {'working': fallback, 'unregistered': 'unregistered', 'other': fallback}
+
+        verdict = _triage_verdict_under(alternatives, tracker_health)
+        if verdict is None:
+            continue
 
         lib_payload = None
         if library_match:
@@ -1604,15 +1666,17 @@ def workflows_triage():
             'total_size':     g['total_size'],
             'trackers':       sorted(g['trackers']),
             'verdict':        verdict,
+            'verdict_alternatives': alternatives,
             'is_duplicate':   is_duplicate,
             'parsed':         parsed,
             'library':        lib_payload,
             'tracker_health': tracker_health,
-            'tracker_msg':    det.get('tracker_msg') or g['stored_msg'],
-            'uploaded':       det.get('uploaded'),
-            'ratio':          det.get('ratio'),
-            'seeding_time':   det.get('seeding_time'),
-            'added_on':       det.get('added_on'),
+            'tracker_msg':    g['stored_msg'],
+            # Live-only fields — filled in by /triage/verify
+            'uploaded':       None,
+            'ratio':          None,
+            'seeding_time':   None,
+            'added_on':       None,
         })
 
     # Dead registrations: torrents the tracker dropped whose payload is still
@@ -1645,20 +1709,7 @@ def workflows_triage():
                 g['alive_sibling'] = True
 
     dead_reg_list = sorted(dead_reg.values(), key=lambda g: -g['total_size'])[:_TRIAGE_GROUP_CAP]
-    dead_details = {}
-    if dead_reg_list:
-        try:
-            dead_details = sources.fetch_torrent_details(cfg, [
-                {'hash': g['hash'], 'instance_id': g['instance_id']} for g in dead_reg_list
-            ])
-        except Exception as e:
-            log.warning("Triage: dead-registration detail fetch failed: %s", e)
     for g in dead_reg_list:
-        det = dead_details.get(g['hash'], {})
-        # Live re-verify: a registration the tracker now answers for has
-        # recovered (re-registered) — drop it, exactly like dead_seed.
-        if det.get('tracker_health') == 'working':
-            continue
         videos = [f for f in g['files']
                   if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
         rep = max(videos or g['files'], key=lambda f: f['size'])
@@ -1671,15 +1722,20 @@ def workflows_triage():
             'total_size':     g['total_size'],
             'trackers':       sorted(g['trackers']),
             'verdict':        'dead_registration',
+            # Live re-verify happens client-side: a registration the tracker
+            # answers for again has recovered — drop it, exactly like dead_seed.
+            'verdict_alternatives': {'working': None,
+                                     'unregistered': 'dead_registration',
+                                     'other': 'dead_registration'},
             'is_duplicate':   False,
             'parsed':         parse_release_info_for_path(rep['path']),
             'library':        None,
             'tracker_health': 'unregistered',
-            'tracker_msg':    det.get('tracker_msg') or g['stored_msg'],
-            'uploaded':       det.get('uploaded'),
-            'ratio':          det.get('ratio'),
-            'seeding_time':   det.get('seeding_time'),
-            'added_on':       det.get('added_on'),
+            'tracker_msg':    g['stored_msg'],
+            'uploaded':       None,
+            'ratio':          None,
+            'seeding_time':   None,
+            'added_on':       None,
             'alive_library':  g['alive_library'],
             'alive_sibling':  g['alive_sibling'],
         })
@@ -1701,6 +1757,42 @@ def workflows_triage():
         "arr_configured": bool(conn_by_id),
         "suggestions":    suggestions,
     })
+
+
+@app.route('/api/workflows/triage/verify', methods=['POST'])
+@require_auth
+def workflows_triage_verify():
+    """Live tracker verification for a batch of triage items (phase 2).
+
+    The Triage page renders instantly from audit-time data, then posts the
+    visible hashes here in sequential batches; each response carries live
+    tracker health + upload stats which the client folds into the rows via
+    their `verdict_alternatives`. Batches are hard-capped so a request
+    finishes in seconds — the per-torrent tracker fan-out in sources/ runs
+    8-wide (the ceiling that keeps qui and qBittorrent responsive), and
+    sequential batches mean live verification never exceeds the concurrency
+    the audit itself uses.
+    """
+    data = request.get_json(silent=True) or {}
+    raw  = data.get('items') or []
+    if not isinstance(raw, list) or len(raw) > _TRIAGE_VERIFY_BATCH_MAX:
+        return jsonify({"status": "error",
+                        "message": f"items must be a list of at most "
+                                   f"{_TRIAGE_VERIFY_BATCH_MAX} entries"}), 400
+    items = [{'hash': i['hash'], 'instance_id': i.get('instance_id')}
+             for i in raw if isinstance(i, dict) and i.get('hash')]
+    if not items:
+        return jsonify({"status": "success", "details": {}})
+    cfg = db_load_config()
+    try:
+        details = sources.fetch_torrent_details(cfg, items)
+    except Exception as e:
+        # qBittorrent raises SourceConnectionError when unreachable — surface
+        # it so the UI shows an honest "verification failed" state instead of
+        # silently treating every torrent as health-unknown.
+        log.warning("Triage verify: torrent detail fetch failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 502
+    return jsonify({"status": "success", "details": details})
 
 
 # Junk auditorr can recognize in Triage and gently offer to exclude. Detection
