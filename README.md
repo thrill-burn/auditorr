@@ -1,8 +1,8 @@
 # auditorr
 
-**A media library audit tool for qBittorrent / qui + Sonarr / Radarr.**
-Library health score, per-tracker analytics, cross-seed effectiveness, and
-a file-level change log between audits.
+**An audit tool for hardlinked media libraries using qBittorrent / qui + Sonarr / Radarr.**
+A dashboard with health score, per-tracker analytics, and cross-seed effectiveness 
+tells you what's wrong with your library. Five automated workflows fix it.
 
 <p align="center">
   <a href="docs/dashboard.png">
@@ -16,7 +16,7 @@ a file-level change log between audits.
 
 - **A rebuilt UI** - a top-to-bottom design pass with consistent buttons and spacing, and a calmer library-health dial.
 - **Four new workflows** - Backfill is now joined by Cleanup, Triage, Dedupe, and Trumped, so every dashboard problem has a fix.
-- **Leaner on big libraries** - backend memory optimizations, tested on libraries up **500 TB** in size.
+- **Leaner on big libraries** - backend memory optimizations, tested on libraries up to **500 TB** in size.
 
 ---
 
