@@ -6,9 +6,17 @@ a file-level change log between audits.
 
 <p align="center">
   <a href="docs/dashboard.png">
-    <img src="docs/dashboard.png" alt="auditorr dashboard" width="900" />
+    <img src="docs/dashboard.png" alt="auditorr dashboard" />
   </a>
 </p>
+
+---
+
+## What's new in 1.7.0
+
+- **A rebuilt UI** - a top-to-bottom design pass with consistent buttons and spacing, and a calmer library-health dial.
+- **Four new workflows** - Backfill is now joined by Cleanup, Triage, Dedupe, and Trumped, so every dashboard problem has a fix.
+- **Leaner on big libraries** - backend memory optimizations, tested on libraries up **500 TB** in size.
 
 ---
 
@@ -31,8 +39,7 @@ a file-level change log between audits.
     <td width="50%" valign="top">
       <a href="docs/feature-trackers.png"><img src="docs/feature-trackers.png" alt="Trackers" /></a>
       <p><b>Trackers</b><br>
-      Configurable chart of per-tracker analytics: size seeded, 30-day uploaded, <b>yield %</b>
-      (uploaded ÷ seeding), orphaned, and not imported. Deep-link into the explorer pre-filtered
+      Configurable chart of per-tracker analytics. Deep-link into the explorer pre-filtered
       by tracker.</p>
     </td>
     <td width="50%" valign="top">
@@ -49,69 +56,58 @@ a file-level change log between audits.
 
 The dashboard tells you what's wrong; **workflows** fix it.
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Backfill</b><br>
-      Targets <i>orphaned media</i>: files on disk with no hardlink to a
-      seeding torrent and no way to grow one (trumped, dead tracker, your own
-      rip). Search the same title on the tracker you want, grab a version that
-      actually seeds, and swap it in via Sonarr / Radarr.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="docs/backfill-config.png"><img src="docs/backfill-config.png" alt="Backfill workflow" /></a>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Cleanup</b><br>
-      Targets <i>orphaned torrent files</i>: files in your torrent folder
-      the client has no torrent for. Review them grouped by release folder, then
-      generate a reviewed delete script — or exclude the ones you put there on
-      purpose.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="docs/workflow-cleanup.png"><img src="docs/workflow-cleanup.png" alt="Cleanup workflow" /></a>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Triage</b><br>
-      Explains every problem torrent and what to do about it:
-      dead seeds, dead registrations, unregistered, superseded quality,
-      pending imports, and not in library. Trigger a Sonarr/Radarr rescan,
-      exclude, or delete torrents and their files directly through
-      qBittorrent / qui.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="docs/workflow-triage.png"><img src="docs/workflow-triage.png" alt="Triage workflow" /></a>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Dedupe</b><br>
-      Targets <i>duplicate files</i>: review duplicate groups and generate
-      a script that replaces copies with hardlinks, verified with <code>cmp</code>
-      before linking.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="docs/workflow-dedupe.png"><img src="docs/workflow-dedupe.png" alt="Dedupe workflow" /></a>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Trumped</b><br>
-      Automates the private-tracker trump swap. Paste the tracker's
-      "this release has been trumped" PM; auditorr parses the old and new release
-      names, finds the entire hardlink group (every cross-seed of the old
-      content), removes it from the client with its files, and grabs the exact
-      replacement through Sonarr/Radarr — wizard-style, confirmed at every step.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="docs/workflow-trumped.png"><img src="docs/workflow-trumped.png" alt="Trumped workflow" /></a>
-    </td>
-  </tr>
-</table>
+### Backfill
+
+Targets *orphaned media*: files on disk with no hardlink to a seeding torrent
+and no way to grow one (trumped, dead tracker, your own rip). Search the same
+title on the tracker you want, grab a version that actually seeds, and swap it
+in via Sonarr / Radarr.
+
+<p>
+  <a href="docs/backfill-config.png"><img src="docs/backfill-config.png" alt="Backfill workflow" width="100%" /></a>
+</p>
+
+### Cleanup
+
+Targets *orphaned torrent files*: files in your torrent folder the client has
+no torrent for. Review them grouped by release folder, then generate a reviewed
+delete script — or exclude the ones you put there on purpose.
+
+<p>
+  <a href="docs/workflow-cleanup.png"><img src="docs/workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></a>
+</p>
+
+### Triage
+
+Explains every problem torrent and what to do about it: dead seeds, dead
+registrations, unregistered, superseded quality, pending imports, and not in
+library. Trigger a Sonarr/Radarr rescan, exclude, or delete torrents and their
+files directly through qBittorrent / qui.
+
+<p>
+  <a href="docs/workflow-triage.png"><img src="docs/workflow-triage.png" alt="Triage workflow" width="100%" /></a>
+</p>
+
+### Dedupe
+
+Targets *duplicate files*: review duplicate groups and generate a script that
+replaces copies with hardlinks, verified with `cmp` before linking.
+
+<p>
+  <a href="docs/workflow-dedupe.png"><img src="docs/workflow-dedupe.png" alt="Dedupe workflow" width="100%" /></a>
+</p>
+
+### Trumped
+
+Automates the private-tracker trump swap. Paste the tracker's "this release has
+been trumped" PM; auditorr parses the old and new release names, finds the
+entire hardlink group (every cross-seed of the old content), removes it from the
+client with its files, and grabs the exact replacement through Sonarr/Radarr —
+wizard-style, confirmed at every step.
+
+<p>
+  <a href="docs/workflow-trumped.png"><img src="docs/workflow-trumped.png" alt="Trumped workflow" width="100%" /></a>
+</p>
 
 ---
 

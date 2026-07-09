@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.7.0 — 2026-07-04
+## v1.7.0 — 2026-07-09
 
 ### Features
 - **Trumped workflow** — a fifth workflow page (green, PM-driven rather than audit-driven) automating the private-tracker trump swap that was previously a manual multi-step chore. Paste the tracker's trump PM; auditorr parses the old and new release names, resolves the **entire hardlink group live from the client** (every cross-seed of the trumped content — audit records can't enumerate siblings, so it queries the client directly: same-payload-size torrents sharing a content path), removes the whole group with its files, and grabs the exact replacement release through Sonarr/Radarr. Every step is independently confirmed; the removal half is gated by `ALLOW_CLIENT_DELETE`; release matching is exact (release names are unique ids — never fuzzy, seeders break ties), with the arr interactive-search deep link as a manual fallback. auditorr never contacts a tracker — group resolution and deletion go through the client, search and grab through the arrs. A re-audit runs automatically afterward.
