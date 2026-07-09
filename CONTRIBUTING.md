@@ -8,7 +8,13 @@ Open an issue and include:
 - What you expected to happen
 - What actually happened
 - Your setup (Unraid version, qBittorrent version, Docker version)
-- Relevant logs from `docker logs auditorr`
+- A debug report. Open `http://<host>:8677/api/debug/report`
+and paste the output into your issue or forum post. The report is
+**privacy-scrubbed and safe to share publicly**: it contains no credentials,
+hostnames, IPs, or API keys, and media file/folder names are replaced with
+short hashes. It includes your (sanitized) configuration, library size stats,
+memory usage, recent audit history, crash evidence, and recent log lines —
+usually everything needed to diagnose a problem in one paste.
 
 ## Suggesting features
 

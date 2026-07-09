@@ -113,6 +113,12 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 - **qui deep links** — Triage + File Explorer chips open the exact torrent (`?torrent={hash}`); qBittorrent chips copy a searchable title
 - **Cleanup ↔ Triage cross-links** with live counts
 - **Trumped workflow** — PM-driven wizard: paste the tracker's trump PM, confirm the hardlink group (resolved live for cross-seed siblings), nuke it everywhere via the client, grab the replacement through Sonarr/Radarr. Design in `prompts/TRUMP.md`
+- **Dead Registration bucket** — tracker dropped the registration but the payload lives on via a cross-seed sibling or the library hardlink; topology-aware `delete_files='auto'` deletes a torrent's files only when no surviving torrent shares that path
+- **Two-phase Triage** — the page answers instantly from an audit-time snapshot (zero torrent-client calls), then confirms live tracker health in batched background requests
+- **Background scan deferral** — the watchdog and scheduled audit defer to an active Triage/Cleanup/Dedupe/Backfill/Trumped session instead of scanning underneath it
+- **Memory ratchet mitigations** — `malloc_trim()` after scans and heavy endpoints, `MALLOC_ARENA_MAX=2`, and a leak-vs-ratchet-distinguishing allocated-blocks timeline in the debug report
+- **Trackers comparison view** — per-tracker card grid replaced with an overlaid multi-line chart (solo/toggle per tracker) and a sortable comparison table
+- **Trumped soft-matching refinements** — near-year title disambiguation no longer misfires on adjacent scene tokens
 
 ---
 
