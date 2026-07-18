@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Security
+- **Non-local API access is now closed by default (#18)** — previously an empty `AUDITORR_SECRET` disabled authentication entirely, leaving the full administrative API (results, config, workflows, client deletes) open to anyone who could reach the port, including the internet on a port-forwarded install. Now, with no secret configured, only local clients are served — loopback and private ranges (10/8, 172.16/12, 192.168/16, IPv6 equivalents), judged by the connection's source address (never `X-Forwarded-For`, which is spoofable) — and everything else gets a generic 401. Existing no-secret LAN installs keep working unchanged. New knobs: `AUDITORR_TRUSTED_NETWORKS` (comma-separated CIDRs treated as local, e.g. `100.64.0.0/10` for Tailscale) and `AUDITORR_REQUIRE_AUTH=true` (strict mode: the key is required even from local clients; without a secret configured this fails closed with a full-page setup notice in the UI). A configured `AUDITORR_SECRET` is enforced for every client as before, but is now accepted **only** via the `X-Auditorr-Secret` header — the `?secret=` query-string fallback was removed, since query strings leak into logs and browser history. `/health` stays open for diagnostics; templates document the new model.
+
 ## v1.7.0 — 2026-07-09
 
 ### Features

@@ -8,6 +8,7 @@ import threading
 import logging
 import secrets
 import functools
+import ipaddress
 import urllib.parse
 import urllib.error
 from datetime import datetime
@@ -89,6 +90,31 @@ CORS(app, origins=_CORS_ORIGINS.split(',') if _CORS_ORIGINS else [
 
 AUDITORR_PORT   = int(os.environ.get('AUDITORR_PORT', 8677))
 AUDITORR_SECRET = os.environ.get('AUDITORR_SECRET', '').strip()
+# #18: with no secret configured, only local (loopback/private-range) clients
+# are served — a port-forwarded or otherwise internet-reachable instance no
+# longer runs open. A configured secret is enforced for every client.
+# AUDITORR_REQUIRE_AUTH=true drops the local exemption entirely (strict mode).
+AUDITORR_REQUIRE_AUTH = os.environ.get(
+    'AUDITORR_REQUIRE_AUTH', '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _parse_trusted_networks(raw):
+    # Extra CIDRs treated as local, e.g. Tailscale's 100.64.0.0/10 — those
+    # aren't RFC1918 so the built-in private-range check won't cover them.
+    nets = []
+    for part in raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            log.warning("Ignoring invalid AUDITORR_TRUSTED_NETWORKS entry: %r", part)
+    return nets
+
+
+AUDITORR_TRUSTED_NETWORKS = _parse_trusted_networks(
+    os.environ.get('AUDITORR_TRUSTED_NETWORKS', ''))
 
 # Initialise DB tables and run JSON migrations on import
 init_db()
@@ -100,19 +126,51 @@ threading.Thread(target=_scheduled_audit_loop, daemon=True).start()
 # Auth middleware
 # ---------------------------------------------------------------------------
 
+def _is_local_client(addr):
+    # remote_addr only — X-Forwarded-For is attacker-controlled and trusting it
+    # would let a remote client spoof a private address. Behind a same-host or
+    # LAN reverse proxy the proxy's address is what's (correctly) evaluated.
+    if not addr:
+        return False
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    # is_private covers loopback, RFC1918, IPv6 ULA and link-local; on modern
+    # Python it tracks the IANA registry, so other non-internet-routable blocks
+    # (TEST-NETs, benchmarking) also pass — harmless, they can't arrive from
+    # the internet as source addresses.
+    return ip.is_private or any(ip in net for net in AUDITORR_TRUSTED_NETWORKS)
+
+
 def require_auth(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
-        if not AUDITORR_SECRET:
+        if AUDITORR_SECRET:
+            # A configured secret is enforced for every client, local included.
+            # Header only — a secret in the query string leaks into logs and
+            # browser history.
+            provided = request.headers.get('X-Auditorr-Secret') or ''
+            if not secrets.compare_digest(provided, AUDITORR_SECRET):
+                return jsonify({"status": "error", "message": "Unauthorized"}), 401
             return f(*args, **kwargs)
-        provided = (
-            request.headers.get('X-Auditorr-Secret') or
-            request.args.get('secret') or
-            ''
-        )
-        if not secrets.compare_digest(provided, AUDITORR_SECRET):
-            return jsonify({"status": "error", "message": "Unauthorized"}), 401
-        return f(*args, **kwargs)
+        if AUDITORR_REQUIRE_AUTH:
+            # Strict mode with nothing to authenticate against: refuse rather
+            # than run open. 503, not 401 — no credential could succeed.
+            return jsonify({
+                "status": "error",
+                "code": "auth_not_configured",
+                "message": "AUDITORR_REQUIRE_AUTH is set but AUDITORR_SECRET is "
+                           "not. Set AUDITORR_SECRET in the container environment "
+                           "and restart auditorr.",
+            }), 503
+        if _is_local_client(request.remote_addr):
+            return f(*args, **kwargs)
+        # No secret configured and a non-local client: fail closed (#18) with a
+        # generic 401 that doesn't reveal whether a secret exists.
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
     return decorated
 
 

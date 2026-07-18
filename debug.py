@@ -587,6 +587,10 @@ def build_debug_report(version):
             'inotify':           inotify_watch_stats(),
             'data_dir_set':      bool(os.environ.get('DATA_DIR')),
             'auth_enabled':      bool(os.environ.get('AUDITORR_SECRET', '').strip()),
+            'auth_strict':       os.environ.get(
+                'AUDITORR_REQUIRE_AUTH', '').strip().lower() in ('1', 'true', 'yes'),
+            'trusted_networks':  len([p for p in os.environ.get(
+                'AUDITORR_TRUSTED_NETWORKS', '').split(',') if p.strip()]),
         },
         'config': _sanitized_config(db_load_config()),
         'scan_state': {

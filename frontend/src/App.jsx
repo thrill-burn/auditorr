@@ -158,6 +158,7 @@ function AppInner() {
   const [isLoadingResults,   setIsLoadingResults]   = useState(false)
   const [activeImports,      setActiveImports]      = useState([])
   const [importPanelOpen,    setImportPanelOpen]    = useState(false)
+  const [authBlocked,        setAuthBlocked]        = useState(false)  // server refuses: AUDITORR_SECRET unset
   const prevScanRef        = useRef(false)
   const intervalRef        = useRef(null)
   const filesFetchingRef   = useRef({ media: false, torrents: false })
@@ -218,6 +219,7 @@ function AppInner() {
         setChanges(changesData)
       } catch (_) {}
     } catch (e) {
+      if (e.code === 'auth_not_configured') setAuthBlocked(true)
       console.error('Failed to fetch results:', e)
     } finally {
       setIsRefreshing(false)
@@ -237,6 +239,7 @@ function AppInner() {
   const pollOnce = useCallback(async () => {
     try {
       const state = await api.progress()
+      setAuthBlocked(false)  // server answered — secret configured (or opt-out set)
       setScanState(state)
       if (prevScanRef.current && !state.is_scanning) {
         await fetchResults(true)
@@ -250,7 +253,10 @@ function AppInner() {
           new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
       }
       prevScanRef.current = state.is_scanning
-    } catch (e) { console.error('Poll error:', e) }
+    } catch (e) {
+      if (e.code === 'auth_not_configured') setAuthBlocked(true)
+      console.error('Poll error:', e)
+    }
   }, [fetchResults, toast])
 
   // Lazy-load file lists only when a tab that needs them becomes active
@@ -346,6 +352,36 @@ function AppInner() {
     (pendingNav?.importFilter || '') +
     (pendingNav?.tracker || '') +
     (pendingNav?.seedCount != null ? String(pendingNav.seedCount) : '')
+
+  // Server is fail-closed: AUDITORR_REQUIRE_AUTH is set but no AUDITORR_SECRET
+  // is configured. Nothing in the app can work, so take over the page with
+  // instructions. pollOnce keeps running and clears this as soon as the server
+  // answers again (secret set + restart).
+  if (authBlocked) {
+    const envChip = {
+      fontFamily: 'var(--mono)', fontSize: 12, background: 'var(--surface2)',
+      border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px',
+    }
+    return (
+      <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{
+          background: 'var(--surface)', border: '1px solid var(--border)',
+          borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '28px 32px', maxWidth: 540,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--red)', flexShrink: 0 }} />
+            <span style={{ fontSize: 15, fontWeight: 600 }}>Access key required</span>
+          </div>
+          <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.6, margin: 0 }}>
+            <code style={envChip}>AUDITORR_REQUIRE_AUTH</code> is set, but no access key is
+            configured. Set <code style={envChip}>AUDITORR_SECRET</code> in the container
+            environment and restart — this page will pick it up automatically and ask for
+            the key.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
