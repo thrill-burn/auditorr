@@ -196,7 +196,17 @@ home, use [Option 2](#option-2--trust-an-extra-network) instead.
 
 ### Checking what the server sees
 
-`GET /api/debug/report` includes an `environment` section reporting whether a
-key is configured, whether strict mode is on, and how many trusted networks
-parsed successfully — never the values themselves. The report is
-privacy-scrubbed and safe to paste into an issue.
+`GET /api/debug/report` reports the live auth settings under `runtime`:
+
+```json
+"runtime": {
+  "auth_enabled": false,
+  "auth_strict": false,
+  "trusted_networks": 0
+}
+```
+
+`auth_enabled` is whether an `AUDITORR_SECRET` is set, `auth_strict` whether
+`AUDITORR_REQUIRE_AUTH` is on, and `trusted_networks` how many CIDRs parsed
+successfully — never the values themselves. The report is privacy-scrubbed and
+safe to paste into an issue.

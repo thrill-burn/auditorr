@@ -4,7 +4,11 @@
 A dashboard with health score, per-tracker analytics, and cross-seed effectiveness 
 tells you what's wrong with your library. Five automated workflows fix it.
 
-**[Docs](docs/) · [Configuration](docs/configuration.md) · [Remote access](docs/remote-access.md) · [Troubleshooting](docs/troubleshooting.md)**
+<p align="center">
+  <a href="docs/configuration.md">Configuration</a> ·
+  <a href="docs/remote-access.md">Remote access</a> ·
+  <a href="docs/troubleshooting.md">Troubleshooting</a>
+</p>
 
 <p align="center">
   <a href="docs/dashboard.png">
