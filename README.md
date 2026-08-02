@@ -4,6 +4,8 @@
 A dashboard with health score, per-tracker analytics, and cross-seed effectiveness 
 tells you what's wrong with your library. Five automated workflows fix it.
 
+**[Docs](docs/) · [Configuration](docs/configuration.md) · [Remote access](docs/remote-access.md) · [Troubleshooting](docs/troubleshooting.md)**
+
 <p align="center">
   <a href="docs/dashboard.png">
     <img src="docs/dashboard.png" alt="auditorr dashboard" />
@@ -12,11 +14,15 @@ tells you what's wrong with your library. Five automated workflows fix it.
 
 ---
 
+## Fixed in 1.7.1
+
+- **Closed by default off-LAN** - with no access key set, [remote requests are refused](docs/remote-access.md). LAN is unaffected.
+
 ## What's new in 1.7.0
 
-- **A rebuilt UI** - a top-to-bottom design pass with consistent buttons and spacing, and a calmer library-health dial.
+- **Optimized for large libraries** - backend memory optimizations, tested on libraries up to **500 TB**.
 - **Four new workflows** - Backfill is now joined by Cleanup, Triage, Dedupe, and Trumped, so every dashboard problem has a fix.
-- **Leaner on big libraries** - backend memory optimizations, tested on libraries up to **500 TB** in size.
+- **A rebuilt UI** - a top-to-bottom design pass with consistent buttons and spacing, and a calmer library-health dial.
 
 ---
 
@@ -155,6 +161,8 @@ docker run -d \
 ```
 
 </details>
+
+Something not working? See [Troubleshooting](docs/troubleshooting.md).
 
 ---
 

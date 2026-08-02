@@ -1,9 +1,20 @@
 # Changelog
 
-## Unreleased
+## v1.7.1 — 2026-08-01
+
+A security release. No feature or UI changes — a no-secret LAN install behaves identically after upgrading.
 
 ### Security
-- **Non-local API access is now closed by default (#18)** — previously an empty `AUDITORR_SECRET` disabled authentication entirely, leaving the full administrative API (results, config, workflows, client deletes) open to anyone who could reach the port, including the internet on a port-forwarded install. Now, with no secret configured, only local clients are served — loopback and private ranges (10/8, 172.16/12, 192.168/16, IPv6 equivalents), judged by the connection's source address (never `X-Forwarded-For`, which is spoofable) — and everything else gets a generic 401. Existing no-secret LAN installs keep working unchanged. New knobs: `AUDITORR_TRUSTED_NETWORKS` (comma-separated CIDRs treated as local, e.g. `100.64.0.0/10` for Tailscale) and `AUDITORR_REQUIRE_AUTH=true` (strict mode: the key is required even from local clients; without a secret configured this fails closed with a full-page setup notice in the UI). A configured `AUDITORR_SECRET` is enforced for every client as before, but is now accepted **only** via the `X-Auditorr-Secret` header — the `?secret=` query-string fallback was removed, since query strings leak into logs and browser history. `/health` stays open for diagnostics; templates document the new model.
+- **Non-local API access is now closed by default (#18)** — previously an empty `AUDITORR_SECRET` disabled authentication entirely, leaving the full administrative API (results, config, workflows, client deletes) open to anyone who could reach the port, including the internet on a port-forwarded install. With no secret configured, auditorr now serves **local clients only** — loopback and private ranges (10/8, 172.16/12, 192.168/16, IPv6 ULA and link-local) — and answers everything else with a generic 401 that doesn't reveal whether a secret exists. Locality is judged by the connection's source address, never `X-Forwarded-For`, which is attacker-controlled and would let a remote client spoof a private address. A configured `AUDITORR_SECRET` is still enforced for every client, local ones included.
+- **The `?secret=` query-string fallback was removed** — the access key is now accepted **only** via the `X-Auditorr-Secret` header, because query strings leak into reverse-proxy access logs and browser history. The web UI already used the header; any bookmark, script, or `curl` invocation passing `?secret=` must be switched over.
+- **New — `AUDITORR_TRUSTED_NETWORKS`** — comma-separated CIDRs treated as local in addition to loopback and private ranges, e.g. `100.64.0.0/10` for Tailscale (CGNAT space, not RFC1918, so the built-in private-range check does not cover it). Invalid entries are logged and skipped rather than failing startup.
+- **New — `AUDITORR_REQUIRE_AUTH=true`** — strict mode: the key is required even from local clients, with no local exemption at all. Set without an `AUDITORR_SECRET`, it fails closed rather than running open: every `/api/*` route returns 503 `auth_not_configured`, and the UI replaces the page with a setup notice that clears itself as soon as a secret is configured and the container restarts.
+- `/health` and the static SPA shell stay open, so container health checks are unaffected. `docker-compose.yml` and the Unraid CA template (`auditorr.xml`) document the new model; the debug report records `auth_strict` and the trusted-network count (never the networks themselves).
+
+### Upgrade notes
+- **Nothing to do** for the common case — a LAN install reached from LAN clients, with or without a secret set.
+- **Set `AUDITORR_SECRET`** (a long random value) if you reach auditorr from outside your LAN — port forward, VPS, or a remote host — or add your tunnel's range to `AUDITORR_TRUSTED_NETWORKS`. Without one of the two, those requests now get 401.
+- A reverse proxy running on the **same host or LAN** as the container passes the local check, because the proxy's address is what gets evaluated. The local-only default cannot see past a proxy — if the proxy itself is internet-facing, set `AUDITORR_SECRET` or enforce authentication at the proxy.
 
 ## v1.7.0 — 2026-07-09
 

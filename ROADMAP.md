@@ -120,6 +120,12 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 - **Trackers comparison view** — per-tracker card grid replaced with an overlaid multi-line chart (solo/toggle per tracker) and a sortable comparison table
 - **Trumped soft-matching refinements** — near-year title disambiguation no longer misfires on adjacent scene tokens
 
+### Shipped in v1.7.1 (security hardening)
+- **Closed by default off-LAN (#18)** — with no `AUDITORR_SECRET` configured, only local clients (loopback + private ranges) are served; everything else gets a generic 401. A port-forwarded instance no longer runs open. Locality comes from the connection's source address, never the spoofable `X-Forwarded-For`
+- **Header-only access key** — the `?secret=` query-string fallback was removed; query strings leak into proxy logs and browser history
+- **`AUDITORR_TRUSTED_NETWORKS`** — extra CIDRs treated as local, e.g. Tailscale's `100.64.0.0/10` (CGNAT, so not covered by the RFC1918 check)
+- **`AUDITORR_REQUIRE_AUTH`** — strict mode with no local exemption; set without a secret it fails closed (503 `auth_not_configured`) behind a self-recovering full-page setup notice
+
 ---
 
 ## Future Ideas

@@ -1,0 +1,204 @@
+# Configuration
+
+Almost everything is configured in the **Config** tab of the web UI and stored
+in auditorr's database — not in environment variables. The handful of variables
+that do exist are listed at the [bottom of this page](#environment-variables).
+
+Settings are validated before they save; if something is rejected the UI tells
+you which field and why.
+
+---
+
+## Torrent Source
+
+auditorr reads your torrents from one of two backends.
+
+| Setting | Notes |
+| --- | --- |
+| **Source** | `qBittorrent` (direct) or `qui` (aggregates several clients). |
+| **Host** | Full URL including scheme and port, e.g. `http://192.168.1.10:8080`. |
+| **Username / Password** | qBittorrent only. |
+| **API key** | qui only. |
+| **Workflow torrent deletion** | Opt-in. Off by default — see below. |
+
+Use **Test Connection** after filling these in. On success auditorr reports the
+client version, torrent count, and total seeding size, which is the quickest
+confirmation that it's talking to the right instance.
+
+Stored credentials are never returned by the API — they read back as
+`__stored__` and are only overwritten when you type a new value.
+
+### Workflow torrent deletion (`ALLOW_CLIENT_DELETE`)
+
+Default **Disallowed**. While disallowed, no workflow can remove a torrent from
+your client; the Triage delete button isn't shown at all.
+
+When allowed, Triage and Trumped may call the client's delete endpoint on
+torrents you have explicitly selected, behind a confirmation dialog that lists
+every hash, tracker, and file path involved. See
+[Workflows](workflows.md#deleting-torrents-safely) for how file deletion
+interacts with cross-seeding.
+
+---
+
+## Path Mappings
+
+auditorr, your torrent client, and Sonarr/Radarr may each see the same files at
+different paths. These settings reconcile that.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| **Media path** | `/data/media` | Your library, as auditorr sees it. |
+| **Remote torrent path** | `/data/torrents` | Your torrent folder as **the torrent client** reports it. |
+| **Local torrent path** | `/data/torrents` | The same folder as **auditorr** sees it. |
+
+If your client runs in another container with different mounts, remote and
+local will differ — auditorr substitutes one prefix for the other when matching
+torrents to files on disk. If both containers use the TRaSH layout under
+`/data`, they are the same and you can leave them alone.
+
+Both paths must be mounted into the auditorr container. Read-only is
+recommended and is what the published templates use.
+
+---
+
+## Watchdog & Scheduled Audits
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| **Watchdog enabled** | On | Re-audit automatically when the filesystem changes. |
+| **Watchdog cooldown** | 60s | Quiet period after a change before scanning. Minimum 10. |
+| **Scheduled interval** | 360 min | Periodic audit regardless of filesystem activity. Minimum 10. |
+
+The cooldown exists so that an import writing hundreds of files triggers one
+audit rather than hundreds. On busy libraries, raise it.
+
+Both automatic triggers defer while you are actively using a workflow page, so
+a background scan can't land in the middle of a Triage session. Manual scans
+and the startup scan ignore that — explicit intent always wins.
+
+> On Unraid, filesystem events over NFS or certain bind mounts can be
+> unreliable. If the watchdog never seems to fire, lean on the scheduled
+> interval instead — see
+> [Troubleshooting](troubleshooting.md#changes-dont-trigger-a-re-scan).
+
+---
+
+## Integrations
+
+Sonarr and Radarr are optional. Without them auditorr still audits, scores, and
+generates scripts; what you lose is import awareness, quality comparison, and
+the search-and-grab half of the workflows.
+
+| Setting | Meaning |
+| --- | --- |
+| **Sonarr / Radarr URL** | Base URL, e.g. `http://192.168.1.10:8989`. |
+| **API key** | From Settings → General in the respective app. |
+| **Remote path** | The library path *as Sonarr/Radarr sees it*, if it differs from auditorr's. |
+
+Multiple instances are supported — add them as additional connections when you
+run, say, a 4K Radarr alongside a 1080p one.
+
+---
+
+## Health Score Thresholds
+
+The score is out of 100:
+
+| Component | Points | How it's earned |
+| --- | --- | --- |
+| **Hardlinked Media** | 70 | Directly proportional: the share of your library size that is hardlinked to a torrent. |
+| **Orphaned Torrents** | 10 | Full marks at zero; falls to zero when orphaned size reaches the threshold below. |
+| **Not Imported** | 10 | Same shape, on torrent data with no library file. |
+| **Duplicate Files** | 10 | Same shape, on bit-identical files that don't share an inode. |
+
+The three thresholds (`OR_RATIO`, `NI_RATIO`, `DUP_RATIO`) are each a fraction
+of your **total torrent size**, default `0.01` — one percent. So with 10 TB of
+torrents, the default gives you a 100 GB allowance for orphans before that
+component's 10 points are fully gone. Valid range is `0.001` to `1.0`.
+
+Raise a threshold if you knowingly keep something around and are tired of being
+marked down for it. Lower it if you want the score to react earlier.
+
+Scores read as **Great** (≥ 90), **Good** (≥ 75), **Fair** (≥ 50), **Poor**
+below that.
+
+> Hardlinked Media is 70 of the 100 points, so a library that doesn't use
+> hardlinks scores near zero no matter how tidy it is. That's intentional — see
+> [Troubleshooting](troubleshooting.md#hardlinked-media-shows-0).
+
+---
+
+## Excluded Files & Folders
+
+Exclusions are auditorr's only filtering mechanism. An excluded file is left out
+of scoring, workflows, and duplicate detection — nothing is ever hidden from you
+silently.
+
+Maximum 100 patterns, 200 characters each. Lines starting with `#` are comments.
+
+### Pattern syntax
+
+| Pattern | Matches |
+| --- | --- |
+| `Featurettes` | A bare word matches any **path segment** with that exact name, at any depth. |
+| `data/torrents/games` | A path matches that subtree. Works against both container-root and host-style paths. |
+| `*.srt` | Glob, matched against the filename and against individual path segments. |
+| `ext:.nfo` | By file extension. The leading dot is optional. |
+| `name:@eaDir` | An exact file or folder name — stricter than a bare word only in that it never partially matches. |
+| `contains:sample` | The text appears anywhere in the normalized path. |
+
+Bare words are the friendly default: `Extras` excludes every `Extras` folder
+without you needing glob syntax. Use `contains:` when you need to match
+mid-segment text like `Sample` inside a filename.
+
+### Presets
+
+Two preset groups save you from writing common rules by hand:
+
+- **Disc rip structures** — `BDMV`, `VIDEO_TS` and friends, for full-disc rips
+  whose thousands of structural files would otherwise dominate duplicate
+  detection.
+- **Media server files** — Plex, Jellyfin, Emby, Kodi and UMS metadata and
+  artwork directories.
+
+### Hide excluded files from the explorer
+
+Off by default: excluded files still appear in File Explorer, marked as
+excluded, so you can see what your rules are doing. Turn it on once you trust
+them.
+
+### Where exclusions come from
+
+Besides typing them here, exclusions are written by the **Exclude** buttons on
+the Cleanup and Triage pages, and by Triage's one-click suggestions. Everything
+those buttons add lands in this list, visible and editable.
+
+---
+
+## Appearance & Audit History
+
+**Appearance** switches between dark and light themes.
+
+**Audit History** lists recent runs with trigger, duration, resulting score, and
+status. Runs marked `aborted` are scans that were killed mid-flight — usually
+the container running out of memory. See
+[Troubleshooting](troubleshooting.md#scans-keep-getting-killed-or-scanning-stopped-on-its-own).
+
+---
+
+## Environment variables
+
+Set these on the container; they can't be changed from the UI.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `AUDITORR_PORT` | `8677` | Port the app listens on inside the container. |
+| `DATA_DIR` | `/app/data` | Where the SQLite database and config live. Must be persistent. |
+| `AUDITORR_SECRET` | *(unset)* | Access key. Once set, required from every client. See [Remote access](remote-access.md). |
+| `AUDITORR_TRUSTED_NETWORKS` | *(unset)* | Extra CIDRs treated as local, e.g. `100.64.0.0/10` for Tailscale. |
+| `AUDITORR_REQUIRE_AUTH` | `false` | Require the access key even from local clients. |
+
+`MALLOC_ARENA_MAX=2` is set in the image itself to limit how much memory the
+allocator holds after a large scan. Don't override it unless you're
+investigating a memory problem.
