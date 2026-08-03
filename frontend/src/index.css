@@ -81,6 +81,13 @@ html, body, #root {
 button { cursor: pointer; font-family: var(--sans); }
 input, select, textarea { font-family: var(--sans); }
 
+/* Native number spinners sit on top of the value in a narrow right-aligned
+   field and only appear on hover, so the field seems to twitch as the pointer
+   crosses it. Every number input here is typed into, not stepped. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
 .ui-section-title,
 .ui-card-title {
   font-family: var(--sans);

@@ -537,6 +537,13 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   // Every category at zero leaves nothing to score — the backend rejects it,
   // so block the save here and say why rather than surface a generic error.
   const allWeightsZero = Object.values(weightPoints(weights)).every(p => p <= 0)
+  const weightsAreDefault = SCORE_CATEGORIES.every(cat =>
+    parseFloat(weights[cat.key]) === DEFAULT_WEIGHTS[cat.key])
+  const resetWeights = () => {
+    setWeights(Object.fromEntries(SCORE_CATEGORIES.map(cat =>
+      [cat.key, String(DEFAULT_WEIGHTS[cat.key])])))
+    setIsDirty(true)
+  }
 
   const formGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }
   const compactGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }
@@ -990,6 +997,28 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                 </div>
               )
             })}
+            {/* Sits under the rows it resets, so its scope is unambiguous —
+                weights only, not the thresholds further down the card. */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+              <button
+                onClick={resetWeights}
+                disabled={weightsAreDefault}
+                title={weightsAreDefault ? 'Already at the default 70/10/10/10'
+                                         : 'Restore the default 70/10/10/10 split'}
+                style={{
+                  padding: '5px 10px', borderRadius: 'var(--r)',
+                  border: '1px solid var(--border2)',
+                  background: 'transparent',
+                  color: weightsAreDefault ? 'var(--text-dim)' : 'var(--text)',
+                  fontSize: 11, fontFamily: 'var(--sans)',
+                  cursor: weightsAreDefault ? 'default' : 'pointer',
+                  opacity: weightsAreDefault ? 0.45 : 1,
+                  transition: 'opacity 0.12s, color 0.12s',
+                }}
+              >
+                Reset to defaults
+              </button>
+            </div>
           </div>
         </div>
 
