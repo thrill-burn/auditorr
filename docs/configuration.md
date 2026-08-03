@@ -82,6 +82,36 @@ and the startup scan ignore that — explicit intent always wins.
 > interval instead — see
 > [Troubleshooting](troubleshooting.md#changes-dont-trigger-a-re-scan).
 
+### Large libraries: turn the watchdog down, or off
+
+This is the setting most worth revisiting once your library gets big. Two costs
+scale with size:
+
+- **One inotify watch per directory.** Both trees are watched recursively, so
+  the watch count tracks your directory count — consuming kernel watch slots
+  (`fs.inotify.max_user_watches`) and the memory behind them. The debug report's
+  `runtime.inotify` shows your current count against the kernel limit.
+- **Every trigger is a full re-walk.** There is no incremental scan. A change
+  anywhere means both trees are walked again, and a scan is also auditorr's
+  peak-memory moment.
+
+The debounce restarts on each new event, so a long import or download run keeps
+pushing the scan out rather than firing repeatedly. But once activity settles
+the full audit runs, and after it finishes further triggers are suppressed for
+whichever is longer — your cooldown, or the duration of the scan that just ran.
+On a library where a scan takes several minutes, sustained write activity can
+therefore produce a re-audit every few minutes, all day.
+
+**Recommendation:** on large libraries, raise the cooldown into the tens of
+minutes (1800 = 30 min is a reasonable starting point), or turn the watchdog off
+entirely. The scheduled audit already runs every 6 hours by default — four full
+audits a day is plenty for a health dashboard, and **Scan Now** is always there
+when you want fresh numbers immediately.
+
+If you keep it on, the cooldown is the dial that matters: it is the minimum
+quiet period before a scan fires, so a larger value both batches more changes
+into a single audit and puts a floor under how often scanning can happen at all.
+
 ---
 
 ## Integrations

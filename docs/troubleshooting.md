@@ -90,7 +90,13 @@ forever. It stays paused until a **manual scan completes successfully**.
 2. Exclude what you don't need audited. Disc rips are the usual culprit — turn
    on the disc-rip preset in
    [Excluded Files](configuration.md#excluded-files--folders).
-3. Trigger a manual scan to clear the pause once you've made room.
+3. **Scan less often.** A scan is the peak-memory moment, so the fix for
+   repeated kills is often fewer scans rather than more headroom. On a large
+   library the watchdog can trigger a full re-walk every few minutes during
+   sustained downloading — raise its cooldown substantially or turn it off and
+   let the 6-hourly scheduled audit do the work. See
+   [Large libraries](configuration.md#large-libraries-turn-the-watchdog-down-or-off).
+4. Trigger a manual scan to clear the pause once you've made room.
 
 The debug report's memory section records peak RSS per scan and which phase each
 aborted scan died in, which tells you whether you're close to the limit or far
