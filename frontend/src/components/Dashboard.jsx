@@ -958,11 +958,20 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     return series
   })()
 
+  // Point denominators come from the audit, which resolves them from the
+  // configurable score weights. Older snapshots predate those fields, so fall
+  // back to the original fixed allocation. A category weighted to zero is
+  // reported as unscored rather than as a zero-out-of-zero failure.
+  const ptsLabel = (score, max, fallback) => {
+    const m = max ?? fallback
+    return m > 0 ? `${score} / ${+m.toFixed(1)} pts` : 'Not scored'
+  }
+
   const metrics = [
     {
       label: 'Hardlinked Media', value: hlPct + '%',
       sub: `${formatBytes(det.hardlinked_media_size)} of ${formatBytes(det.total_media_size)}`,
-      pts: `${det.hl_score} / 70 pts`,
+      pts: ptsLabel(det.hl_score, det.hl_max, 70),
       desc: 'Percentage of your media library hardlinked back to a torrent file.',
       color: 'var(--blue)',
       trend: makeTrend(trendSeries.hardlinked, false, 'pct'),
@@ -974,7 +983,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     {
       label: 'Orphaned Torrents', value: formatBytes(det.orphaned_torrent_size),
       sub: `${det.orphaned_torrent_count} file${det.orphaned_torrent_count !== 1 ? 's' : ''} · threshold ${formatBytes(det.or_limit)}`,
-      pts: `${det.or_score} / 10 pts`,
+      pts: ptsLabel(det.or_score, det.or_max, 10),
       desc: 'Files in your torrent folder that qBittorrent has no knowledge of.',
       color: 'var(--yellow)',
       trend: makeTrend(trendSeries.orphaned, true, 'bytes'),
@@ -986,7 +995,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     {
       label: 'Not Imported', value: formatBytes(det.not_imported_size),
       sub: `${det.not_imported_count} file${det.not_imported_count !== 1 ? 's' : ''} · threshold ${formatBytes(det.ni_limit)}`,
-      pts: `${det.ni_score} / 10 pts`,
+      pts: ptsLabel(det.ni_score, det.ni_max, 10),
       desc: 'Seeding torrents with no matching file in your media folder.',
       color: 'var(--red)',
       trend: makeTrend(trendSeries.notImported, true, 'bytes'),
@@ -998,7 +1007,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     {
       label: 'Duplicate Files', value: formatBytes(det.duplicate_size),
       sub: `${det.duplicate_count} file${det.duplicate_count !== 1 ? 's' : ''} · threshold ${formatBytes(det.dup_limit)}`,
-      pts: `${det.dup_score} / 10 pts`,
+      pts: ptsLabel(det.dup_score, det.dup_max, 10),
       desc: 'Bit-for-bit identical files that share no inode.',
       color: 'var(--purple)',
       trend: makeTrend(trendSeries.duplicates, true, 'bytes'),

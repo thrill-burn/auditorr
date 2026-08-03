@@ -12,6 +12,7 @@ from exclusions import is_excluded, compile_exclusions
 from media_server_exclusions import expand_exclusion_patterns
 
 from db import (
+    score_weight_points,
     db_load_config, db_load_history, db_save_history,
     db_load_results, db_save_results, db_save_audit,
     db_save_upload_snapshot, db_get_upload_snapshots,
@@ -292,17 +293,26 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
         file_id = f.get('file_id', f.get('inode'))
         if f.get('duplicate_paths') and file_id not in seen_files:
             seen_files.add(file_id); dup_size += f['size']; dup_count += 1
+    # How many of the 100 points each category is worth. Configurable so a user
+    # whose workflow legitimately lacks a category (e.g. torrents removed once
+    # seeding requirements are met, leaving healthy but unhardlinked media) can
+    # stop being marked down for it. Defaults reproduce the original 70/10/10/10.
+    pts     = score_weight_points(cfg)
+    hl_max  = pts['WEIGHT_HARDLINKED']
+    or_max  = pts['WEIGHT_ORPHANED']
+    ni_max  = pts['WEIGHT_NOT_IMPORTED']
+    dup_max = pts['WEIGHT_DUPLICATES']
     hl_ratio = (hardlinked_media_size / total_media_size) if total_media_size > 0 else 1.0
-    hl_score = hl_ratio * 70
+    hl_score = hl_ratio * hl_max
     or_limit   = total_torrents_size * or_ratio
-    or_penalty = (orphaned_torrent_size / or_limit) * 10 if or_limit > 0 else (10 if orphaned_torrent_size > 0 else 0)
-    or_score   = max(0, 10 - or_penalty)
+    or_penalty = (orphaned_torrent_size / or_limit) * or_max if or_limit > 0 else (or_max if orphaned_torrent_size > 0 else 0)
+    or_score   = max(0, or_max - or_penalty)
     ni_limit   = total_torrents_size * ni_ratio
-    ni_penalty = (not_imported_size / ni_limit) * 10 if ni_limit > 0 else (10 if not_imported_size > 0 else 0)
-    ni_score   = max(0, 10 - ni_penalty)
+    ni_penalty = (not_imported_size / ni_limit) * ni_max if ni_limit > 0 else (ni_max if not_imported_size > 0 else 0)
+    ni_score   = max(0, ni_max - ni_penalty)
     dup_limit   = total_torrents_size * dup_ratio
-    dup_penalty = (dup_size / dup_limit) * 10 if dup_limit > 0 else (10 if dup_size > 0 else 0)
-    dup_score   = max(0, 10 - dup_penalty)
+    dup_penalty = (dup_size / dup_limit) * dup_max if dup_limit > 0 else (dup_max if dup_size > 0 else 0)
+    dup_score   = max(0, dup_max - dup_penalty)
     final_score = round(max(0, min(100, hl_score + or_score + ni_score + dup_score)), 1)
     if   final_score >= 90: status_text = "Great"
     elif final_score >= 75: status_text = "Good"
@@ -322,6 +332,11 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
             "duplicate_count": dup_count, "or_limit": or_limit, "ni_limit": ni_limit,
             "dup_limit": dup_limit, "hl_score": round(hl_score,1), "or_score": round(or_score,1),
             "ni_score": round(ni_score,1), "dup_score": round(dup_score,1),
+            # Points each category was worth for this run. The dashboard reads
+            # these as the card denominators — without them it would show the
+            # old hardcoded 70/10/10/10 next to weighted scores.
+            "hl_max": round(hl_max,1), "or_max": round(or_max,1),
+            "ni_max": round(ni_max,1), "dup_max": round(dup_max,1),
         }
     }
     if update_history:

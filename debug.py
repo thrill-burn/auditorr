@@ -19,7 +19,9 @@ import traceback
 from collections import deque
 from datetime import datetime, timedelta
 
-from db import DATA_DIR, DB_FILE, db_load_config, db_load_results, db_get_meta, db_set_meta
+from db import (DATA_DIR, DB_FILE, DEFAULT_CONFIG, SCORE_WEIGHT_KEYS,
+                score_weight_points,
+                db_load_config, db_load_results, db_get_meta, db_set_meta)
 from state import get_state
 
 log = logging.getLogger(__name__)
@@ -469,6 +471,12 @@ def _sanitized_config(cfg):
         'watchdog_cooldown_s':  cfg.get('WATCHDOG_COOLDOWN'),
         'scheduled_interval_m': cfg.get('SCHEDULED_INTERVAL'),
         'ratios': {k.lower(): cfg.get(k) for k in ('OR_RATIO', 'NI_RATIO', 'DUP_RATIO')},
+        # Reported alongside the ratios because a non-default weighting changes
+        # what a score means — a report showing one without the other misleads.
+        'score_weights': {k.lower(): cfg.get(k, DEFAULT_CONFIG.get(k))
+                          for k in SCORE_WEIGHT_KEYS},
+        'score_points':  {k.lower(): round(v, 1)
+                          for k, v in score_weight_points(cfg).items()},
         'exclusion_hide_from_explorer': cfg.get('EXCLUSION_HIDE_FROM_EXPLORER'),
         'media_server_exclusion_presets': cfg.get('MEDIA_SERVER_EXCLUSION_PRESETS'),
         'exclusion_patterns':   [sanitize_exclusion_pattern(p) for p in (cfg.get('EXCLUSION_PATTERNS') or [])],

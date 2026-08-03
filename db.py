@@ -27,6 +27,13 @@ DEFAULT_CONFIG = {
     'OR_RATIO':           0.01,
     'NI_RATIO':           0.01,
     'DUP_RATIO':          0.01,
+    # Relative importance of each score component. Normalized to 100 points at
+    # scoring time, so any non-negative numbers are valid — the defaults happen
+    # to sum to 100 already, which keeps them readable as point values.
+    'WEIGHT_HARDLINKED':  70,
+    'WEIGHT_ORPHANED':    10,
+    'WEIGHT_NOT_IMPORTED': 10,
+    'WEIGHT_DUPLICATES':  10,
     'EXCLUSION_PATTERNS':          [],
     'DISC_RIP_EXCLUSION_PRESETS':  [],
     'MEDIA_SERVER_EXCLUSION_PRESETS': [],
@@ -41,6 +48,33 @@ DEFAULT_CONFIG = {
     'ACQUIRE_DOWNLOAD_FROM': [],  # Indexer names to download from (Workflows)
     'ACQUIRE_SEEDING_ON':    [],  # Indexer names the file must also be on (Workflows)
 }
+
+# Ordered to match the four dashboard cards (and the config donut's segments).
+SCORE_WEIGHT_KEYS = ('WEIGHT_HARDLINKED', 'WEIGHT_ORPHANED',
+                     'WEIGHT_NOT_IMPORTED', 'WEIGHT_DUPLICATES')
+
+
+def score_weight_points(cfg):
+    """Resolve the four score weights into points that sum to 100.
+
+    Weights are relative: only their ratio matters, so users can type whatever
+    numbers express their priorities and never see an invalid total. A category
+    weighted 0 earns 0 points and is reported as unscored rather than failed.
+    """
+    raw = []
+    for key in SCORE_WEIGHT_KEYS:
+        try:
+            val = float(cfg.get(key, DEFAULT_CONFIG[key]))
+        except (ValueError, TypeError):
+            val = float(DEFAULT_CONFIG[key])
+        raw.append(max(0.0, val))
+    total = sum(raw)
+    if total <= 0:
+        # Guarded at save time, but config can also arrive from an older DB row
+        # or a hand-edited file — fall back rather than divide by zero.
+        raw   = [float(DEFAULT_CONFIG[k]) for k in SCORE_WEIGHT_KEYS]
+        total = sum(raw)
+    return {key: (val / total) * 100 for key, val in zip(SCORE_WEIGHT_KEYS, raw)}
 
 
 def _db_conn():
@@ -544,6 +578,29 @@ def validate_config(data):
                     errors.append(f"{key} must be between 0.001 and 1.0")
             except (ValueError, TypeError):
                 errors.append(f"{key} must be a number")
+
+    # Score weights are relative, so only the ratio between them matters — any
+    # non-negative number is valid. The one illegal state is all four at zero,
+    # which would leave nothing to score. Missing keys fall back to their
+    # non-zero defaults on save, so that state needs all four sent as zero.
+    supplied_weights = []
+    for key in SCORE_WEIGHT_KEYS:
+        val = data.get(key)
+        if val is None:
+            continue
+        try:
+            fval = float(val)
+        except (ValueError, TypeError):
+            errors.append(f"{key} must be a number")
+            continue
+        if fval < 0:
+            errors.append(f"{key} must not be negative")
+        elif fval > 1000:
+            errors.append(f"{key} must not exceed 1000")
+        else:
+            supplied_weights.append(fval)
+    if len(supplied_weights) == len(SCORE_WEIGHT_KEYS) and sum(supplied_weights) <= 0:
+        errors.append("At least one score category must have a weight above zero")
 
     qb_host = data.get('QB_HOST')
     if qb_host is not None and str(qb_host) and not str(qb_host).strip():

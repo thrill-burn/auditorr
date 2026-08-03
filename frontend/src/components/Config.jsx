@@ -144,6 +144,105 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
   )
 }
 
+// The four score categories, in dashboard-card order and carrying the same
+// accent each card uses — the donut is meant to read as "those four cards, as
+// proportions", not as a new set of colors to learn.
+const SCORE_CATEGORIES = [
+  { key: 'WEIGHT_HARDLINKED',   label: 'Hardlinked Media',   color: 'var(--blue)',
+    hint: 'Share of your library hardlinked back to a torrent.' },
+  { key: 'WEIGHT_ORPHANED',     label: 'Orphaned Torrents',  color: 'var(--yellow)',
+    hint: 'Torrent-folder files your client has no knowledge of.' },
+  { key: 'WEIGHT_NOT_IMPORTED', label: 'Not Imported',       color: 'var(--red)',
+    hint: 'Seeding torrents with no matching library file.' },
+  { key: 'WEIGHT_DUPLICATES',   label: 'Duplicate Files',    color: 'var(--purple)',
+    hint: 'Identical files that share no inode.' },
+]
+
+// Mirrors the backend defaults in db.py — they sum to 100, so an untouched
+// install reads its weights and its points as the same four numbers.
+const DEFAULT_WEIGHTS = {
+  WEIGHT_HARDLINKED: 70, WEIGHT_ORPHANED: 10,
+  WEIGHT_NOT_IMPORTED: 10, WEIGHT_DUPLICATES: 10,
+}
+
+// Normalize raw weights to points out of 100. Mirrors score_weight_points()
+// in db.py so the preview always matches what the next audit will compute.
+function weightPoints(weights) {
+  const raw = SCORE_CATEGORIES.map(cat => {
+    const v = parseFloat(weights[cat.key])
+    return isNaN(v) || v < 0 ? 0 : v
+  })
+  const total = raw.reduce((a, b) => a + b, 0)
+  return Object.fromEntries(SCORE_CATEGORIES.map((cat, i) =>
+    [cat.key, total > 0 ? (raw[i] / total) * 100 : 0]))
+}
+
+// Donut readout for the score weighting. Deliberately not draggable: the
+// numbers are entered in the fields beside it, and this shows what they mean.
+function WeightDonut({ points, hovered }) {
+  const SIZE = 150
+  const CX = SIZE / 2, CY = SIZE / 2
+  const R_OUTER = 62, R_INNER = 42
+  const GAP_DEG = 2.5   // breathing room between segments
+
+  function polarToXY(cx, cy, r, angleDeg) {
+    const rad = (angleDeg - 90) * Math.PI / 180
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) }
+  }
+  function arcPath(cx, cy, rO, rI, s, e) {
+    const s1 = polarToXY(cx, cy, rO, s), e1 = polarToXY(cx, cy, rO, e)
+    const s2 = polarToXY(cx, cy, rI, e), e2 = polarToXY(cx, cy, rI, s)
+    const large = (e - s) > 180 ? 1 : 0
+    return `M ${s1.x} ${s1.y} A ${rO} ${rO} 0 ${large} 1 ${e1.x} ${e1.y} L ${s2.x} ${s2.y} A ${rI} ${rI} 0 ${large} 0 ${e2.x} ${e2.y} Z`
+  }
+
+  const visible = SCORE_CATEGORIES.filter(c => (points[c.key] || 0) > 0.05)
+  const segments = []
+  let cursor = 0
+  for (const cat of visible) {
+    const sweep = (points[cat.key] / 100) * 360
+    // A lone category owns the full ring — a gap there would render as a
+    // hairline slit in an otherwise solid circle, which reads as a bug.
+    const gap = visible.length > 1 ? GAP_DEG : 0
+    const isHovered = hovered === cat.key
+    const grow = isHovered ? 3 : 0
+    segments.push({
+      key: cat.key, color: cat.color, dim: hovered && !isHovered,
+      // An SVG arc whose start and end coincide draws nothing, so a category
+      // holding every point is rendered as a ring rather than a 360° wedge.
+      full: sweep >= 359.9,
+      rOuter: R_OUTER + grow, rInner: R_INNER - (isHovered ? 1 : 0),
+      path: arcPath(CX, CY, R_OUTER + grow, R_INNER - (isHovered ? 1 : 0),
+                    cursor + gap / 2, cursor + sweep - gap / 2),
+    })
+    cursor += sweep
+  }
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} style={{ flexShrink: 0 }}>
+      <circle cx={CX} cy={CY} r={(R_OUTER + R_INNER) / 2} fill="none"
+        stroke="var(--border)" strokeWidth={R_OUTER - R_INNER} opacity={0.35} />
+      {segments.map(seg => (seg.full ? (
+        <circle key={seg.key} cx={CX} cy={CY} r={(seg.rOuter + seg.rInner) / 2}
+          fill="none" stroke={seg.color} strokeWidth={seg.rOuter - seg.rInner}
+          opacity={seg.dim ? 0.3 : 0.85} style={{ transition: 'opacity 0.12s' }} />
+      ) : (
+        <path key={seg.key} d={seg.path} fill={seg.color}
+          opacity={seg.dim ? 0.3 : 0.85}
+          style={{ transition: 'opacity 0.12s' }} />
+      )))}
+      <text x={CX} y={CY - 3} textAnchor="middle" dominantBaseline="middle"
+        style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, fill: 'var(--text)' }}>
+        100
+      </text>
+      <text x={CX} y={CY + 16} textAnchor="middle" dominantBaseline="middle"
+        style={{ fontFamily: 'var(--mono)', fontSize: 10, fill: 'var(--text-dim)' }}>
+        pts
+      </text>
+    </svg>
+  )
+}
+
 function Card({ title, children }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 24, marginBottom: 16 }}>
@@ -207,6 +306,9 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [orPct,  setOrPct]  = useState('')
   const [niPct,  setNiPct]  = useState('')
   const [dupPct, setDupPct] = useState('')
+  // Score weights, held as strings so the fields can be cleared while typing.
+  const [weights,      setWeights]      = useState({})
+  const [hoveredWeight, setHoveredWeight] = useState(null)
   const [exclusionPatterns,        setExclusionPatterns]        = useState('')
   const [exclusionFocused,         setExclusionFocused]         = useState(false)
   const [discRipPresets,           setDiscRipPresets]           = useState([])
@@ -230,6 +332,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setOrPct( String(parseFloat((c.OR_RATIO  ?? 0.01) * 100)))
       setNiPct( String(parseFloat((c.NI_RATIO  ?? 0.01) * 100)))
       setDupPct(String(parseFloat((c.DUP_RATIO ?? 0.01) * 100)))
+      setWeights(Object.fromEntries(SCORE_CATEGORIES.map(cat =>
+        [cat.key, String(c[cat.key] ?? DEFAULT_WEIGHTS[cat.key])])))
       setExclusionPatterns((c.EXCLUSION_PATTERNS || []).join('\n'))
       setDiscRipPresets(Array.isArray(c.DISC_RIP_EXCLUSION_PRESETS) ? c.DISC_RIP_EXCLUSION_PRESETS : [])
       setMediaServerPresets(Array.isArray(c.MEDIA_SERVER_EXCLUSION_PRESETS) ? c.MEDIA_SERVER_EXCLUSION_PRESETS : [])
@@ -390,6 +494,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   }
 
   const handleSave = async () => {
+    if (Object.values(weightPoints(weights)).every(p => p <= 0)) {
+      setSaveStatus({ ok: false, msg: 'At least one score category must have a weight above zero' })
+      return
+    }
     const sourceChanged = conf.TORRENT_SOURCE !== savedSource
     setPersistentWarnings([])
     const payload = {
@@ -397,6 +505,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       OR_RATIO:  parseFloat(orPct)  / 100 || 0.01,
       NI_RATIO:  parseFloat(niPct)  / 100 || 0.01,
       DUP_RATIO: parseFloat(dupPct) / 100 || 0.01,
+      // A blank field means zero here, not "use the default" — clearing a box
+      // is how you switch a category off.
+      ...Object.fromEntries(SCORE_CATEGORIES.map(cat => {
+        const v = parseFloat(weights[cat.key])
+        return [cat.key, isNaN(v) || v < 0 ? 0 : v]
+      })),
       EXCLUSION_PATTERNS:           exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean),
       DISC_RIP_EXCLUSION_PRESETS:   discRipPresets,
       MEDIA_SERVER_EXCLUSION_PRESETS: mediaServerPresets,
@@ -419,6 +533,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       if (sourceChanged && onScan) onScan()
     } catch (e) { setSaveStatus({ ok: false, msg: e.message }) }
   }
+
+  // Every category at zero leaves nothing to score — the backend rejects it,
+  // so block the save here and say why rather than surface a generic error.
+  const allWeightsZero = Object.values(weightPoints(weights)).every(p => p <= 0)
 
   const formGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }
   const compactGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }
@@ -496,8 +614,13 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     return (b / 1e6).toFixed(0) + ' MB'
   }
 
-  const thresholdHint = (label) =>
-    `All 10 pts lost when ${label} data reaches this % of your library. Points lost proportionally below that.`
+  // The point figure follows the weighting above, so the hint stays truthful
+  // when a category is reweighted — and says so plainly when it is switched off.
+  const thresholdHint = (label, key) => {
+    const max = weightPoints(weights)[key]
+    if (!(max > 0.05)) return `${label} data is not scored — this threshold has no effect.`
+    return `All ${+max.toFixed(1)} pts lost when ${label} data reaches this % of your library. Points lost proportionally below that.`
+  }
 
   return (
     <div className="fade-in" style={{ padding: 24, maxWidth: 800 }}>
@@ -815,41 +938,113 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
       </Card>
 
-      <Card title="Health Score Thresholds">
+      <Card title="Health Score">
+        <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
+          How much each category counts toward your score out of 100. The numbers are relative —
+          only their proportions matter, so you can type whatever expresses your priorities.
+          Set a category to <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>0</span> to
+          stop scoring it entirely; it still appears on the dashboard, just unscored.
+        </p>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 28, flexWrap: 'wrap', marginBottom: 8 }}>
+          <WeightDonut points={weightPoints(weights)} hovered={hoveredWeight} />
+          <div style={{ flex: '1 1 320px', minWidth: 260, maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {SCORE_CATEGORIES.map(cat => {
+              const pts = weightPoints(weights)[cat.key]
+              const off = !(pts > 0.05)
+              return (
+                <div key={cat.key}
+                  onMouseEnter={() => setHoveredWeight(cat.key)}
+                  onMouseLeave={() => setHoveredWeight(null)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
+                    borderRadius: 'var(--r)',
+                    background: hoveredWeight === cat.key ? 'var(--surface2)' : 'transparent',
+                    transition: 'background 0.12s',
+                  }}>
+                  <span style={{
+                    width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                    background: cat.color, opacity: off ? 0.3 : 1,
+                  }} />
+                  <span style={{
+                    flex: 1, fontSize: 12, minWidth: 0,
+                    color: off ? 'var(--text-dim)' : 'var(--text)',
+                  }} title={cat.hint}>{cat.label}</span>
+                  <input
+                    type="number" min="0" max="1000"
+                    value={weights[cat.key] ?? ''}
+                    onChange={e => { setWeights(w => ({ ...w, [cat.key]: e.target.value })); setIsDirty(true) }}
+                    style={{
+                      width: 62, padding: '5px 8px', borderRadius: 'var(--r)',
+                      border: '1px solid var(--border2)', background: 'var(--surface2)',
+                      color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12,
+                      outline: 'none', textAlign: 'right',
+                    }}
+                  />
+                  <span style={{
+                    width: 74, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11,
+                    color: off ? 'var(--text-dim)' : cat.color,
+                  }}>
+                    {off ? 'not scored' : `${+pts.toFixed(1)} pts`}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {allWeightsZero && (
+          <div style={{
+            fontSize: 11, color: 'var(--red)', fontFamily: 'var(--mono)',
+            background: 'var(--red)14', border: '1px solid var(--red)33',
+            borderRadius: 'var(--r)', padding: '7px 10px', marginBottom: 18,
+          }}>
+            At least one category needs a weight above zero.
+          </div>
+        )}
+
+        <div style={{
+          fontSize: 12, fontWeight: 600, color: 'var(--text)',
+          paddingTop: 18, marginTop: 10, marginBottom: 10,
+          borderTop: '1px solid var(--border)',
+        }}>Thresholds</div>
         <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
           Each threshold defines the size limit for that category relative to your total torrent library.
-          Points are lost <em>linearly</em> as you approach the threshold — at exactly the threshold value all 10 points are gone.
+          Points are lost <em>linearly</em> as you approach the threshold — at exactly the threshold value that
+          category's points are all gone.
           For example, a <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>1%</span> threshold means
-          you start losing points immediately if any problem data exists, and lose all 10 points once it reaches 1% of your library.
-          Lower = stricter. Hardlinked Media accounts for 70 pts; each category below accounts for 10 pts.
+          you start losing points immediately if any problem data exists, and lose them all once it reaches 1% of your library.
+          Lower = stricter. Hardlinked Media has no threshold — it scores in direct proportion to how much of your library is hardlinked.
         </p>
         <div style={formGrid}>
           <Field label="Orphaned Torrent Threshold" type="number"
             suffix="%"
-            hint={thresholdHint('orphaned torrent')}
+            hint={thresholdHint('orphaned torrent', 'WEIGHT_ORPHANED')}
             placeholder="1" value={orPct} onChange={v => { setOrPct(v); setIsDirty(true) }} />
           <Field label="Not Imported Threshold" type="number"
             suffix="%"
-            hint={thresholdHint('unlinked seeding')}
+            hint={thresholdHint('unlinked seeding', 'WEIGHT_NOT_IMPORTED')}
             placeholder="1" value={niPct} onChange={v => { setNiPct(v); setIsDirty(true) }} />
           <Field label="Duplicate Files Threshold" type="number"
             suffix="%"
-            hint={thresholdHint('duplicate file')}
+            hint={thresholdHint('duplicate file', 'WEIGHT_DUPLICATES')}
             placeholder="1" value={dupPct} onChange={v => { setDupPct(v); setIsDirty(true) }} />
         </div>
 
-        {/* Live score preview */}
+        {/* Live score preview — points come from the weighting above, so this
+            stays truthful when a category is reweighted or switched off. */}
         <div style={{ marginTop: 14, ...formGrid }}>
           {[
-            { label: 'Orphaned', pct: orPct,  size: null },
-            { label: 'Not Imported', pct: niPct,  size: null },
-            { label: 'Duplicates', pct: dupPct, size: null },
-          ].map(({ label, pct }) => {
-            const v = parseFloat(pct)
-            if (!v || isNaN(v)) return null
+            { label: 'Orphaned',     pct: orPct,  key: 'WEIGHT_ORPHANED' },
+            { label: 'Not Imported', pct: niPct,  key: 'WEIGHT_NOT_IMPORTED' },
+            { label: 'Duplicates',   pct: dupPct, key: 'WEIGHT_DUPLICATES' },
+          ].map(({ label, pct, key }) => {
+            const v   = parseFloat(pct)
+            const max = weightPoints(weights)[key]
+            if (!v || isNaN(v) || !(max > 0.05)) return null
             return (
               <div key={label} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '6px 10px' }}>
-                {label}: all 10 pts lost at <span style={{ color: 'var(--accent)' }}>{v}%</span> of library
+                {label}: all {+max.toFixed(1)} pts lost at <span style={{ color: 'var(--accent)' }}>{v}%</span> of library
               </div>
             )
           })}

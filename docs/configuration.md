@@ -131,31 +131,75 @@ run, say, a 4K Radarr alongside a 1080p one.
 
 ---
 
-## Health Score Thresholds
+## Health Score
 
-The score is out of 100:
+The score is out of 100, split across four components:
 
-| Component | Points | How it's earned |
+| Component | Default points | How it's earned |
 | --- | --- | --- |
 | **Hardlinked Media** | 70 | Directly proportional: the share of your library size that is hardlinked to a torrent. |
 | **Orphaned Torrents** | 10 | Full marks at zero; falls to zero when orphaned size reaches the threshold below. |
 | **Not Imported** | 10 | Same shape, on torrent data with no library file. |
 | **Duplicate Files** | 10 | Same shape, on bit-identical files that don't share an inode. |
 
+### Weighting
+
+The donut at the top of the Health Score settings controls how the 100 points
+are divided. The numbers are **relative** — only their proportions matter, so
+you can type whatever expresses your priorities and the points column always
+totals 100. The defaults happen to sum to 100 already, so an untouched install
+reads its weights and its points as the same four numbers.
+
+Set a category to `0` to stop scoring it. It still appears on the dashboard with
+its size, count and trend — the points figure just reads **Not scored** instead.
+At least one category has to stay above zero.
+
+Scores read as **Great** (≥ 90), **Good** (≥ 75), **Fair** (≥ 50), **Poor**
+below that, whatever weighting you choose.
+
+> Changing the weighting changes what the number means, so your score history
+> will step on the day you change it. The chart is not re-computed retroactively.
+
+### If you remove torrents once seeding finishes
+
+A common setup has Sonarr/Radarr or qBittorrent delete a torrent once it meets
+its seeding requirement, and the torrent-folder hardlink goes with it. The media
+file stays healthy, but it no longer has a torrent partner — so **Hardlinked
+Media**, 70 of the 100 points by default, collapses.
+
+If that's deliberate, turn **Hardlinked Media** down or off. The remaining
+categories carry the score.
+
+Doing that does **not** blind auditorr to broken imports, which is the usual
+worry. The failure that actually costs you disk — an arr that *copied* instead
+of hardlinking — leaves a second, bit-identical file with a different inode in
+your torrent folder, and that is exactly what **Duplicate Files** detects. What
+you give up is only the signal that a file has no torrent partner at all, which
+in this workflow is the normal, intended state.
+
+There is no way for auditorr to detect this workflow on its own: once the
+torrent and its hardlink are gone, a deliberately cleaned file and a failed
+import look identical on disk. That's why it's a setting rather than something
+auto-detected.
+
+### Thresholds
+
 The three thresholds (`OR_RATIO`, `NI_RATIO`, `DUP_RATIO`) are each a fraction
 of your **total torrent size**, default `0.01` — one percent. So with 10 TB of
 torrents, the default gives you a 100 GB allowance for orphans before that
-component's 10 points are fully gone. Valid range is `0.001` to `1.0`.
+component's points are fully gone. Valid range is `0.001` to `1.0`.
 
 Raise a threshold if you knowingly keep something around and are tired of being
 marked down for it. Lower it if you want the score to react earlier.
 
-Scores read as **Great** (≥ 90), **Good** (≥ 75), **Fair** (≥ 50), **Poor**
-below that.
+Hardlinked Media has no threshold — it scores in direct proportion to how much
+of your library is hardlinked.
 
-> Hardlinked Media is 70 of the 100 points, so a library that doesn't use
-> hardlinks scores near zero no matter how tidy it is. That's intentional — see
-> [Troubleshooting](troubleshooting.md#hardlinked-media-shows-0).
+> At the default weighting, Hardlinked Media is 70 of the 100 points, so a
+> library that doesn't use hardlinks scores near zero no matter how tidy it is.
+> That's intentional — see
+> [Troubleshooting](troubleshooting.md#hardlinked-media-shows-0). If it's
+> deliberate rather than a misconfiguration, reweight it as described above.
 
 ---
 

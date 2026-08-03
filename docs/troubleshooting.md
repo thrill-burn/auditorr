@@ -29,8 +29,14 @@ version: set `AUDITORR_SECRET`, or add your tunnel's range to
 **Cause:** your library and torrent folder don't share files. Either you're not
 using hardlinks, or auditorr can't see that you are.
 
-Hardlinked Media is 70 of the 100 health points, so this one number sinks the
-whole score.
+Hardlinked Media is 70 of the 100 health points by default, so this one number
+sinks the whole score.
+
+> **Removing torrents once seeding finishes?** Then this is expected, not a
+> fault — the media file outlives its torrent, so it has nothing left to be
+> hardlinked to. Turn the component down or off in
+> [Health Score → Weighting](configuration.md#weighting) rather than working
+> through the checks below.
 
 **Check, in order:**
 

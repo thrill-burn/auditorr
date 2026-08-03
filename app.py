@@ -19,6 +19,7 @@ from flask_cors import CORS
 import sources
 from db import (
     DATA_DIR,
+    DEFAULT_CONFIG, SCORE_WEIGHT_KEYS,
     init_db,
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
@@ -515,6 +516,8 @@ def handle_config():
                 'OR_RATIO':           float(data.get('OR_RATIO',  0.01)),
                 'NI_RATIO':           float(data.get('NI_RATIO',  0.01)),
                 'DUP_RATIO':          float(data.get('DUP_RATIO', 0.01)),
+                **{k: float(data.get(k, existing.get(k, DEFAULT_CONFIG[k])))
+                   for k in SCORE_WEIGHT_KEYS},
                 'EXCLUSION_PATTERNS':           [p for p in data.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)],
                 'DISC_RIP_EXCLUSION_PRESETS': normalize_disc_rip_presets(
                     data.get('DISC_RIP_EXCLUSION_PRESETS', [])
