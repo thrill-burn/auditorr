@@ -3,6 +3,7 @@ import unittest
 from arr import (
     parse_trump_pm, match_trump_release, match_trumped_torrent, _norm_release_name,
     rank_release_matches, score_release_match, _audio_codec, title_soft_match,
+    indexer_key, tracker_matches_indexer,
 )
 
 
@@ -96,6 +97,27 @@ class TrumpedTorrentMatchTests(unittest.TestCase):
         self.assertIsNone(match_trumped_torrent(rows, "FROM S04E01 The Arrival 2160p-Kitsune"))
         self.assertIsNone(match_trumped_torrent(rows, ""))
 
+    def test_never_crosses_to_a_different_title(self):
+        # Field report: two unrelated movies, same group and identical quality
+        # tags. Quality tokens alone cleared the 0.6 overlap bar, so the wizard
+        # offered a stranger's film for deletion. The title must gate.
+        rows = self._rows("Weapons.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
+        m = match_trumped_torrent(
+            rows, "The Drama 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD")
+        self.assertIsNone(m)
+
+    def test_never_crosses_to_a_remake_from_the_same_group(self):
+        # Same title and group, years far apart — a different film.
+        rows = self._rows("Dune.1984.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265-GRP")
+        self.assertIsNone(match_trumped_torrent(
+            rows, "Dune 2021 2160p UHD BluRay TrueHD 7.1 Atmos x265-GRP"))
+
+    def test_year_drift_of_one_still_matches(self):
+        # Premiere vs wide-release rendering — same film, must still resolve.
+        rows = self._rows("Snow.White.1937.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265-GRP")
+        self.assertIsNotNone(match_trumped_torrent(
+            rows, "Snow White 1938 2160p UHD BluRay TrueHD 7.1 Atmos x265-GRP"))
+
 
 class TrumpReleaseMatchTests(unittest.TestCase):
     def setUp(self):
@@ -136,6 +158,28 @@ class TrumpReleaseMatchTests(unittest.TestCase):
         ]
         m = match_trump_release(rels, "A Movie 2020 1080p-GRP")
         self.assertEqual(m["seeders"], 99)
+
+
+class TrackerIndexerMatchTests(unittest.TestCase):
+    def test_arr_indexer_name_matches_tracker_host(self):
+        self.assertTrue(tracker_matches_indexer("aither.cc", "Aither (API) (Prowlarr)"))
+        self.assertTrue(tracker_matches_indexer("tracker.beyond-hd.me", "Beyond-HD"))
+        self.assertTrue(tracker_matches_indexer("https://hawke.uno/announce", "Hawke.uno (API)"))
+
+    def test_other_trackers_do_not_match(self):
+        self.assertFalse(tracker_matches_indexer("hawke.uno", "Aither (API) (Prowlarr)"))
+        self.assertFalse(tracker_matches_indexer("", "Aither"))
+        self.assertFalse(tracker_matches_indexer("aither.cc", ""))
+
+    def test_short_names_need_an_exact_key(self):
+        # 3-char keys can't match by containment, or 'HD' swallows everything.
+        self.assertFalse(tracker_matches_indexer("hdt.org", "HDTorrents"))
+        self.assertTrue(tracker_matches_indexer("hdt.org", "HDT (API)"))
+
+    def test_key_normalization(self):
+        self.assertEqual(indexer_key("Aither (API) (Prowlarr)"), "aither")
+        self.assertEqual(indexer_key("aither.cc"), "aither")
+        self.assertEqual(indexer_key("https://tracker.beyond-hd.me:2053/announce"), "beyondhd")
 
 
 class AudioCodecTests(unittest.TestCase):
@@ -186,6 +230,21 @@ class RankReleaseMatchesTests(unittest.TestCase):
             "name", min_score=0.2)
         self.assertTrue(ranked[0]["name"].startswith("FROM.S04E01"))
         self.assertTrue(all("S04E02" not in r["name"] for r in ranked))
+
+    def test_symbol_quality_token_is_not_a_title_word(self):
+        # 'HDR10+' kept its '+', missed the quality-noise set, and became a
+        # shared *title* token — one junk word was enough to clear the gate.
+        score, brk = score_release_match(
+            "The Drama 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD",
+            "Weapons.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
+        self.assertEqual(score, 0.0)
+        self.assertEqual(brk["title"], "diff")
+
+    def test_unrelated_title_is_dropped_from_the_candidate_list(self):
+        rows = self._rows("Weapons.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
+        ranked = rank_release_matches(
+            rows, "The Drama 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD", "name")
+        self.assertEqual(ranked, [])
 
     def test_same_title_other_quality_still_surfaces(self):
         # Same movie/year, different encode — a genuine title match, so it shows

@@ -39,7 +39,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -1290,6 +1290,36 @@ def _trump_pick_row(row):
     }
 
 
+def _trump_prefer_pm_tracker(ranked, auto_hash, indexer):
+    """Break candidate ties with the tracker that sent the PM.
+
+    A cross-seed group carries one release name on several trackers, so its rows
+    score identically and the pre-selected seed was whichever the client listed
+    first. The trumped registration is the one on the tracker that sent the PM,
+    so that's the better seed to offer.
+
+    Strictly a tie-break: the sort is score-first and stable, so a stronger title
+    match is never demoted, and nothing is dropped for being on another tracker
+    (the PM's tracker may not be in the client under a recognizable name at all).
+    Reorders `ranked` in place and returns the possibly-upgraded auto hash.
+    """
+    if not indexer or not ranked:
+        return auto_hash
+    on_tracker = {c['hash'] for c in ranked
+                  if tracker_matches_indexer(c.get('tracker'), indexer)}
+    if not on_tracker:
+        return auto_hash
+    pinned = next((c for c in ranked if c['hash'] == auto_hash), None)
+    ranked.sort(key=lambda c: ((c.get('match_score') or 0), c['hash'] in on_tracker),
+                reverse=True)
+    if pinned is None:
+        return ranked[0]['hash']
+    # Only swap for a sibling that matched the PM equally well.
+    sib = next((c for c in ranked if c['hash'] in on_tracker
+                and c.get('match_score') == pinned.get('match_score')), None)
+    return sib['hash'] if sib else auto_hash
+
+
 @app.route('/api/workflows/trump/resolve_group', methods=['POST'])
 @require_auth
 def workflows_trump_resolve_group():
@@ -1321,6 +1351,7 @@ def workflows_trump_resolve_group():
         return jsonify({"status": "error", "message": str(e)}), 502
 
     seed_hashes = [str(h).strip() for h in (data.get('seed_hashes') or []) if str(h).strip()]
+    indexer     = str(data.get('indexer') or '').strip()
 
     # Phase 1 — rank candidates per title; the user confirms the seed set.
     if not seed_hashes:
@@ -1334,6 +1365,7 @@ def workflows_trump_resolve_group():
                 s, brk = score_release_match(title, auto['name'])
                 ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
             auto_hash = auto['hash'] if auto is not None else (ranked[0]['hash'] if ranked else None)
+            auto_hash = _trump_prefer_pm_tracker(ranked, auto_hash, indexer)
             picks.append({
                 'title':      title,
                 'auto':       auto_hash,
@@ -1438,12 +1470,22 @@ def workflows_trump_search_release():
 
     # The exact match is the trusted auto-pick; the ranked list is the fallback
     # when the PM's rendering of the new title doesn't match any release name
-    # exactly, and an "other matches" affordance when it does. Restrict the pool
-    # to the PM's indexer first (when given) so the candidate list stays focused.
-    pool = [r for r in releases
-            if not indexer or (r.get('indexer') or '').lower() == indexer.lower()]
-    release    = match_trump_release(releases, new_title, indexer)
-    candidates = rank_release_matches(pool or releases, new_title, name_key='title', limit=8)
+    # exactly, and an "other matches" affordance when it does.
+    #
+    # The PM's indexer is a *priority*, not a filter. Its copy is the one that
+    # was trumped (and the one carrying the PM's freeleech), so it wins every
+    # tie — but the release is often listed on several trackers, and hiding
+    # those turned "not up on this one yet" into a dead end. Ranked wide, then
+    # reordered, then cut, so a lower-scoring copy on the PM's tracker can't be
+    # truncated away before the tie-break runs.
+    release = (match_trump_release(releases, new_title, indexer)
+               or match_trump_release(releases, new_title))
+    candidates = rank_release_matches(releases, new_title, name_key='title', limit=40)
+    if indexer:
+        candidates.sort(key=lambda r: ((r.get('match_score') or 0),
+                                       tracker_matches_indexer(r.get('indexer'), indexer)),
+                        reverse=True)
+    candidates = candidates[:8]
     return jsonify({
         "status":          "success",
         "release":         release,

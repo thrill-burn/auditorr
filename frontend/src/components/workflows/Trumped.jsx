@@ -206,7 +206,7 @@ export default function Trumped({ onNavigate }) {
   const handleFindTorrents = async () => {
     setBusy('group'); setError(null)
     try {
-      const r = await api.trumpResolveGroup(oldTitles.filter(t => t.trim()))
+      const r = await api.trumpResolveGroup(oldTitles.filter(t => t.trim()), null, indexer)
       setPicks(r.picks || [])
       const sel = {}
       ;(r.picks || []).forEach(p => { sel[p.title] = p.auto })
@@ -347,7 +347,7 @@ export default function Trumped({ onNavigate }) {
         <StepShell n={2} active={step2} done={picks != null} title="Which tracker sent the PM?">
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Indexer (optional — narrows the release search)</span>
+              <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Indexer (optional — prioritizes this tracker's torrents and releases)</span>
               <select
                 value={indexer} onChange={e => setIndexer(e.target.value)}
                 style={{ padding: '7px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 12, minWidth: 220 }}

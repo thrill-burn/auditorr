@@ -252,10 +252,17 @@ def match_trumped_torrent(rows, title):
     (both inherently can't cross episodes/groups), then a strong-overlap
     fallback for PMs whose rendering differs from the torrent name (e.g. the
     tracker prints "DD+ 5.1" where the torrent says "DDP5.1"). The fallback is
-    gated hard on the season/episode anchor and the release group, then ranked
-    by token overlap (≥0.6) — it tolerates cosmetic token differences but never
-    a different episode or a different encode. Used only for resolving the
-    delete group (always user-confirmed), never for the grab.
+    gated hard on the season/episode anchor, the release group, the title core
+    and the year, then ranked by token overlap (≥0.6) — it tolerates cosmetic
+    token differences but never a different episode, encode, or title. Used
+    only for resolving the delete group (always user-confirmed), never for the
+    grab.
+
+    The title gate is the same one `score_release_match` applies, and it is the
+    load-bearing one: two unrelated releases in the same format share almost
+    all of their *quality* tokens ("2160p UHD BluRay TrueHD 7.1 Atmos x265"
+    from one group), which on its own sails past a 0.6 overlap bar and offers a
+    stranger's movie up for deletion.
     """
     target = _norm_release_name(title)
     if not target:
@@ -273,6 +280,10 @@ def match_trumped_torrent(rows, title):
 
     t_anchor = _season_ep_anchor(target)
     t_group  = _release_group_tag(title)
+    t_core   = _title_core_tokens(target, t_group)
+    t_year   = _parse_year_from_name(target)
+    if not t_core:
+        return None
     best, best_score = None, 0.0
     for r in rows:
         rn = _norm_release_name(r['name'])
@@ -285,6 +296,15 @@ def match_trumped_torrent(rows, title):
         # Release group must agree when both declare one (the encode identity)
         r_group = _release_group_tag(r['name'])
         if t_group and r_group and t_group != r_group:
+            continue
+        # Title must actually overlap — quality tokens are not identity
+        r_core = _title_core_tokens(rn, r_group)
+        if not r_core or len(t_core & r_core) / len(t_core | r_core) < _MIN_TITLE_SIM:
+            continue
+        # Year must agree within ±1 (premiere vs wide-release rendering), so a
+        # same-title remake from the same group can't be swapped in
+        r_year = _parse_year_from_name(rn)
+        if t_year and r_year and abs(t_year - r_year) > 1:
             continue
         score = len(t_tokens & r_tokens) / max(len(t_tokens), len(r_tokens))
         if score > best_score:
@@ -359,7 +379,7 @@ _QUALITY_NOISE = {
     '2160p', '1080p', '1080i', '720p', '480p', '4k', 'uhd', 'sdtv',
     'web', 'dl', 'webdl', 'webrip', 'bluray', 'blu', 'ray', 'bdrip', 'brrip',
     'remux', 'hdtv', 'dvd', 'dvdrip', 'bd',
-    'hdr', 'hdr10', 'dv', 'dovi', 'dolby', 'vision', 'hlg', 'plus',
+    'hdr', 'hdr10', 'sdr', 'dv', 'dovi', 'dolby', 'vision', 'hlg', 'plus',
     'atmos', 'hd', 'ma',
     'x', 'h', 'hevc', 'avc',
     'amzn', 'nf', 'dsnp', 'atvp', 'hmax', 'max', 'hulu', 'pcok', 'stan', 'ip', 'itunes',
@@ -387,11 +407,20 @@ _CORE_DROP_RE = re.compile(
 
 def _title_core_tokens(norm, group=''):
     """Title-only tokens of a normalized release name — quality/source/audio/
-    codec/year/episode/group/article noise stripped, apostrophes folded — for
-    the soft title match."""
+    codec/year/episode/group/article noise stripped, punctuation folded — for
+    the soft title match.
+
+    Punctuation is stripped before the noise lookup, not after: a quality token
+    that carries a symbol ("HDR10+", "DD+") would otherwise miss the noise set
+    and land in the title core, where it reads as *shared title words* between
+    two unrelated releases. One such token is enough to clear the similarity
+    gate — that was the "Weapons 2025 offered for The Drama 2026" bug, where
+    both names contributed 'hdr10+' and nothing else overlapped. \\W (not
+    [^a-z0-9]) so accented title words survive intact.
+    """
     out = set()
     for raw in re.split(r'[\s\-]+', norm):
-        tok = raw.replace("'", '').replace('’', '')   # director's → directors
+        tok = re.sub(r'\W+', '', raw)   # director's → directors, hdr10+ → hdr10
         if not tok or tok == group or tok in _QUALITY_NOISE or tok in _TITLE_STOPWORDS:
             continue
         if _CORE_DROP_RE.match(tok):
@@ -532,6 +561,43 @@ def title_soft_match(query_title, candidate_title):
     if not inter:
         return 0.0
     return inter / len(q | c)
+
+
+# Host labels that identify the announce endpoint, not the tracker itself.
+_TRACKER_HOST_PREFIXES = {'www', 'tracker', 'announce', 'tr', 't', 'private', 'secure'}
+
+
+def indexer_key(name):
+    """Comparable identity for an indexer name or a tracker host.
+
+    The Trumped wizard knows the PM's tracker as an *arr indexer name* ("Aither
+    (API) (Prowlarr)") while client torrents carry a *host* ("aither.cc"); both
+    reduce to 'aither'. Parenthetical suffixes, URL scheme/path/port, announce
+    subdomains and punctuation are dropped.
+    """
+    s = re.sub(r'\([^)]*\)', ' ', str(name or '').strip().lower())
+    s = re.sub(r'^[a-z]+://', '', s.strip()).split('/')[0].split(':')[0].strip()
+    if '.' in s:
+        labels = [l for l in s.split('.') if l]
+        while len(labels) > 1 and labels[0] in _TRACKER_HOST_PREFIXES:
+            labels.pop(0)
+        s = labels[0] if labels else s
+    return re.sub(r'[^a-z0-9]', '', s)
+
+
+def tracker_matches_indexer(tracker, indexer):
+    """True when a torrent's tracker is (most likely) the indexer the PM came from.
+
+    Deliberately fuzzy — the two names come from different systems and only ever
+    agree by convention. Safe because this is a **ranking tie-break only**: a
+    wrong answer reorders equally-scored candidates, it never drops one or
+    promotes a worse title match. Containment needs 4+ chars so short names
+    ('HD') can't swallow unrelated trackers.
+    """
+    a, b = indexer_key(tracker), indexer_key(indexer)
+    if not a or not b:
+        return False
+    return a == b or (len(a) >= 4 and len(b) >= 4 and (a in b or b in a))
 
 
 def grab_release(cfg, service, connection_id, guid, indexer_id):
