@@ -66,9 +66,12 @@ function Dot({ color, size = 7 }) {
 function Track({ pct, color = 'var(--accent)', height = 4 }) {
   return (
     <div style={{ height, background: 'var(--surface3)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
+      {/* Plain var() fill, like the sidebar scan bar. The `var(--accent)55`
+          alpha-suffix idiom does not survive substitution inside a single
+          property value, so the fill silently resolved to nothing. */}
       <div style={{
         width: `${Math.max(0, Math.min(100, pct))}%`, height: '100%',
-        background: `${color}55`, borderRadius: 'var(--r-pill)',
+        background: color, opacity: 0.85, borderRadius: 'var(--r-pill)',
         transition: 'width 0.6s cubic-bezier(.4,0,.2,1)',
       }} />
     </div>
@@ -117,7 +120,9 @@ function Medallion({ l }) {
       <div style={{ position: 'relative', width: 52, height: 52, flexShrink: 0 }}>
         <svg width="52" height="52" viewBox="0 0 52 52" style={{ position: 'absolute', inset: 0, transform: 'rotate(-90deg)' }}>
           <circle cx="26" cy="26" r={R} fill="none" stroke="var(--surface3)" strokeWidth="3" />
-          <circle cx="26" cy="26" r={R} fill="none" stroke={`${ring}88`} strokeWidth="3"
+          {/* strokeOpacity, not an alpha-suffixed colour — SVG paint attributes
+              take a plain var(), the same way the HealthDial draws its track. */}
+          <circle cx="26" cy="26" r={R} fill="none" stroke={ring} strokeOpacity={0.9} strokeWidth="3"
             strokeLinecap="round" strokeDasharray={C}
             strokeDashoffset={C - (C * pct) / 100}
             style={{ transition: 'stroke-dashoffset 0.7s cubic-bezier(.4,0,.2,1)' }} />
@@ -262,7 +267,7 @@ function WorkflowCard({ row, onNavigate, compact }) {
         <span style={{ fontSize: compact ? 13 : 16, fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 8px',
-          borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}40`, color: meta.color,
+          borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}`, color: meta.color,
         }}>{meta.label}</span>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)' }}>{row.nature}</span>
         {row.score_lost > 0 && (
@@ -375,7 +380,7 @@ function Section({ title, sub, done, doneLine, children, defaultOpen = true }) {
 function SetupPanel({ setup, onNavigate }) {
   return (
     <div style={{
-      background: 'var(--surface)', border: '1px solid var(--accent)33', borderRadius: 'var(--rl)',
+      background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 'var(--rl)',
       boxShadow: 'var(--elev-1)', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 10,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
