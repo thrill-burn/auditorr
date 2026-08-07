@@ -7,7 +7,7 @@ import { LoadingRow, WorkflowError } from './workflows/shared'
 // Layout, top to bottom:
 //   1. Useless prizes  — the trophy shelf. Recognition, up front, so the page
 //      opens with something to aspire to rather than a wall of chores.
-//   2. One-time cleanup — Cleanup + Dedupe. Collapses to one line when done.
+//   2. Baseline        — Cleanup + Dedupe. Collapses to one line once clear.
 //   3. Ongoing          — Triage, then Backfill.
 //   4. On demand        — Trumped.
 //
@@ -16,8 +16,11 @@ import { LoadingRow, WorkflowError } from './workflows/shared'
 // ("do this, get that") — an abstract shelf does not motivate on its own.
 //
 // Cheese lives in the language and in restrained motion, never in pigment: no
-// gradients, no gold, no confetti. Medallion rings use --accent at low alpha,
-// locked tiles are dashed and --text-faint. See prompts/NEXT_STEPS.md.
+// gradients, no gold, no confetti. Rings use a plain var() paint plus
+// strokeOpacity; locked tiles are dashed and --text-faint. Do NOT reach for the
+// `var(--x)55` alpha-suffix idiom here — it does not survive substitution inside
+// a property value, which is what made these fills invisible the first time.
+// See prompts/NEXT_STEPS.md.
 //
 // Everything here is contained to this page. Nothing about Next steps appears
 // on the dashboard, in toasts, or as a sidebar badge.
@@ -452,8 +455,8 @@ export default function NextSteps({ onNavigate }) {
 
   const { setup, rows, health } = data
   const byId = Object.fromEntries((rows || []).map(r => [r.id, r]))
-  const oneoff = ['cleanup', 'dedupe'].map(id => byId[id]).filter(Boolean)
-  const oneoffDone = oneoff.length > 0 && oneoff.every(r => !['fix', 'optimize'].includes(r.state))
+  const baseline = ['cleanup', 'dedupe'].map(id => byId[id]).filter(Boolean)
+  const baselineClear = baseline.length > 0 && baseline.every(r => !['fix', 'optimize'].includes(r.state))
 
   return (
     <div style={{ padding: 'var(--page-gutter)', display: 'flex', flexDirection: 'column', gap: 'var(--card-gap)', maxWidth: 1180 }}>
@@ -464,7 +467,7 @@ export default function NextSteps({ onNavigate }) {
         <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 760 }}>
           {data.stage === 'setup'
             ? 'auditorr has nothing to audit yet. Finish the checklist and the rest of this page fills in.'
-            : 'Clear the one-time cleanup first, then settle into the two jobs that never really end.'}
+            : 'Get to a clean baseline first, then settle into the two jobs that never really end. auditorr keeps watch on the baseline in case it slips.'}
         </p>
       </div>
 
@@ -476,14 +479,14 @@ export default function NextSteps({ onNavigate }) {
       {rows && rows.length > 0 && (
         <>
           <Section
-            title="One-time cleanup"
-            sub="Do these once. They finish and stay finished."
-            done={oneoffDone}
-            doneLine="Done — orphans and duplicates are clear. auditorr keeps watch."
-            defaultOpen={!oneoffDone}
+            title="Baseline"
+            sub="Clear these first. They should stay clear — auditorr tells you when they don't."
+            done={baselineClear}
+            doneLine="Clear — auditorr is watching in case they come back."
+            defaultOpen={!baselineClear}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {oneoff.map(r => (
+              {baseline.map(r => (
                 <WorkflowCard key={r.id} row={r} onNavigate={onNavigate}
                   compact={!['fix', 'optimize', 'blocked'].includes(r.state)} />
               ))}

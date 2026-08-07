@@ -39,10 +39,15 @@ log = logging.getLogger(__name__)
 #
 # There are two steps, and they differ in *nature*, not just sequence:
 #
-#   Step 1 — one-time cleanup. Concrete work that finishes and stays finished.
+#   Step 1 — baseline. Concrete work you do once at the start and then *guard*.
 #     1. Cleanup  — clear the torrent directory of orphans
 #     2. Dedupe   — collapse duplicate files
 #   ──────────────  that is a clean baseline
+#   Deliberately not called "one-time": you clear it once, but an arr
+#   re-downloading something or a move going wrong brings it back, which is the
+#   whole reason these are modelled as zombies rather than as a checklist. The
+#   distinction from step 2 is that a clean baseline is an achievable *state*;
+#   step 2 has no such state to reach.
 #   Step 2 — ongoing. Work that never has a last item.
 #     3. Triage   — maintenance: what isn't imported, and why. New downloads
 #                   and upgrades keep refilling this pile forever.
@@ -55,26 +60,26 @@ log = logging.getLogger(__name__)
 #     is _hard_, not because it is an early priority.** Ranking by score — or
 #     even by score-per-effort — hands a brand-new user the slowest, fiddliest
 #     workflow in the product as step one. The stage gate is structural: no
-#     hardlink gap, however catastrophic, jumps ahead of one-time cleanup.
+#     hardlink gap, however catastrophic, jumps ahead of baseline work.
 #   * **The sequence inside a stage is fixed, not impact-ranked.** A page that
 #     teaches always teaches the same order; a list that reshuffles by whichever
 #     number is biggest today teaches nothing. Magnitude still decides *state*
 #     (fix vs optimize), which is what actually promotes a row.
 STAGE = {
-    'cleanup': 'oneoff', 'dedupe': 'oneoff',
+    'cleanup': 'baseline', 'dedupe': 'baseline',
     'triage': 'ongoing', 'backfill': 'ongoing',
     'trumped': 'ondemand',
 }
 STAGE_LABEL = {
-    'oneoff':   'One-time cleanup',
+    'baseline': 'Baseline',
     'ongoing':  'Ongoing',
     'ondemand': 'On demand',
 }
 # The character of each job, said plainly. Sets expectations honestly: two of
 # these end, two of them don't.
 NATURE = {
-    'cleanup':  'Do once',
-    'dedupe':   'Do once',
+    'cleanup':  'Clear once, then watch',
+    'dedupe':   'Clear once, then watch',
     'triage':   'Keeps coming back',
     'backfill': 'Never really finishes',
     'trumped':  'Only when a tracker asks',
@@ -155,13 +160,13 @@ STATE_RANK = {'fix': 0, 'blocked': 1, 'optimize': 2, 'maintain': 3, 'standby': 4
 def _bucket(row):
     """Priority buckets, best first.
 
-    Foundation work outranks the long game whenever it is actionable at all —
+    Baseline work outranks the long game whenever it is actionable at all —
     a couple of stray orphans is a 30-second job, and clearing it promotes the
     next row immediately.
     """
     stage, state = STAGE.get(row['id'], 'ongoing'), row['state']
     if state in ('fix', 'optimize'):
-        return (0 if stage == 'oneoff' else 1) * 2 + (0 if state == 'fix' else 1)
+        return (0 if stage == 'baseline' else 1) * 2 + (0 if state == 'fix' else 1)
     return {'blocked': 4, 'maintain': 5, 'standby': 6}.get(state, 7)
 
 # Deliberately long. Progress Quest's appeal was that the next level was always
@@ -458,7 +463,7 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
     })
 
     # Always the canonical sequence. The page renders fixed, labelled sections
-    # (one-time cleanup → ongoing → on demand), so the layout carries the
+    # (baseline → ongoing → on demand), so the layout carries the
     # ordering and nothing reshuffles under the user between visits. Magnitude
     # decides *state*, which decides whether a card is expanded or collapsed.
     for r in rows:
@@ -912,11 +917,12 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
             'value_label': nxt['value_label'],
         }
 
-    # The moment step 1 is done: orphans and duplicates cleared, and they stay
-    # cleared. The page shifts from a cleanup sprint to the ongoing loop.
-    oneoff = [r for r in rows if r['stage'] == 'oneoff']
-    baseline_clear = bool(oneoff) and all(
-        r['state'] not in ('fix', 'optimize') for r in oneoff)
+    # The moment step 1 is reached: orphans and duplicates cleared. Not a
+    # permanent state — it is defended, not finished — but it is the point the
+    # page shifts from a cleanup sprint to the ongoing loop.
+    base = [r for r in rows if r['stage'] == 'baseline']
+    baseline_clear = bool(base) and all(
+        r['state'] not in ('fix', 'optimize') for r in base)
 
     # A fresh install has no audit to reason about — the honest answer to "what
     # should I be doing" is "finish setup", not an empty workflow list.

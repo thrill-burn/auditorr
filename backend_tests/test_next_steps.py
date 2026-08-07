@@ -79,12 +79,12 @@ def test_under_threshold_is_optimize_not_fix():
     assert _row(st, 'cleanup')['state'] == 'optimize'
 
 
-def test_oneoff_cleanup_outranks_ongoing_work():
+def test_baseline_work_outranks_ongoing_work():
     """Backfill carries 70 of 100 points; scored ordering would always pick it.
 
     Hardlinked media is weighted high because it is *hard*, not because it is
-    an early priority. Orphans and duplicates are the one-time cleanup that
-    produces a clean baseline, so they come first.
+    an early priority. Orphans and duplicates are the baseline work that must
+    be cleared first.
     """
     det = _details(
         orphaned_torrent_count=12, orphaned_torrent_size=500 * GB, or_score=4.5,
@@ -94,7 +94,7 @@ def test_oneoff_cleanup_outranks_ongoing_work():
     assert st['hero'] == 'cleanup'
 
 
-def test_even_a_catastrophic_hardlink_gap_waits_for_the_cleanup():
+def test_even_a_catastrophic_hardlink_gap_waits_for_the_baseline():
     """The stage gate is structural — no magnitude jumps the queue."""
     det = _details(
         orphaned_torrent_count=1, orphaned_torrent_size=1 * GB, or_score=9.7,
@@ -112,7 +112,7 @@ def test_backfill_leads_once_the_baseline_is_clear():
     assert st['hero'] == 'backfill'
 
 
-def test_both_oneoff_rows_precede_all_ongoing_work():
+def test_both_baseline_rows_precede_all_ongoing_work():
     """The stage gate is what must not be jumped."""
     det = _details(
         duplicate_count=8, duplicate_size=400 * GB, dup_score=3.0,
@@ -150,7 +150,7 @@ def test_triage_is_ongoing_and_ranks_ahead_of_backfill():
 def test_each_row_states_whether_the_job_ever_ends():
     st = next_steps.build_state(_cfg(), _results(_details()), _runs())
     natures = {r['id']: r['nature'] for r in st['rows']}
-    assert natures['cleanup'] == natures['dedupe'] == 'Do once'
+    assert natures['cleanup'] == natures['dedupe'] == 'Clear once, then watch'
     assert natures['triage'] == 'Keeps coming back'
     assert natures['backfill'] == 'Never really finishes'
 
@@ -158,7 +158,7 @@ def test_each_row_states_whether_the_job_ever_ends():
 def test_stage_labels_are_present_for_grouping():
     st = next_steps.build_state(_cfg(), _results(_details()), _runs())
     stages = {r['id']: r['stage'] for r in st['rows']}
-    assert stages['cleanup'] == stages['dedupe'] == 'oneoff'
+    assert stages['cleanup'] == stages['dedupe'] == 'baseline'
     assert stages['triage'] == stages['backfill'] == 'ongoing'
     assert stages['trumped'] == 'ondemand'
 
