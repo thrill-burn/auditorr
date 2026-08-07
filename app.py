@@ -16,6 +16,7 @@ from datetime import datetime
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 
+import next_steps
 import sources
 from db import (
     DATA_DIR,
@@ -31,6 +32,7 @@ from db import (
     db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
     db_delete_upload_snapshots,
     db_get_change_log,
+    db_get_latest_upload_snapshot,
     db_save_audit,
     db_get_meta, db_set_meta, db_delete_meta,
 )
@@ -410,6 +412,34 @@ def debug_report():
 @require_auth
 def get_results():
     return jsonify(db_load_results())
+
+
+@app.route('/api/next_steps')
+@require_auth
+def get_next_steps():
+    """Next steps page — prioritized workflows plus the (useless) prize layer.
+
+    Summary data only: `latest_results` minus file lists, `audit_runs`, and the
+    latest upload snapshot. Deliberately never touches `file_results` — this
+    endpoint is polled and deserializing full file lists is the known RAM
+    hotspot. Do not add it to `_is_heavy_mem_path`; it must never qualify.
+    """
+    cfg = db_load_config()
+    if not cfg.get('NEXT_STEPS_ENABLED', True):
+        return jsonify({"enabled": False})
+    lifetime_up = 0
+    try:
+        snap = db_get_latest_upload_snapshot() or {}
+        lifetime_up = sum(
+            (v or {}).get('uploaded', 0)
+            for k, v in snap.items()
+            if not k.startswith('_') and isinstance(v, dict)
+        )
+    except Exception as e:
+        log.warning(f"Next steps: could not read upload snapshot: {e}")
+    return jsonify(next_steps.build_state(
+        cfg, db_load_results(), db_get_recent_runs(),
+        lifetime_uploaded=lifetime_up, progress=db_get_meta('ns_progress')))
 
 
 @app.route('/api/files')

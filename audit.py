@@ -15,12 +15,13 @@ from db import (
     score_weight_points,
     db_load_config, db_load_history, db_save_history,
     db_load_results, db_save_results, db_save_audit,
-    db_save_upload_snapshot, db_get_upload_snapshots,
+    db_save_upload_snapshot, db_get_upload_snapshots, db_get_recent_runs,
     db_save_change_log_entry,
     db_save_file_results,
     db_save_file_signatures, db_load_file_signatures,
     db_get_meta, db_set_meta, db_delete_meta,
 )
+import next_steps
 from state import get_state, set_state, update_progress
 from debug import process_rss_mb, container_memory, host_available_mb, malloc_trim
 
@@ -329,6 +330,9 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
             "dead_seed_count": sum(1 for f in scoring_torrents
                                    if f['imported'] and f['status'] != 'Orphaned'
                                    and f.get('tracker_health') == 'unregistered'),
+            # Scored file counts — cheap here, and the only place the totals are
+            # known without re-deserializing the full file lists.
+            "media_file_count": len(scoring_media), "torrent_file_count": len(scoring_torrents),
             "duplicate_count": dup_count, "or_limit": or_limit, "ni_limit": ni_limit,
             "dup_limit": dup_limit, "hl_score": round(hl_score,1), "or_score": round(or_score,1),
             "ni_score": round(ni_score,1), "dup_score": round(dup_score,1),
@@ -955,6 +959,24 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                       source=cfg.get('TORRENT_SOURCE', 'qbit'),
                       duration_seconds=round(time.time() - scan_start, 1),
                       ran_at=ran_at, peak_rss_mb=_scan_peak_rss())
+        # Advance the Next steps reward counters (cumulative shovel count,
+        # hardlink high-water mark, clean-state streaks). Kept here rather than
+        # in the endpoint so /api/next_steps never recomputes history — it is
+        # polled, and this is a single small app_meta row.
+        # NB: `update_progress` is also a state.py import, hence the namespace.
+        try:
+            _ns_prev = db_get_meta('ns_progress')
+            _ns_det  = dashboard_stats['current']['details']
+            # Built with the *previous* progress so prior latches still apply;
+            # update_progress then unions in whatever was newly earned. This is
+            # what makes the prize layer ratchet — points accrue for action and
+            # nothing is ever deducted for inaction or regression.
+            _ns_state = next_steps.build_state(
+                cfg, result, db_get_recent_runs(limit=2000), progress=_ns_prev)
+            db_set_meta('ns_progress', next_steps.update_progress(
+                _ns_prev, cfg, _ns_det, state=_ns_state))
+        except Exception as e:
+            log.warning(f"Could not update Next steps progress: {e}")
         # Scan finished — clear the crash-loop streak so future startups scan normally
         try:
             db_set_meta('consecutive_aborted_scans', 0)

@@ -58,6 +58,7 @@ async function reqText(path, opts = {}, retried = false) {
 
 export const api = {
   results:        ()     => req('/results'),
+  nextSteps:      ()     => req('/next_steps'),
   files:          (tab)  => req('/files?tab=' + tab),
   progress:       ()     => req('/progress'),
   changes:        ()     => req('/changes'),

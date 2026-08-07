@@ -3,6 +3,7 @@ import SetupWizard  from './components/SetupWizard'
 import ChangeLog    from './components/ChangeLog'
 import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
+import NextSteps    from './components/NextSteps'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
 import Trackers     from './components/Trackers'
@@ -126,7 +127,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
 function getHashTab() {
   let hash = window.location.hash.replace('#', '') || 'dashboard'
   if (hash === 'workflows') hash = 'backfill'  // legacy alias from before per-workflow pages
-  const valid = ['dashboard', 'media', 'torrents', 'trackers', 'changes', 'config', 'backfill', 'triage', 'cleanup', 'dedupe', 'trumped']
+  const valid = ['dashboard', 'next-steps', 'media', 'torrents', 'trackers', 'changes', 'config', 'backfill', 'triage', 'cleanup', 'dedupe', 'trumped']
   return valid.includes(hash) ? hash : 'dashboard'
 }
 function setHashTab(tab) {
@@ -159,6 +160,7 @@ function AppInner() {
   const [activeImports,      setActiveImports]      = useState([])
   const [importPanelOpen,    setImportPanelOpen]    = useState(false)
   const [authBlocked,        setAuthBlocked]        = useState(false)  // server refuses: AUDITORR_SECRET unset
+  const [nextStepsOn,        setNextStepsOn]        = useState(true)   // NEXT_STEPS_ENABLED config flag
   const prevScanRef        = useRef(false)
   const intervalRef        = useRef(null)
   const filesFetchingRef   = useRef({ media: false, torrents: false })
@@ -228,8 +230,9 @@ function AppInner() {
   }, [])
 
   useEffect(() => {
-    if (localStorage.getItem('auditorr_setup_dismissed')) return
     api.getConfig().then(cfg => {
+      setNextStepsOn(cfg.NEXT_STEPS_ENABLED !== false)
+      if (localStorage.getItem('auditorr_setup_dismissed')) return
       const isQui = cfg.TORRENT_SOURCE === 'qui'
       const unconfigured = isQui ? !cfg.QUI_HOST : !cfg.QB_HOST
       if (unconfigured) setShowWizard(true)
@@ -319,6 +322,9 @@ function AppInner() {
     try { await api.saveConfig(wizardData) } catch (_) {}
     localStorage.setItem('auditorr_setup_dismissed', '1')
     setShowWizard(false)
+    // Land on Next steps, not the dashboard — a fresh install has no numbers
+    // to read yet, but Next steps can always answer "what should I be doing".
+    if (nextStepsOn) { setHashTab('next-steps'); setTab('next-steps') }
   }
 
   const handleWizardSkip = () => {
@@ -400,6 +406,7 @@ function AppInner() {
         crossSeedMultiplier={crossSeedMultiplier}
         activeImportCount={activeImports.filter(j => !['done', 'error'].includes(j.status)).length}
         onOpenImportPanel={() => setImportPanelOpen(true)}
+        showNextSteps={nextStepsOn}
         workflowCounts={(() => {
           const det = results?.dashboard?.current?.details
           if (!det) return null
@@ -439,6 +446,9 @@ function AppInner() {
               allTrackers={allTrackers}
               onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
             />
+          )}
+          {tab === 'next-steps' && (
+            <NextSteps onNavigate={handleTabChange} />
           )}
           {(tab === 'media' || tab === 'torrents') && (
             <FileExplorer

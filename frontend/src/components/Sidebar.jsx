@@ -72,6 +72,18 @@ const NAV = [
     ],
   },
   {
+    // Next steps — the ranked workflow list plus the side-quest prize layer.
+    // Sits directly below Workflows because it is the index for them, and
+    // deliberately carries no count badge: a page you visit, never one that nags.
+    id: 'next-steps', label: 'Next steps',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="9 11 12 14 22 4"/>
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+      </svg>
+    ),
+  },
+  {
     id: 'config', label: 'Config',
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -84,7 +96,7 @@ const NAV = [
 
 const WORKFLOW_TAB_IDS = ['backfill', 'triage', 'cleanup', 'dedupe', 'trumped']
 
-export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel, workflowCounts }) {
+export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel, workflowCounts, showNextSteps = true }) {
   const scoreC = score != null ? scoreColor(score) : 'var(--text-dim)'
   const scoreDisplay = score != null ? Math.round(Number(score)) : null
   const csDisplay = crossSeedMultiplier != null ? crossSeedMultiplier.toFixed(2) : null
@@ -163,6 +175,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
       {/* Nav */}
       <nav style={{ flex: 1, padding: '10px 10px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
         {NAV.map(({ id, label, icon, children }) => {
+          if (id === 'next-steps' && !showNextSteps) return null
           if (children) {
             const isGroupActive = children.some(c => c.id === active)
             const isOpen = openGroups.has(id)
