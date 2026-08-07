@@ -771,7 +771,8 @@ TIER_TITLES = {
     'trophyhunter': [
         'First Feat', 'Two Feats', 'Hat Trick', 'Trophy Shelf', 'Cabinet',
         'Trophy Room', 'Trophy Wing', 'Hall of Fame', 'Legendary',
-        'Nothing Left To Prove', 'Still Here Somehow',
+        'Nothing Left To Prove', 'Still Here Somehow', 'Curator of Nonsense',
+        'Beyond Trophies', 'The Shelf Groans',
     ],
 }
 
@@ -846,6 +847,9 @@ def _ladder(lid, name, blurb, value, thresholds, fmt, points_step=25, peaks=None
         'tier': len(earned), 'tiers_total': len(tiers),
         'tier_label': earned[-1]['label'] if earned else None,
         'next_label': nxt['label'] if nxt else None,
+        # Which rung the next tier actually is. A name on its own ("Pack Rat")
+        # says nothing about where you are on the ladder — "5 of 21" does.
+        'next_n': nxt['n'] if nxt else None,
         'next_at': nxt['at'] if nxt else None,
         'next_at_label': nxt['at_label'] if nxt else None,
         'pct': round(pct, 1),
@@ -1089,7 +1093,39 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
     ]
 
 
-def _feats(det, runs, cross, best_score, progress=None, ladders=None):
+# Feats are one-offs, and there are a lot of them. Ungrouped they read as an
+# undifferentiated wall, which hides the fact that most of them are reachable —
+# so they ship in named sections, in roughly ascending difficulty within each.
+#
+# The *balance* rule: feats are free to give, and the cheap ones do the work.
+# An early tier list that jumps from "run one audit" to "audit 100 TB" tells a
+# 2 TB user the whole layer was written for somebody else. Every axis that has
+# a top-end feat (size, files, uploaded, hardlink %, health, trackers, time)
+# must also have rungs a small, new, ordinary library actually clears.
+FEAT_GROUPS = [
+    ('start',   'First steps',
+     'Cheap and immediate. Everyone clears these.'),
+    ('clean',   'A clean library',
+     'The zero states, and the score that follows them.'),
+    ('grind',   'The grind',
+     'Zombies killed, pile shovelled. Cumulative and permanent.'),
+    ('scale',   'Scale',
+     'How much there is. Not strictly an achievement. Counted anyway.'),
+    ('give',    'Giving back',
+     'Bytes out, ratio earned, and how many trackers you answer to.'),
+    ('machine', 'The machine',
+     'What auditorr did while you were elsewhere.'),
+    ('time',    'Time served',
+     'Awarded for not turning it off.'),
+    ('absurd',  'None of this means anything',
+     'It never did. Here they are anyway.'),
+]
+
+_FEAT_GROUP_ORDER = {gid: i for i, (gid, _, _) in enumerate(FEAT_GROUPS)}
+
+
+def _feats(det, runs, cross, best_score, progress=None, ladders=None,
+           lifetime_up=0, seeding=0, n_trackers=0):
     p = {**EMPTY_PROGRESS, **(progress or {})}
     durations   = [float(r.get('duration_seconds') or 0) for r in runs
                    if r.get('status') == 'ok' and r.get('duration_seconds')]
@@ -1103,7 +1139,6 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None):
                         and r.get('trigger') == 'manual')
     night_audit   = any(str(r.get('ran_at', ''))[11:13] in ('02', '03', '04')
                         for r in runs if r.get('status') == 'ok')
-    n_trackers    = len([t for t in ((cross or {}).get('tracker_stats') or [])])
     tiers_so_far  = sum(l['tier'] for l in (ladders or []))
     total_media = det.get('total_media_size', 0) or 0
     total_tor   = det.get('total_torrents_size', 0) or 0
@@ -1116,123 +1151,219 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None):
     ok_runs     = [r for r in runs if r.get('status') == 'ok']
     fast        = any((r.get('duration_seconds') or 1e9) < 60 for r in ok_runs)
     triggers    = {r.get('trigger') for r in ok_runs}
+    observed    = _days_observed(runs)
+    streak_90   = _days_at_or_above(runs, 90)
+    files       = (det.get('media_file_count') or 0) + (det.get('torrent_file_count') or 0)
+    multiplier  = float((cross or {}).get('multiplier') or 0)
+    ratio       = (float(lifetime_up or 0) / seeding) if seeding else 0.0
+    shoveled    = int(p.get('shoveled') or 0)
+    kills       = int(p.get('orphan_kills') or 0) + int(p.get('dupe_kills') or 0)
+    up          = float(lifetime_up or 0)
 
     defs = [
-        ('first_contact', 'First Contact', 'Complete a single audit.',
+        # ── First steps ──────────────────────────────────────────────────────
+        ('start', 'first_contact', 'First Contact', 'Complete a single audit.',
          bool(ok_runs), 50),
-        ('nothing_behind', 'Nothing Left Behind', 'Hold zero orphaned torrents.',
-         total_tor > 0 and orphans == 0, 150),
-        ('no_report', 'Nothing to Report', 'Hold zero duplicate files.',
-         total_media > 0 and dupes == 0, 150),
-        ('all_landed', 'Stuck the Landing', 'Hold zero not-imported torrents.',
-         total_tor > 0 and not_imp == 0, 150),
-        ('immaculate', 'Immaculate', 'Zero orphans, zero duplicates and zero not-imported at once.',
-         total_tor > 0 and total_media > 0 and orphans == 0 and dupes == 0 and not_imp == 0, 500),
-        ('necromancer', 'Necromancer', 'Clear every dead seed from your client.',
-         total_tor > 0 and dead == 0, 150),
-        ('perfect', 'The Perfect Library', 'Record a health score of 100.',
-         best_score >= 100, 500),
-        ('speedrun', 'Speedrun', 'Complete an audit in under 60 seconds.',
-         fast, 100),
-        ('watched', 'The Long Watch', 'Let the watchdog trigger an audit for you.',
+        ('start', 'ten_audits', 'Getting the Hang of It', 'Complete ten audits.',
+         len(ok_runs) >= 10, 75),
+        ('start', 'first_shovel', 'First Shovelful', 'Work through a single not-imported item.',
+         shoveled >= 1, 50),
+        ('start', 'first_kill', 'It Had It Coming',
+         'Drive orphans or duplicates back to zero for the first time.',
+         kills >= 1, 100),
+        ('start', 'watched', 'The Long Watch', 'Let the watchdog trigger an audit for you.',
          'watchdog' in triggers, 75),
-        ('punctual', 'Punctual', 'Let a scheduled audit run on its own.',
+        ('start', 'punctual', 'Punctual', 'Let a scheduled audit run on its own.',
          'scheduled' in triggers, 75),
-        ('century', 'Century', 'Complete 100 audits.',
-         len(ok_runs) >= 100, 200),
-        ('petabyte', 'Absolutely Unhinged', 'Audit a library of 100 TB or more.',
-         total_media >= 100 * TB, 300),
-        # The top end keeps going — field reports include 100-500 TB libraries,
-        # and those users should still have something left to chase.
-        ('quarter_pb', 'Storage Problem', 'Audit a library of 250 TB or more.',
-         total_media >= 250 * TB, 400),
-        ('half_pb', 'Half a Petabyte', 'Audit a library of 500 TB or more.',
-         total_media >= 500 * TB, 500),
-        ('full_pb', 'Petabyte Club', 'Audit a full petabyte. Membership is its own punishment.',
-         total_media >= PB, 750),
-        ('two_pb', 'Are You a Datacenter?', 'Audit two petabytes or more. Genuinely, how.',
-         total_media >= 2 * PB, 1000),
-        ('million_files', 'One Million Files', 'Have a million files under audit at once.',
-         (det.get('media_file_count') or 0) + (det.get('torrent_file_count') or 0) >= 1000000, 400),
-        ('ten_million_files', 'Ten Million Files', 'Have ten million files under audit at once.',
-         (det.get('media_file_count') or 0) + (det.get('torrent_file_count') or 0) >= 10000000, 800),
-        ('sisyphus', 'Sisyphus', 'Shovel 10,000 not-imported items. The boulder does not care.',
-         int(p.get('shoveled') or 0) >= 10000, 600),
-        ('unkillable', 'They Keep Coming', 'Rack up 50 kills across orphans and duplicates.',
-         int(p.get('orphan_kills') or 0) + int(p.get('dupe_kills') or 0) >= 50, 500),
+        ('start', 'speedrun', 'Speedrun', 'Complete an audit in under 60 seconds.',
+         fast, 100),
+        ('start', 'night_owl', 'Night Owl', 'Have an audit start between 2am and 5am.',
+         night_audit, 100),
+
+        # ── A clean library ──────────────────────────────────────────────────
+        ('clean', 'health_half', 'Passing Grade', 'Record a health score of 50 or better.',
+         best_score >= 50, 75),
+        ('clean', 'health_good', 'Respectable', 'Record a health score of 75 or better.',
+         best_score >= 75, 125),
+        ('clean', 'health_great', 'Honour Roll', 'Record a health score of 90 or better.',
+         best_score >= 90, 200),
+        ('clean', 'perfect', 'The Perfect Library', 'Record a health score of 100.',
+         best_score >= 100, 500),
+        ('clean', 'nothing_behind', 'Nothing Left Behind', 'Hold zero orphaned torrents.',
+         total_tor > 0 and orphans == 0, 150),
+        ('clean', 'no_report', 'Nothing to Report', 'Hold zero duplicate files.',
+         total_media > 0 and dupes == 0, 150),
+        ('clean', 'all_landed', 'Stuck the Landing', 'Hold zero not-imported torrents.',
+         total_tor > 0 and not_imp == 0, 150),
+        ('clean', 'necromancer', 'Necromancer', 'Clear every dead seed from your client.',
+         total_tor > 0 and dead == 0, 150),
+        ('clean', 'immaculate', 'Immaculate', 'Zero orphans, zero duplicates and zero not-imported at once.',
+         total_tor > 0 and total_media > 0 and orphans == 0 and dupes == 0 and not_imp == 0, 500),
+        ('clean', 'half_linked', 'Halfway Home', 'Get half your library hardlinked.',
+         hl_pct >= 50, 100),
+        ('clean', 'mostly_linked', 'Nine Tenths', 'Reach 90% hardlinked.',
+         hl_pct >= 90, 250),
+        ('clean', 'hardlink_purist', 'Purist', 'Reach 99% hardlinked.',
+         hl_pct >= 99, 500),
+
+        # ── The grind ────────────────────────────────────────────────────────
+        ('grind', 'ten_shovels', 'Ten Down', 'Shovel ten not-imported items off the pile.',
+         shoveled >= 10, 75),
+        ('grind', 'hundred_shovels', 'A Hundred Down', 'Shovel a hundred not-imported items.',
+         shoveled >= 100, 150),
+        ('grind', 'mountain', 'The Mountain Wins Anyway',
+         'Shovel 1,000 not-imported items. It will refill. It always refills.',
+         shoveled >= 1000, 300),
+        ('grind', 'sisyphus', 'Sisyphus', 'Shovel 10,000 not-imported items. The boulder does not care.',
+         shoveled >= 10000, 600),
         # Sentinel breaks. Cleanup and Dedupe are done-once jobs, so the useful
         # signal is not "you did it again" — it is "it came undone." Awarded,
         # never deducted: a break is information the user wants.
-        ('first_kill', 'It Had It Coming',
-         'Drive orphans or duplicates back to zero for the first time.',
-         int(p.get('orphan_kills') or 0) + int(p.get('dupe_kills') or 0) >= 1, 100),
-        ('orphans_returned', 'Well, That Didn\'t Last',
-         'Have orphaned torrents claw their way back after you cleared them all.',
-         int(p.get('orphan_breaks') or 0) >= 1, 75),
-        ('dupes_returned', 'It Came Back',
-         'Have duplicate files claw their way back after you cleared them all.',
-         int(p.get('dupe_breaks') or 0) >= 1, 75),
-        ('double_tap', 'Double Tap',
+        ('grind', 'double_tap', 'Double Tap',
          'Kill the same mess a second time. You knew it was not over.',
          int(p.get('orphan_kills') or 0) >= 2 or int(p.get('dupe_kills') or 0) >= 2, 150),
-        ('groundhog', 'Groundhog Day',
+        ('grind', 'five_kills', 'Persistent',
+         'Rack up five kills across orphans and duplicates.',
+         kills >= 5, 200),
+        ('grind', 'unkillable', 'They Keep Coming', 'Rack up 50 kills across orphans and duplicates.',
+         kills >= 50, 500),
+        ('grind', 'orphans_returned', 'Well, That Didn\'t Last',
+         'Have orphaned torrents claw their way back after you cleared them all.',
+         int(p.get('orphan_breaks') or 0) >= 1, 75),
+        ('grind', 'dupes_returned', 'It Came Back',
+         'Have duplicate files claw their way back after you cleared them all.',
+         int(p.get('dupe_breaks') or 0) >= 1, 75),
+        ('grind', 'groundhog', 'Groundhog Day',
          'Let the same mess come back five times. Something upstream is misbehaving.',
          int(p.get('orphan_breaks') or 0) + int(p.get('dupe_breaks') or 0) >= 5, 150),
-        ('first_shovel', 'First Shovelful', 'Work through a single not-imported item.',
-         int(p.get('shoveled') or 0) >= 1, 50),
-        ('mountain', 'The Mountain Wins Anyway',
-         'Shovel 1,000 not-imported items. It will refill. It always refills.',
-         int(p.get('shoveled') or 0) >= 1000, 300),
-        # --- Absurdity tier. None of these mean anything. That is the point. ---
-        ('inverted', 'Backwards Library',
-         'Have a torrent directory larger than your media library. Bold strategy.',
-         total_tor > total_media > 0, 200),
-        ('featherweight', 'Featherweight',
+
+        # ── Scale ────────────────────────────────────────────────────────────
+        # Rungs all the way down. A 2 TB library is the common case and must not
+        # look at this section and find nothing addressed to it.
+        ('scale', 'featherweight', 'Featherweight',
          'Audit a library under 10 GB. Everyone starts somewhere.',
          0 < total_media < 10 * GB, 50),
-        ('lopsided', 'One Tracker To Rule Them All',
+        ('scale', 'hundred_gb', 'A Hundred Gigs', 'Audit a library of 100 GB or more.',
+         total_media >= 100 * GB, 75),
+        ('scale', 'terabyte', 'First Terabyte', 'Audit a library of 1 TB or more.',
+         total_media >= TB, 125),
+        ('scale', 'five_tb', 'Five Terabytes', 'Audit a library of 5 TB or more.',
+         total_media >= 5 * TB, 175),
+        ('scale', 'ten_tb', 'Double Digits', 'Audit a library of 10 TB or more.',
+         total_media >= 10 * TB, 200),
+        ('scale', 'fifty_tb', 'Fifty Terabytes', 'Audit a library of 50 TB or more.',
+         total_media >= 50 * TB, 250),
+        ('scale', 'petabyte', 'Absolutely Unhinged', 'Audit a library of 100 TB or more.',
+         total_media >= 100 * TB, 300),
+        # The top end keeps going — field reports include 100-500 TB libraries,
+        # and those users should still have something left to chase.
+        ('scale', 'quarter_pb', 'Storage Problem', 'Audit a library of 250 TB or more.',
+         total_media >= 250 * TB, 400),
+        ('scale', 'half_pb', 'Half a Petabyte', 'Audit a library of 500 TB or more.',
+         total_media >= 500 * TB, 500),
+        ('scale', 'full_pb', 'Petabyte Club', 'Audit a full petabyte. Membership is its own punishment.',
+         total_media >= PB, 750),
+        ('scale', 'two_pb', 'Are You a Datacenter?', 'Audit two petabytes or more. Genuinely, how.',
+         total_media >= 2 * PB, 1000),
+        ('scale', 'thousand_files', 'A Thousand Files', 'Have a thousand files under audit at once.',
+         files >= 1000, 75),
+        ('scale', 'ten_thousand_files', 'Ten Thousand Files', 'Have ten thousand files under audit at once.',
+         files >= 10000, 125),
+        ('scale', 'hundred_thousand_files', 'A Hundred Thousand Files',
+         'Have a hundred thousand files under audit at once.',
+         files >= 100000, 200),
+        ('scale', 'million_files', 'One Million Files', 'Have a million files under audit at once.',
+         files >= 1000000, 400),
+        ('scale', 'ten_million_files', 'Ten Million Files', 'Have ten million files under audit at once.',
+         files >= 10000000, 800),
+
+        # ── Giving back ──────────────────────────────────────────────────────
+        ('give', 'gave_back', 'Gave Something Back', 'Upload a gigabyte, lifetime.',
+         up >= GB, 50),
+        ('give', 'gave_100', 'A Hundred Gigs Given', 'Upload 100 GB, lifetime.',
+         up >= 100 * GB, 100),
+        ('give', 'gave_tb', 'A Terabyte Given', 'Upload a terabyte, lifetime.',
+         up >= TB, 200),
+        ('give', 'gave_10tb', 'Ten Terabytes Given', 'Upload 10 TB, lifetime.',
+         up >= 10 * TB, 350),
+        ('give', 'gave_100tb', 'The Firehose', 'Upload 100 TB, lifetime. Somebody had to.',
+         up >= 100 * TB, 600),
+        ('give', 'in_the_black', 'In the Black',
+         'Upload more than you are seeding. A ratio of 1.0 across everything.',
+         ratio >= 1.0, 150),
+        ('give', 'free_estate', 'Free Real Estate',
+         'Get your cross-seed multiplier above 1.5×. The same bytes, twice employed.',
+         multiplier >= 1.5, 150),
+        ('give', 'twice_over', 'Twice the Bytes',
+         'Get your cross-seed multiplier to 2×. Every byte works two jobs.',
+         multiplier >= 2.0, 300),
+        ('give', 'lopsided', 'One Tracker To Rule Them All',
          'Seed on exactly one tracker. Loyal, or trapped.',
          n_trackers == 1, 75),
-        ('cosmopolitan', 'Cosmopolitan', 'Seed on ten or more distinct trackers.',
+        ('give', 'small_circle', 'A Small Circle', 'Seed on three or more distinct trackers.',
+         n_trackers >= 3, 75),
+        ('give', 'well_connected', 'Well Connected', 'Seed on five or more distinct trackers.',
+         n_trackers >= 5, 125),
+        ('give', 'cosmopolitan', 'Cosmopolitan', 'Seed on ten or more distinct trackers.',
          n_trackers >= 10, 250),
-        ('marathon_scan', 'Longer Than a Feature Film',
-         'Complete a single audit that took more than two hours.',
-         longest_scan >= 7200, 200),
-        ('blink', 'Blink and Miss It', 'Complete an audit in under ten seconds.',
+
+        # ── The machine ──────────────────────────────────────────────────────
+        ('machine', 'lean_machine', 'Lean Machine',
+         'Complete a scan that peaked under 256 MB of RAM. Tidy.',
+         0 < peak_rss < 256, 100),
+        ('machine', 'blink', 'Blink and Miss It', 'Complete an audit in under ten seconds.',
          0 < shortest_scan < 10, 150),
-        ('memory_hog', 'Four Gigabytes of RAM',
-         'Have a single scan peak above 4 GB. Your server felt that one.',
-         peak_rss >= 4096, 250),
-        ('night_owl', 'Night Owl', 'Have an audit start between 2am and 5am.',
-         night_audit, 100),
-        ('workhorse', 'The Machine Does It All',
-         'Let automation run 100 audits for you.',
-         auto_runs >= 100, 200),
-        ('control_freak', 'Control Freak',
-         'Start 100 audits by hand. The button works fine, you just like pressing it.',
-         manual_runs >= 100, 200),
-        ('boring', 'Nothing Ever Happens',
-         'Reach 50 audits. Most of them found nothing. That is the good outcome.',
-         len(ok_runs) >= 50, 150),
-        ('veteran', 'Old Timer', 'Keep auditorr running for a full year.',
-         _days_observed(runs) >= 365, 400),
-        ('ancient', 'Still Here', 'Keep auditorr running for five years. Genuinely, why.',
-         _days_observed(runs) >= 1825, 1000),
-        ('crash_survivor', 'Walked It Off',
+        ('machine', 'crash_survivor', 'Walked It Off',
          'Survive an aborted scan and complete a successful one afterwards.',
          had_abort and bool(ok_runs), 150),
-        ('flawless_week', 'A Quiet Week', 'Hold 90+ health for seven consecutive days.',
-         _days_at_or_above(runs, 90) >= 7, 150),
-        ('hardlink_purist', 'Purist', 'Reach 99% hardlinked.',
-         hl_pct >= 99, 500),
-        ('empty_handed', 'Nothing To Audit',
+        ('machine', 'marathon_scan', 'Longer Than a Feature Film',
+         'Complete a single audit that took more than two hours.',
+         longest_scan >= 7200, 200),
+        ('machine', 'workhorse', 'The Machine Does It All',
+         'Let automation run 100 audits for you.',
+         auto_runs >= 100, 200),
+        ('machine', 'control_freak', 'Control Freak',
+         'Start 100 audits by hand. The button works fine, you just like pressing it.',
+         manual_runs >= 100, 200),
+        ('machine', 'memory_hog', 'Four Gigabytes of RAM',
+         'Have a single scan peak above 4 GB. Your server felt that one.',
+         peak_rss >= 4096, 250),
+
+        # ── Time served ──────────────────────────────────────────────────────
+        ('time', 'first_week', 'A Week In', 'Keep auditorr running for a week.',
+         observed >= 7, 75),
+        ('time', 'first_month', 'A Month In', 'Keep auditorr running for a month.',
+         observed >= 30, 150),
+        ('time', 'flawless_week', 'A Quiet Week', 'Hold 90+ health for seven consecutive days.',
+         streak_90 >= 7, 150),
+        ('time', 'flawless_month', 'A Quiet Month', 'Hold 90+ health for thirty consecutive days.',
+         streak_90 >= 30, 400),
+        ('time', 'boring', 'Nothing Ever Happens',
+         'Reach 50 audits. Most of them found nothing. That is the good outcome.',
+         len(ok_runs) >= 50, 150),
+        ('time', 'century', 'Century', 'Complete 100 audits.',
+         len(ok_runs) >= 100, 200),
+        ('time', 'veteran', 'Old Timer', 'Keep auditorr running for a full year.',
+         observed >= 365, 400),
+        ('time', 'ancient', 'Still Here', 'Keep auditorr running for five years. Genuinely, why.',
+         observed >= 1825, 1000),
+
+        # ── Absurdity tier. None of these mean anything. That is the point. ───
+        ('absurd', 'inverted', 'Backwards Library',
+         'Have a torrent directory larger than your media library. Bold strategy.',
+         total_tor > total_media > 0, 200),
+        ('absurd', 'empty_handed', 'Nothing To Audit',
          'Run an audit against a completely empty library. Ambitious.',
          bool(ok_runs) and total_media == 0 and total_tor == 0, 100),
-        ('overachiever', 'Overachiever', 'Unlock 100 prize tiers.',
+        ('absurd', 'ten_tiers', 'Trinket Collector', 'Unlock 10 prize tiers.',
+         tiers_so_far >= 10, 75),
+        ('absurd', 'fifty_tiers', 'Shelf Filling', 'Unlock 50 prize tiers.',
+         tiers_so_far >= 50, 150),
+        ('absurd', 'overachiever', 'Overachiever', 'Unlock 100 prize tiers.',
          tiers_so_far >= 100, 300),
-        ('why', 'Why Are You Like This', 'Unlock 250 prize tiers.',
+        ('absurd', 'why', 'Why Are You Like This', 'Unlock 250 prize tiers.',
          tiers_so_far >= 250, 750),
-        ('the_end', 'There Is No End', 'Unlock 400 prize tiers. There is still no end.',
+        ('absurd', 'the_end', 'There Is No End', 'Unlock 400 prize tiers. There is still no end.',
          tiers_so_far >= 400, 2000),
     ]
     # Latched: a feat earned once is earned forever. Most of these read current
@@ -1240,9 +1371,9 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None):
     # its own kill awarded.
     latched = set(p.get('feats_earned') or [])
     return [
-        {'id': fid, 'label': label, 'desc': desc,
+        {'id': fid, 'label': label, 'desc': desc, 'group': group,
          'earned': bool(earned) or fid in latched, 'points': pts}
-        for fid, label, desc, earned, pts in defs
+        for group, fid, label, desc, earned, pts in defs
     ]
 
 
@@ -1299,7 +1430,13 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
                       if r.get('health_score') is not None), default=0.0)
 
     ladders = _ladders(det, runs, cross, tracker_stats, best_score, lifetime_uploaded, progress)
-    feats   = _feats(det, runs, cross, best_score, progress, ladders)
+    # Feats read the same seeding/tracker totals the ladders do, so a feat and
+    # its neighbouring ladder can never disagree about how many trackers you
+    # are on.
+    seeding    = sum((s or {}).get('seeding_size', 0) for s in (tracker_stats or {}).values())
+    n_trackers = len([t for t in (tracker_stats or {}) if t and t != 'None'])
+    feats   = _feats(det, runs, cross, best_score, progress, ladders,
+                     lifetime_up=lifetime_uploaded, seeding=seeding, n_trackers=n_trackers)
 
     # Meta ladders — prizes for collecting prizes, which is either the most or
     # the least useless thing on this page. Computed last because they measure
@@ -1315,7 +1452,7 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
         'trophyhunter', 'Trophy Hunter',
         'One-off feats earned. The ones you cannot grind for. They simply happen to you.',
         sum(1 for f in feats if f['earned']),
-        [1, 2, 3, 5, 8, 12, 16, 20, 25, 30, 40],
+        [1, 2, 3, 5, 8, 12, 16, 20, 25, 30, 40, 50, 60, 70],
         _fmt_plain, 30, peaks=peaks))
 
     points = (
@@ -1341,9 +1478,12 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
         r['prizes'] = owned
         nxt = next((l for l in owned if not l['maxed']), None)
         r['next_prize'] = None if not nxt else {
-            'ladder': nxt['name'], 'label': nxt['next_label'],
+            'ladder': nxt['name'], 'ladder_id': nxt['id'], 'label': nxt['next_label'],
             'at': nxt['next_at_label'], 'pct': nxt['pct'],
             'value_label': nxt['value_label'],
+            # Where the rung sits on its ladder — a bare name gives no sense of
+            # whether this is rung 2 or rung 12.
+            'n': nxt['next_n'], 'of': nxt['tiers_total'],
         }
 
     # The moment step 1 is reached: orphans and duplicates cleared. Not a
@@ -1372,6 +1512,12 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
         'baseline_clear': baseline_clear,
         'ladders': ladders,
         'feats': feats,
+        'feat_groups': [
+            {'id': gid, 'label': label, 'blurb': blurb,
+             'earned': sum(1 for f in feats if f['group'] == gid and f['earned']),
+             'total':  sum(1 for f in feats if f['group'] == gid)}
+            for gid, label, blurb in FEAT_GROUPS
+        ],
         'prizes': {'earned': tiers_earned, 'total': tiers_total},
         'streak_90': _days_at_or_above(runs, 90),
         'audits': len(ok_runs),

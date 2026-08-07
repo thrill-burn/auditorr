@@ -119,22 +119,39 @@ function useCountUp(target, ms = 900) {
 }
 
 // ── Medallion — icon in a progress ring showing distance to the next tier ────
-function Medallion({ l }) {
+//
+// The x/y in the corner is load-bearing: a mock-heroic band name ("Pack Rat")
+// tells you nothing about how far up the ladder you are, and half the appeal of
+// this layer is seeing that there are sixteen more rungs above you. Clicking
+// opens the full rung list, which is the only place the names get their actual
+// thresholds attached to them.
+function Medallion({ l, selected, onSelect }) {
   const earned = l.tier > 0
   const R = 22, C = 2 * Math.PI * R
   const pct = l.maxed ? 100 : l.pct
   const ring = l.maxed ? 'var(--green)' : 'var(--accent)'
   return (
-    <div
-      title={`${l.name} — ${l.blurb}\n${l.value_label}${l.maxed ? ' · maxed' : ` · ${l.next_label} at ${l.next_at_label}`}`}
+    <button
+      onClick={() => onSelect(selected ? null : l.id)}
+      title={`${l.name} — ${l.blurb}\n${l.value_label}${l.maxed ? ' · maxed' : ` · next: ${l.next_label} at ${l.next_at_label}`}\nClick for every rung.`}
       style={{
+        position: 'relative', textAlign: 'inherit', font: 'inherit', cursor: 'pointer',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
         padding: '12px 6px 10px', borderRadius: 'var(--rl)',
-        background: earned ? 'var(--surface)' : 'transparent',
-        border: earned ? '1px solid var(--border)' : '1px dashed var(--border2)',
+        background: selected ? 'var(--surface2)' : earned ? 'var(--surface)' : 'transparent',
+        border: selected ? '1px solid var(--accent)'
+          : earned ? '1px solid var(--border)' : '1px dashed var(--border2)',
         boxShadow: earned ? 'var(--elev-1)' : 'none',
       }}
     >
+      {/* Where you are out of how many there are. Mono, faint, out of the way. */}
+      <span style={{
+        position: 'absolute', top: 6, right: 8,
+        fontFamily: 'var(--mono)', fontSize: 9.5, lineHeight: 1,
+        color: l.maxed ? 'var(--green)' : 'var(--text-faint)',
+      }}>
+        {l.tier}/{l.tiers_total}
+      </span>
       <div style={{ position: 'relative', width: 52, height: 52, flexShrink: 0 }}>
         <svg width="52" height="52" viewBox="0 0 52 52" style={{ position: 'absolute', inset: 0, transform: 'rotate(-90deg)' }}>
           <circle cx="26" cy="26" r={R} fill="none" stroke="var(--surface3)" strokeWidth="3" />
@@ -172,6 +189,89 @@ function Medallion({ l }) {
           {l.maxed ? 'maxed' : l.value_label}
         </div>
       </div>
+    </button>
+  )
+}
+
+// ── Ladder detail — every rung, named, with the number it actually wants ─────
+//
+// The names are the fun part but they are opaque on their own: "Geological
+// Layer" is only funny once you can see it means 25 TB of torrent directory.
+// This is where a title gets its threshold, its points, and its position.
+function LadderDetail({ l, onClose }) {
+  return (
+    <div style={{
+      background: 'var(--surface2)', border: '1px solid var(--border2)',
+      borderRadius: 'var(--rl)', padding: '14px 16px',
+      display: 'flex', flexDirection: 'column', gap: 12,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 11 }}>
+        <span style={{ color: 'var(--accent)', display: 'flex', marginTop: 1 }}>
+          <Icon name={l.id} size={18} />
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)' }}>{l.name}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+              {l.tier} / {l.tiers_total} rungs
+            </span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>
+              now {l.value_label}
+            </span>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: 620 }}>
+            {l.blurb}
+          </p>
+        </div>
+        <button onClick={onClose} title="Close"
+          style={{
+            background: 'none', border: 'none', padding: 4, cursor: 'pointer',
+            color: 'var(--text-faint)', display: 'flex', flexShrink: 0,
+          }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(216px, 1fr))', gap: 4 }}>
+        {l.tiers.map(t => {
+          const isNext = !t.earned && t.n === l.next_n
+          return (
+            <div key={t.n} style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+              borderRadius: 'var(--r-sm)',
+              background: isNext ? 'var(--surface)' : 'transparent',
+              border: `1px solid ${isNext ? 'var(--accent)' : 'transparent'}`,
+            }}>
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--text-faint)',
+                minWidth: 16, textAlign: 'right', flexShrink: 0,
+              }}>{t.n}</span>
+              {t.earned
+                ? <Dot color="var(--green)" size={5} />
+                : <span style={{
+                    width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+                    border: '1px solid var(--border2)',
+                  }} />}
+              <span style={{
+                fontSize: 11.5, flex: 1, minWidth: 0,
+                color: t.earned ? 'var(--text)' : isNext ? 'var(--accent)' : 'var(--text-faint)',
+                fontWeight: isNext ? 600 : 400,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{t.label}</span>
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 10, flexShrink: 0,
+                color: t.earned ? 'var(--text-dim)' : 'var(--text-faint)',
+              }}>{t.at_label}</span>
+            </div>
+          )
+        })}
+      </div>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>
+        {l.maxed
+          ? 'Maxed. There is nothing above this one.'
+          : `Next rung ${l.next_n} of ${l.tiers_total} — ${l.next_label} at ${l.next_at_label}.`}
+      </span>
     </div>
   )
 }
@@ -179,12 +279,19 @@ function Medallion({ l }) {
 // ── Useless prizes — the shelf, up top ───────────────────────────────────────
 function Prizes({ data }) {
   const [showAll, setShowAll] = useState(false)
-  const { ladders, feats, prizes, rank } = data
+  const [openLadder, setOpenLadder] = useState(null)
+  const { ladders, feats, feat_groups, prizes, rank } = data
   const points = useCountUp(rank.points)
 
   // Three nearest unlocks — the "you are almost there" nudge.
   const closest = ladders.filter(l => !l.maxed).sort((a, b) => b.pct - a.pct).slice(0, 3)
-  const earnedFeats = feats.filter(f => f.earned)
+  const selected = ladders.find(l => l.id === openLadder) || null
+
+  // Feats ship grouped by the server; fall back to one unnamed bucket so an
+  // older payload still renders rather than dropping the whole section.
+  const groups = (feat_groups && feat_groups.length)
+    ? feat_groups
+    : [{ id: null, label: 'Feats', blurb: '', earned: feats.filter(f => f.earned).length, total: feats.length }]
 
   return (
     <div style={{
@@ -216,21 +323,43 @@ function Prizes({ data }) {
 
       {/* The shelf */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(108px, 1fr))', gap: 8 }}>
-        {ladders.map(l => <Medallion key={l.id} l={l} />)}
+        {ladders.map(l => (
+          <Medallion key={l.id} l={l} selected={l.id === openLadder} onSelect={setOpenLadder} />
+        ))}
       </div>
 
-      {/* Almost there */}
+      {selected && <LadderDetail l={selected} onClose={() => setOpenLadder(null)} />}
+
+      {/* Almost there. Naming the ladder and the rung number is the whole point:
+          "Pack Rat" alone is a punchline with no setup — "Hoarder, rung 9 of 21"
+          says what you are climbing and how far up it sits. */}
       {closest.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)' }}>Closest to unlocking</span>
           {closest.map(l => (
-            <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 11.5, color: 'var(--text)', minWidth: 130 }}>{l.next_label}</span>
+            <button
+              key={l.id}
+              onClick={() => setOpenLadder(openLadder === l.id ? null : l.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                background: 'none', border: 'none', padding: '3px 0', cursor: 'pointer',
+                font: 'inherit', textAlign: 'left',
+              }}
+            >
+              <span style={{ color: 'var(--text-faint)', display: 'flex', flexShrink: 0 }}>
+                <Icon name={l.id} size={14} />
+              </span>
+              <span style={{ minWidth: 180, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <span style={{ fontSize: 11.5, color: 'var(--text)', fontWeight: 600 }}>{l.next_label}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--text-faint)' }}>
+                  {l.name} · rung {l.next_n} of {l.tiers_total}
+                </span>
+              </span>
               <span style={{ flex: 1, minWidth: 60 }}><Track pct={l.pct} height={3} /></span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)', minWidth: 100, textAlign: 'right' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)', minWidth: 110, textAlign: 'right' }}>
                 {l.value_label} / {l.next_at_label}
               </span>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -242,7 +371,7 @@ function Prizes({ data }) {
           fontSize: 11.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
         }}
       >
-        {showAll ? 'Hide' : `Show all ${feats.length} feats`}
+        {showAll ? 'Hide feats' : `Show all ${feats.length} feats`}
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
           strokeLinecap="round" strokeLinejoin="round"
           style={{ transform: showAll ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.5 }}>
@@ -250,24 +379,47 @@ function Prizes({ data }) {
         </svg>
       </button>
 
+      {/* Grouped, in ascending difficulty within each group. Eighty unsorted
+          one-offs read as a wall you cannot get a foothold in; named sections
+          with their own x/y show at a glance which axis you have neglected. */}
       {showAll && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
-          {feats.map(f => (
-            <div key={f.id} style={{
-              background: f.earned ? 'var(--surface2)' : 'transparent',
-              border: f.earned ? '1px solid var(--border)' : '1px dashed var(--border2)',
-              borderRadius: 'var(--r)', padding: '9px 12px',
-              display: 'flex', flexDirection: 'column', gap: 3,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                {f.earned && <Dot color="var(--green)" size={6} />}
-                <span style={{ fontSize: 12, fontWeight: 600, color: f.earned ? 'var(--text)' : 'var(--text-faint)' }}>{f.label}</span>
-                <span style={{ flex: 1 }} />
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>+{f.points}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {groups.map(g => {
+            const items = feats.filter(f => (f.group || null) === g.id)
+            if (!items.length) return null
+            return (
+              <div key={g.id || 'all'} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{g.label}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: g.earned === g.total ? 'var(--green)' : 'var(--text-dim)' }}>
+                    {g.earned}/{g.total}
+                  </span>
+                  {g.blurb && (
+                    <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{g.blurb}</span>
+                  )}
+                  <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+                  {items.map(f => (
+                    <div key={f.id} style={{
+                      background: f.earned ? 'var(--surface2)' : 'transparent',
+                      border: f.earned ? '1px solid var(--border)' : '1px dashed var(--border2)',
+                      borderRadius: 'var(--r)', padding: '9px 12px',
+                      display: 'flex', flexDirection: 'column', gap: 3,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        {f.earned && <Dot color="var(--green)" size={6} />}
+                        <span style={{ fontSize: 12, fontWeight: 600, color: f.earned ? 'var(--text)' : 'var(--text-faint)' }}>{f.label}</span>
+                        <span style={{ flex: 1 }} />
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>+{f.points}</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.45 }}>{f.desc}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.45 }}>{f.desc}</span>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -337,11 +489,17 @@ function WorkflowCard({ row, onNavigate, compact }) {
               background: 'var(--surface2)', border: '1px solid var(--border2)', minWidth: 210,
             }}>
               <span style={{ color: 'var(--accent)', display: 'flex', flexShrink: 0 }}>
-                <Icon name={row.prizes[0]?.id} size={16} />
+                {/* The ladder the *next* rung belongs to — prizes[0] can be a
+                    maxed ladder, which would put the wrong icon here. */}
+                <Icon name={row.next_prize.ladder_id} size={16} />
               </span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text)' }}>
                   Next: {row.next_prize.label}
+                </span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--text-faint)' }}>
+                  {row.next_prize.ladder}
+                  {row.next_prize.n ? ` · rung ${row.next_prize.n} of ${row.next_prize.of}` : ''}
                 </span>
                 <Track pct={row.next_prize.pct} height={3} />
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>

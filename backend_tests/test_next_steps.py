@@ -231,6 +231,68 @@ def test_ladders_are_dense():
     assert st['prizes']['total'] >= 100
 
 
+def test_every_ladder_reports_where_you_are_on_it():
+    """A band name alone ("Pack Rat") says nothing about how far up you are."""
+    st = next_steps.build_state(_cfg(), _results(_details(total_media_size=15 * TB)), _runs())
+    for l in st['ladders']:
+        assert l['tiers_total'] == len(l['tiers'])
+        assert 0 <= l['tier'] <= l['tiers_total']
+        if l['maxed']:
+            assert l['next_n'] is None and l['tier'] == l['tiers_total']
+        else:
+            assert l['next_n'] == l['tier'] + 1
+            assert 1 <= l['next_n'] <= l['tiers_total']
+
+
+def test_every_ladder_rung_is_individually_named():
+    """Roman-numeral fallback is a safety net, not a shipping state."""
+    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    for l in st['ladders']:
+        titles = next_steps.TIER_TITLES.get(l['id']) or []
+        assert len(titles) >= l['tiers_total'], f"{l['id']} runs out of names"
+
+
+def test_next_prize_names_its_ladder_and_its_rung():
+    det = _details(not_imported_count=40, not_imported_size=500 * GB, ni_score=3.0)
+    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    prize = _row(st, 'triage')['next_prize']
+    assert prize['ladder'] and prize['ladder_id']
+    assert prize['n'] and prize['of'] and prize['n'] <= prize['of']
+
+
+# ── Feats ────────────────────────────────────────────────────────────────────
+
+def test_every_feat_belongs_to_a_declared_group():
+    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    known = {gid for gid, _, _ in next_steps.FEAT_GROUPS}
+    assert {f['group'] for f in st['feats']} <= known
+    assert len({f['id'] for f in st['feats']}) == len(st['feats']), 'duplicate feat id'
+    for g in st['feat_groups']:
+        assert g['total'] > 0, f"{g['id']} has no feats"
+        assert g['earned'] == sum(
+            1 for f in st['feats'] if f['group'] == g['id'] and f['earned'])
+
+
+def test_a_small_library_still_has_something_to_earn_on_every_axis():
+    """Feats are free to give, and the cheap ones do the work.
+
+    A 200 GB library with one tracker is the ordinary case. If the size and
+    upload axes only start rewarding at 100 TB, this whole layer reads as
+    written for somebody else.
+    """
+    det = _details(
+        total_media_size=200 * GB, hardlinked_media_size=180 * GB,
+        total_torrents_size=190 * GB,
+        media_file_count=300, torrent_file_count=300,
+    )
+    res = _results(det, tracker_file_stats={'one.cc': {'seeding_size': 150 * GB,
+                                                       'seeding_count': 90}})
+    st = next_steps.build_state(_cfg(), res, _runs(3), lifetime_uploaded=20 * GB)
+    by_group = {g['id']: g for g in st['feat_groups']}
+    for gid in ('start', 'clean', 'scale', 'give'):
+        assert by_group[gid]['earned'] >= 1, f"nothing reachable in '{gid}'"
+
+
 def test_ladder_progress_is_between_tiers_not_from_zero():
     st = next_steps.build_state(_cfg(), _results(_details(total_media_size=15 * TB)), _runs())
     hoard = next(l for l in st['ladders'] if l['id'] == 'hoard')
