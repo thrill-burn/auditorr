@@ -106,6 +106,20 @@ REWARD_KIND = {
     'trumped': 'ondemand',
 }
 
+# Which ladders a given workflow actually feeds. Used to show a concrete carrot
+# on each row — "do this and you get that" — instead of leaving the prize layer
+# as an abstract shelf the user has to connect to their own actions. Ladders
+# absent here are library-wide (Hoarder, Auditor, Chronicler…) and appear only
+# in the top shelf, because no single workflow moves them.
+LADDER_OWNER = {
+    'exterminator': ('cleanup',),
+    'sentinel':     ('cleanup',),
+    'clonehunter':  ('dedupe',),
+    'shoveler':     ('triage',),
+    'lapidary':     ('backfill',),
+    'alchemist':    ('backfill',),
+}
+
 # Empty progress record. Persisted in app_meta under `ns_progress` and advanced
 # once per audit, so the polled endpoint never recomputes history.
 EMPTY_PROGRESS = {
@@ -443,8 +457,10 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
         'clear_line': 'Nothing to do until a tracker sends you a trump notice.',
     })
 
-    # Stage bucket first (structural), then the canonical sequence. Magnitude
-    # never reorders — it decides state, and state decides the bucket.
+    # Always the canonical sequence. The page renders fixed, labelled sections
+    # (one-time cleanup → ongoing → on demand), so the layout carries the
+    # ordering and nothing reshuffles under the user between visits. Magnitude
+    # decides *state*, which decides whether a card is expanded or collapsed.
     for r in rows:
         r['stage']       = STAGE.get(r['id'], 'ongoing')
         r['stage_label'] = STAGE_LABEL[r['stage']]
@@ -694,11 +710,17 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                 (progress or {}).get('shoveled') or 0,
                 [10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000],
                 _fmt_plain, 35),
-        # Zombie: repeatable kills. They should have stayed dead.
+        # Zombies, tracked separately: orphans and duplicates come back for
+        # different reasons, and each row deserves its own carrot rather than
+        # both pointing at one shared counter.
         L('exterminator', 'Exterminator',
-                'Times you have driven orphans or duplicates back to zero. They keep getting up.',
-                (int((progress or {}).get('orphan_kills') or 0)
-                 + int((progress or {}).get('dupe_kills') or 0)),
+                'Times you have driven orphaned torrents back to zero. They keep getting up.',
+                int((progress or {}).get('orphan_kills') or 0),
+                [1, 2, 3, 5, 10, 20, 35, 50, 100],
+                _fmt_plain, 40),
+        L('clonehunter', 'Clone Hunter',
+                'Times you have driven duplicate files back to zero. They keep coming back too.',
+                int((progress or {}).get('dupe_kills') or 0),
                 [1, 2, 3, 5, 10, 20, 35, 50, 100],
                 _fmt_plain, 40),
         # Zombie: the streak of a clean state holding.
@@ -872,9 +894,23 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
     tiers_total  = sum(l['tiers_total'] for l in ladders) + len(feats)
 
     rows = _workflow_rows(cfg, det, source_ok, arr_ok) if has_audit else []
+    by_id = {l['id']: l for l in ladders}
     for r in rows:
         r['headline'] = _headline(r)
         r['reward']   = _reward_line(r, progress, det)
+        # The carrot: which prizes this specific workflow moves, and the nearest
+        # one still locked. Abstract shelves do not motivate; "clear these and
+        # you hit Shoveler V" does.
+        owned = [by_id[lid] for lid, owners in LADDER_OWNER.items()
+                 if r['id'] in owners and lid in by_id]
+        owned.sort(key=lambda l: (l['maxed'], -l['pct']))
+        r['prizes'] = owned
+        nxt = next((l for l in owned if not l['maxed']), None)
+        r['next_prize'] = None if not nxt else {
+            'ladder': nxt['name'], 'label': nxt['next_label'],
+            'at': nxt['next_at_label'], 'pct': nxt['pct'],
+            'value_label': nxt['value_label'],
+        }
 
     # The moment step 1 is done: orphans and duplicates cleared, and they stay
     # cleared. The page shifts from a cleanup sprint to the ongoing loop.

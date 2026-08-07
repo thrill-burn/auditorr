@@ -1,47 +1,66 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { api } from '../api'
-import { LoadingRow, WorkflowError, SectionLabel } from './workflows/shared'
+import { LoadingRow, WorkflowError } from './workflows/shared'
 
 // Next steps — "this is your prioritized (and rewarded) workflows page."
 //
-// The spine is real: the five workflows ordered by recoverable health-score
-// points per unit of effort. The prize layer is deliberately useless and says
-// so — Progress Quest rules: many tiers, mock-heroic names, the next one
-// always in sight. Cheese lives in the language, never in the pigment: no
-// saturated fills, no gradients, no confetti. See prompts/OPS.md.
+// Layout, top to bottom:
+//   1. Useless prizes  — the trophy shelf. Recognition, up front, so the page
+//      opens with something to aspire to rather than a wall of chores.
+//   2. One-time cleanup — Cleanup + Dedupe. Collapses to one line when done.
+//   3. Ongoing          — Triage, then Backfill.
+//   4. On demand        — Trumped.
+//
+// Sections are fixed and labelled, so the sequence is self-evident and nothing
+// reshuffles between visits. Each workflow card also shows the prize it feeds
+// ("do this, get that") — an abstract shelf does not motivate on its own.
+//
+// Cheese lives in the language and in restrained motion, never in pigment: no
+// gradients, no gold, no confetti. Medallion rings use --accent at low alpha,
+// locked tiles are dashed and --text-faint. See prompts/NEXT_STEPS.md.
 //
 // Everything here is contained to this page. Nothing about Next steps appears
 // on the dashboard, in toasts, or as a sidebar badge.
 
 const STATE_META = {
-  fix:      { label: 'Needs you',   color: 'var(--red)' },
-  blocked:  { label: 'Blocked',     color: 'var(--text-faint)' },
+  fix:      { label: 'Needs you',     color: 'var(--red)' },
+  blocked:  { label: 'Blocked',       color: 'var(--text-faint)' },
   optimize: { label: 'Could improve', color: 'var(--yellow)' },
-  maintain: { label: 'Clear',       color: 'var(--green)' },
-  standby:  { label: 'On standby',  color: 'var(--text-faint)' },
+  maintain: { label: 'Clear',         color: 'var(--green)' },
+  standby:  { label: 'On standby',    color: 'var(--text-faint)' },
 }
 
-// ── Count-up readout, matching the HealthDial's 0.9s cubic ease-out ──────────
-function useCountUp(target, ms = 900) {
-  const [val, setVal] = useState(0)
-  const fromRef = useRef(0)
-  useEffect(() => {
-    const from = fromRef.current
-    const delta = (target || 0) - from
-    if (!delta) { setVal(target || 0); return }
-    let raf, start
-    const step = t => {
-      if (!start) start = t
-      const p = Math.min(1, (t - start) / ms)
-      const eased = 1 - Math.pow(1 - p, 3)
-      setVal(Math.round(from + delta * eased))
-      if (p < 1) raf = requestAnimationFrame(step)
-      else fromRef.current = target || 0
-    }
-    raf = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(raf)
-  }, [target, ms])
-  return val
+// Lucide-style line icons, 24×24, stroke currentColor. One per ladder.
+const I = {
+  hoard:        <><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></>,
+  seedbearer:   <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></>,
+  benefactor:   <><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></>,
+  auditor:      <><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></>,
+  custodian:    <><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></>,
+  lapidary:     <><path d="M6 3h12l4 6-10 13L2 9Z"/><path d="M11 3 8 9l4 13 4-13-3-6"/><path d="M2 9h20"/></>,
+  shoveler:     <><path d="M2 22v-5l5-5 5 5-5 5z"/><path d="M9.5 14.5 16 8"/><path d="m17 2 5 5-4 4-5-5z"/></>,
+  exterminator: <><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M8 20v2h8v-2"/><path d="M20 12a8 8 0 1 0-16 0c0 2.5 1 4 2 5v3h12v-3c1-1 2-2.5 2-5Z"/></>,
+  clonehunter:  <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
+  sentinel:     <><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></>,
+  alchemist:    <><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></>,
+  diplomat:     <><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></>,
+  steady:       <><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></>,
+  chronicler:   <><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>,
+  archivist:    <><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9"/><path d="M10 13h4"/></>,
+  trophy:       <><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></>,
+}
+
+function Icon({ name, size = 20, style }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+      {I[name] || I.trophy}
+    </svg>
+  )
+}
+
+function Dot({ color, size = 7 }) {
+  return <span className="ui-status-dot" style={{ width: size, height: size, background: color, flexShrink: 0 }} />
 }
 
 function Track({ pct, color = 'var(--accent)', height = 4 }) {
@@ -56,195 +75,169 @@ function Track({ pct, color = 'var(--accent)', height = 4 }) {
   )
 }
 
-function Dot({ color, size = 7 }) {
-  return <span className="ui-status-dot" style={{ width: size, height: size, background: color, flexShrink: 0 }} />
+// Count-up readout, matching the HealthDial's 0.9s cubic ease-out.
+function useCountUp(target, ms = 900) {
+  const [val, setVal] = useState(0)
+  const fromRef = useRef(0)
+  useEffect(() => {
+    const from = fromRef.current
+    const delta = (target || 0) - from
+    if (!delta) { setVal(target || 0); return }
+    let raf, start
+    const step = t => {
+      if (!start) start = t
+      const p = Math.min(1, (t - start) / ms)
+      setVal(Math.round(from + delta * (1 - Math.pow(1 - p, 3))))
+      if (p < 1) raf = requestAnimationFrame(step)
+      else fromRef.current = target || 0
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [target, ms])
+  return val
 }
 
-// ── Hero row — the answer to "what should I be doing" ────────────────────────
-function HeroRow({ row, onNavigate }) {
-  const meta = STATE_META[row.state] || STATE_META.maintain
-  const actionable = row.state === 'fix' || row.state === 'optimize'
+// ── Medallion — icon in a progress ring showing distance to the next tier ────
+function Medallion({ l }) {
+  const earned = l.tier > 0
+  const R = 22, C = 2 * Math.PI * R
+  const pct = l.maxed ? 100 : l.pct
+  const ring = l.maxed ? 'var(--green)' : 'var(--accent)'
   return (
-    <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
-      boxShadow: 'var(--elev-1)', padding: '20px 22px',
-      display: 'flex', flexDirection: 'column', gap: 12,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <Dot color={row.accent} />
-        <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
-        <span style={{
-          fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 8px',
-          borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}40`, color: meta.color,
-        }}>{meta.label}</span>
-        {row.nature && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)' }}>
-            {row.nature}
-          </span>
-        )}
-        {row.score_lost > 0 && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)', marginLeft: 'auto' }}>
-            {row.score_lost} of {row.score_max} pts lost
-          </span>
-        )}
-      </div>
-
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 19, fontWeight: 700, color: 'var(--text)', lineHeight: 1.25 }}>
-        {row.headline}
-      </div>
-
-      <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.65, margin: 0, maxWidth: 760 }}>
-        {row.teaching}
-      </p>
-
-      {/* How this one pays out. Each workflow rewards in its own shape:
-          a defended streak, a cumulative shovel count, or a ratcheting best. */}
-      {row.reward && (
+    <div
+      title={`${l.name} — ${l.blurb}\n${l.value_label}${l.maxed ? ' · maxed' : ` · ${l.next_label} at ${l.next_at_label}`}`}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+        padding: '12px 6px 10px', borderRadius: 'var(--rl)',
+        background: earned ? 'var(--surface)' : 'transparent',
+        border: earned ? '1px solid var(--border)' : '1px dashed var(--border2)',
+        boxShadow: earned ? 'var(--elev-1)' : 'none',
+      }}
+    >
+      <div style={{ position: 'relative', width: 52, height: 52, flexShrink: 0 }}>
+        <svg width="52" height="52" viewBox="0 0 52 52" style={{ position: 'absolute', inset: 0, transform: 'rotate(-90deg)' }}>
+          <circle cx="26" cy="26" r={R} fill="none" stroke="var(--surface3)" strokeWidth="3" />
+          <circle cx="26" cy="26" r={R} fill="none" stroke={`${ring}88`} strokeWidth="3"
+            strokeLinecap="round" strokeDasharray={C}
+            strokeDashoffset={C - (C * pct) / 100}
+            style={{ transition: 'stroke-dashoffset 0.7s cubic-bezier(.4,0,.2,1)' }} />
+        </svg>
         <div style={{
-          borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 2,
-          display: 'flex', flexDirection: 'column', gap: 2,
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: earned ? 'var(--text)' : 'var(--text-faint)',
         }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>
-            {row.reward.headline}
-          </span>
-          <span style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
-            {row.reward.detail}
-          </span>
+          <Icon name={l.id} size={20} />
         </div>
-      )}
-
-      {actionable && (
-        <button
-          onClick={() => onNavigate(row.id)}
-          style={{
-            alignSelf: 'flex-start', marginTop: 2,
-            padding: '9px 18px', borderRadius: 'var(--r)', cursor: 'pointer',
-            border: '1px solid var(--accent)', background: 'var(--accent)',
-            color: '#0a0a0a', fontSize: 13, fontWeight: 600,
-          }}
-        >
-          Open {row.label} →
-        </button>
-      )}
-      {row.state === 'blocked' && (
-        <button
-          onClick={() => onNavigate('config')}
-          style={{
-            alignSelf: 'flex-start', marginTop: 2,
-            padding: '8px 16px', borderRadius: 'var(--r)', cursor: 'pointer',
-            border: '1px solid var(--border2)', background: 'var(--surface2)',
-            color: 'var(--text)', fontSize: 12.5, fontWeight: 600,
-          }}
-        >
-          Open Config →
-        </button>
-      )}
+      </div>
+      <div style={{ textAlign: 'center', minWidth: 0, width: '100%' }}>
+        <div style={{
+          fontSize: 11.5, fontWeight: 600, lineHeight: 1.25,
+          color: earned ? 'var(--text)' : 'var(--text-faint)',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {l.tier_label || l.name}
+        </div>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', marginTop: 2 }}>
+          {l.maxed ? 'maxed' : l.value_label}
+        </div>
+      </div>
     </div>
   )
 }
 
-// ── Compact row — the queue behind the hero ──────────────────────────────────
-function QueueRow({ row, onNavigate }) {
-  const meta = STATE_META[row.state] || STATE_META.maintain
-  const clickable = row.state !== 'blocked'
-  return (
-    <button
-      onClick={() => onNavigate(clickable ? row.id : 'config')}
-      style={{
-        width: '100%', textAlign: 'left', cursor: 'pointer',
-        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
-        boxShadow: 'var(--elev-1)', padding: '13px 16px',
-        display: 'flex', alignItems: 'center', gap: 12, transition: 'all 0.12s',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--elev-2)' }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--elev-1)' }}
-    >
-      <Dot color={row.accent} />
-      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', minWidth: 74 }}>{row.label}</span>
-      <span style={{
-        fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)',
-        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
-        {row.headline}
-      </span>
-      {row.reward && (
-        <span style={{
-          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)', flexShrink: 0,
-          maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {row.reward.headline}
-        </span>
-      )}
-      <span style={{
-        fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 8px', flexShrink: 0,
-        borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}40`, color: meta.color,
-      }}>{meta.label}</span>
-    </button>
-  )
-}
+// ── Useless prizes — the shelf, up top ───────────────────────────────────────
+function Prizes({ data }) {
+  const [showAll, setShowAll] = useState(false)
+  const { ladders, feats, prizes, rank } = data
+  const points = useCountUp(rank.points)
 
-// ── Setup checklist ──────────────────────────────────────────────────────────
-function SetupPanel({ setup, onNavigate }) {
-  const [open, setOpen] = useState(!setup.complete)
+  // Three nearest unlocks — the "you are almost there" nudge.
+  const closest = ladders.filter(l => !l.maxed).sort((a, b) => b.pct - a.pct).slice(0, 3)
+  const earnedFeats = feats.filter(f => f.earned)
+
   return (
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
-      boxShadow: 'var(--elev-1)', padding: '14px 18px',
+      boxShadow: 'var(--elev-1)', padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 16,
     }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="trophy" size={17} /></span>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Useless prizes</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
+              {prizes.earned} / {prizes.total}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 4 }}>
+            None of this does anything. Your library does not care.
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', minWidth: 160 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{rank.name}</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.15 }}>
+            {points.toLocaleString()}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
+          </div>
+          <div style={{ marginTop: 6 }}><Track pct={rank.pct} /></div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', marginTop: 5 }}>
+            {rank.next_name ? `${rank.next_name} at ${rank.next_at.toLocaleString()}` : 'nothing left to become'}
+          </div>
+        </div>
+      </div>
+
+      {/* The shelf */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(108px, 1fr))', gap: 8 }}>
+        {ladders.map(l => <Medallion key={l.id} l={l} />)}
+      </div>
+
+      {/* Almost there */}
+      {closest.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)' }}>Closest to unlocking</span>
+          {closest.map(l => (
+            <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 11.5, color: 'var(--text)', minWidth: 130 }}>{l.next_label}</span>
+              <span style={{ flex: 1, minWidth: 60 }}><Track pct={l.pct} height={3} /></span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)', minWidth: 100, textAlign: 'right' }}>
+                {l.value_label} / {l.next_at_label}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setShowAll(s => !s)}
         style={{
-          width: '100%', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
-          background: 'none', border: 'none', padding: 0, textAlign: 'left',
+          alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+          fontSize: 11.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
         }}
       >
-        <Dot color={setup.complete ? 'var(--green)' : 'var(--accent)'} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>Setup</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
-          {setup.done} / {setup.total}
-        </span>
-        <span style={{ flex: 1 }} />
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+        {showAll ? 'Hide' : `Show all ${feats.length} feats`}
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
           strokeLinecap="round" strokeLinejoin="round"
-          style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, color: 'var(--text-dim)' }}>
+          style={{ transform: showAll ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.5 }}>
           <polyline points="9 18 15 12 9 6" />
         </svg>
       </button>
 
-      {open && (
-        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {setup.steps.map(s => (
-            <div key={s.id}
-              onClick={() => !s.done && onNavigate(s.tab)}
-              style={{
-                display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 8px',
-                borderRadius: 'var(--r)', cursor: s.done ? 'default' : 'pointer',
-                transition: 'background 0.12s',
-              }}
-              onMouseEnter={e => { if (!s.done) e.currentTarget.style.background = 'var(--surface2)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-            >
-              <span style={{
-                width: 15, height: 15, borderRadius: 'var(--r-sm)', marginTop: 1, flexShrink: 0,
-                border: `1.5px solid ${s.done ? 'var(--green)' : 'var(--border2)'}`,
-                background: s.done ? 'var(--green)' : 'transparent',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {s.done && (
-                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#0a0a0a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                )}
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12.5, color: s.done ? 'var(--text-dim)' : 'var(--text)', fontWeight: s.done ? 400 : 600 }}>
-                  {s.label}
-                </div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>{s.hint}</div>
+      {showAll && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+          {feats.map(f => (
+            <div key={f.id} style={{
+              background: f.earned ? 'var(--surface2)' : 'transparent',
+              border: f.earned ? '1px solid var(--border)' : '1px dashed var(--border2)',
+              borderRadius: 'var(--r)', padding: '9px 12px',
+              display: 'flex', flexDirection: 'column', gap: 3,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                {f.earned && <Dot color="var(--green)" size={6} />}
+                <span style={{ fontSize: 12, fontWeight: 600, color: f.earned ? 'var(--text)' : 'var(--text-faint)' }}>{f.label}</span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>+{f.points}</span>
               </div>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: s.done ? 'var(--green)' : 'var(--text-faint)', flexShrink: 0 }}>
-                +{s.points}
-              </span>
+              <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.45 }}>{f.desc}</span>
             </div>
           ))}
         </div>
@@ -253,89 +246,186 @@ function SetupPanel({ setup, onNavigate }) {
   )
 }
 
-// ── One prize ladder ─────────────────────────────────────────────────────────
-function Ladder({ l }) {
-  const [open, setOpen] = useState(false)
+// ── Workflow card ────────────────────────────────────────────────────────────
+function WorkflowCard({ row, onNavigate, compact }) {
+  const meta = STATE_META[row.state] || STATE_META.maintain
+  const actionable = row.state === 'fix' || row.state === 'optimize'
+
   return (
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
-      boxShadow: 'var(--elev-1)', padding: '13px 16px',
-      display: 'flex', flexDirection: 'column', gap: 8,
+      boxShadow: 'var(--elev-1)', padding: compact ? '12px 16px' : '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: compact ? 6 : 11,
     }}>
-      <div onClick={() => setOpen(o => !o)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
-          {l.tier_label || l.name}
-        </span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>
-          {l.tier} / {l.tiers_total}
-        </span>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{l.value_label}</span>
-      </div>
-
-      <Track pct={l.pct} color={l.maxed ? 'var(--green)' : 'var(--accent)'} />
-
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 11.5, color: 'var(--text-faint)', flex: 1, minWidth: 0, lineHeight: 1.5 }}>
-          {l.blurb}
-        </span>
-        {!l.maxed && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>
-            {l.next_label} at {l.next_at_label}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        <Dot color={row.accent} />
+        <span style={{ fontSize: compact ? 13 : 16, fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
+        <span style={{
+          fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 8px',
+          borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}40`, color: meta.color,
+        }}>{meta.label}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)' }}>{row.nature}</span>
+        {row.score_lost > 0 && (
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginLeft: 'auto' }}>
+            {row.score_lost} of {row.score_max} pts lost
           </span>
         )}
-        {l.maxed && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)', flexShrink: 0 }}>maxed</span>
-        )}
       </div>
 
-      {open && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 2 }}>
-          {l.tiers.map(t => (
-            <span key={t.n} title={`${t.label} — ${t.at_label}`} style={{
-              fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 8px', borderRadius: 'var(--r-pill)',
-              border: t.earned ? '1px solid var(--border2)' : '1px dashed var(--border2)',
-              color: t.earned ? 'var(--text-dim)' : 'var(--text-faint)',
-              background: t.earned ? 'var(--surface2)' : 'transparent',
-            }}>
-              {t.label} · {t.at_label}
+      <div style={{
+        fontFamily: 'var(--mono)', fontSize: compact ? 12.5 : 18, fontWeight: compact ? 400 : 700,
+        color: compact ? 'var(--text-dim)' : 'var(--text)', lineHeight: 1.3,
+      }}>
+        {row.headline}
+      </div>
+
+      {!compact && (
+        <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.65, margin: 0, maxWidth: 780 }}>
+          {row.teaching}
+        </p>
+      )}
+
+      {/* What this workflow pays out, and the next prize it feeds. */}
+      {row.reward && (
+        <div style={{
+          borderTop: '1px solid var(--border)', paddingTop: 10,
+          display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 220 }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>
+              {row.reward.headline}
             </span>
-          ))}
+            {!compact && (
+              <span style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+                {row.reward.detail}
+              </span>
+            )}
+          </div>
+
+          {row.next_prize && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+              padding: '7px 12px', borderRadius: 'var(--r)',
+              background: 'var(--surface2)', border: '1px solid var(--border2)', minWidth: 210,
+            }}>
+              <span style={{ color: 'var(--accent)', display: 'flex', flexShrink: 0 }}>
+                <Icon name={row.prizes[0]?.id} size={16} />
+              </span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text)' }}>
+                  Next: {row.next_prize.label}
+                </span>
+                <Track pct={row.next_prize.pct} height={3} />
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>
+                  {row.next_prize.value_label} / {row.next_prize.at}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {(actionable || row.state === 'blocked') && (
+        <button
+          onClick={() => onNavigate(row.state === 'blocked' ? 'config' : row.id)}
+          style={{
+            alignSelf: 'flex-start', marginTop: 2,
+            padding: compact ? '7px 14px' : '9px 18px', borderRadius: 'var(--r)', cursor: 'pointer',
+            border: `1px solid ${actionable ? 'var(--accent)' : 'var(--border2)'}`,
+            background: actionable ? 'var(--accent)' : 'var(--surface2)',
+            color: actionable ? '#0a0a0a' : 'var(--text)',
+            fontSize: 12.5, fontWeight: 600,
+          }}
+        >
+          {row.state === 'blocked' ? 'Open Config →' : `Open ${row.label} →`}
+        </button>
       )}
     </div>
   )
 }
 
-function Feat({ f }) {
+// ── A labelled, collapsible section ──────────────────────────────────────────
+function Section({ title, sub, done, doneLine, children, defaultOpen = true }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+          background: 'none', border: 'none', padding: 0, textAlign: 'left', width: '100%',
+        }}
+      >
+        {done && <Dot color="var(--green)" size={7} />}
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{title}</span>
+        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{done ? doneLine : sub}</span>
+        <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          strokeLinecap="round" strokeLinejoin="round"
+          style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, color: 'var(--text-dim)', flexShrink: 0 }}>
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+      </button>
+      {open && children}
+    </div>
+  )
+}
+
+// ── Setup checklist ──────────────────────────────────────────────────────────
+function SetupPanel({ setup, onNavigate }) {
   return (
     <div style={{
-      background: f.earned ? 'var(--surface)' : 'transparent',
-      border: f.earned ? '1px solid var(--border)' : '1px dashed var(--border2)',
-      borderRadius: 'var(--rl)', padding: '11px 14px',
-      boxShadow: f.earned ? 'var(--elev-1)' : 'none',
-      display: 'flex', flexDirection: 'column', gap: 3,
+      background: 'var(--surface)', border: '1px solid var(--accent)33', borderRadius: 'var(--rl)',
+      boxShadow: 'var(--elev-1)', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 10,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-        {f.earned && <Dot color="var(--green)" size={6} />}
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: f.earned ? 'var(--text)' : 'var(--text-faint)' }}>
-          {f.label}
-        </span>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: f.earned ? 'var(--text-dim)' : 'var(--text-faint)' }}>
-          +{f.points}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <Dot color="var(--accent)" />
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Finish setting up</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
+          {setup.done} / {setup.total}
         </span>
       </div>
-      <span style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>{f.desc}</span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {setup.steps.map(s => (
+          <div key={s.id}
+            onClick={() => !s.done && onNavigate(s.tab)}
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 6px',
+              borderRadius: 'var(--r)', cursor: s.done ? 'default' : 'pointer',
+            }}
+            onMouseEnter={e => { if (!s.done) e.currentTarget.style.background = 'var(--surface2)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+          >
+            <span style={{
+              width: 15, height: 15, borderRadius: 'var(--r-sm)', marginTop: 1, flexShrink: 0,
+              border: `1.5px solid ${s.done ? 'var(--green)' : 'var(--border2)'}`,
+              background: s.done ? 'var(--green)' : 'transparent',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              {s.done && (
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#0a0a0a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              )}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, color: s.done ? 'var(--text-dim)' : 'var(--text)', fontWeight: s.done ? 400 : 600 }}>{s.label}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>{s.hint}</div>
+            </div>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: s.done ? 'var(--green)' : 'var(--text-faint)', flexShrink: 0 }}>
+              +{s.points}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function NextSteps({ onNavigate }) {
-  const [data, setData]       = useState(null)
-  const [error, setError]     = useState(null)
-  const [showPrizes, setShow] = useState(false)
+  const [data, setData]   = useState(null)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
     let alive = true
@@ -345,11 +435,8 @@ export default function NextSteps({ onNavigate }) {
     return () => { alive = false }
   }, [])
 
-  const points = useCountUp(data?.rank?.points || 0)
-
   if (error) return <div style={{ padding: 'var(--page-gutter)' }}><WorkflowError message={error} /></div>
   if (!data)  return <div style={{ padding: 'var(--page-gutter)' }}><LoadingRow label="Working out what you should be doing…" /></div>
-
   if (data.enabled === false) {
     return (
       <div style={{ padding: 'var(--page-gutter)', color: 'var(--text-dim)', fontSize: 13 }}>
@@ -358,86 +445,60 @@ export default function NextSteps({ onNavigate }) {
     )
   }
 
-  const { rank, setup, rows, ladders, feats, prizes, health } = data
-  const hero  = rows && rows.length ? rows[0] : null
-  const queue = rows && rows.length ? rows.slice(1) : []
+  const { setup, rows, health } = data
+  const byId = Object.fromEntries((rows || []).map(r => [r.id, r]))
+  const oneoff = ['cleanup', 'dedupe'].map(id => byId[id]).filter(Boolean)
+  const oneoffDone = oneoff.length > 0 && oneoff.every(r => !['fix', 'optimize'].includes(r.state))
 
   return (
     <div style={{ padding: 'var(--page-gutter)', display: 'flex', flexDirection: 'column', gap: 'var(--card-gap)', maxWidth: 1180 }}>
 
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 260 }}>
-          <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Workflows</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>
-            {data.stage === 'setup' ? 'Finish setting up' : 'Do this next'}
-          </div>
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 720 }}>
-            {data.stage === 'setup'
-              ? 'auditorr has nothing to audit yet. Work down the list and the rest of this page fills in.'
-              : 'Two steps. First the one-time cleanup — orphaned torrents and duplicates — which finishes and stays finished. Then the ongoing part: tend to what fails to import, and slowly hardlink more of what you own.'}
-          </p>
-        </div>
-
-        {/* Rank readout — mono, near-white, count-up. Dressing, not the point. */}
-        <div style={{
-          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
-          boxShadow: 'var(--elev-1)', padding: '12px 16px', minWidth: 210,
-        }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{rank.name}</div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.1 }}>
-            {points.toLocaleString()}
-            <span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
-          </div>
-          <div style={{ marginTop: 8 }}><Track pct={rank.pct} /></div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)', marginTop: 6 }}>
-            {rank.next_name ? `${rank.next_name} at ${rank.next_at.toLocaleString()}` : 'nothing left to become'}
-          </div>
-        </div>
+      <div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Workflows</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Next steps</div>
+        <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 760 }}>
+          {data.stage === 'setup'
+            ? 'auditorr has nothing to audit yet. Finish the checklist and the rest of this page fills in.'
+            : 'Clear the one-time cleanup first, then settle into the two jobs that never really end.'}
+        </p>
       </div>
 
-      {/* Setup — only while it matters */}
       {!setup.complete && <SetupPanel setup={setup} onNavigate={onNavigate} />}
 
-      {/* The spine. Rows are grouped by stage so the sequence is legible:
-          foundation is the sprint to a clean baseline, maintenance is the
-          forever loop. Hardlinked media scores high because it is hard, not
-          because it comes first. */}
-      {hero && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <HeroRow row={hero} onNavigate={onNavigate} />
-          {queue.map((r, i) => {
-            const prev = i === 0 ? hero : queue[i - 1]
-            const newStage = r.stage !== prev.stage
-            return (
-              <React.Fragment key={r.id}>
-                {newStage && (
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    marginTop: 6, paddingLeft: 2,
-                  }}>
-                    <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)' }}>
-                      {r.stage_label}
-                    </span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)' }}>
-                      {r.stage === 'oneoff' ? 'finishes' : r.stage === 'ongoing' ? 'never finishes' : ''}
-                    </span>
-                    <span style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-                  </div>
-                )}
-                <QueueRow row={r} onNavigate={onNavigate} />
-              </React.Fragment>
-            )
-          })}
-        </div>
-      )}
+      {/* Prizes first — something to recognise and aspire to before the chores. */}
+      {data.stage !== 'setup' && <Prizes data={data} />}
 
-      {data.baseline_clear && hero && hero.stage !== 'oneoff' && (
-        <div style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.6 }}>
-          Orphans and duplicates are clear, and that part stays done — your library has a clean
-          baseline. What's left never quite finishes: keep an eye on what fails to import, and
-          hardlink more of what you already own.
-        </div>
+      {rows && rows.length > 0 && (
+        <>
+          <Section
+            title="One-time cleanup"
+            sub="Do these once. They finish and stay finished."
+            done={oneoffDone}
+            doneLine="Done — orphans and duplicates are clear. auditorr keeps watch."
+            defaultOpen={!oneoffDone}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {oneoff.map(r => (
+                <WorkflowCard key={r.id} row={r} onNavigate={onNavigate}
+                  compact={!['fix', 'optimize', 'blocked'].includes(r.state)} />
+              ))}
+            </div>
+          </Section>
+
+          <Section title="Ongoing" sub="These never have a last item. That is normal.">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {['triage', 'backfill'].map(id => byId[id]).filter(Boolean).map(r => (
+                <WorkflowCard key={r.id} row={r} onNavigate={onNavigate} compact={false} />
+              ))}
+            </div>
+          </Section>
+
+          {byId.trumped && (
+            <Section title="On demand" sub="Only when a tracker asks." defaultOpen={false}>
+              <WorkflowCard row={byId.trumped} onNavigate={onNavigate} compact />
+            </Section>
+          )}
+        </>
       )}
 
       {health?.score != null && (
@@ -446,45 +507,6 @@ export default function NextSteps({ onNavigate }) {
           {data.streak_90 > 0 && ` · ${data.streak_90} day${data.streak_90 === 1 ? '' : 's'} at 90+`}
         </div>
       )}
-
-      {/* Useless prizes — the side quest, and the page says so */}
-      <div style={{ marginTop: 6 }}>
-        <button
-          onClick={() => setShow(s => !s)}
-          style={{
-            width: '100%', display: 'flex', alignItems: 'baseline', gap: 10, cursor: 'pointer',
-            background: 'none', border: 'none', padding: '0 0 10px', textAlign: 'left',
-          }}
-        >
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>Useless prizes</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
-            {prizes.earned} / {prizes.total}
-          </span>
-          <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-            None of this does anything. Your library does not care.
-          </span>
-          <span style={{ flex: 1 }} />
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-            strokeLinecap="round" strokeLinejoin="round"
-            style={{ transform: showPrizes ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, color: 'var(--text-dim)' }}>
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
-        </button>
-
-        {showPrizes && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--card-gap)' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 10 }}>
-              {ladders.map(l => <Ladder key={l.id} l={l} />)}
-            </div>
-            <div>
-              <SectionLabel>Feats</SectionLabel>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
-                {feats.map(f => <Feat key={f.id} f={f} />)}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   )
 }
