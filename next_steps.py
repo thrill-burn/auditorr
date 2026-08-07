@@ -580,6 +580,74 @@ def _headline(row):
 # a tier rendered as "Packrat 16" instead of "Packrat XVI" breaks the joke.
 
 # ---------------------------------------------------------------------------
+# What each medallion is a medallion *of*.
+#
+# Feats explain themselves — every one carries a `desc` saying exactly what to
+# do. Ladders had no equivalent: a tile read "Rack Owner / Hoarder / 12.4 TB",
+# and eight of the thirty ladders are byte ladders, so the number alone is
+# indistinguishable between the library, the torrent directory, what is seeding
+# and what has been uploaded. The blurb answers it but only in a tooltip.
+#
+# Two cheap fixes, no extra tile height:
+#   * `measures` — one or two words naming what the number counts, printed
+#     faint straight after the value ("12.4 TB library", "3.90× ratio").
+#   * `group` — the shelf is themed rather than a wall of thirty, mirroring the
+#     feat groups exactly so the two sections read as one system.
+LADDER_GROUPS = [
+    ('have',    'What you have',
+     'Size, count, and how much of it is in good order.'),
+    ('give',    'What you give',
+     'Bytes out, the ratio they earn, and how far they travel.'),
+    ('work',    'What you did',
+     'The workflows, and the states you drove them to.'),
+    ('machine', 'What it did',
+     'auditorr, running, whether or not you were watching.'),
+    ('meta',    'Prizes for prizes',
+     'The least useful things on the least useful page.'),
+]
+
+# ladder id -> (group, what the number counts)
+LADDER_FACET = {
+    'hoard':         ('have',    'library'),
+    'packrat':       ('have',    'torrents'),
+    'archivist':     ('have',    'files'),
+    'vaultkeeper':   ('have',    'hardlinked'),
+    'tidiness':      ('have',    'clean'),
+    'purity':        ('have',    'imported'),
+
+    'seedbearer':    ('give',    'seeding'),
+    'benefactor':    ('give',    'uploaded'),
+    'usurer':        ('give',    'ratio'),
+    # 'seeds', not 'seeding' — Seedbearer already owns that word for bytes, and
+    # two tiles reading "… seeding" is exactly the ambiguity this field fixes.
+    'seedling':      ('give',    'seeds'),
+    'pollinator':    ('give',    'cross-seeded'),
+    'alchemist':     ('give',    'multiplier'),
+    'diplomat':      ('give',    'trackers'),
+
+    'shoveler':      ('work',    'shovelled'),
+    'exterminator':  ('work',    'orphan kills'),
+    'clonehunter':   ('work',    'dupe kills'),
+    'sentinel':      ('work',    'clean'),
+    'lapidary':      ('work',    'hardlinked'),
+    'custodian':     ('work',    'best health'),
+    'steady':        ('work',    'at 90+'),
+
+    'auditor':       ('machine', 'audits'),
+    'watcher':       ('machine', 'audited'),
+    'chronicler':    ('machine', 'running'),
+    'nightwatch':    ('machine', 'by watchdog'),
+    'clockwork':     ('machine', 'scheduled'),
+    'handson':       ('machine', 'by hand'),
+    'marathoner':    ('machine', 'scanning'),
+    'highwater':     ('machine', 'peak RAM'),
+
+    'completionist': ('meta',    'rungs'),
+    'trophyhunter':  ('meta',    'feats'),
+}
+
+
+# ---------------------------------------------------------------------------
 # Tier titles. Progress Quest's joy was absurd *specificity* — "Fuzzy Wolf
 # Spider", "Rat Tail x3" — not tidy grading. "Hoarder XVII" is a spreadsheet
 # wearing a costume; "Structural Engineer" is a joke. Every rung gets a name.
@@ -841,8 +909,10 @@ def _ladder(lid, name, blurb, value, thresholds, fmt, points_step=25, peaks=None
         pct  = max(0.0, min(1.0, (value - prev_at) / span)) * 100
     else:
         pct = 100.0
+    group, measures = LADDER_FACET.get(lid, ('have', ''))
     return {
         'id': lid, 'name': name, 'blurb': blurb,
+        'group': group, 'measures': measures,
         'value': value, 'value_label': fmt(value),
         'tier': len(earned), 'tiers_total': len(tiers),
         'tier_label': earned[-1]['label'] if earned else None,
@@ -1511,6 +1581,15 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
         'hero': rows[0]['id'] if rows else None,
         'baseline_clear': baseline_clear,
         'ladders': ladders,
+        # Rungs, not ladders — "34/97" answers "how far up this theme am I",
+        # which is the same question the per-medallion x/y answers one level
+        # down. Counting ladders would just say how many I have touched.
+        'ladder_groups': [
+            {'id': gid, 'label': label, 'blurb': blurb,
+             'earned': sum(l['tier'] for l in ladders if l['group'] == gid),
+             'total':  sum(l['tiers_total'] for l in ladders if l['group'] == gid)}
+            for gid, label, blurb in LADDER_GROUPS
+        ],
         'feats': feats,
         'feat_groups': [
             {'id': gid, 'label': label, 'blurb': blurb,

@@ -118,6 +118,23 @@ function useCountUp(target, ms = 900) {
   return val
 }
 
+// One header shape for both halves of the prize section — themed ladder groups
+// and feat groups. Same component, so the two read as one system rather than
+// two lists that happen to sit near each other.
+function GroupHeader({ label, count, total, blurb }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{label}</span>
+      <span style={{
+        fontFamily: 'var(--mono)', fontSize: 10.5,
+        color: count === total ? 'var(--green)' : 'var(--text-dim)',
+      }}>{count}/{total}</span>
+      {blurb && <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{blurb}</span>}
+      <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
+    </div>
+  )
+}
+
 // ── Medallion — icon in a progress ring showing distance to the next tier ────
 //
 // The x/y in the corner is load-bearing: a mock-heroic band name ("Pack Rat")
@@ -133,7 +150,7 @@ function Medallion({ l, selected, onSelect }) {
   return (
     <button
       onClick={() => onSelect(selected ? null : l.id)}
-      title={`${l.name} — ${l.blurb}\n${l.value_label}${l.maxed ? ' · maxed' : ` · next: ${l.next_label} at ${l.next_at_label}`}\nClick for every rung.`}
+      title={`${l.name} — ${l.blurb}\n${l.value_label} ${l.measures || ''}${l.maxed ? ' · maxed' : ` · next: ${l.next_label} at ${l.next_at_label}`}\nClick for every rung.`}
       style={{
         position: 'relative', textAlign: 'inherit', font: 'inherit', cursor: 'pointer',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
@@ -185,8 +202,16 @@ function Medallion({ l, selected, onSelect }) {
         }}>
           {l.name}
         </div>
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>
-          {l.maxed ? 'maxed' : l.value_label}
+        {/* The value with the thing it measures. Without the second word,
+            eight byte ladders all read "12.4 TB" and are indistinguishable.
+            "maxed" is no longer needed here — the ring is green and the corner
+            reads n/n. */}
+        <div style={{
+          fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 2,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {l.value_label}
+          {l.measures && <span style={{ color: 'var(--text-faint)' }}> {l.measures}</span>}
         </div>
       </div>
     </button>
@@ -216,7 +241,7 @@ function LadderDetail({ l, onClose }) {
               {l.tier} / {l.tiers_total} rungs
             </span>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>
-              now {l.value_label}
+              now {l.value_label}{l.measures ? ` ${l.measures}` : ''}
             </span>
           </div>
           <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: 620 }}>
@@ -280,15 +305,18 @@ function LadderDetail({ l, onClose }) {
 function Prizes({ data }) {
   const [showAll, setShowAll] = useState(false)
   const [openLadder, setOpenLadder] = useState(null)
-  const { ladders, feats, feat_groups, prizes, rank } = data
+  const { ladders, ladder_groups, feats, feat_groups, prizes, rank } = data
   const points = useCountUp(rank.points)
 
   // Three nearest unlocks — the "you are almost there" nudge.
   const closest = ladders.filter(l => !l.maxed).sort((a, b) => b.pct - a.pct).slice(0, 3)
   const selected = ladders.find(l => l.id === openLadder) || null
 
-  // Feats ship grouped by the server; fall back to one unnamed bucket so an
-  // older payload still renders rather than dropping the whole section.
+  // Both halves ship grouped by the server; each falls back to one unnamed
+  // bucket so an older payload still renders rather than dropping the section.
+  const shelves = (ladder_groups && ladder_groups.length)
+    ? ladder_groups
+    : [{ id: null, label: 'Prizes', blurb: '', earned: prizes.earned, total: prizes.total }]
   const groups = (feat_groups && feat_groups.length)
     ? feat_groups
     : [{ id: null, label: 'Feats', blurb: '', earned: feats.filter(f => f.earned).length, total: feats.length }]
@@ -321,14 +349,28 @@ function Prizes({ data }) {
         </div>
       </div>
 
-      {/* The shelf */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(108px, 1fr))', gap: 8 }}>
-        {ladders.map(l => (
-          <Medallion key={l.id} l={l} selected={l.id === openLadder} onSelect={setOpenLadder} />
-        ))}
+      {/* The shelf, themed. Thirty undifferentiated medallions is a wall; four
+          named shelves plus a meta one say what each region is about before you
+          read a single tile. The detail panel opens under the shelf you clicked
+          in, not under the whole grid, so it stays near the medallion. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {shelves.map(g => {
+          const items = ladders.filter(l => (l.group || null) === g.id)
+          if (!items.length) return null
+          const showDetail = selected && (selected.group || null) === g.id
+          return (
+            <div key={g.id || 'all'} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <GroupHeader label={g.label} count={g.earned} total={g.total} blurb={g.blurb} />
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(108px, 1fr))', gap: 8 }}>
+                {items.map(l => (
+                  <Medallion key={l.id} l={l} selected={l.id === openLadder} onSelect={setOpenLadder} />
+                ))}
+              </div>
+              {showDetail && <LadderDetail l={selected} onClose={() => setOpenLadder(null)} />}
+            </div>
+          )
+        })}
       </div>
-
-      {selected && <LadderDetail l={selected} onClose={() => setOpenLadder(null)} />}
 
       {/* Almost there. Naming the ladder and the rung number is the whole point:
           "Pack Rat" alone is a punchline with no setup — "Hoarder, rung 9 of 21"
@@ -389,16 +431,7 @@ function Prizes({ data }) {
             if (!items.length) return null
             return (
               <div key={g.id || 'all'} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{g.label}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: g.earned === g.total ? 'var(--green)' : 'var(--text-dim)' }}>
-                    {g.earned}/{g.total}
-                  </span>
-                  {g.blurb && (
-                    <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{g.blurb}</span>
-                  )}
-                  <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
-                </div>
+                <GroupHeader label={g.label} count={g.earned} total={g.total} blurb={g.blurb} />
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
                   {items.map(f => (
                     <div key={f.id} style={{

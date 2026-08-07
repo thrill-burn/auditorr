@@ -252,6 +252,22 @@ def test_every_ladder_rung_is_individually_named():
         assert len(titles) >= l['tiers_total'], f"{l['id']} runs out of names"
 
 
+def test_every_ladder_says_what_its_number_counts():
+    """Eight ladders render bytes. "12.4 TB" alone names none of them."""
+    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    known = {gid for gid, _, _ in next_steps.LADDER_GROUPS}
+    for l in st['ladders']:
+        assert l['id'] in next_steps.LADDER_FACET, f"{l['id']} has no facet"
+        assert l['measures'], f"{l['id']} does not say what it measures"
+        assert l['group'] in known
+    for g in st['ladder_groups']:
+        assert g['total'] > 0, f"{g['id']} is an empty shelf"
+        assert g['earned'] == sum(l['tier'] for l in st['ladders'] if l['group'] == g['id'])
+        assert g['total'] == sum(l['tiers_total'] for l in st['ladders'] if l['group'] == g['id'])
+    # Every ladder lands on exactly one shelf — none orphaned, none duplicated.
+    assert sum(g['total'] for g in st['ladder_groups']) == st['prizes']['total'] - len(st['feats'])
+
+
 def test_next_prize_names_its_ladder_and_its_rung():
     det = _details(not_imported_count=40, not_imported_size=500 * GB, ni_score=3.0)
     st = next_steps.build_state(_cfg(), _results(det), _runs())
