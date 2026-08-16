@@ -544,6 +544,11 @@ def _build_yield_summary():
 SIG_ORPHANED = 1
 SIG_IMPORTED = 2
 SIG_HAS_DUPS = 4
+# Excluded files are walked and stored like any other, but never scored. The bit
+# records the exclusion state *as of that scan*, which is what lets
+# `count_pile_resolved` tell "deleted a file that was on the pile" from "deleted
+# a sidecar that never counted" — and immunises it against exclusion churn.
+SIG_EXCLUDED = 8
 
 
 def file_signatures(files):
@@ -553,6 +558,7 @@ def file_signatures(files):
             (SIG_ORPHANED if f.get('status') == 'Orphaned' else 0)
             | (SIG_IMPORTED if f.get('imported') else 0)
             | (SIG_HAS_DUPS if f.get('duplicate_paths') else 0)
+            | (SIG_EXCLUDED if f.get('excluded') else 0)
         )
         for f in files
     }
@@ -628,6 +634,49 @@ def compute_diff(prev_snap, curr_snap):
     }
     prev_score = (prev_snap.get('dashboard') or {}).get('score')
     return compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
+
+
+def count_pile_resolved(prev_torrent_sigs, torrent_files):
+    """Count items that genuinely left the not-imported pile since the last scan.
+
+    This is the Next steps shovel counter (`ns_progress['shoveled']`), and it
+    counts *transitions*, not a drop in `not_imported_count`. The count-delta it
+    replaces was gated on an exclusion fingerprint — any change to the exclusion
+    set voided the whole interval, so a Triage session that deleted five real
+    files and clicked one suggestion chip credited nothing. Triage renders those
+    chips next to the delete button, so the reward layer was reliably punishing
+    the workflow the page encourages.
+
+    Counting transitions needs no such guard. Excluding a file does not remove
+    it from the walk, so it produces no transition at all and simply cannot be
+    mistaken for work; nothing here has to be defended against exclusion churn.
+
+    An item is credited when it was on the pile at the previous scan — present,
+    not imported, not orphaned, not excluded — and is now either:
+      - gone   (the user deleted it), or
+      - imported (an arr took it, or the user forced the import).
+    Deliberately NOT credited: a pile item that merely went orphaned (its
+    torrent was removed but the file stayed — that is Cleanup's work, and it
+    pays out via the orphan zombie ladder), and one that got excluded (hidden,
+    not dug). Both leave `not_imported_count` and both fooled the old delta.
+
+    Caps do not apply: the change log's lists stop at 50 entries, so a real
+    clearout must be counted here, off the signature map, not off the diff.
+    """
+    if not prev_torrent_sigs:
+        return 0
+    on_pile = {
+        path for path, sig in prev_torrent_sigs.items()
+        if not (sig & (SIG_IMPORTED | SIG_ORPHANED | SIG_EXCLUDED))
+    }
+    if not on_pile:
+        return 0
+    # Everything that was on the pile counts, minus the ones still sitting on it.
+    resolved = len(on_pile)
+    for f in torrent_files:
+        if f['path'] in on_pile and not f.get('imported'):
+            resolved -= 1
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -915,11 +964,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # record lists (multi-GB of Python objects for 500K+ file libraries).
         ran_at = datetime.now().isoformat()
         _enter_phase("post", "Computing changes vs previous scan...")
+        # Shovel credit for this interval, counted off the same signature map
+        # (see count_pile_resolved). Stays 0 if there is no previous scan to
+        # compare against, or if this block fails — never a guess.
+        ns_resolved = 0
         try:
             prev_sigs = {
                 'media':    db_load_file_signatures('media'),
                 'torrents': db_load_file_signatures('torrents'),
             }
+            ns_resolved = count_pile_resolved(prev_sigs['torrents'], torrent_files_data)
             if prev_sigs['media'] or prev_sigs['torrents']:
                 curr_snap = {
                     "media_files": media_files_data, "torrent_files": torrent_files_data,
@@ -974,7 +1028,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             _ns_state = next_steps.build_state(
                 cfg, result, db_get_recent_runs(limit=2000), progress=_ns_prev)
             db_set_meta('ns_progress', next_steps.update_progress(
-                _ns_prev, cfg, _ns_det, state=_ns_state))
+                _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved))
         except Exception as e:
             log.warning(f"Could not update Next steps progress: {e}")
         # Scan finished — clear the crash-loop streak so future startups scan normally

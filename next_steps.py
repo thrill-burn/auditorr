@@ -173,29 +173,42 @@ def _bucket(row):
 # visible and always close; a seven-rank ladder tops out and stops mattering.
 RANKS = [
     # Thresholds are absolute, not a share of the available total, so a user's
-    # rank can never fall. Corollary: **do not raise these after release** —
-    # adding ladders raises everyone's points (fine), but raising thresholds
-    # would demote people, which is the one thing this layer must never do.
+    # rank can never fall. Corollary: **do not raise these** — adding ladders,
+    # rungs or feats raises everyone's points (fine, and the only safe way to
+    # grow this layer), but raising a threshold would demote people, which is
+    # the one thing this layer must never do. Lowering is always safe.
+    #
+    # **Every rank must be reachable.** Unlike a ladder, the rank scale has a
+    # hard ceiling: total points are bounded by "every rung of every ladder,
+    # every feat, full setup". The first cut ran to 800,000 against a ceiling of
+    # ~138,000, so the top *seven* names could never be seen by anyone, and a
+    # three-year 60 TB library topped out at rank 9 of 20 — half the scale was
+    # scenery. `test_every_rank_is_reachable` now fails the build if the top
+    # threshold ever drifts back above what is earnable.
+    #
+    # Calibrated against measured profiles: a fresh install sits at rank 1, a
+    # day-one library lands around 4, a year in around 9, a three-year veteran
+    # around 11, and the last few rungs are genuinely for completionists.
     (0,       'Unaudited'),
-    (3000,    'Apprentice Indexer'),
-    (7000,    'Journeyman Linker'),
-    (12000,   'Hardlink Adept'),
-    (17000,   'Orphan Warden'),
-    (23000,   'Seed Custodian'),
-    (30000,   'Library Curator'),
-    (40000,   'Master Archivist'),
-    (52000,   'Grand Deduplicator'),
-    (66000,   'Keeper of Inodes'),
-    (84000,   'Warden of the Array'),
-    (105000,  'Duke of Deduplication'),
-    (130000,  'Lord of the Hardlink'),
-    (165000,  'Sovereign of Seeds'),
-    (210000,  'High Priest of Hardlinks'),
-    (270000,  'Filesystem Ascendant'),
-    (350000,  'Avatar of the Array'),
-    (450000,  'Demigod of Disk'),
-    (600000,  'The Inode Eternal'),
-    (800000,  'Ozymandias'),
+    (2500,    'Apprentice Indexer'),
+    (6000,    'Journeyman Linker'),
+    (10000,   'Hardlink Adept'),
+    (14000,   'Orphan Warden'),
+    (19000,   'Seed Custodian'),
+    (24000,   'Library Curator'),
+    (30000,   'Master Archivist'),
+    (37000,   'Grand Deduplicator'),
+    (45000,   'Keeper of Inodes'),
+    (54000,   'Warden of the Array'),
+    (64000,   'Duke of Deduplication'),
+    (75000,   'Lord of the Hardlink'),
+    (87000,   'Sovereign of Seeds'),
+    (100000,  'High Priest of Hardlinks'),
+    (112000,  'Filesystem Ascendant'),
+    (124000,  'Avatar of the Array'),
+    (135000,  'Demigod of Disk'),
+    (143000,  'The Inode Eternal'),
+    (150000,  'Ozymandias'),
 ]
 
 GB = 1024 ** 3
@@ -256,8 +269,13 @@ def exclusion_fingerprint(cfg):
     """Stable hash of every exclusion input.
 
     Exclusions raise the health score by *hiding* problems, and Triage actively
-    suggests them. Without this, adding one pattern would register as a big
-    shovelful of work the user never did.
+    suggests them, so anything inferred from a drop in a *count* has to know
+    whether the exclusion set moved under it.
+
+    The shovel counter no longer needs this — it counts per-file transitions
+    (`audit.count_pile_resolved`), which exclusions cannot fake. Kept because
+    it is still recorded on every audit and phase 2's outcome-verified awards
+    are specced to need it (`prompts/NEXT_STEPS.md`).
     """
     blob = json.dumps([
         sorted(cfg.get('EXCLUSION_PATTERNS') or []),
@@ -267,7 +285,7 @@ def exclusion_fingerprint(cfg):
     return hashlib.sha1(blob.encode()).hexdigest()[:16]
 
 
-def update_progress(progress, cfg, det, state=None, now=None):
+def update_progress(progress, cfg, det, state=None, now=None, resolved=None):
     """Advance the reward counters by one audit. Pure — returns a new dict.
 
     Called from `run_audit_process` after stats are computed. Everything here
@@ -277,6 +295,14 @@ def update_progress(progress, cfg, det, state=None, now=None):
     `state` is the freshly built payload (`build_state` with the *previous*
     progress). It is used only to latch ladder peaks and earned feats, which is
     what stops current-state prizes from un-earning on a regression.
+
+    `resolved` is this interval's shovel credit — the count of files that left
+    the not-imported pile by being deleted or imported, counted per file by
+    `audit.count_pile_resolved`. It is passed in rather than inferred from a
+    drop in `not_imported_count` because a count knows only that the pile got
+    smaller, not why: hiding items behind a new exclusion shrinks it just as
+    well as clearing them. `None` means "no previous scan to compare against",
+    which credits nothing.
     """
     p = {**EMPTY_PROGRESS, **(progress or {})}
     now = now or datetime.now()
@@ -285,14 +311,11 @@ def update_progress(progress, cfg, det, state=None, now=None):
     # there was nothing there to kill.
     first_run = p['last_ni_count'] is None
 
-    ni_count = det.get('not_imported_count', 0) or 0
-    excl_fp  = exclusion_fingerprint(cfg)
-    # Only count the delta when the exclusion set is unchanged — otherwise a
-    # pile that "shrank" may just be a pile that got hidden.
-    if p['last_ni_count'] is not None and excl_fp == p['last_excl_fp']:
-        p['shoveled'] += max(0, p['last_ni_count'] - ni_count)
-    p['last_ni_count'] = ni_count
-    p['last_excl_fp']  = excl_fp
+    p['shoveled'] += max(0, int(resolved or 0))
+    # Still recorded: `last_ni_count` marks the first observed audit (above),
+    # and both feed phase 2's outcome verification.
+    p['last_ni_count'] = det.get('not_imported_count', 0) or 0
+    p['last_excl_fp']  = exclusion_fingerprint(cfg)
 
     total_media = det.get('total_media_size', 0) or 0
     if total_media > 0:
@@ -676,15 +699,17 @@ TIER_TITLES = {
         'A Few Files', 'Getting Started', 'Cluttered', 'Overflowing',
         'Spare Room Gone', 'Closet Situation', 'Load Bearing Boxes',
         'Fire Marshal Interested', 'Documented Case', 'Intervention Pending',
-        'Beyond Reason', 'Geological Layer', 'Sedimentary', 'Tectonic',
-        'Visible From Orbit', 'Own Gravity', 'Event Horizon', 'Singularity',
+        'Beyond Reason', 'Geological Layer', 'Sedimentary', 'Metamorphic',
+        'Tectonic', 'Visible From Orbit', 'Own Gravity', 'Event Horizon',
+        'Singularity',
     ],
     'benefactor': [
-        'First Crumb', 'Kind Stranger', 'Good Samaritan', 'Reliable Uploader',
-        'Community Pillar', 'Local Hero', 'Regional Hero', 'Philanthropist',
-        'Benefactor', 'Great Benefactor', 'Endowment', 'Foundation',
-        'Institution', 'National Treasure', 'Living Legend', 'Folk Hero',
-        'Mythologized', 'Deified', 'Cosmic Background Upload', 'Ozymandias',
+        'First Crumb', 'Kind Stranger', 'Generous Sort', 'Good Samaritan',
+        'Reliable Uploader', 'Community Pillar', 'Local Hero', 'Regional Hero',
+        'Philanthropist', 'Benefactor', 'Great Benefactor', 'Endowment',
+        'Trust Fund', 'Foundation', 'Institution', 'National Treasure',
+        'Living Legend', 'Folk Hero', 'Mythologized', 'Deified', 'Pantheon',
+        'Cosmic Background Upload', 'Ozymandias',
     ],
     'usurer': [
         'Break Even Adjacent', 'Half Decent', 'Even Steven', 'Turning a Profit',
@@ -711,10 +736,11 @@ TIER_TITLES = {
         'Theoretical Perfection', 'Asymptotic', 'Crystalline Ideal',
     ],
     'shoveler': [
-        'First Shovelful', 'Warmed Up', 'Blisters', 'Committed', 'Digger',
-        'Excavator', 'Earthmover', 'Trench Warfare', 'Strip Miner',
-        'Terraformer', 'The Pile Persists', 'Sisyphus', 'Sisyphus Prime',
-        'Boulder Enthusiast', 'One With The Pile', 'The Pile Is You',
+        'First Shovelful', 'Second Scoop', 'Warmed Up', 'Blisters',
+        'Committed', 'Digger', 'Excavator', 'Earthmover', 'Trench Warfare',
+        'Strip Miner', 'Terraformer', 'The Pile Persists', 'Sisyphus',
+        'Sisyphus Prime', 'Boulder Enthusiast', 'One With The Pile',
+        'The Pile Is You', 'The Pile Was Always You',
     ],
     'exterminator': [
         'First Blood', 'Double Tap', 'Hat Trick', 'Pest Control',
@@ -757,17 +783,19 @@ TIER_TITLES = {
         'Two Years', 'Five Years', 'A Decade', 'Twenty Years',
     ],
     'archivist': [
-        'A Handful', 'Some Files', 'A Hundred', 'Getting Organized',
-        'A Thousand', 'Filing Cabinet', 'Card Catalogue', 'Small Library',
-        'Municipal Library', 'University Library', 'National Library',
-        'Deep Archive', 'A Million Files', 'Beyond Counting',
+        'A Handful', 'A Couple Dozen', 'Some Files', 'A Hundred',
+        'A Few Hundred', 'Getting Organized', 'A Thousand', 'Filing Cabinet',
+        'Card Catalogue', 'Small Library', 'Municipal Library',
+        'University Library', 'National Library', 'Deep Archive',
+        'Continental Index', 'A Million Files', 'Beyond Counting',
         'Inode Exhaustion Risk', 'The Filesystem Weeps', 'fsck Would Take Days',
     ],
     'seedling': [
-        'One Torrent', 'A Few', 'A Dozen', 'Two Dozen', 'Fifty', 'A Hundred',
-        'Small Farm', 'Plantation', 'Agricultural Concern',
-        'Industrial Farming', 'Monoculture', 'Breadbasket',
-        'Feeding the Swarm', 'Green Revolution',
+        'One Torrent', 'Two Torrents', 'A Few', 'A Dozen', 'Two Dozen',
+        'Fifty', 'A Hundred', 'Small Farm', 'Plantation',
+        'Agricultural Concern', 'Industrial Farming', 'Monoculture',
+        'Breadbasket', 'Feeding the Swarm', 'Green Revolution',
+        'Seed Bank of Record',
     ],
     'vaultkeeper': [
         'A Locked Drawer', 'Small Safe', 'Gun Safe', 'Wall Vault',
@@ -778,17 +806,18 @@ TIER_TITLES = {
         'Vault Keeper Eternal',
     ],
     'pollinator': [
-        'First Cross', 'Busy Bee', 'Pollinator', 'Orchard Keeper',
-        'Cross-Seed Enjoyer', 'Efficiency Merchant', 'Multiplier Mage',
-        'Double Dipper', 'Triple Dipper', 'Hydra', 'One File Many Homes',
-        'Ubiquitous', 'Everywhere at Once', 'Quantum Superposition',
+        'First Cross', 'Busy Bee', 'Bee Keeper', 'Pollinator',
+        'Orchard Keeper', 'Cross-Seed Enjoyer', 'Efficiency Merchant',
+        'Multiplier Mage', 'Double Dipper', 'Triple Dipper',
+        'Quadruple Dipper', 'Hydra', 'One File Many Homes', 'Ubiquitous',
+        'Everywhere at Once', 'Simultaneous', 'Quantum Superposition',
         'Omnipresent',
     ],
     'marathoner': [
-        'A Minute of Effort', 'Five Minutes', 'A Quarter Hour', 'An Hour',
-        'A Long Lunch', 'Half a Shift', 'A Full Shift', 'A Full Day',
-        'A Long Weekend', 'A Working Week', 'A Fortnight of CPU',
-        'A Month of Staring', 'A Season of Scanning',
+        'A Minute of Effort', 'Two Minutes', 'Five Minutes', 'Ten Minutes',
+        'A Quarter Hour', 'An Hour', 'A Long Lunch', 'Half a Shift',
+        'A Full Shift', 'A Full Day', 'A Long Weekend', 'A Working Week',
+        'A Fortnight of CPU', 'A Month of Staring', 'A Season of Scanning',
     ],
     'watcher': [
         'First Day', 'Second Day', 'Third Day', 'A Week of Watching',
@@ -796,16 +825,16 @@ TIER_TITLES = {
         'A Year of Vigilance', 'Two Years', 'Five Years',
     ],
     'nightwatch': [
-        'It Woke Up Once', 'Light Sleeper', 'Attentive', 'Ever Vigilant',
-        'Never Sleeps', 'The Night Watch', 'Insomniac', 'Sleepless Sentinel',
-        'Perpetual Motion', 'It Does Not Rest', 'It Does Not Blink',
-        'It Has Seen Things',
+        'It Woke Up Once', 'Twice in the Night', 'Light Sleeper', 'Attentive',
+        'Ever Vigilant', 'Never Sleeps', 'The Night Watch', 'Insomniac',
+        'Sleepless Sentinel', 'Perpetual Motion', 'It Does Not Rest',
+        'It Does Not Blink', 'It Has Seen Things', 'It Remembers',
     ],
     'clockwork': [
-        'On Schedule', 'Punctual', 'Reliable', 'Metronome', 'Clockwork',
-        'Swiss Movement', 'Atomic Clock', 'Cesium Standard',
+        'On Schedule', 'Twice on Time', 'Punctual', 'Reliable', 'Metronome',
+        'Clockwork', 'Swiss Movement', 'Atomic Clock', 'Cesium Standard',
         'More Punctual Than You', 'Timekeeper', 'Chronometer Absolute',
-        'Time Itself',
+        'Time Itself', 'Outlasts Timezones',
     ],
     'handson': [
         'Clicked It Once', 'Impatient', 'Hands On', 'Control Freak',
@@ -820,15 +849,19 @@ TIER_TITLES = {
     ],
     'tidiness': [
         'Swept Once', 'Tidy Corner', 'Clean Shelf', 'Clean Room',
-        'Spotless Wing', 'Immaculate Floor', 'Sterile', 'Operating Theatre',
-        'Cleanroom Class 100', 'Vacuum Sealed', 'No Dust Exists Here',
-        'Aggressively Clean', 'Surgical', 'Beyond Sterile', 'Void of Filth',
+        'Spotless Wing', 'Immaculate Floor', 'Clean Storey', 'Sterile',
+        'Operating Theatre', 'Cleanroom Class 100', 'Vacuum Sealed',
+        'No Dust Exists Here', 'Aggressively Clean', 'Surgical',
+        'Beyond Sterile', 'Void of Filth', 'Nothing Grows Here',
+        'Antiseptic Sublime', 'Clinically Empty', 'Cleaner Than Vacuum',
     ],
     'purity': [
         'Mostly Landed', 'Well Sorted', 'Properly Filed', 'Cleanly Imported',
         'Orderly', 'Meticulous', 'Fastidious', 'Beyond Reproach',
-        'Unimpeachable', 'Certified Pure', 'Distilled', 'Refined',
-        'Twice Refined', 'Elemental', 'Refined To Nothing',
+        'Unimpeachable', 'Certified Pure', 'Distilled', 'Twice Distilled',
+        'Refined', 'Twice Refined', 'Thrice Refined', 'Elemental',
+        'Isotopically Pure', 'Refined To Nothing', 'Theoretically Clean',
+        'Purity Itself',
     ],
     'completionist': [
         'First Prize', 'Getting Started', 'Ten Trinkets', 'Collector',
@@ -1009,15 +1042,15 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                 'The other half of the hardlink. It only ever grows, and you know it.',
                 total_tor,
                 [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB, 500 * GB,
-                 1 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB, 100 * TB, 250 * TB, 500 * TB,
-                 1 * PB, 2 * PB],
+                 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB, 100 * TB, 250 * TB,
+                 500 * TB, 1 * PB, 2 * PB],
                 _fmt_bytes, 30),
         L('benefactor', 'Benefactor',
                 'Lifetime bytes uploaded. Somewhere, someone got their show. They will never thank you.',
                 lifetime_up,
-                [1 * GB, 5 * GB, 10 * GB, 50 * GB, 100 * GB, 250 * GB, 500 * GB,
-                 1 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB, 100 * TB, 250 * TB, 500 * TB,
-                 1 * PB, 2 * PB, 5 * PB, 10 * PB, 50 * PB],
+                [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB, 500 * GB,
+                 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB, 100 * TB, 250 * TB,
+                 500 * TB, 1 * PB, 2 * PB, 5 * PB, 10 * PB, 25 * PB, 50 * PB],
                 _fmt_bytes, 40),
         L('usurer', 'Usurer',
                 'Uploaded divided by seeded. Rent, collected on bytes, forever, from strangers.',
@@ -1047,8 +1080,8 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
         L('shoveler', 'Shoveler',
                 'Items shovelled off the pile, ever. The pile does not care. The pile returns.',
                 (progress or {}).get('shoveled') or 0,
-                [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000,
-                 50000, 100000, 250000],
+                [1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
+                 25000, 50000, 100000, 250000],
                 _fmt_plain, 35),
         # Zombies, tracked separately: orphans and duplicates come back for
         # different reasons, and each row deserves its own carrot rather than
@@ -1092,13 +1125,15 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
         L('archivist', 'Archivist',
                 'Files under audit. Each one personally inspected. By a computer. Not by you.',
                 (det.get('media_file_count') or 0) + (det.get('torrent_file_count') or 0),
-                [10, 50, 100, 500, 1000, 5000, 10000, 25000, 50000, 100000, 250000,
-                 500000, 1000000, 2500000, 5000000, 10000000, 25000000],
+                [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000,
+                 100000, 250000, 500000, 1000000, 2500000, 5000000, 10000000,
+                 25000000],
                 _fmt_plain, 25),
         L('seedling', 'Seedling',
                 'Torrents currently seeding. Each one a small, anonymous act of charity.',
                 seed_count,
-                [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000],
+                [1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
+                 25000, 50000],
                 _fmt_plain, 25),
         L('vaultkeeper', 'Vault Keeper',
                 'Bytes actually hardlinked and earning. Not what you own. What is working for you.',
@@ -1110,14 +1145,16 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
         L('pollinator', 'Cross-Pollinator',
                 'Bytes earning on two or more trackers at once. One file, many masters.',
                 multi_seed,
-                [1 * GB, 5 * GB, 10 * GB, 50 * GB, 100 * GB, 500 * GB, 1 * TB, 5 * TB,
-                 10 * TB, 25 * TB, 50 * TB, 100 * TB, 250 * TB, 500 * TB, 1 * PB],
+                [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
+                 500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
+                 100 * TB, 250 * TB, 500 * TB, 1 * PB],
                 _fmt_bytes, 40),
         L('marathoner', 'Marathoner',
                 'Hours auditorr has spent staring at your files so that you did not have to.',
                 scan_secs,
-                [60, 300, 900, 3600, 3 * 3600, 6 * 3600, 12 * 3600, 24 * 3600,
-                 3 * 86400, 7 * 86400, 14 * 86400, 30 * 86400, 90 * 86400],
+                [60, 120, 300, 600, 900, 3600, 3 * 3600, 6 * 3600, 12 * 3600,
+                 24 * 3600, 3 * 86400, 7 * 86400, 14 * 86400, 30 * 86400,
+                 90 * 86400],
                 _fmt_hours, 25),
         L('watcher', 'Watcher',
                 'Days on which an audit happened. Evidence, should anyone ever ask.',
@@ -1127,12 +1164,12 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
         L('nightwatch', 'Nightwatch',
                 'Audits the watchdog began while you were asleep, or eating, or living.',
                 by_trigger('watchdog'),
-                [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
+                [1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
                 _fmt_plain, 25),
         L('clockwork', 'Clockwork',
                 'Audits the scheduler ran alone. Punctual. Uncomplaining. Unloved.',
                 by_trigger('scheduled'),
-                [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
+                [1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000],
                 _fmt_plain, 25),
         L('handson', 'Hands On',
                 'Audits you started by hand, clicking the button yourself, like an animal.',
@@ -1151,14 +1188,16 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
         L('tidiness', 'Tidiness',
                 'Bytes in your torrent directory that are not orphaned junk. Sweep, then keep sweeping.',
                 max(0, total_tor - (det.get('orphaned_torrent_size', 0) or 0)),
-                [1 * GB, 5 * GB, 25 * GB, 100 * GB, 500 * GB, 1 * TB, 5 * TB, 10 * TB,
-                 50 * TB, 100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
+                [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
+                 500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
+                 100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
                 _fmt_bytes, 30),
         L('purity', 'Purity',
                 'Bytes you are seeding that actually made it into the library. The stuff that worked.',
                 max(0, total_tor - (det.get('not_imported_size', 0) or 0)),
-                [1 * GB, 5 * GB, 25 * GB, 100 * GB, 500 * GB, 1 * TB, 5 * TB, 10 * TB,
-                 50 * TB, 100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
+                [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
+                 500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
+                 100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
                 _fmt_bytes, 30),
     ]
 
@@ -1295,6 +1334,9 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
         ('grind', 'five_kills', 'Persistent',
          'Rack up five kills across orphans and duplicates.',
          kills >= 5, 200),
+        ('grind', 'fifteen_kills', 'Seasoned',
+         'Rack up fifteen kills across orphans and duplicates.',
+         kills >= 15, 300),
         ('grind', 'unkillable', 'They Keep Coming', 'Rack up 50 kills across orphans and duplicates.',
          kills >= 50, 500),
         ('grind', 'orphans_returned', 'Well, That Didn\'t Last',
@@ -1350,6 +1392,8 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
         # ── Giving back ──────────────────────────────────────────────────────
         ('give', 'gave_back', 'Gave Something Back', 'Upload a gigabyte, lifetime.',
          up >= GB, 50),
+        ('give', 'gave_10', 'Ten Gigs Given', 'Upload 10 GB, lifetime.',
+         up >= 10 * GB, 75),
         ('give', 'gave_100', 'A Hundred Gigs Given', 'Upload 100 GB, lifetime.',
          up >= 100 * GB, 100),
         ('give', 'gave_tb', 'A Terabyte Given', 'Upload a terabyte, lifetime.',
@@ -1404,6 +1448,8 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
          observed >= 7, 75),
         ('time', 'first_month', 'A Month In', 'Keep auditorr running for a month.',
          observed >= 30, 150),
+        ('time', 'first_quarter', 'A Season In', 'Keep auditorr running for ninety days.',
+         observed >= 90, 250),
         ('time', 'flawless_week', 'A Quiet Week', 'Hold 90+ health for seven consecutive days.',
          streak_90 >= 7, 150),
         ('time', 'flawless_month', 'A Quiet Month', 'Hold 90+ health for thirty consecutive days.',

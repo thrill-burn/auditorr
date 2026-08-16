@@ -3,6 +3,7 @@
 import os
 
 import next_steps
+from audit import count_pile_resolved, file_signatures
 
 
 GB = 1024 ** 3
@@ -380,28 +381,99 @@ def test_shovel_count_is_cumulative_and_never_decreases():
     """The pile refills forever; what you already dug is permanent."""
     cfg, p = _cfg(), None
     p = next_steps.update_progress(p, cfg, _details(not_imported_count=100))
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=40))   # dug 60
+    assert p['shoveled'] == 0, 'the first audit has no previous scan to credit against'
+    p = next_steps.update_progress(p, cfg, _details(not_imported_count=40), resolved=60)
     assert p['shoveled'] == 60
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=90))   # pile grew
+    p = next_steps.update_progress(p, cfg, _details(not_imported_count=90), resolved=0)
     assert p['shoveled'] == 60, 'a growing pile must not erase past work'
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=10))   # dug 80 more
+    p = next_steps.update_progress(p, cfg, _details(not_imported_count=10), resolved=80)
     assert p['shoveled'] == 140
 
 
-def test_shovel_count_ignores_a_pile_that_was_merely_hidden():
-    """Exclusions raise the score by hiding problems — and Triage suggests them.
+def test_shovel_credit_survives_an_exclusion_change():
+    """The regression this counter was rebuilt to fix.
 
-    Without this guard, adding one pattern would register as a huge shovelful
-    of work the user never did.
+    Triage renders its exclusion suggestions beside the delete button, so a
+    session that deletes real files *and* clicks a chip is the normal case, not
+    the edge case. The count-delta this replaced was gated on an exclusion
+    fingerprint and voided the entire interval whenever the set moved — a field
+    case cleared five real video files and was paid nothing because a `*.sfv`
+    pattern was added in the same minute. Credit is now counted per file
+    upstream, where hiding something simply produces no transition to count.
     """
     cfg = _cfg()
     p = next_steps.update_progress(None, cfg, _details(not_imported_count=100))
     hidden = _cfg(EXCLUSION_PATTERNS=['*.sfv'])
-    p = next_steps.update_progress(p, hidden, _details(not_imported_count=5))
-    assert p['shoveled'] == 0, 'an exclusion change must not count as work'
-    # Real work after the change still counts.
-    p = next_steps.update_progress(p, hidden, _details(not_imported_count=1))
-    assert p['shoveled'] == 4
+    p = next_steps.update_progress(p, hidden, _details(not_imported_count=5), resolved=5)
+    assert p['shoveled'] == 5, 'deleted files must pay out even if a pattern was added too'
+
+
+# ── Shovel credit — what counts as digging (audit.count_pile_resolved) ───────
+# The counter reads per-file transitions off the signature map rather than a
+# drop in not_imported_count, because a count knows only that the pile shrank,
+# never why.
+
+def _tf(path, imported=False, status='Seeding', excluded=False):
+    return {'path': path, 'size': GB, 'imported': imported,
+            'status': status, 'excluded': excluded, 'duplicate_paths': []}
+
+
+def test_a_real_clearout_credits_only_what_was_on_the_pile():
+    """Field case, 2026-08-15: one Triage session removed eight torrent files.
+
+    Three were excluded sidecars — a .sfv, a .nfo (via the media-server presets)
+    and a Sample/ clip — which never counted toward not_imported_count in the
+    first place. Five is the honest number.
+    """
+    before = [
+        _tf('The Lion King (1994) HONE.mkv'),
+        _tf('radarr/Obsession.2025.mkv'),
+        _tf('radarr/Spirited.Away.2001.mkv'),
+        _tf('radarr/Michael.2026.mkv'),
+        _tf('tv-sonarr/Furious.S01E05/ep.mkv'),
+        _tf('tv-sonarr/Furious.S01E05/ep.sfv',       excluded=True),
+        _tf('tv-sonarr/Furious.S01E05/ep.nfo',       excluded=True),
+        _tf('tv-sonarr/Furious.S01E05/Sample/s.mkv', excluded=True),
+        _tf('radarr/Untouched.2024.mkv'),
+    ]
+    survivor = [_tf('radarr/Untouched.2024.mkv')]
+    assert count_pile_resolved(file_signatures(before), survivor) == 5
+
+
+def test_an_import_clears_a_pile_item_too():
+    """The other honest exit from the pile: an arr picked it up."""
+    before = [_tf('radarr/Dont.Say.Good.Luck.2026.mkv')]
+    after  = [_tf('radarr/Dont.Say.Good.Luck.2026.mkv', imported=True)]
+    assert count_pile_resolved(file_signatures(before), after) == 1
+
+
+def test_hiding_or_orphaning_a_pile_item_is_not_digging():
+    """Both leave not_imported_count, and both fooled the old count-delta.
+
+    An excluded item was hidden, not resolved. An orphaned one lost its torrent
+    but kept its bytes — that is Cleanup's work, and it pays out on the orphan
+    zombie ladder instead.
+    """
+    before = [_tf('radarr/A.mkv'), _tf('radarr/B.mkv')]
+    after  = [_tf('radarr/A.mkv', excluded=True),
+              _tf('radarr/B.mkv', status='Orphaned')]
+    assert count_pile_resolved(file_signatures(before), after) == 0
+
+
+def test_deleting_an_imported_file_is_not_digging():
+    """It was never on the pile — and it just cost the library a hardlink."""
+    before = [_tf('radarr/Splitsville.2025.mkv', imported=True)]
+    assert count_pile_resolved(file_signatures(before), []) == 0
+
+
+def test_credit_is_not_capped_like_the_change_log():
+    """compute_diff caps its lists at 50 entries; a real clearout can exceed it."""
+    before = [_tf(f'radarr/{i}.mkv') for i in range(200)]
+    assert count_pile_resolved(file_signatures(before), []) == 200
+
+
+def test_first_scan_credits_nothing():
+    assert count_pile_resolved({}, [_tf('radarr/A.mkv')]) == 0
 
 
 def test_crystal_ratchets_on_best_ever():
@@ -484,24 +556,27 @@ def test_points_never_decrease_across_any_sequence_of_audits():
     asserts the running total only ever goes up.
     """
     cfg = _cfg()
+    # (details, shovel credit earned since the previous entry)
     history = [
-        _details(),                                                        # pristine
-        _details(orphaned_torrent_count=40, duplicate_count=9,
-                 not_imported_count=300),                                  # everything breaks
-        _details(not_imported_count=20),                                   # big shovel + kills
-        _details(total_media_size=1 * TB, hardlinked_media_size=100 * GB,
-                 hl_score=7.0, not_imported_count=400,
-                 orphaned_torrent_count=88, duplicate_count=30),           # disaster
-        _details(total_media_size=500 * GB, hardlinked_media_size=50 * GB),  # library shrinks
+        (_details(), 0),                                                   # pristine
+        (_details(orphaned_torrent_count=40, duplicate_count=9,
+                  not_imported_count=300), 0),                             # everything breaks
+        (_details(not_imported_count=20), 280),                            # big shovel + kills
+        (_details(total_media_size=1 * TB, hardlinked_media_size=100 * GB,
+                  hl_score=7.0, not_imported_count=400,
+                  orphaned_torrent_count=88, duplicate_count=30), 0),      # disaster
+        (_details(total_media_size=500 * GB,
+                  hardlinked_media_size=50 * GB), 0),                      # library shrinks
     ]
     progress, last_points = None, -1
-    for i, det in enumerate(history):
+    for i, (det, resolved) in enumerate(history):
         state = next_steps.build_state(cfg, _results(det), _runs(i + 1), progress=progress)
         pts = state['rank']['points']
         assert pts >= last_points, (
             f'points dropped at step {i}: {last_points} -> {pts}')
         last_points = pts
-        progress = next_steps.update_progress(progress, cfg, det, state=state)
+        progress = next_steps.update_progress(progress, cfg, det, state=state,
+                                              resolved=resolved)
 
 
 def test_a_kill_earns_points_and_a_break_never_removes_them():
