@@ -6,7 +6,7 @@ subset so phase 1 never deserializes the full torrent list."""
 import unittest
 from unittest.mock import patch
 
-from audit import _is_triage_relevant
+from audit import _is_triage_relevant, count_triage_items
 import app
 
 
@@ -133,6 +133,80 @@ class TriagePhaseOneTests(unittest.TestCase):
         self.assertEqual(load_mock.call_args[0][0], 'triage')
         _, load_mock = _phase1([], has_subset=False)
         self.assertEqual(load_mock.call_args[0][0], 'torrents')
+
+
+class TriageCountTests(unittest.TestCase):
+    """count_triage_items feeds the sidebar badge and the Next steps card, so
+    it must agree with what the endpoint actually lists. It used to be derived
+    from per-file counts that ignored dead registrations entirely."""
+
+    def _counts(self, records):
+        return count_triage_items(records)
+
+    def _rows(self, records):
+        resp, _ = _phase1(records)
+        return len(resp.get_json()['items'])
+
+    def test_agrees_with_endpoint_on_a_mixed_library(self):
+        records = [
+            # One not-imported torrent spanning three files — one row, not three
+            _rec(hash='PACK', path='tv/Show.S01/e01.mkv'),
+            _rec(hash='PACK', path='tv/Show.S01/e02.mkv'),
+            _rec(hash='PACK', path='tv/Show.S01/e03.mkv'),
+            _rec(hash='NI2',  path='radarr/Other.2020/other.mkv'),
+            _rec(hash='SEED', path='radarr/Dead.2020/dead.mkv',
+                 imported=True, tracker_health='unregistered'),
+            # Healthy imported carrier holding two dead cross-seed registrations
+            _rec(hash='LIVE', path='radarr/Live.2021/live.mkv',
+                 imported=True, tracker_health='working',
+                 dead_siblings=[{'hash': 'REG1', 'instance_id': 1},
+                                {'hash': 'REG2', 'instance_id': 1}]),
+            # Ignored: excluded, and an orphan with nothing hanging off it
+            _rec(hash='EXCL', path='radarr/Excl/e.mkv', excluded=True),
+            _rec(hash='ORPH', path='radarr/Orph/o.mkv', status='Orphaned'),
+        ]
+        self.assertEqual(self._counts(records), {
+            'not_imported': 2, 'dead_seeds': 1,
+            'dead_registrations': 2, 'total': 5,
+        })
+        self.assertEqual(self._rows(records), 5)
+
+    def test_dead_siblings_on_orphaned_carrier_still_count(self):
+        # The endpoint scans every non-excluded record for dead_siblings,
+        # orphaned ones included — the count has to do the same.
+        records = [_rec(hash='ORPH', status='Orphaned',
+                        dead_siblings=[{'hash': 'REG1', 'instance_id': 1}])]
+        self.assertEqual(self._counts(records)['total'], 1)
+        self.assertEqual(self._rows(records), 1)
+
+    def test_excluded_carrier_hides_its_dead_siblings(self):
+        records = [_rec(hash='EXCL', excluded=True,
+                        dead_siblings=[{'hash': 'REG1', 'instance_id': 1}])]
+        self.assertEqual(self._counts(records)['total'], 0)
+        self.assertEqual(self._rows(records), 0)
+
+    def test_sibling_hash_listed_in_its_own_right_is_not_double_counted(self):
+        records = [
+            _rec(hash='REG1', path='radarr/A/a.mkv'),
+            _rec(hash='LIVE', path='radarr/B/b.mkv', imported=True,
+                 tracker_health='working',
+                 dead_siblings=[{'hash': 'REG1', 'instance_id': 1}]),
+        ]
+        self.assertEqual(self._counts(records),
+                         {'not_imported': 1, 'dead_seeds': 0,
+                          'dead_registrations': 0, 'total': 1})
+        self.assertEqual(self._rows(records), 1)
+
+    def test_partially_imported_torrent_counts_once_as_not_imported(self):
+        records = [
+            _rec(hash='PART', path='radarr/P/a.mkv', imported=False),
+            _rec(hash='PART', path='radarr/P/b.mkv', imported=True,
+                 tracker_health='unregistered'),
+        ]
+        self.assertEqual(self._counts(records),
+                         {'not_imported': 1, 'dead_seeds': 0,
+                          'dead_registrations': 0, 'total': 1})
+        self.assertEqual(self._rows(records), 1)
 
 
 class TriageVerifyEndpointTests(unittest.TestCase):

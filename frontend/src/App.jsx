@@ -411,7 +411,13 @@ function AppInner() {
           const det = results?.dashboard?.current?.details
           if (!det) return null
           return {
-            triage:  (det.not_imported_count || 0) + (det.dead_seed_count || 0),
+            // Per-torrent row count so the badge matches what Triage lists —
+            // the *_count details are per file and omit dead registrations.
+            // Falls back to the old sum for results rows written before the
+            // upgrade, until the next audit fills triage_counts in.
+            triage:  det.triage_counts
+              ? det.triage_counts.total
+              : (det.not_imported_count || 0) + (det.dead_seed_count || 0),
             cleanup: det.orphaned_torrent_count || 0,
             dedupe:  det.duplicate_count        || 0,
           }

@@ -105,10 +105,16 @@ NATURE = {
 #   crystal  — Backfill. Aspirational polish toward a perfect 100%. It gets
 #              better and worse as the library grows, so the ladder tracks your
 #              **best ever** and ratchets: a bad week cannot take a tier away.
+#   tribute  — Trumped. The only workflow you do not start: a tracker PMs you,
+#              and complying wins you nothing except continued good standing.
+#              So it pays in a tally of compliance rather than progress — a
+#              discrete, countable act with no pile behind it and no state that
+#              gets better. Counted at execute time, not at audit time, because
+#              a swap is an event and leaves no trace in the next scan.
 REWARD_KIND = {
     'cleanup': 'zombie', 'dedupe': 'zombie',
     'triage': 'shovel', 'backfill': 'crystal',
-    'trumped': 'ondemand',
+    'trumped': 'tribute',
 }
 
 # Which ladders a given workflow actually feeds. Used to show a concrete carrot
@@ -123,6 +129,7 @@ LADDER_OWNER = {
     'shoveler':     ('triage',),
     'lapidary':     ('backfill',),
     'alchemist':    ('backfill',),
+    'kingmaker':    ('trumped',),
 }
 
 # Empty progress record. Persisted in app_meta under `ns_progress` and advanced
@@ -138,6 +145,18 @@ EMPTY_PROGRESS = {
     'dupe_breaks': 0,
     'last_ni_count': None,
     'last_excl_fp': None,
+    # Last scan's dead cross-seed registrations, by hash. The shovel counter
+    # diffs against this: several dead registrations can ride one healthy
+    # carrier record, so a path-based signature diff cannot see one of three go.
+    'last_dead_regs': [],
+    # Trumped is the one workflow whose work leaves no trace in the next scan —
+    # the swap deletes one release and grabs another, and the library ends up
+    # roughly where it started. So it is counted where it happens (the execute
+    # endpoint, via `record_trump`) rather than derived from audit state.
+    'trumps': 0,              # completed trump swaps, ever
+    'trump_torrents': 0,      # registrations retired by those swaps (cross-seed groups)
+    'trump_max_group': 0,     # biggest cross-seed group retired in one swap
+    'last_trump_at': None,
     # Everything below exists to make the prize layer **ratchet**. Most ladders
     # and feats read current state, which can regress — a library that shrinks,
     # a tracker you stop using, a zombie that rises. Without latching, a break
@@ -146,6 +165,9 @@ EMPTY_PROGRESS = {
     'peaks': {},              # ladder id -> best value ever seen
     'feats_earned': [],       # feat ids, latched on first earn
 }
+
+# Ceiling on the persisted dead-registration hash set (see `last_dead_regs`).
+_DEAD_REG_CAP = 10000
 
 # The canonical sequence. This is the sort order inside every bucket.
 WORKFLOW_ORDER = ('cleanup', 'dedupe', 'triage', 'backfill', 'trumped')
@@ -285,7 +307,8 @@ def exclusion_fingerprint(cfg):
     return hashlib.sha1(blob.encode()).hexdigest()[:16]
 
 
-def update_progress(progress, cfg, det, state=None, now=None, resolved=None):
+def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
+                    dead_regs=None):
     """Advance the reward counters by one audit. Pure — returns a new dict.
 
     Called from `run_audit_process` after stats are computed. Everything here
@@ -296,13 +319,18 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None):
     progress). It is used only to latch ladder peaks and earned feats, which is
     what stops current-state prizes from un-earning on a regression.
 
-    `resolved` is this interval's shovel credit — the count of files that left
-    the not-imported pile by being deleted or imported, counted per file by
-    `audit.count_pile_resolved`. It is passed in rather than inferred from a
-    drop in `not_imported_count` because a count knows only that the pile got
-    smaller, not why: hiding items behind a new exclusion shrinks it just as
-    well as clearing them. `None` means "no previous scan to compare against",
-    which credits nothing.
+    `resolved` is this interval's shovel credit — items that left the Triage
+    pile (not-imported files, dead seeds, dead registrations) by being deleted,
+    imported, or retired, counted by `audit.count_pile_resolved`. It is passed
+    in rather than inferred from a drop in `not_imported_count` because a count
+    knows only that the pile got smaller, not why: hiding items behind a new
+    exclusion shrinks it just as well as clearing them. `None` means "no
+    previous scan to compare against", which credits nothing.
+
+    `dead_regs` is this scan's dead cross-seed registration hashes, kept so the
+    next scan can diff against them. `None` leaves the stored set untouched —
+    an audit that could not compute them must not read as "they all went away"
+    and hand out credit for it on the following run.
     """
     p = {**EMPTY_PROGRESS, **(progress or {})}
     now = now or datetime.now()
@@ -316,6 +344,11 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None):
     # and both feed phase 2's outcome verification.
     p['last_ni_count'] = det.get('not_imported_count', 0) or 0
     p['last_excl_fp']  = exclusion_fingerprint(cfg)
+    if dead_regs is not None:
+        # Bounded so a pathological library cannot grow this app_meta row without
+        # limit. Past the cap the shovel counter under-credits dead registrations
+        # rather than bloating the record; realistic counts are single digits.
+        p['last_dead_regs'] = sorted(dead_regs)[:_DEAD_REG_CAP]
 
     total_media = det.get('total_media_size', 0) or 0
     if total_media > 0:
@@ -352,6 +385,32 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None):
             set(p.get('feats_earned') or [])
             | {f['id'] for f in (state.get('feats') or []) if f.get('earned')}
         )
+    return p
+
+
+def record_trump(progress, torrents=1, now=None):
+    """Credit one completed trump swap. Pure — returns a new dict.
+
+    Called from the trump execute endpoint rather than from `run_audit_process`,
+    which is where every other counter is advanced. Trumped is the exception on
+    purpose: a swap deletes one release and grabs its replacement, so the next
+    scan sees a library in much the same shape as the last one and there is no
+    state change to infer the action from. The event is the only evidence.
+
+    Safe to do outside the audit because this is a plain increment of a discrete
+    act, not a reading of current state — there is nothing here that could
+    regress and claw back points, which is the hazard `update_progress` exists
+    to manage.
+    """
+    p = {**EMPTY_PROGRESS, **(progress or {})}
+    n = max(1, int(torrents or 1))
+    p['trumps'] = int(p.get('trumps') or 0) + 1
+    p['trump_torrents'] = int(p.get('trump_torrents') or 0) + n
+    # Latched separately from the running total: "four in one swap" is a fact
+    # about a single cross-seed group, and a sum of small swaps must not add up
+    # to it. Ratchets, like every other peak here.
+    p['trump_max_group'] = max(int(p.get('trump_max_group') or 0), n)
+    p['last_trump_at'] = (now or datetime.now()).isoformat()
     return p
 
 
@@ -432,15 +491,25 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
     n_count = det.get('not_imported_count', 0) or 0
     n_size  = det.get('not_imported_size', 0) or 0
     dead    = det.get('dead_seed_count', 0) or 0
+    # Per-torrent Triage row counts (audit.count_triage_items). The flat
+    # *_count details are per file and know nothing about dead registrations,
+    # so they only stand in for pre-upgrade results rows.
+    tri      = det.get('triage_counts') or {}
+    tri_live = tri.get('not_imported', n_count)
+    tri_dead = tri.get('dead_seeds', dead)
+    tri_reg  = tri.get('dead_registrations', 0) or 0
+    tri_total = tri.get('total', n_count + dead)
     tri_state = 'blocked' if not source_ok else _threshold_state(n_size, det.get('ni_limit'), n_count)
-    if tri_state == 'maintain' and dead:
+    if tri_state == 'maintain' and (tri_dead or tri_reg):
         tri_state = 'optimize'
     rows.append({
         'id': 'triage', 'label': 'Triage', 'accent': 'var(--red)',
         'card': 'Not Imported',
         'state': tri_state,
         'blocked_reason': None if source_ok else 'Connect your torrent client first.',
-        'count': n_count + dead, 'bytes': n_size, 'dead_seeds': dead,
+        'count': tri_total, 'bytes': n_size,
+        'not_imported_torrents': tri_live, 'dead_seeds': tri_dead,
+        'dead_registrations': tri_reg,
         'score_lost': _recoverable(det.get('ni_score'), det.get('ni_max', 10)),
         'score_max': round(float(det.get('ni_max', 10) or 0), 1),
         'teaching': (
@@ -536,6 +605,9 @@ def _reward_line(row, progress, det):
                 'detail': 'Get the count to zero once and you bank your first kill.'}
 
     if kind == 'shovel':
+        # The row count — every item Triage lists, including dead registrations.
+        # `audit.count_pile_resolved` credits the same set, so the number here
+        # and the number that pays out describe the same pile.
         pile = row['count']
         return {
             'kind': kind,
@@ -553,8 +625,29 @@ def _reward_line(row, progress, det):
         return {'kind': kind, 'headline': line,
                 'detail': detail + ' Your best never goes back down.'}
 
+    if kind == 'tribute':
+        swaps = int(p.get('trumps') or 0)
+        rigs  = int(p.get('trump_torrents') or 0)
+        if not swaps:
+            return {
+                'kind': kind, 'tally': 0,
+                'headline': 'No tribute paid. The trackers have not asked.',
+                'detail': 'Nothing accrues here until a PM arrives. Then it does, forever.',
+            }
+        since = _days_since(p.get('last_trump_at'))
+        when  = ('today' if since == 0 else
+                 f"{_pluralize(since, 'day')} ago" if since is not None else 'at some point')
+        line = f"{swaps:,} paid · {_pluralize(rigs, 'registration')} retired"
+        return {
+            # `tally` drives the page: On demand is collapsed by default, so a
+            # user with a Kingmaker streak would otherwise never see it.
+            'kind': kind, 'tally': swaps,
+            'headline': f"{line}. Last one {when}.",
+            'detail': 'Every one of these was somebody else\'s idea. Counted anyway.',
+        }
+
     return {'kind': kind, 'headline': 'No prize. No pile. No streak.',
-            'detail': 'Trumped only matters when a tracker says so.'}
+            'detail': 'This one only matters when a tracker says so.'}
 
 
 def _fmt_bytes(n):
@@ -580,11 +673,13 @@ def _headline(row):
         return f"{_pluralize(row['count'], 'duplicate')} · {size} recoverable"
     if row['id'] == 'triage':
         parts = []
-        live = row['count'] - row.get('dead_seeds', 0)
+        live = row.get('not_imported_torrents', 0)
         if live > 0:
             parts.append(_pluralize(live, 'not-imported torrent'))
         if row.get('dead_seeds'):
             parts.append(_pluralize(row['dead_seeds'], 'dead seed'))
+        if row.get('dead_registrations'):
+            parts.append(_pluralize(row['dead_registrations'], 'dead registration'))
         return ' · '.join(parts) or 'Items need a verdict'
     if row['id'] == 'backfill':
         return f"{row['ratio_pct']}% hardlinked · {size} earning nothing"
@@ -651,6 +746,7 @@ LADDER_FACET = {
     'shoveler':      ('work',    'shovelled'),
     'exterminator':  ('work',    'orphan kills'),
     'clonehunter':   ('work',    'dupe kills'),
+    'kingmaker':     ('work',    'swaps'),
     'sentinel':      ('work',    'clean'),
     'lapidary':      ('work',    'hardlinked'),
     'custodian':     ('work',    'best health'),
@@ -753,6 +849,15 @@ TIER_TITLES = {
         'Duplicate Bane', 'Copy Killer', 'Redundancy Eliminator',
         'Blade Runner', 'There Can Be Only One', 'Original Only',
         'Uniqueness Enforcer', 'Xerox Nemesis', 'Singular', 'Still Copying',
+    ],
+    # Trumped is the one workflow where you are the loser of the exchange: a
+    # better copy turned up and you stood aside. The names lean into it.
+    'kingmaker': [
+        'Stood Aside', 'Twice Deposed', 'Gracious in Defeat',
+        'Succession Planner', 'Regime Change', 'Kingmaker',
+        'Serial Abdicator', 'Palace Regular', 'Court Official',
+        'Master of Ceremonies', 'Keeper of the Crown', 'Dynasty Manager',
+        'The Throne Is a Chair', 'Long Live Whoever',
     ],
     'sentinel': [
         'One Quiet Day', 'Two Days Clean', 'Three Day Weekend', 'A Full Week',
@@ -1096,6 +1201,16 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                 int((progress or {}).get('dupe_kills') or 0),
                 [1, 2, 3, 5, 8, 12, 20, 35, 50, 75, 100, 200, 500, 1000],
                 _fmt_plain, 40),
+        # Tribute: counted at execute time, not inferred from the next scan.
+        # A swap deletes one release and grabs its replacement, so the library
+        # lands back roughly where it started and there is nothing for an audit
+        # to notice. Curve is gentle — a trump PM is a rare event on most
+        # trackers, and a ladder whose first rung takes a year is not a ladder.
+        L('kingmaker', 'Kingmaker',
+                'Trump swaps completed. Somebody had a better copy and you stepped aside, again.',
+                int((progress or {}).get('trumps') or 0),
+                [1, 2, 3, 5, 8, 12, 20, 30, 50, 75, 100, 200, 500, 1000],
+                _fmt_plain, 40),
         # Zombie: the streak of a clean state holding.
         L('sentinel', 'Sentinel',
                 'Consecutive days with zero orphans. You killed them. Now you stand watch, alone.',
@@ -1217,7 +1332,7 @@ FEAT_GROUPS = [
     ('clean',   'A clean library',
      'The zero states, and the score that follows them.'),
     ('grind',   'The grind',
-     'Zombies killed, pile shovelled. Cumulative and permanent.'),
+     'Zombies killed, pile shovelled, thrones surrendered. Cumulative and permanent.'),
     ('scale',   'Scale',
      'How much there is. Not strictly an achievement. Counted anyway.'),
     ('give',    'Giving back',
@@ -1267,6 +1382,7 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
     ratio       = (float(lifetime_up or 0) / seeding) if seeding else 0.0
     shoveled    = int(p.get('shoveled') or 0)
     kills       = int(p.get('orphan_kills') or 0) + int(p.get('dupe_kills') or 0)
+    trumps      = int(p.get('trumps') or 0)
     up          = float(lifetime_up or 0)
 
     defs = [
@@ -1348,6 +1464,21 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
         ('grind', 'groundhog', 'Groundhog Day',
          'Let the same mess come back five times. Something upstream is misbehaving.',
          int(p.get('orphan_breaks') or 0) + int(p.get('dupe_breaks') or 0) >= 5, 150),
+        # Trumps. Balanced down like everything else here: a private tracker
+        # sends these out rarely, so the first rung has to be reachable by
+        # somebody who has done exactly one.
+        ('grind', 'trump_first', 'Politely Replaced',
+         'Complete a trump swap. Somebody had a better copy. You took it well.',
+         trumps >= 1, 75),
+        ('grind', 'trump_five', 'Five Times Deposed',
+         'Complete five trump swaps. The throne was never yours.',
+         trumps >= 5, 200),
+        ('grind', 'trump_many', 'Professional Understudy',
+         'Complete twenty-five trump swaps. At this point it is just what you do.',
+         trumps >= 25, 400),
+        ('absurd', 'trump_entourage', 'Deposed in Bulk',
+         'Retire four or more registrations of the same release in a single trump swap.',
+         int(p.get('trump_max_group') or 0) >= 4, 150),
 
         # ── Scale ────────────────────────────────────────────────────────────
         # Rungs all the way down. A 2 TB library is the common case and must not

@@ -5,11 +5,20 @@ import { LoadingRow, WorkflowError } from './workflows/shared'
 // Next steps — "this is your prioritized (and rewarded) workflows page."
 //
 // Layout, top to bottom:
-//   1. Useless prizes  — the trophy shelf. Recognition, up front, so the page
-//      opens with something to aspire to rather than a wall of chores.
-//   2. Baseline        — Cleanup + Dedupe. Collapses to one line once clear.
-//   3. Ongoing          — Triage, then Backfill.
-//   4. On demand        — Trumped.
+//   1. Baseline        — Cleanup + Dedupe. Collapses to one line once clear.
+//   2. Ongoing         — Triage, then Backfill.
+//   3. On demand       — Trumped.
+//   4. Useless prizes  — the trophy shelf, at the foot of the page.
+//
+// The shelf used to lead, on the theory that opening with a wall of chores was
+// unwelcoming. In use it just buried the thing the page is named after: the
+// prizes are tall (five themed shelves, thirty medallions) and pushed every
+// actual next step below the fold. A single column with the shelf last reads
+// better than the obvious alternative of floating it into a second column —
+// the medallion grid wants the full width, and a narrow rail would squeeze it
+// to two tiles across. The workflow cards carry `next_prize` anyway, so the
+// reward layer still shows up next to the work; the shelf at the bottom is
+// where you go to browse it, which is a different intent from doing a chore.
 //
 // Sections are fixed and labelled, so the sequence is self-evident and nothing
 // reshuffles between visits. Each workflow card also shows the prize it feeds
@@ -44,6 +53,7 @@ const I = {
   shoveler:     <><path d="M2 22v-5l5-5 5 5-5 5z"/><path d="M9.5 14.5 16 8"/><path d="m17 2 5 5-4 4-5-5z"/></>,
   exterminator: <><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M8 20v2h8v-2"/><path d="M20 12a8 8 0 1 0-16 0c0 2.5 1 4 2 5v3h12v-3c1-1 2-2.5 2-5Z"/></>,
   clonehunter:  <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
+  kingmaker:    <><path d="m2 6 4 4 6-7 6 7 4-4-2 12H4z"/><path d="M4 21h16"/></>,
   sentinel:     <><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></>,
   alchemist:    <><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></>,
   diplomat:     <><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></>,
@@ -301,12 +311,37 @@ function LadderDetail({ l, onClose }) {
   )
 }
 
-// ── Useless prizes — the shelf, up top ───────────────────────────────────────
+// ── Rank readout — page header, right of the title ───────────────────────────
+//
+// Lives up top rather than on the prize card. Moving the shelf to the foot of
+// the page put the one line that recognises a long-running install ("Keeper of
+// Inodes · 46,440 pts") below everything, and the title block left the whole
+// right-hand side of the header empty. Sitting here it fills that space and
+// leaves the shelf's own header as a single left-aligned row.
+function RankReadout({ rank }) {
+  const points = useCountUp(rank.points)
+  return (
+    <div style={{ textAlign: 'right', minWidth: 190, flexShrink: 0 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{rank.name}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.15 }}>
+        {points.toLocaleString()}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
+      </div>
+      <div style={{ marginTop: 6 }}><Track pct={rank.pct} /></div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', marginTop: 5 }}>
+        {rank.next_name
+          ? `${rank.next_name} at ${rank.next_at.toLocaleString()}`
+          : 'nothing left to become'}
+        {rank.total_ranks ? ` · rank ${rank.index + 1} of ${rank.total_ranks}` : ''}
+      </div>
+    </div>
+  )
+}
+
+// ── Useless prizes — the shelf, at the foot of the page ──────────────────────
 function Prizes({ data }) {
   const [showAll, setShowAll] = useState(false)
   const [openLadder, setOpenLadder] = useState(null)
-  const { ladders, ladder_groups, feats, feat_groups, prizes, rank } = data
-  const points = useCountUp(rank.points)
+  const { ladders, ladder_groups, feats, feat_groups, prizes } = data
 
   // Three nearest unlocks — the "you are almost there" nudge.
   const closest = ladders.filter(l => !l.maxed).sort((a, b) => b.pct - a.pct).slice(0, 3)
@@ -327,26 +362,15 @@ function Prizes({ data }) {
       boxShadow: 'var(--elev-1)', padding: '18px 20px',
       display: 'flex', flexDirection: 'column', gap: 16,
     }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="trophy" size={17} /></span>
-            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Useless prizes</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
-              {prizes.earned} / {prizes.total}
-            </span>
-          </div>
-        </div>
-        <div style={{ textAlign: 'right', minWidth: 160 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{rank.name}</div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.15 }}>
-            {points.toLocaleString()}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
-          </div>
-          <div style={{ marginTop: 6 }}><Track pct={rank.pct} /></div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', marginTop: 5 }}>
-            {rank.next_name ? `${rank.next_name} at ${rank.next_at.toLocaleString()}` : 'nothing left to become'}
-          </div>
-        </div>
+      {/* One row, left-aligned. The rank block that used to sit opposite this
+          now lives in the page header — the split left a lot of air across the
+          middle and read as two columns that were not really a pair. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="trophy" size={17} /></span>
+        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Useless prizes</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
+          {prizes.earned} / {prizes.total}
+        </span>
       </div>
 
       {/* The shelf, themed. Thirty undifferentiated medallions is a wall; four
@@ -672,20 +696,24 @@ export default function NextSteps({ onNavigate }) {
   return (
     <div style={{ padding: 'var(--page-gutter)', display: 'flex', flexDirection: 'column', gap: 'var(--card-gap)', maxWidth: 1180 }}>
 
-      <div>
-        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Workflows</div>
-        <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Next steps</div>
-        <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 760 }}>
-          {data.stage === 'setup'
-            ? 'auditorr has nothing to audit yet. Finish the checklist and the rest of this page fills in.'
-            : 'Get to a clean baseline first, then settle into the two jobs that never really end. auditorr keeps watch on the baseline in case it slips.'}
-        </p>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Workflows</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Next steps</div>
+          {/* Only the setup-stage blurb survives: with no audit on record the
+              sections below are empty and the page needs to say why. Once they
+              fill in, the section headers state the plan better than a paragraph
+              restating it above them did. */}
+          {data.stage === 'setup' && (
+            <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 760 }}>
+              auditorr has nothing to audit yet. Finish the checklist and the rest of this page fills in.
+            </p>
+          )}
+        </div>
+        {data.stage !== 'setup' && <RankReadout rank={data.rank} />}
       </div>
 
       {!setup.complete && <SetupPanel setup={setup} onNavigate={onNavigate} />}
-
-      {/* Prizes first — something to recognise and aspire to before the chores. */}
-      {data.stage !== 'setup' && <Prizes data={data} />}
 
       {rows && rows.length > 0 && (
         <>
@@ -713,12 +741,24 @@ export default function NextSteps({ onNavigate }) {
           </Section>
 
           {byId.trumped && (
-            <Section title="On demand" sub="Only when a tracker asks." defaultOpen={false}>
-              <WorkflowCard row={byId.trumped} onNavigate={onNavigate} compact />
+            <Section
+              title="On demand"
+              sub="Only when a tracker asks."
+              /* Collapsed until you have actually done one. Once there is a
+                 Kingmaker tally to show, hiding it behind a closed section
+                 means the only user who earned it never sees it. */
+              defaultOpen={(byId.trumped.reward?.tally || 0) > 0}
+            >
+              <WorkflowCard row={byId.trumped} onNavigate={onNavigate}
+                compact={!((byId.trumped.reward?.tally || 0) > 0)} />
             </Section>
           )}
         </>
       )}
+
+      {/* The shelf, last. Browsing prizes is a different intent from doing the
+          work, and it was burying the work when it led the page. */}
+      {data.stage !== 'setup' && <Prizes data={data} />}
 
       {health?.score != null && (
         <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-faint)' }}>

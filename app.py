@@ -1566,6 +1566,18 @@ def workflows_trump_execute():
             grabbed = False
             grab_error = str(e)
 
+    # Credit the swap on the Next steps prize layer. Trumped is the one workflow
+    # counted at execute time: the swap trades one release for another, so the
+    # re-audit below sees a library in much the same shape and has nothing to
+    # infer the action from. Recorded before the rescan so that scan's own
+    # progress pass reads the updated counter.
+    if removed:
+        try:
+            db_set_meta('ns_progress', next_steps.record_trump(
+                db_get_meta('ns_progress'), torrents=removed))
+        except Exception as e:
+            log.warning("Could not record trump on Next steps progress: %s", e)
+
     rescan = False
     if try_start_scanning("trump"):
         threading.Thread(target=run_audit_process, args=("trump",), daemon=True).start()

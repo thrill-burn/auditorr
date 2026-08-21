@@ -3,7 +3,7 @@
 import os
 
 import next_steps
-from audit import count_pile_resolved, file_signatures
+from audit import count_pile_resolved, file_signatures, SIG_IMPORTED
 
 
 GB = 1024 ** 3
@@ -413,9 +413,11 @@ def test_shovel_credit_survives_an_exclusion_change():
 # drop in not_imported_count, because a count knows only that the pile shrank,
 # never why.
 
-def _tf(path, imported=False, status='Seeding', excluded=False):
-    return {'path': path, 'size': GB, 'imported': imported,
-            'status': status, 'excluded': excluded, 'duplicate_paths': []}
+def _tf(path, imported=False, status='Seeding', excluded=False, **over):
+    rec = {'path': path, 'size': GB, 'imported': imported,
+           'status': status, 'excluded': excluded, 'duplicate_paths': []}
+    rec.update(over)
+    return rec
 
 
 def test_a_real_clearout_credits_only_what_was_on_the_pile():
@@ -474,6 +476,90 @@ def test_credit_is_not_capped_like_the_change_log():
 
 def test_first_scan_credits_nothing():
     assert count_pile_resolved({}, [_tf('radarr/A.mkv')]) == 0
+
+
+# ── …and the rest of the pile: dead seeds and dead registrations ─────────────
+# The pile is everything Triage lists, not just the not-imported files. Both of
+# these are invisible to a "not imported" test: a dead seed IS imported, and a
+# dead registration is not a file record at all.
+
+def _seed(path, **over):
+    """An imported, tracker-dead torrent — a dead seed."""
+    return _tf(path, imported=True, **{'tracker_health': 'unregistered', **over})
+
+
+def _carrier(path, dead_hashes, **over):
+    """A healthy imported file carrying dead cross-seed registrations."""
+    return _tf(path, imported=True, **{
+        'tracker_health': 'working',
+        'dead_siblings': [{'hash': h, 'instance_id': 1} for h in dead_hashes],
+        **over})
+
+
+def test_removing_a_dead_seed_is_digging():
+    """Imported, so SIG_IMPORTED is set — only SIG_ON_PILE can see this one."""
+    before = [_seed('radarr/Dead.2020.mkv')]
+    assert count_pile_resolved(file_signatures(before), []) == 1
+
+
+def test_a_dead_seed_that_re_registers_leaves_the_pile_too():
+    before = [_seed('radarr/Dead.2020.mkv')]
+    after  = [_tf('radarr/Dead.2020.mkv', imported=True, tracker_health='working')]
+    assert count_pile_resolved(file_signatures(before), after) == 1
+
+
+def test_retiring_dead_registrations_is_digging():
+    """Counted by hash: the carrier file is healthy and never leaves the walk,
+    so a path diff sees nothing at all."""
+    before = ['H1', 'H2', 'H3']
+    after  = [_carrier('radarr/Live.2021.mkv', ['H3'])]
+    assert count_pile_resolved({}, after, prev_dead_regs=before) == 2
+
+
+def test_excluding_a_carrier_does_not_pay_out_its_registrations():
+    """Excluding hides them from Triage; hiding is not digging.
+
+    This is why `dead_registration_hashes` ignores the excluded flag while
+    `count_triage_items` honours it — otherwise clicking an exclusion
+    suggestion chip would read as retiring every registration under it.
+    """
+    before = ['H1', 'H2']
+    after  = [_carrier('radarr/Live.2021.mkv', ['H1', 'H2'], excluded=True)]
+    assert count_pile_resolved({}, after, prev_dead_regs=before) == 0
+
+
+def test_both_halves_of_the_pile_add_up():
+    before_files = [_tf('radarr/NotImported.mkv'), _seed('radarr/DeadSeed.mkv'),
+                    _carrier('radarr/Live.mkv', ['H1', 'H2'])]
+    after_files  = [_carrier('radarr/Live.mkv', [])]
+    assert count_pile_resolved(file_signatures(before_files), after_files,
+                               prev_dead_regs=['H1', 'H2']) == 4
+
+
+def test_a_carrier_is_not_double_counted_as_a_file_and_a_hash():
+    """The carrier is a healthy imported file — it must never set SIG_ON_PILE,
+    or clearing its siblings would pay twice."""
+    carrier = _carrier('radarr/Live.mkv', ['H1'])
+    assert file_signatures([carrier])['radarr/Live.mkv'] == SIG_IMPORTED
+    after = [_carrier('radarr/Live.mkv', [])]
+    assert count_pile_resolved(file_signatures([carrier]), after,
+                               prev_dead_regs=['H1']) == 1
+
+
+def test_legacy_signatures_still_credit_not_imported_files():
+    """Rows written before SIG_ON_PILE existed carry no bit; an upgrade must
+    cost at most that interval's dead seeds, not the whole interval."""
+    legacy = {'radarr/A.mkv': 0, 'radarr/B.mkv': SIG_IMPORTED}
+    assert count_pile_resolved(legacy, []) == 1
+
+
+def test_update_progress_round_trips_the_dead_registration_set():
+    cfg = _cfg()
+    p = next_steps.update_progress(None, cfg, _details(), dead_regs={'H2', 'H1'})
+    assert p['last_dead_regs'] == ['H1', 'H2']
+    # None must not read as "they all went away" on the next scan.
+    p2 = next_steps.update_progress(p, cfg, _details())
+    assert p2['last_dead_regs'] == ['H1', 'H2']
 
 
 def test_crystal_ratchets_on_best_ever():
@@ -610,3 +696,93 @@ def test_ladder_tiers_are_never_demoted():
     small = _details(total_media_size=1 * GB)
     st2 = next_steps.build_state(cfg, _results(small), _runs(), progress=p)
     assert next(l for l in st2['ladders'] if l['id'] == 'hoard')['tier'] == tier_at_peak
+
+
+# ── Trumped: the one workflow counted at execute time ────────────────────────
+#
+# A trump swap deletes one release and grabs its replacement, so the audit that
+# follows sees a library in much the same shape as the one before it. There is
+# no state change to infer the action from — hence `record_trump`, called from
+# the execute endpoint rather than from `run_audit_process`.
+
+def test_record_trump_counts_swaps_groups_and_the_biggest_group():
+    p = next_steps.record_trump(None, torrents=4)
+    assert p['trumps'] == 1
+    assert p['trump_torrents'] == 4
+    assert p['trump_max_group'] == 4
+    assert p['last_trump_at']
+
+    p = next_steps.record_trump(p, torrents=1)
+    assert p['trumps'] == 2
+    assert p['trump_torrents'] == 5
+    # A later, smaller swap must not lower the latched peak.
+    assert p['trump_max_group'] == 4
+
+
+def test_record_trump_is_pure_and_defaults_to_one_torrent():
+    before = next_steps.record_trump(None)
+    after = next_steps.record_trump(before)
+    assert before['trumps'] == 1 and after['trumps'] == 2, 'must not mutate its input'
+    assert after['trump_torrents'] == 2
+
+
+def test_trump_swaps_climb_the_kingmaker_ladder_and_earn_points():
+    cfg = _cfg()
+    res = _results(_details())
+    base = next_steps.build_state(cfg, res, _runs(), progress=None)
+    km = next(l for l in base['ladders'] if l['id'] == 'kingmaker')
+    assert km['tier'] == 0 and km['value'] == 0
+
+    p = None
+    for _ in range(5):
+        p = next_steps.record_trump(p, torrents=1)
+    after = next_steps.build_state(cfg, res, _runs(), progress=p)
+    km2 = next(l for l in after['ladders'] if l['id'] == 'kingmaker')
+    assert km2['tier'] >= 4, km2['tier']
+    assert after['rank']['points'] > base['rank']['points']
+
+    earned = {f['id'] for f in after['feats'] if f['earned']}
+    assert {'trump_first', 'trump_five'} <= earned
+    assert 'trump_entourage' not in earned, 'five single-torrent swaps is not four in one'
+
+
+def test_bulk_feat_needs_one_big_group_not_an_accumulated_total():
+    cfg = _cfg()
+    res = _results(_details())
+    many_small = None
+    for _ in range(6):
+        many_small = next_steps.record_trump(many_small, torrents=1)
+    st = next_steps.build_state(cfg, res, _runs(), progress=many_small)
+    assert not next(f for f in st['feats'] if f['id'] == 'trump_entourage')['earned']
+
+    one_big = next_steps.record_trump(None, torrents=4)
+    st2 = next_steps.build_state(cfg, res, _runs(), progress=one_big)
+    assert next(f for f in st2['feats'] if f['id'] == 'trump_entourage')['earned']
+
+
+def test_trumped_row_carries_its_reward_and_next_prize():
+    cfg = _cfg()
+    res = _results(_details())
+    cold = _row(next_steps.build_state(cfg, res, _runs(), progress=None), 'trumped')
+    assert cold['reward_kind'] == 'tribute'
+    assert 'not asked' in cold['reward']['headline']
+    # Even at zero the card names the rung it is working toward.
+    assert cold['next_prize']['ladder_id'] == 'kingmaker'
+
+    p = next_steps.record_trump(next_steps.record_trump(None, torrents=3))
+    warm = _row(next_steps.build_state(cfg, res, _runs(), progress=p), 'trumped')
+    assert '2 paid' in warm['reward']['headline']
+    assert '4 registrations' in warm['reward']['headline']
+
+
+def test_an_audit_never_clears_trump_credit():
+    """update_progress rebuilds progress from EMPTY_PROGRESS each run — the
+    trump counters must survive that, or every scan would wipe them."""
+    cfg = _cfg()
+    det = _details()
+    p = next_steps.record_trump(None, torrents=3)
+    st = next_steps.build_state(cfg, _results(det), _runs(), progress=p)
+    p2 = next_steps.update_progress(p, cfg, det, state=st, resolved=0)
+    assert p2['trumps'] == 1
+    assert p2['trump_torrents'] == 3
+    assert p2['trump_max_group'] == 3

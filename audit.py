@@ -315,6 +315,9 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
     dup_penalty = (dup_size / dup_limit) * dup_max if dup_limit > 0 else (dup_max if dup_size > 0 else 0)
     dup_score   = max(0, dup_max - dup_penalty)
     final_score = round(max(0, min(100, hl_score + or_score + ni_score + dup_score)), 1)
+    # Read off the unfiltered list: dead cross-seed registrations hang off
+    # orphaned and imported records too, which the scoring subset still carries.
+    triage_counts = count_triage_items(torrent_files)
     if   final_score >= 90: status_text = "Great"
     elif final_score >= 75: status_text = "Good"
     elif final_score >= 50: status_text = "Fair"
@@ -330,6 +333,10 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
             "dead_seed_count": sum(1 for f in scoring_torrents
                                    if f['imported'] and f['status'] != 'Orphaned'
                                    and f.get('tracker_health') == 'unregistered'),
+            # Per-torrent Triage row counts (the counts above are per file).
+            # The sidebar badge and the Next steps Triage card read this so
+            # they agree with the page — see audit.count_triage_items.
+            "triage_counts": triage_counts,
             # Scored file counts — cheap here, and the only place the totals are
             # known without re-deserializing the full file lists.
             "media_file_count": len(scoring_media), "torrent_file_count": len(scoring_torrents),
@@ -549,6 +556,13 @@ SIG_HAS_DUPS = 4
 # `count_pile_resolved` tell "deleted a file that was on the pile" from "deleted
 # a sidecar that never counted" — and immunises it against exclusion churn.
 SIG_EXCLUDED = 8
+# On the Triage pile in its own right: not-imported, or an imported dead seed.
+# Needed because "not imported" alone no longer describes the pile — a dead seed
+# is imported and still sits in Triage, so without this bit `count_pile_resolved`
+# could not see one leave. Carriers of dead cross-seed registrations deliberately
+# do NOT set this: those are counted by hash (several can ride one record, and
+# the record itself is a healthy file that never leaves).
+SIG_ON_PILE = 16
 
 
 def file_signatures(files):
@@ -559,6 +573,7 @@ def file_signatures(files):
             | (SIG_IMPORTED if f.get('imported') else 0)
             | (SIG_HAS_DUPS if f.get('duplicate_paths') else 0)
             | (SIG_EXCLUDED if f.get('excluded') else 0)
+            | (SIG_ON_PILE if _is_pile_item(f) else 0)
         )
         for f in files
     }
@@ -636,8 +651,8 @@ def compute_diff(prev_snap, curr_snap):
     return compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
 
 
-def count_pile_resolved(prev_torrent_sigs, torrent_files):
-    """Count items that genuinely left the not-imported pile since the last scan.
+def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
+    """Count items that genuinely left the Triage pile since the last scan.
 
     This is the Next steps shovel counter (`ns_progress['shoveled']`), and it
     counts *transitions*, not a drop in `not_imported_count`. The count-delta it
@@ -651,32 +666,63 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files):
     it from the walk, so it produces no transition at all and simply cannot be
     mistaken for work; nothing here has to be defended against exclusion churn.
 
-    An item is credited when it was on the pile at the previous scan — present,
-    not imported, not orphaned, not excluded — and is now either:
-      - gone   (the user deleted it), or
-      - imported (an arr took it, or the user forced the import).
-    Deliberately NOT credited: a pile item that merely went orphaned (its
-    torrent was removed but the file stayed — that is Cleanup's work, and it
-    pays out via the orphan zombie ladder), and one that got excluded (hidden,
-    not dug). Both leave `not_imported_count` and both fooled the old delta.
+    The pile is everything Triage lists, not just the not-imported files: a
+    dead seed removed via the client and a dead cross-seed registration retired
+    are both a successful triage, and shovel credit is cheap. Anything that
+    leaves the pile counts.
+
+    Two units, because the pile has two:
+      - **file records** — not-imported files and imported dead seeds, tracked
+        by path through `SIG_ON_PILE` on the previous scan's signature map.
+      - **dead registrations** — tracked by hash (`prev_dead_regs`), because
+        several ride a single healthy carrier record that never leaves the walk,
+        so a path-based diff cannot see one of three go.
+
+    Still NOT credited, because neither is a *successful* triage:
+      - going orphaned — the torrent left but the file stayed. The item moved to
+        Cleanup rather than being resolved, and it pays out there, on the orphan
+        zombie ladder.
+      - getting excluded — hidden, not dug. Triage renders its exclusion
+        suggestion chips right beside the delete button, so this is the normal
+        case, and paying for it would turn "add a pattern" into a points button.
+
+    Counting transitions needs no exclusion guard beyond that: excluding a file
+    leaves it in the walk, so it produces no phantom transition. This is why the
+    count-delta version — gated on an exclusion fingerprint, which voided the
+    *entire* interval whenever the exclusion set moved — is gone.
 
     Caps do not apply: the change log's lists stop at 50 entries, so a real
     clearout must be counted here, off the signature map, not off the diff.
     """
+    resolved = 0
+
+    # ── Dead registrations, by hash ──────────────────────────────────────────
+    if prev_dead_regs:
+        resolved += len(set(prev_dead_regs) - dead_registration_hashes(torrent_files))
+
+    # ── File records, by path ────────────────────────────────────────────────
     if not prev_torrent_sigs:
-        return 0
+        return resolved
+    # `SIG_ON_PILE or not SIG_IMPORTED` reads both new and legacy signature rows:
+    # scans written before the bit existed still identify their not-imported
+    # files correctly, so an upgrade costs at most the dead seeds of one interval
+    # rather than voiding it.
     on_pile = {
         path for path, sig in prev_torrent_sigs.items()
-        if not (sig & (SIG_IMPORTED | SIG_ORPHANED | SIG_EXCLUDED))
+        if not (sig & (SIG_ORPHANED | SIG_EXCLUDED))
+        and (sig & SIG_ON_PILE or not sig & SIG_IMPORTED)
     }
     if not on_pile:
-        return 0
-    # Everything that was on the pile counts, minus the ones still sitting on it.
-    resolved = len(on_pile)
+        return resolved
+    still = 0
     for f in torrent_files:
-        if f['path'] in on_pile and not f.get('imported'):
-            resolved -= 1
-    return resolved
+        if f['path'] not in on_pile:
+            continue
+        # Either still sitting on the pile, or it left by a route that isn't a
+        # success (see the carve-outs above).
+        if _is_pile_item(f) or f.get('status') == 'Orphaned' or f.get('excluded'):
+            still += 1
+    return resolved + len(on_pile) - still
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +812,83 @@ def _is_triage_relevant(f):
     if not f.get('imported'):
         return True
     return f.get('tracker_health') == 'unregistered'
+
+
+def _is_dead_seed_torrent(f):
+    return (
+        not f.get('excluded')
+        and f.get('imported')
+        and f.get('status') != 'Orphaned'
+        and f.get('tracker_health') == 'unregistered'
+    )
+
+
+def _is_pile_item(f):
+    """On the Triage pile as a file record — the shovel counter's unit.
+
+    Dead cross-seed registrations are also on the pile but are not file records:
+    several can ride a single healthy carrier, so they are counted by hash in
+    `dead_registration_hashes` instead.
+    """
+    return _is_not_imported_torrent(f) or _is_dead_seed_torrent(f)
+
+
+def dead_registration_hashes(torrent_files):
+    """Hashes of every dead cross-seed registration still riding a walked record.
+
+    Deliberately does NOT skip excluded carriers, unlike `count_triage_items`,
+    which answers a different question ("what does Triage list", where exclusion
+    is a hide). Here the set is diffed scan-over-scan to award shovel credit, so
+    dropping excluded carriers would make "add an exclusion pattern" read as
+    "retired those registrations" and pay out for hiding — the one thing the
+    counter's carve-outs exist to prevent. A hash leaves this set when the
+    registration is actually gone from the client, not when it stops being
+    displayed.
+    """
+    out = set()
+    for f in torrent_files:
+        for s in (f.get('dead_siblings') or []):
+            if s.get('hash'):
+                out.add(s['hash'])
+    return out
+
+
+def count_triage_items(torrent_files):
+    """How many rows the Triage page will list — per torrent, not per file.
+
+    The sidebar badge and the Next steps card both read this, so it has to
+    reproduce app.workflows_triage's grouping exactly: not-imported torrents
+    and imported dead seeds collapse to one row per hash (a season pack is one
+    row, not twenty), and every dead cross-seed registration stashed in
+    `dead_siblings` is its own removable row. Counting not-imported *files*
+    instead — what the badge used to do — overcounted multi-file torrents and
+    missed dead registrations entirely.
+
+    Live re-verification can still drop rows that recovered, so this is the
+    audit-time figure: what the page renders before /triage/verify lands.
+    """
+    not_imported, dead_seeds, dead_reg = set(), set(), set()
+    for f in torrent_files:
+        if f.get('excluded'):
+            continue
+        # Dead siblings ride on any record, orphaned and imported ones included.
+        for s in (f.get('dead_siblings') or []):
+            if s.get('hash'):
+                dead_reg.add(s['hash'])
+        if _is_not_imported_torrent(f):
+            not_imported.add(f.get('hash') or f['path'])
+        elif _is_dead_seed_torrent(f):
+            dead_seeds.add(f.get('hash') or f['path'])
+    # A partially-imported torrent is triaged as not-imported, not as a dead
+    # seed, and a hash already listed in its own right is not also a sibling row.
+    dead_seeds -= not_imported
+    dead_reg   -= (not_imported | dead_seeds)
+    return {
+        'not_imported':      len(not_imported),
+        'dead_seeds':        len(dead_seeds),
+        'dead_registrations': len(dead_reg),
+        'total':             len(not_imported) + len(dead_seeds) + len(dead_reg),
+    }
 
 
 def _not_imported_paths(torrent_files):
@@ -968,12 +1091,18 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # (see count_pile_resolved). Stays 0 if there is no previous scan to
         # compare against, or if this block fails — never a guess.
         ns_resolved = 0
+        # Read once, here: the dead-registration half of the shovel count needs
+        # the previous scan's hash set, and the progress pass below needs the
+        # same record to latch against.
+        _ns_prev = db_get_meta('ns_progress')
         try:
             prev_sigs = {
                 'media':    db_load_file_signatures('media'),
                 'torrents': db_load_file_signatures('torrents'),
             }
-            ns_resolved = count_pile_resolved(prev_sigs['torrents'], torrent_files_data)
+            ns_resolved = count_pile_resolved(
+                prev_sigs['torrents'], torrent_files_data,
+                prev_dead_regs=(_ns_prev or {}).get('last_dead_regs'))
             if prev_sigs['media'] or prev_sigs['torrents']:
                 curr_snap = {
                     "media_files": media_files_data, "torrent_files": torrent_files_data,
@@ -1019,7 +1148,6 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # polled, and this is a single small app_meta row.
         # NB: `update_progress` is also a state.py import, hence the namespace.
         try:
-            _ns_prev = db_get_meta('ns_progress')
             _ns_det  = dashboard_stats['current']['details']
             # Built with the *previous* progress so prior latches still apply;
             # update_progress then unions in whatever was newly earned. This is
@@ -1028,7 +1156,8 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             _ns_state = next_steps.build_state(
                 cfg, result, db_get_recent_runs(limit=2000), progress=_ns_prev)
             db_set_meta('ns_progress', next_steps.update_progress(
-                _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved))
+                _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
+                dead_regs=dead_registration_hashes(torrent_files_data)))
         except Exception as e:
             log.warning(f"Could not update Next steps progress: {e}")
         # Scan finished — clear the crash-loop streak so future startups scan normally
