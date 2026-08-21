@@ -134,6 +134,19 @@ function setHashTab(tab) {
   window.location.hash = tab
 }
 
+// How many rows the Triage page will list, per torrent — the sidebar badge and
+// the Cleanup page's cross-link both show this, and they must agree with the
+// page. `triage_counts` is computed by the audit (audit.count_triage_items);
+// the fallback is the old per-file sum, which undercounts (it cannot see dead
+// registrations at all) and only covers results rows written before the
+// upgrade. Deliberately one function: this was duplicated at two call sites and
+// fixing one of them left the other quietly wrong.
+function triageRowCount(details) {
+  if (!details) return 0
+  if (details.triage_counts) return details.triage_counts.total
+  return (details.not_imported_count || 0) + (details.dead_seed_count || 0)
+}
+
 function AppInner() {
   const [tab,        setTab]        = useState(getHashTab)
   const [results,      setResults]      = useState(null)
@@ -411,13 +424,7 @@ function AppInner() {
           const det = results?.dashboard?.current?.details
           if (!det) return null
           return {
-            // Per-torrent row count so the badge matches what Triage lists —
-            // the *_count details are per file and omit dead registrations.
-            // Falls back to the old sum for results rows written before the
-            // upgrade, until the next audit fills triage_counts in.
-            triage:  det.triage_counts
-              ? det.triage_counts.total
-              : (det.not_imported_count || 0) + (det.dead_seed_count || 0),
+            triage:  triageRowCount(det),
             cleanup: det.orphaned_torrent_count || 0,
             dedupe:  det.duplicate_count        || 0,
           }
@@ -499,8 +506,7 @@ function AppInner() {
           )}
           {tab === 'cleanup' && (
             <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
-              triageCount={(results?.dashboard?.current?.details?.not_imported_count || 0)
-                + (results?.dashboard?.current?.details?.dead_seed_count || 0)} />
+              triageCount={triageRowCount(results?.dashboard?.current?.details)} />
           )}
           {tab === 'dedupe' && (
             <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />

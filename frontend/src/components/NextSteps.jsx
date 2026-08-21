@@ -696,9 +696,8 @@ export default function NextSteps({ onNavigate }) {
   return (
     <div style={{ padding: 'var(--page-gutter)', display: 'flex', flexDirection: 'column', gap: 'var(--card-gap)', maxWidth: 1180 }}>
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Workflows</div>
           <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Next steps</div>
           {/* Only the setup-stage blurb survives: with no audit on record the
               sections below are empty and the page needs to say why. Once they
