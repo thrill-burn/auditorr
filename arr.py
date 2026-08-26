@@ -737,10 +737,15 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
             return []
 
     def _query_by_folder(folder):
+        # No movieId/seriesId here, deliberately. It does not scope the folder
+        # listing to that item — it *replaces* it, returning the arr's existing
+        # library file (with a movieFileId) and ignoring `folder` entirely. That
+        # silently defeated every folder lookup: the rows came back describing
+        # the file we are trying to replace, never the one we want to import.
         try:
             encoded = urllib.parse.quote(folder, safe='')
             return _keep(_arr_get(conn['base_url'], conn['api_key'],
-                                  f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
+                                  f'/api/v3/manualimport?folder={encoded}&filterExistingFiles=false',
                                   timeout=30))
         except urllib.error.HTTPError as e:
             log.warning("manualimport GET by folder returned HTTP %s", e.code)
@@ -873,13 +878,17 @@ def force_import_files(cfg, service, connection_id, arr_id, paths, wait=20):
     remote_path = conn.get('remote_path', '').strip()
     targets     = [arr_import_target(p, local_path, remote_path) for p in paths]
     arr_files   = [t[1] for t in targets]
-    folder      = targets[0][2]
+    # The scan target, not the containing folder: for a single-file torrent the
+    # folder is the shared category dir, whose listing identifies nothing —
+    # every row comes back with movie null and quality "Unknown", which would
+    # import this file into the library under an unknown quality.
+    lookup      = targets[0][0]
 
     before = get_arr_file_id(cfg, service, connection_id, arr_id)
     # Copy, not Auto: there is no tracked download behind a Triage item — the arr
     # never grabbed it — so Auto would resolve to a move and break the seed.
     force_manual_import_by_id(cfg, service, connection_id, arr_id,
-                              download_folder=folder, only_paths=arr_files,
+                              download_folder=lookup, only_paths=arr_files,
                               import_mode='Copy')
 
     name = _SERVICE_MAP[service]['name']
@@ -1461,38 +1470,43 @@ def _remote_path_for(abs_path, local_path, remote_path):
 
 
 def arr_import_target(path, local_path, remote_path):
-    """(scan_path, file_path, folder) as the arr sees them, for one stored path.
+    """(scan_path, file_path) as the arr sees them, for one stored path.
 
-    scan_path is what a scan command should be pointed at (see _scan_target);
-    file_path is the specific file; folder is where a manualimport lookup has to
-    look to find that file — the release folder when there is one, otherwise the
-    category dir, since manualimport only queries by folder.
+    scan_path is what both a scan command and a manualimport lookup should be
+    pointed at (see _scan_target); file_path is the specific file.
     """
     abs_path  = _local_to_abs(path, local_path)
     arr_file  = _remote_path_for(abs_path, local_path, remote_path)
     scan_path = _remote_path_for(_scan_target(abs_path, local_path), local_path, remote_path)
-    folder    = scan_path if scan_path != arr_file else os.path.dirname(arr_file)
-    return scan_path, arr_file, folder
+    return scan_path, arr_file
 
 
-def import_rejections(conn, folder, timeout=30):
-    """What the arr would say about importing this folder's files, without importing.
+def import_rejections(conn, target, timeout=30):
+    """What the arr would say about importing this target, without importing it.
 
     /api/v3/manualimport runs the same decision specs the scan command does and
     reports them per file, which is the only way to tell a rescan that imported
     nothing from one that imported everything — the command endpoint reports
     'completed' either way. Returns [{path, rejections: [reason, …]}].
 
+    `target` is a _scan_target result: a release folder, or a bare file. Both are
+    accepted by the `folder` parameter, and passing the file is what makes a
+    single-file torrent work — a category-dir listing identifies nothing, coming
+    back with movie null and quality "Unknown" for every row (and 384 rows deep
+    on a real library), while the file itself parses cleanly. Never narrow the
+    lookup with movieId/seriesId: that does not scope the folder, it *replaces*
+    it with the arr's existing library file for that item.
+
     Advisory only: ManualImport with replaceExistingFiles overrides every
     rejection listed here, which is what the force-import path relies on.
     """
     try:
-        encoded = urllib.parse.quote(folder, safe='')
+        encoded = urllib.parse.quote(target, safe='')
         rows = _arr_get(conn['base_url'], conn['api_key'],
                         f'/api/v3/manualimport?folder={encoded}&filterExistingFiles=false',
                         timeout=timeout)
     except Exception as e:
-        log.warning("manualimport probe failed for %s: %s", folder, e)
+        log.warning("manualimport probe failed for %s: %s", target, e)
         return None
     out = []
     for row in (rows or []):
@@ -1507,10 +1521,9 @@ def import_rejections(conn, folder, timeout=30):
     return out
 
 
-# Distinct folders probed per rescan request. A probe is a full manualimport
-# parse of a folder, so an unbounded selection would stall the request. Results
-# are cached per folder, and one category-dir probe already answers for every
-# single-file torrent sitting in it, so the cap is rarely reached.
+# Distinct targets probed per rescan request. Each probe is a manualimport parse,
+# so an unbounded selection would stall the request. Results are cached per
+# target, so a season pack's files all share one probe of their release folder.
 _PROBE_FOLDER_LIMIT = 20
 
 
@@ -1535,19 +1548,19 @@ def arr_rescan(cfg, service, paths):
     results = []
     probes = {}
 
-    def _probe(conn, folder):
-        key = (conn['id'], folder)
+    def _probe(conn, target):
+        key = (conn['id'], target)
         if key not in probes:
             if len(probes) >= _PROBE_FOLDER_LIMIT:
                 return None
-            probes[key] = import_rejections(conn, folder)
+            probes[key] = import_rejections(conn, target)
         return probes[key]
 
     for conn in connections:
         remote_path = conn.get('remote_path', '').strip()
         for path in paths:
-            scan_path, arr_file, folder = arr_import_target(path, local_path, remote_path)
-            rows = _probe(conn, folder)
+            scan_path, arr_file = arr_import_target(path, local_path, remote_path)
+            rows = _probe(conn, scan_path)
 
             reasons = []
             if rows is not None:

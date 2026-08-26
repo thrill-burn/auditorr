@@ -99,8 +99,32 @@ def test_clean_import_reports_no_rejections(mock_cmd, monkeypatch):
 
 
 @patch('arr._arr_command')
-def test_neighbouring_files_in_the_category_dir_are_not_confused(mock_cmd, monkeypatch):
-    """One probe answers for a whole category dir, so rows must be matched by path."""
+def test_single_file_torrent_is_probed_by_file_not_by_its_folder(mock_cmd, monkeypatch):
+    """A category-dir listing identifies nothing.
+
+    Every row comes back with movie null and quality "Unknown" — Radarr only
+    parses a title when it can anchor on the folder name. The file itself parses
+    cleanly, and `folder=` accepts one.
+    """
+    seen = []
+    monkeypatch.setattr('arr.import_rejections',
+                        lambda conn, target, **k: seen.append(target) or [])
+    arr_rescan(_cfg(), 'radarr', ['radarr/Film.2026.mkv'])
+    assert seen == ['/data/torrents/radarr/Film.2026.mkv']
+
+
+@patch('arr._arr_command')
+def test_release_folder_torrent_is_probed_by_folder(mock_cmd, monkeypatch):
+    seen = []
+    monkeypatch.setattr('arr.import_rejections',
+                        lambda conn, target, **k: seen.append(target) or [])
+    arr_rescan(_cfg(), 'sonarr', ['sonarr/Show.S01.1080p/Show.S01E01.mkv'])
+    assert seen == ['/data/torrents/sonarr/Show.S01.1080p']
+
+
+@patch('arr._arr_command')
+def test_rows_are_matched_to_the_file_by_path(mock_cmd, monkeypatch):
+    """Defensive: a file lookup should return only its own row, but never assume it."""
     monkeypatch.setattr('arr.import_rejections', lambda conn, folder, **k: [
         {'path': '/data/torrents/radarr/Other.Film.2020.mkv', 'rejections': ['Not an upgrade']},
         {'path': '/data/torrents/radarr/Film.2026.mkv',       'rejections': []},
@@ -179,6 +203,16 @@ def test_force_import_asks_for_copy_so_the_seed_survives():
         force_import_files(_cfg(), 'radarr', 'radarr-default', 7, ['radarr/Film.2026.mkv'])
     assert fmi.call_args.kwargs['import_mode'] == 'Copy'
     assert fmi.call_args.kwargs['only_paths'] == ['/data/torrents/radarr/Film.2026.mkv']
+
+
+def test_force_import_looks_up_the_scan_target_not_the_parent_folder():
+    """The parent of a single-file torrent is the category dir, whose listing
+    reports quality "Unknown" — importing from it would set that on the library."""
+    from arr import force_import_files
+    with patch('arr.force_manual_import_by_id') as fmi, patch('arr.time.sleep'), \
+         patch('arr.get_arr_file_id', side_effect=[11, 42]):
+        force_import_files(_cfg(), 'radarr', 'radarr-default', 7, ['radarr/Film.2026.mkv'])
+    assert fmi.call_args.kwargs['download_folder'] == '/data/torrents/radarr/Film.2026.mkv'
 
 
 def test_import_is_confirmed_by_the_file_id_moving():
