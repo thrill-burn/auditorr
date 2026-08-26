@@ -79,7 +79,7 @@ they need six different responses.
 | **Dead seed — imported** | The tracker has dropped the torrent, but the file was imported and your library hardlink still holds the data. | Delete via the client. Lossless — the library keeps the file. |
 | **Dead registration** | This particular registration is dead, but the payload is alive via a working cross-seed or the library copy. | Delete this registration; the data stays. |
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
-| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. |
+| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). |
 | **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Trigger a rescan. |
 | **Not in library** | Neither arr knows about it. | Import it, exclude it, or remove it. |
 
@@ -94,6 +94,41 @@ snapshot (a torrent that was dead last night may be fine now), while everything
 else can. Recovered torrents disappear from the list as their batch confirms
 them. If verification fails you get an explicit "showing audit-time data" notice
 and a Retry button, never a quiet guess.
+
+### Rescan vs force import
+
+Two actions get a file into your library, and they reach different things.
+
+**Trigger Rescan** asks Sonarr/Radarr to look at the release folder and import
+what they find. That works when the arr has no file for the title yet — the
+*Import pending* case. It imports by hardlink, so your torrent keeps seeding.
+
+It does **not** work when the arr already has a file. Sonarr and Radarr compare
+every candidate against what they hold and refuse anything that isn't strictly
+better — including a release of *identical* quality, and including a normal
+release offered against an existing REPACK. Rescanning cannot get past that; the
+answer is the same every time.
+
+That refusal used to be invisible, because the arrs report a scan as "completed"
+whether they imported everything or nothing. auditorr now asks what the arr
+decided and tells you in plain words:
+
+> Nothing will import — Not a quality revision upgrade for existing movie file(s)
+
+**Force import** is the way past it. It uses the arr's own *Import Anyway*,
+replacing the library file with this release. It appears on superseded items and
+is only enabled when the torrent is the **same quality** as the file you already
+have — typically after a trump, where the tracker made you swap one release for
+an equivalent one.
+
+If the torrent is genuinely worse than what you have — 1080p against a 2160p
+library file, a WEB-DL against a Bluray — the button stays disabled. That
+refusal isn't a bug to work around; those torrents are fine as cross-seeds, and
+your library is right to keep the better copy.
+
+> Force import replaces a file you already have. It's the one Triage action that
+> changes your library rather than your torrent client, so it's deliberately
+> narrow.
 
 ### Exclusion suggestions
 

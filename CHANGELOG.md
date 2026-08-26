@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- **Force import in Triage** — a new action on superseded items that replaces the file Sonarr/Radarr already holds, using their own "Import Anyway" mechanism (`ManualImport` with `replaceExistingFiles`). Trigger Rescan can never do this: the arr evaluates its upgrade and revision specs against the existing file and refuses anything not strictly better, which a same-quality trump replacement never is — a non-REPACK over a REPACK is rejected as "not a quality revision upgrade" no matter how many times you rescan. Offered **only** where the torrent scores the same quality as the library file; a genuine downgrade (1080p against a 2160p library file, WEB-DL against a Bluray) keeps the button visible but disabled with the reason, because refusing those is correct behaviour, not a bug to work around.
+
+### Bug Fixes
+- **Trigger Rescan reached the wrong folder** — the rescan pointed Sonarr/Radarr at the *parent directory* of the file, but the arrs identify a release by parsing the folder name they are given. For a single-file torrent sitting in its category dir that meant handing over the download root: Radarr parsed "radarr" as the release name, logged `Unknown Movie`, and imported nothing. A nested season pack handed over "Season 1", which parses no better. The scan now targets the **release folder** — the second segment below the torrent root — and falls back to the file itself when there is no release folder, which both arrs accept and parse from its own filename.
+- **Rescan could move a file out from under a seeding torrent** — the scan command sent no `importMode`, so the arrs used their default of `Auto`, which means *move* whenever no download-client item is attached to the scan. One never is for a Triage rescan, by definition: it exists for payloads the arr never grabbed. The import mode is now sent explicitly as `Copy` — the arr's name for "leave the source in place", and the only mode that consults the *Use Hardlinks instead of Copy* setting, so a successful import costs no extra disk and the torrent keeps seeding.
+- **A rescan the arr refused reported success anyway** — Sonarr/Radarr report every scan command as `completed` whether it imported everything or rejected everything, so a refused rescan surfaced as a green "Rescan triggered" toast and looked like a mystery. auditorr now asks `/api/v3/manualimport` what the arr would decide — the same specs, reported per file — and shows the real reason ("Not an upgrade for existing movie file", "Not a quality revision upgrade"). Failing to check is kept distinct from checking and finding no objection, and a file the arr can't identify at all is reported as such rather than passing silently.
+
 ## v1.7.1 — 2026-08-01
 
 A security release. No feature or UI changes — a no-secret LAN install behaves identically after upgrading.

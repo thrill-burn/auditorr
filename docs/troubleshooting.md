@@ -206,6 +206,30 @@ silently present it as current.
 
 ---
 
+## Trigger Rescan doesn't import anything
+
+Read the toast — it now carries Sonarr/Radarr's actual answer rather than a
+blanket "rescan triggered". Two answers are common:
+
+**"Not an upgrade for existing movie file"** or **"Not a quality revision
+upgrade"** — the arr already has a file for this title and won't replace it with
+something equal or worse. Rescanning again will never change that. If the
+release really is equivalent (a trump replacement, typically), use
+[Force import](workflows.md#rescan-vs-force-import) instead. If it's genuinely
+lower quality, the arr is right and there's nothing to fix.
+
+**"No matching title — the file could not be identified"** — the arr couldn't
+tell what the release is from its name. Import it by hand from the arr's own
+Manual Import, or fix the naming.
+
+If nothing happens at all and no reason is given, auditorr couldn't reach the
+arr to ask; check **Test Connection** in Config.
+
+> A rescan imports by hardlink and leaves the torrent seeding. It will never
+> move your file out from under the client.
+
+---
+
 ## The score dropped and I didn't change anything
 
 Open **Changes**. Every audit records a file-level diff against the previous

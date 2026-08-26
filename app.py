@@ -41,7 +41,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -850,31 +850,38 @@ def get_action_script(script_type):
 @app.route('/api/actions/sonarr_rescan', methods=['POST'])
 @require_auth
 def actions_sonarr_rescan():
-    data = request.json or {}
-    cfg  = db_load_config()
-    try:
-        count = arr_rescan(cfg, 'sonarr', data.get('paths', []))
-        return jsonify({"status": "success", "count": count})
-    except ValueError as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
-    except Exception as e:
-        log.exception("Error in sonarr_rescan")
-        return jsonify({"status": "error", "message": str(e)}), 400
+    return _rescan_response('sonarr')
 
 
 @app.route('/api/actions/radarr_rescan', methods=['POST'])
 @require_auth
 def actions_radarr_rescan():
+    return _rescan_response('radarr')
+
+
+def _rescan_response(service):
+    """Run a rescan and report what the arr actually decided, not just that we asked.
+
+    arr_rescan probes each target through /api/v3/manualimport, so a scan the arr
+    will refuse (a downgrade, or a non-repack over a repack) comes back with its
+    reason attached instead of a bare success the UI would render as a green toast.
+    """
     data = request.json or {}
     cfg  = db_load_config()
     try:
-        count = arr_rescan(cfg, 'radarr', data.get('paths', []))
-        return jsonify({"status": "success", "count": count})
+        outcome = arr_rescan(cfg, service, data.get('paths', []))
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
     except Exception as e:
-        log.exception("Error in radarr_rescan")
+        log.exception("Error in %s_rescan", service)
         return jsonify({"status": "error", "message": str(e)}), 400
+    rejected = [r for r in outcome['results'] if r['rejections']]
+    return jsonify({
+        "status":   "success",
+        "count":    outcome['count'],
+        "results":  outcome['results'],
+        "rejected": len(rejected),
+    })
 
 
 @app.route('/api/actions/sonarr_search', methods=['POST'])
@@ -1137,6 +1144,52 @@ def workflows_remove_torrents():
              removed, len(items), mode, files_deleted, files_kept)
     return jsonify({"status": "success", "removed": removed, "requested": len(items),
                     "files_deleted": files_deleted, "files_kept": files_kept})
+
+
+@app.route('/api/workflows/force_import', methods=['POST'])
+@require_auth
+def workflows_force_import():
+    """Import a torrent's files over the file Sonarr/Radarr already holds.
+
+    The rescan action cannot reach these: the arr evaluates its upgrade and
+    revision specs against the existing file and refuses anything that is not
+    strictly better, which a same-quality trump replacement never is. This is
+    the API form of the arr's own "Import Anyway".
+
+    Each item is {service, connection_id, arr_id, paths}. Items are independent —
+    one failure is reported against that item, not the request.
+    """
+    cfg   = db_load_config()
+    data  = request.json or {}
+    items = data.get('items') or []
+    if not items:
+        return jsonify({"status": "error", "message": "No items provided"}), 400
+
+    results = []
+    for item in items:
+        service = str(item.get('service') or '')
+        key     = str(item.get('key') or '')
+        if service not in ('sonarr', 'radarr'):
+            results.append({"key": key, "imported": False, "message": "Unknown service"})
+            continue
+        if not item.get('arr_id') or not item.get('connection_id'):
+            results.append({"key": key, "imported": False,
+                            "message": "No library item to replace — nothing to import over"})
+            continue
+        try:
+            outcome = force_import_files(cfg, service, item['connection_id'], item['arr_id'],
+                                         [str(p) for p in (item.get('paths') or [])])
+            results.append({"key": key, **outcome})
+        except ValueError as e:
+            results.append({"key": key, "imported": False, "message": str(e)})
+        except Exception as e:
+            log.exception("Error force-importing %s %s", service, item.get('arr_id'))
+            results.append({"key": key, "imported": False, "message": str(e)})
+
+    imported = sum(1 for r in results if r.get('imported'))
+    log.info("Force import: %d/%d item(s) imported", imported, len(results))
+    return jsonify({"status": "success", "imported": imported,
+                    "requested": len(results), "results": results})
 
 
 @app.route('/api/workflows/triage/resolve_groups', methods=['POST'])
@@ -1783,6 +1836,10 @@ def workflows_triage():
                 'filename':     os.path.basename(library_match.get('path') or ''),
                 'arr_url':      _arr_url(library_match),
                 'quality_cmp':  compare_release_quality(parsed, lib_quality),
+                # Addressing for force-import: the arr already holds a file for
+                # this title, so replacing it needs the item's own id, not a path.
+                'arr_id':        library_match.get('arr_id'),
+                'connection_id': library_match.get('connection_id'),
             }
         elif in_arr:
             t = arr_title_hit
@@ -1795,6 +1852,8 @@ def workflows_triage():
                 'filename':     '',
                 'arr_url':      _arr_url(t),
                 'quality_cmp':  'unknown',
+                'arr_id':        t.get('arr_id'),
+                'connection_id': t.get('connection_id'),
             }
 
         # A byte-identical copy of this torrent's data already exists on disk

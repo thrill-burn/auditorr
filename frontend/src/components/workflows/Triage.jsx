@@ -133,6 +133,23 @@ function canDeepLink(client, item) {
   return client?.name === 'qui' && item.hash && item.instance_id != null
 }
 
+// Force import replaces the file the arr already holds, so it is only offered
+// where auditorr scored this release as the *same* quality as that file. A
+// downgrade stays blocked — Sonarr/Radarr are right to refuse those, and the
+// rescan action now reports their reason rather than a blank success.
+function canForceImport(item) {
+  const lib = item.library
+  return !!lib && lib.quality_cmp === 'same' && !!lib.arr_id && !!lib.connection_id
+}
+
+// The arr reports every scan command as completed even when its import
+// decision refused every file, so the reasons are the only real signal.
+function rejectionSummary(rejected) {
+  const reasons = [...new Set(rejected.flatMap(r => r.rejections || []))]
+  if (reasons.length === 0) return 'no reason given'
+  return reasons.slice(0, 2).join(' · ') + (reasons.length > 2 ? ` (+${reasons.length - 2} more)` : '')
+}
+
 // Exclusion rules for a torrent. Single-file torrents always get an exact
 // file-path rule — their parent is often a shared category dir (tv-sonarr)
 // that must never be excluded wholesale. Multi-file torrents get their
@@ -500,6 +517,11 @@ export default function Triage({ onNavigate, cleanupCount }) {
   // entries (hash unknown) can only be handled manually.
   const deletableItems = selectedItems.filter(i => i.hash)
 
+  // Superseded items are the only ones a force import applies to — the rest
+  // have no library file to replace. Of those, only same-quality ones qualify.
+  const supersededSelected = selectedItems.filter(i => i.verdict === 'superseded')
+  const forceImportItems   = supersededSelected.filter(canForceImport)
+
   // Open the confirm modal and resolve each selected torrent's live cross-seed
   // group so the user can choose per-item: delete just this torrent, or the
   // whole hardlinked group. Deletion is hardlink-safe either way.
@@ -582,9 +604,47 @@ export default function Triage({ onNavigate, cleanupCount }) {
       else { sonarrPaths.push(item.rep_path); radarrPaths.push(item.rep_path) }
     }
     let ok = 0
-    try { if (sonarrPaths.length) { await api.sonarrRescan(sonarrPaths); ok++ } } catch (e) { toast(e.message, 'error') }
-    try { if (radarrPaths.length) { await api.radarrRescan(radarrPaths); ok++ } } catch (e) { toast(e.message, 'error') }
-    if (ok > 0) toast('Rescan triggered — check Sonarr/Radarr for import results', 'success')
+    const results = []
+    const collect = r => { results.push(...(r?.results || [])); ok++ }
+    try { if (sonarrPaths.length) { collect(await api.sonarrRescan(sonarrPaths)) } } catch (e) { toast(e.message, 'error') }
+    try { if (radarrPaths.length) { collect(await api.radarrRescan(radarrPaths)) } } catch (e) { toast(e.message, 'error') }
+    if (ok > 0) {
+      const rejected = results.filter(r => (r.rejections || []).length > 0)
+      if (rejected.length === 0) {
+        toast('Rescan triggered — check Sonarr/Radarr for import results', 'success')
+      } else if (rejected.length === results.length) {
+        toast(`Nothing will import — ${rejectionSummary(rejected)}`, 'error')
+      } else {
+        toast(`${results.length - rejected.length} scanning · ${rejected.length} refused — ${rejectionSummary(rejected)}`, 'warning')
+      }
+    }
+    setBusy(null)
+  }
+
+  // "Import Anyway" — the only way past the arr's upgrade/revision specs, which
+  // a same-quality trump replacement can never satisfy. Replaces the library
+  // file, so it is deliberately restricted to same-quality items.
+  const handleForceImport = async () => {
+    setBusy('force')
+    try {
+      const resp = await api.forceImport(forceImportItems.map(i => ({
+        key:           itemKey(i),
+        service:       i.library.service,
+        connection_id: i.library.connection_id,
+        arr_id:        i.library.arr_id,
+        paths:         i.paths,
+      })))
+      const done   = new Set((resp.results || []).filter(r => r.imported).map(r => r.key))
+      const failed = (resp.results || []).filter(r => !r.imported)
+      if (done.size) {
+        toast(`Imported ${done.size} of ${resp.requested} — the library file was replaced`, 'success')
+        setReport(r => ({ ...r, items: (r?.items || []).filter(i => !done.has(itemKey(i))) }))
+        setSelected(new Set())
+      }
+      if (failed.length) toast(failed[0].message || 'Import did not complete', 'error')
+    } catch (e) {
+      toast(e.message, 'error')
+    }
     setBusy(null)
   }
 
@@ -808,6 +868,14 @@ export default function Triage({ onNavigate, cleanupCount }) {
               <ActionButton onClick={handleRescan} disabled={busy != null} title="Tell Sonarr/Radarr to rescan these folders and retry the import">
                 {busy === 'rescan' ? 'Rescanning…' : 'Trigger Rescan'}
               </ActionButton>
+              {supersededSelected.length > 0 && (
+                <ActionButton onClick={handleForceImport} disabled={busy != null || forceImportItems.length === 0}
+                  title={forceImportItems.length === 0
+                    ? 'Only same-quality releases can be force-imported — the selected ones are downgrades on what the library already holds, which Sonarr/Radarr are right to refuse'
+                    : `Replace the library file with this release via Sonarr/Radarr's "Import Anyway" — the only way past the upgrade check a same-quality swap can never pass`}>
+                  {busy === 'force' ? 'Importing…' : `Force import${forceImportItems.length ? ` (${forceImportItems.length})` : ''}`}
+                </ActionButton>
+              )}
               <ActionButton onClick={handleExclude} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
                 {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
               </ActionButton>

@@ -1,4 +1,7 @@
-FROM node:20-slim AS frontend-build
+# Pinned to the build host's architecture: the Vite output is plain JS/CSS and
+# is identical on every target, so building it natively keeps the arm64 image
+# from paying for an emulated npm build.
+FROM --platform=$BUILDPLATFORM node:20-slim AS frontend-build
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install

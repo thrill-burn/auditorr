@@ -684,7 +684,8 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
     return last_active  # timeout — caller can use outputPath to locate the download
 
 
-def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=None, download_folder=None):
+def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=None,
+                              download_folder=None, only_paths=None, import_mode='Auto'):
     """Force manual import of a movie or series, bypassing quality cutoff.
 
     download_id:     the downloadId from the Radarr/Sonarr queue record (qBittorrent hash).
@@ -695,6 +696,15 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
                      Used when download_id is unavailable.  Falls back further to the
                      media folder for hardlink/backfill cases where the file is already
                      at its final location.
+    only_paths:      restrict the import to these exact arr-side file paths. A folder
+                     lookup returns every file in the folder, and a single-file torrent's
+                     folder is the shared category dir — without this, importing one
+                     torrent would sweep in every unrelated file sitting beside it.
+    import_mode:     'Auto' is safe only when a download_id resolves to a tracked
+                     download: the arr then sees CanMoveFiles=false on a seeding
+                     torrent and hardlinks. With no tracked download Auto means
+                     move, which would pull the payload out from under the seed —
+                     callers working from a bare path must pass 'Copy'.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
@@ -710,12 +720,18 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         media_folder = info.get('path', '')
         id_param     = f'seriesId={arr_id}'
 
+    def _keep(rows):
+        if only_paths is None:
+            return rows or []
+        wanted = set(only_paths)
+        return [r for r in (rows or []) if (r.get('path') or '') in wanted]
+
     def _query_by_download_id(dl_id):
         try:
             encoded = urllib.parse.quote(dl_id, safe='')
-            return _arr_get(conn['base_url'], conn['api_key'],
-                            f'/api/v3/manualimport?downloadId={encoded}&{id_param}',
-                            timeout=30)
+            return _keep(_arr_get(conn['base_url'], conn['api_key'],
+                                  f'/api/v3/manualimport?downloadId={encoded}&{id_param}',
+                                  timeout=30))
         except urllib.error.HTTPError as e:
             log.warning("manualimport GET by downloadId returned HTTP %s — falling back to folder", e.code)
             return []
@@ -723,9 +739,9 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
     def _query_by_folder(folder):
         try:
             encoded = urllib.parse.quote(folder, safe='')
-            return _arr_get(conn['base_url'], conn['api_key'],
-                            f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
-                            timeout=30)
+            return _keep(_arr_get(conn['base_url'], conn['api_key'],
+                                  f'/api/v3/manualimport?folder={encoded}&{id_param}&filterExistingFiles=false',
+                                  timeout=30))
         except urllib.error.HTTPError as e:
             log.warning("manualimport GET by folder returned HTTP %s", e.code)
             return []
@@ -759,6 +775,10 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
                     break
 
     if not files:
+        if only_paths:
+            raise ValueError(
+                f"{_SERVICE_MAP[service]['name']} does not list the selected file(s) as importable — "
+                "they may have already been imported, or moved")
         raise ValueError(f"No importable files found — check {service} queue manually")
 
     # Use the ManualImport command endpoint with replaceExistingFiles=True.
@@ -787,7 +807,7 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         'name':                 'ManualImport',
         'files':                cmd_files,
         'replaceExistingFiles': True,
-        'importMode':           'Auto',
+        'importMode':           import_mode,
     }
     req = urllib.request.Request(
         conn['base_url'].rstrip('/') + '/api/v3/command',
@@ -827,6 +847,61 @@ def get_arr_file_id(cfg, service, connection_id, arr_id):
             return frozenset(e['id'] for e in eps if e.get('id'))
     except Exception:
         return None
+
+
+def force_import_files(cfg, service, connection_id, arr_id, paths, wait=20):
+    """Import specific torrent files over the arr's existing file ("Import Anyway").
+
+    A scan command can never do this: Sonarr/Radarr run the upgrade and revision
+    specs against the file they already hold and reject anything that is not
+    strictly better — a same-quality trump replacement always is. ManualImport
+    with replaceExistingFiles is the API form of the UI's "Import Anyway", and
+    the only override there is.
+
+    Success is confirmed by watching the arr's own file id, not the command
+    status, which reports 'failed' on replacements that in fact succeeded.
+    Returns {'imported': bool, 'files': int, 'message': str}.
+    """
+    conns = normalize_arr_connections(cfg, service=service)
+    conn  = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        raise ValueError(f"Arr connection '{connection_id}' not found for service '{service}'")
+    if not paths:
+        raise ValueError("No files to import")
+
+    local_path  = cfg.get('LOCAL_PATH', '').strip()
+    remote_path = conn.get('remote_path', '').strip()
+    targets     = [arr_import_target(p, local_path, remote_path) for p in paths]
+    arr_files   = [t[1] for t in targets]
+    folder      = targets[0][2]
+
+    before = get_arr_file_id(cfg, service, connection_id, arr_id)
+    # Copy, not Auto: there is no tracked download behind a Triage item — the arr
+    # never grabbed it — so Auto would resolve to a move and break the seed.
+    force_manual_import_by_id(cfg, service, connection_id, arr_id,
+                              download_folder=folder, only_paths=arr_files,
+                              import_mode='Copy')
+
+    name = _SERVICE_MAP[service]['name']
+    if before is None:
+        # Without a baseline a changed file id proves nothing — 0 ("no file") and
+        # a real id both differ from None. Say so rather than claim either way.
+        return {'imported': False, 'files': len(arr_files),
+                'message': f"Import sent, but {name} did not report its current file — verify there"}
+
+    # The command is queued, not synchronous, so poll for the file id to move.
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        time.sleep(2)
+        after = get_arr_file_id(cfg, service, connection_id, arr_id)
+        if after is not None and after != before:
+            return {'imported': True, 'files': len(arr_files), 'message': 'Imported'}
+    return {
+        'imported': False,
+        'files':    len(arr_files),
+        'message':  f"{name} accepted the import but its library file has not changed — "
+                    "check Activity → Queue there",
+    }
 
 
 def remove_from_arr_queue(cfg, service, connection_id, queue_id):
@@ -1366,10 +1441,88 @@ def _scan_target(abs_path, local_path):
     return local_path.rstrip('/') + '/' + '/'.join(segments[:2])
 
 
+def _local_to_abs(path, local_path):
+    """Absolute container-side path for a stored (root-relative) file path.
+
+    Posix all the way down, not os.path: these are container-side paths whatever
+    platform the process runs on, and os.path.isabs answers False for "/data/…"
+    on Windows (3.13+ reads a rooted path with no drive as relative).
+    """
+    if path.startswith('/'):
+        return path
+    return (local_path.rstrip('/') + '/' + path) if local_path else path
+
+
+def _remote_path_for(abs_path, local_path, remote_path):
+    """Translate an auditorr-local path to the path the arr container sees."""
+    if remote_path and _under_root(abs_path, local_path):
+        return remote_path + abs_path[len(local_path):]
+    return abs_path
+
+
+def arr_import_target(path, local_path, remote_path):
+    """(scan_path, file_path, folder) as the arr sees them, for one stored path.
+
+    scan_path is what a scan command should be pointed at (see _scan_target);
+    file_path is the specific file; folder is where a manualimport lookup has to
+    look to find that file — the release folder when there is one, otherwise the
+    category dir, since manualimport only queries by folder.
+    """
+    abs_path  = _local_to_abs(path, local_path)
+    arr_file  = _remote_path_for(abs_path, local_path, remote_path)
+    scan_path = _remote_path_for(_scan_target(abs_path, local_path), local_path, remote_path)
+    folder    = scan_path if scan_path != arr_file else os.path.dirname(arr_file)
+    return scan_path, arr_file, folder
+
+
+def import_rejections(conn, folder, timeout=30):
+    """What the arr would say about importing this folder's files, without importing.
+
+    /api/v3/manualimport runs the same decision specs the scan command does and
+    reports them per file, which is the only way to tell a rescan that imported
+    nothing from one that imported everything — the command endpoint reports
+    'completed' either way. Returns [{path, rejections: [reason, …]}].
+
+    Advisory only: ManualImport with replaceExistingFiles overrides every
+    rejection listed here, which is what the force-import path relies on.
+    """
+    try:
+        encoded = urllib.parse.quote(folder, safe='')
+        rows = _arr_get(conn['base_url'], conn['api_key'],
+                        f'/api/v3/manualimport?folder={encoded}&filterExistingFiles=false',
+                        timeout=timeout)
+    except Exception as e:
+        log.warning("manualimport probe failed for %s: %s", folder, e)
+        return None
+    out = []
+    for row in (rows or []):
+        reasons = [r.get('reason') for r in (row.get('rejections') or []) if r.get('reason')]
+        # A row the arr could not attach to a title carries no rejections at all
+        # — there was nothing to evaluate the specs against. Left unsaid that
+        # reads as "no objections", which is the failure mode this whole probe
+        # exists to remove.
+        if not (row.get('movie') or row.get('series')):
+            reasons.append('No matching title — the file could not be identified')
+        out.append({'path': row.get('path') or '', 'rejections': reasons})
+    return out
+
+
+# Distinct folders probed per rescan request. A probe is a full manualimport
+# parse of a folder, so an unbounded selection would stall the request. Results
+# are cached per folder, and one category-dir probe already answers for every
+# single-file torrent sitting in it, so the cap is rarely reached.
+_PROBE_FOLDER_LIMIT = 20
+
+
 def arr_rescan(cfg, service, paths):
     """Shared rescan logic for sonarr and radarr.
 
-    service is 'sonarr' or 'radarr'. Returns the number of paths rescanned.
+    Returns {'count': commands issued, 'results': [{path, scanned, rejections,
+    checked}]}. The rejections are what made this look like a silent failure:
+    the arr runs its upgrade/revision specs against the file it already holds
+    and refuses anything that isn't strictly better, while the command endpoint
+    reports 'completed' either way.
+
     Raises ValueError if the service is not configured, or re-raises network errors.
     """
     svc = _SERVICE_MAP[service]
@@ -1377,23 +1530,43 @@ def arr_rescan(cfg, service, paths):
     local_path = cfg.get('LOCAL_PATH', '').strip()
     if not connections:
         raise ValueError(f"{svc['name']} not configured")
+
     command_count = 0
+    results = []
+    probes = {}
+
+    def _probe(conn, folder):
+        key = (conn['id'], folder)
+        if key not in probes:
+            if len(probes) >= _PROBE_FOLDER_LIMIT:
+                return None
+            probes[key] = import_rejections(conn, folder)
+        return probes[key]
+
     for conn in connections:
         remote_path = conn.get('remote_path', '').strip()
         for path in paths:
-            # Posix all the way down, not os.path: these are container-side
-            # paths whatever platform the process runs on, and os.path.isabs
-            # answers False for "/data/…" on Windows (3.13+ reads a rooted
-            # path with no drive as relative).
-            abs_path = path if path.startswith('/') else (local_path.rstrip('/') + '/' + path if local_path else path)
-            scan_path = _scan_target(abs_path, local_path)
-            if remote_path and _under_root(scan_path, local_path):
-                arr_path = remote_path + scan_path[len(local_path):]
-            else:
-                arr_path = scan_path
-            _arr_command(conn['base_url'], conn['api_key'], svc['command'], arr_path)
+            scan_path, arr_file, folder = arr_import_target(path, local_path, remote_path)
+            rows = _probe(conn, folder)
+
+            reasons = []
+            if rows is not None:
+                # A folder scan acts on everything under it; a file scan on one row.
+                matched = rows if scan_path != arr_file else [r for r in rows if r['path'] == arr_file]
+                if not matched:
+                    reasons = [f"{svc['name']} does not list this file as importable"]
+                elif all(r['rejections'] for r in matched):
+                    reasons = list(dict.fromkeys(r for m in matched for r in m['rejections']))
+
+            _arr_command(conn['base_url'], conn['api_key'], svc['command'], scan_path)
             command_count += 1
-    return command_count
+            results.append({
+                'path':       path,
+                'scanned':    scan_path,
+                'rejections': reasons,
+                'checked':    rows is not None,
+            })
+    return {'count': command_count, 'results': results}
 
 
 def arr_search(cfg, service, file_path):

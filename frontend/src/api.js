@@ -78,6 +78,7 @@ export const api = {
     : reqText('/actions/script/' + type),
   sonarrRescan: (paths)   => req('/actions/sonarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
   radarrRescan: (paths)   => req('/actions/radarr_rescan', { method: 'POST', body: JSON.stringify({ paths }) }),
+  forceImport: (items)    => req('/workflows/force_import', { method: 'POST', body: JSON.stringify({ items }) }),
   sonarrSearch: (path)    => req('/actions/sonarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
   radarrSearch: (path)    => req('/actions/radarr_search', { method: 'POST', body: JSON.stringify({ path }) }),
   uploadStats: (params) => {
