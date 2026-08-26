@@ -72,10 +72,22 @@ const NAV = [
     ],
   },
   {
-    // Next steps — the ranked workflow list plus the side-quest prize layer.
+    // Rounds — the ranked workflow list plus the side-quest prize layer.
     // Sits directly below Workflows because it is the index for them, and
     // deliberately carries no count badge: a page you visit, never one that nags.
-    id: 'next-steps', label: 'Next steps',
+    //
+    // Named "Rounds", not "Next steps": next steps is wizard language and
+    // promises a finite list you finish, which is the one thing this page
+    // refuses to be. Rounds are walked in a fixed order, forever. The tab id
+    // stays `next-steps` so existing bookmarks and the API route still match.
+    //
+    // Keep the clipboard-and-check icon. It looks like a leftover from the old
+    // name and is not: on rounds it reads as a chart, ticked off today and
+    // again tomorrow, which is the page exactly. It also carries the medical
+    // register Triage already set, and so does the work of making a one-word
+    // label legible cold. Something like a radar sweep would say "recurring"
+    // but pull the whole thing toward surveillance instead.
+    id: 'next-steps', label: 'Rounds',
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="9 11 12 14 22 4"/>

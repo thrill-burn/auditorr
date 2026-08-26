@@ -335,8 +335,8 @@ function AppInner() {
     try { await api.saveConfig(wizardData) } catch (_) {}
     localStorage.setItem('auditorr_setup_dismissed', '1')
     setShowWizard(false)
-    // Land on Next steps, not the dashboard — a fresh install has no numbers
-    // to read yet, but Next steps can always answer "what should I be doing".
+    // Land on Rounds, not the dashboard — a fresh install has no numbers
+    // to read yet, but Rounds can always answer "what should I be doing".
     if (nextStepsOn) { setHashTab('next-steps'); setTab('next-steps') }
   }
 

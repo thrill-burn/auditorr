@@ -1226,10 +1226,18 @@ def _slug(value):
     return re.sub(r'[^a-z0-9]+', '-', str(value).lower()).strip('-') or 'default'
 
 
-def _arr_command(base_url, api_key, command_name, path):
-    """POST a command to a Sonarr/Radarr instance."""
+def _arr_command(base_url, api_key, command_name, path, import_mode='Copy'):
+    """POST a scan command to a Sonarr/Radarr instance.
+
+    importMode is sent explicitly. The default, Auto, means "move" whenever no
+    download-client item is attached to the scan — and one never is here, since
+    the whole point of a Triage rescan is a payload the arr never grabbed. A
+    move pulls the file out from under a seeding torrent. Copy leaves the source
+    in place, and with "Use Hardlinks instead of Copy" on (the hardlink setup
+    this app assumes) it costs no extra disk.
+    """
     endpoint = base_url.rstrip('/') + '/api/v3/command'
-    body = json.dumps({"name": command_name, "path": path}).encode()
+    body = json.dumps({"name": command_name, "path": path, "importMode": import_mode}).encode()
     http_req = urllib.request.Request(
         endpoint, data=body,
         headers={"X-Api-Key": api_key, "Content-Type": "application/json"},
@@ -1327,6 +1335,37 @@ def _test_arr_connection(url, api_key):
         return False, str(e)
 
 
+def _under_root(path, root):
+    """True when path is root itself or sits inside it, on a separator boundary.
+
+    Guards against /data/media-extra reading as a sub-path of /data/media.
+    """
+    return bool(root) and path.startswith(root) and path[len(root):][:1] in ('/', '')
+
+
+def _scan_target(abs_path, local_path):
+    """The path to hand Sonarr/Radarr for a downloaded file.
+
+    A release folder is the better scan target than a bare file — it lets the
+    arr import a whole season pack from one command — but only the release
+    folder: both arrs parse the folder's own name to identify the title, so any
+    other folder imports nothing. Torrent layouts put a category dir first
+    (torrents/radarr/Film.mkv), so a blind dirname() on a single-file torrent
+    hands over the download root and the arr parses "radarr" as the release
+    name; on a nested pack it hands over "Season 1", which parses no better.
+    The release folder is the second segment below local_path — the same
+    "never a category dir" rule Triage uses for its exclusion granularity — and
+    anything shallower scans the file itself, which both arrs accept and parse
+    from its own filename.
+    """
+    if not _under_root(abs_path, local_path):
+        return abs_path
+    segments = [seg for seg in abs_path[len(local_path):].split('/') if seg]
+    if len(segments) < 3:
+        return abs_path
+    return local_path.rstrip('/') + '/' + '/'.join(segments[:2])
+
+
 def arr_rescan(cfg, service, paths):
     """Shared rescan logic for sonarr and radarr.
 
@@ -1342,13 +1381,16 @@ def arr_rescan(cfg, service, paths):
     for conn in connections:
         remote_path = conn.get('remote_path', '').strip()
         for path in paths:
-            abs_path = path if os.path.isabs(path) else (os.path.join(local_path, path) if local_path else path)
-            if remote_path and local_path and abs_path.startswith(local_path) and \
-                    abs_path[len(local_path):][:1] in ('/', ''):
-                arr_path = remote_path + abs_path[len(local_path):]
+            # Posix all the way down, not os.path: these are container-side
+            # paths whatever platform the process runs on, and os.path.isabs
+            # answers False for "/data/…" on Windows (3.13+ reads a rooted
+            # path with no drive as relative).
+            abs_path = path if path.startswith('/') else (local_path.rstrip('/') + '/' + path if local_path else path)
+            scan_path = _scan_target(abs_path, local_path)
+            if remote_path and _under_root(scan_path, local_path):
+                arr_path = remote_path + scan_path[len(local_path):]
             else:
-                arr_path = abs_path
-            arr_path = os.path.dirname(arr_path)
+                arr_path = scan_path
             _arr_command(conn['base_url'], conn['api_key'], svc['command'], arr_path)
             command_count += 1
     return command_count

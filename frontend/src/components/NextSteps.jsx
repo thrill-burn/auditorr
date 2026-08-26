@@ -2,7 +2,21 @@ import React, { useState, useEffect, useRef } from 'react'
 import { api } from '../api'
 import { LoadingRow, WorkflowError } from './workflows/shared'
 
-// Next steps — "this is your prioritized (and rewarded) workflows page."
+// Rounds — "this is your prioritized (and rewarded) workflows page."
+//
+// The page is called Rounds, not Next steps. "Next steps" is wizard language:
+// it promises a finite list you work through and are then done with, which is
+// the exact thing this page refuses to be (see the `nature` strings — "Keeps
+// coming back", "Never really finishes"). Rounds get walked in a fixed order,
+// forever, and the word casts the user as the person in charge of the library
+// rather than someone being handed homework — which is the same posture the
+// ladder names already take (Custodian, Sentinel, Watcher, Nightwatch).
+// "Chores" was the other finalist and was cut for building the do-chores-get-
+// useless-prizes joke out loud; the shelf lands harder against a flat frame,
+// for the same reason its own subhead was cut.
+//
+// Only the label changed. The module, route, config key and tab id all stay
+// `next_steps` / `next-steps` so bookmarks and stored config keep working.
 //
 // Layout, top to bottom:
 //   1. Baseline        — Cleanup + Dedupe. Collapses to one line once clear.
@@ -31,7 +45,7 @@ import { LoadingRow, WorkflowError } from './workflows/shared'
 // a property value, which is what made these fills invisible the first time.
 // See prompts/NEXT_STEPS.md.
 //
-// Everything here is contained to this page. Nothing about Next steps appears
+// Everything here is contained to this page. Nothing about Rounds appears
 // on the dashboard, in toasts, or as a sidebar badge.
 
 const STATE_META = {
@@ -683,7 +697,7 @@ export default function NextSteps({ onNavigate }) {
   if (data.enabled === false) {
     return (
       <div style={{ padding: 'var(--page-gutter)', color: 'var(--text-dim)', fontSize: 13 }}>
-        Next steps is turned off. Enable it in Config if you want it back.
+        Rounds is turned off. Enable it in Config if you want it back.
       </div>
     )
   }
@@ -698,7 +712,7 @@ export default function NextSteps({ onNavigate }) {
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Next steps</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Rounds</div>
           {/* Only the setup-stage blurb survives: with no audit on record the
               sections below are empty and the page needs to say why. Once they
               fill in, the section headers state the plan better than a paragraph
