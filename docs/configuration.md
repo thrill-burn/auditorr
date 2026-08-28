@@ -20,6 +20,7 @@ auditorr reads your torrents from one of two backends.
 | **Username / Password** | qBittorrent only. |
 | **API key** | qui only. |
 | **Workflow torrent deletion** | Opt-in. Off by default — see below. |
+| **External URL** | Optional. Only for reverse-proxy setups — see below. |
 
 Use **Test Connection** after filling these in. On success auditorr reports the
 client version, torrent count, and total seeding size, which is the quickest
@@ -27,6 +28,42 @@ confirmation that it's talking to the right instance.
 
 Stored credentials are never returned by the API — they read back as
 `__stored__` and are only overwritten when you type a new value.
+
+### External URLs (reverse proxy)
+
+**If the "open in qui ↗" and Sonarr/Radarr links already take you to the right
+place, skip this section and leave these fields blank.** Blank means "same as
+the host above", which is what auditorr has always done.
+
+The **Host** field above is the address auditorr *connects to*. It's also, by
+default, the address your browser is sent to when you click one of the `↗`
+buttons. Those are usually the same. They aren't if you reach your apps through
+a reverse proxy or a Tailscale domain, and there's no single value that works
+for both: the internal address gives you links your browser can't open, and the
+public one routes every scan through the proxy — or fails entirely if there's an
+SSO layer in front of it.
+
+So they're two separate settings. Find **External URLs (reverse proxy)** at the
+bottom of Torrent Source and Integrations:
+
+| Field | What it's for |
+| --- | --- |
+| **Host / URL** | The address **auditorr** connects to. Keep this internal. |
+| **External URL** | The address **your browser** uses. Only what `↗` links point at. |
+
+Notes:
+
+- Must start with `http://` or `https://`. A bare `media.example.com` is
+  rejected, because a browser reads it as a path inside auditorr rather than
+  another host.
+- Subpaths work: `https://media.example.com/sonarr` is fine.
+- auditorr **never** fetches the external URL. It's a link target and nothing
+  more — no API call, no connection test, no scan traffic.
+- There's no Test button for it, because the only meaningful test is whether
+  *your* browser can reach it. Fill it in and use the **open ↗** link beside the
+  field.
+- Additional Sonarr/Radarr instances each get their own **External URL** field
+  on their card.
 
 ### Workflow torrent deletion (`ALLOW_CLIENT_DELETE`)
 
@@ -125,9 +162,11 @@ the search-and-grab half of the workflows.
 | **Sonarr / Radarr URL** | Base URL, e.g. `http://192.168.1.10:8989`. |
 | **API key** | From Settings → General in the respective app. |
 | **Remote path** | The library path *as Sonarr/Radarr sees it*, if it differs from auditorr's. |
+| **External URL** | Optional. Where *your browser* reaches it, if that differs — see [External URLs](#external-urls-reverse-proxy). |
 
 Multiple instances are supported — add them as additional connections when you
-run, say, a 4K Radarr alongside a 1080p one.
+run, say, a 4K Radarr alongside a 1080p one. Each carries its own External URL
+field, so a split library behind a proxy links correctly per instance.
 
 ---
 

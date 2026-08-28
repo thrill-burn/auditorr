@@ -144,6 +144,55 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
   )
 }
 
+// Collapsed disclosure for the browser-facing link addresses.
+//
+// Named for the symptom, not the category: someone arrives here because their
+// links open the wrong address, and nobody expands a section called "Advanced"
+// looking for that. Once values are set the collapsed row says so — a setting
+// that is silently active is one people forget they turned on.
+//
+// There is no Test button, deliberately. The only meaningful test of a link
+// address is "does my browser reach it", which the server cannot answer and
+// must not try — it never fetches these. So the affordance is an open ↗ link,
+// which asks the one thing that can actually answer the question.
+function ExternalUrlSection({ fields }) {
+  const [open, setOpen] = useState(false)
+  const setCount = fields.filter(f => (f.value || '').trim()).length
+  return (
+    <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <button onClick={() => setOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+        {open ? '▼' : '▶'} External URLs (reverse proxy){setCount > 0 ? ` — ${setCount} set` : ''}
+      </button>
+      {open && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, margin: 0 }}>
+            Only needed if you reach these apps at a different address than auditorr does —
+            a reverse proxy or Tailscale domain. auditorr keeps using the host above for its
+            own API calls; this is only what the “open ↗” buttons link to.
+            <strong style={{ color: 'var(--text)' }}> If your links already open correctly, leave these blank.</strong>
+          </p>
+          {fields.map(f => (
+            <div key={f.key}>
+              <Field
+                label={f.label}
+                placeholder={f.placeholder}
+                value={f.value}
+                onChange={f.onChange}
+              />
+              {(f.value || '').trim() && (
+                <a href={f.value} target="_blank" rel="noopener noreferrer"
+                  style={{ display: 'inline-block', marginTop: 5, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>
+                  open ↗
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // The four score categories, in dashboard-card order and carrying the same
 // accent each card uses — the donut is meant to read as "those four cards, as
 // proportions", not as a new set of colors to learn.
@@ -345,6 +394,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         service: conn.service || 'sonarr',
         name: conn.name || '',
         base_url: conn.base_url || conn.url || '',
+        external_url: conn.external_url || '',
         api_key: conn.api_key === '__stored__' ? '' : (conn.api_key || ''),
         media_path: conn.media_path || '',
         local_media_path: conn.local_media_path || '',
@@ -471,6 +521,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           service: label,
           name,
           base_url: (conn.base_url || '').trim(),
+          external_url: (conn.external_url || '').trim(),
           api_key: conn.api_key || '',
           media_path: (conn.media_path || '').trim(),
           local_media_path: (conn.local_media_path || '').trim(),
@@ -673,6 +724,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             Test Connection
           </button>
         </div>
+        <ExternalUrlSection fields={isQui
+          ? [{ key: 'QUI_EXTERNAL_URL', label: 'qui External URL', placeholder: 'https://qui.example.com',
+               value: conf.QUI_EXTERNAL_URL, onChange: set('QUI_EXTERNAL_URL') }]
+          : [{ key: 'QB_EXTERNAL_URL', label: 'qBittorrent External URL', placeholder: 'https://qbit.example.com',
+               value: conf.QB_EXTERNAL_URL, onChange: set('QB_EXTERNAL_URL') }]} />
         {sourceInfo && testStatus?.ok && (
           <div style={{ marginTop: 8 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)' }}>
@@ -860,6 +916,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             </div>
           </div>
         </div>
+        <ExternalUrlSection fields={[
+          { key: 'SONARR_EXTERNAL_URL', label: 'Sonarr External URL', placeholder: 'https://sonarr.example.com',
+            value: conf.SONARR_EXTERNAL_URL, onChange: set('SONARR_EXTERNAL_URL') },
+          { key: 'RADARR_EXTERNAL_URL', label: 'Radarr External URL', placeholder: 'https://radarr.example.com',
+            value: conf.RADARR_EXTERNAL_URL, onChange: set('RADARR_EXTERNAL_URL') },
+        ]} />
         <div style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Additional Sonarr/Radarr instances</label>
           <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 10 }}>
@@ -908,6 +970,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                         Changing the ID requires re-entering this instance's API key before saving.
                       </div>
                     )}
+                    <div style={{ ...compactGrid, marginBottom: 10 }}>
+                      <Field label="External URL" placeholder="https://sonarr-4k.example.com"
+                        hint="Optional. Where your browser reaches this instance, if that differs from the URL above."
+                        value={conn.external_url} onChange={v => setArrConnection(index, 'external_url', v)} />
+                    </div>
                     <div style={compactGrid}>
                       <Field label="Arr Media Path" placeholder="/movies or /tv" hint="Path as this Arr instance sees its library." value={conn.media_path} onChange={v => setArrConnection(index, 'media_path', v)} />
                       <Field label="Auditorr Media Path" placeholder="/data/media/movies" hint="Matching path inside auditorr. Leave blank when paths already match." value={conn.local_media_path} onChange={v => setArrConnection(index, 'local_media_path', v)} />

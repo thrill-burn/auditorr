@@ -453,7 +453,10 @@ export default function Triage({ onNavigate, cleanupCount }) {
       .finally(() => setLoading(false))
     api.getConfig().then(cfg => {
       const isQui = cfg.TORRENT_SOURCE === 'qui'
-      const url = (isQui ? cfg.QUI_HOST : cfg.QB_HOST) || ''
+      // Link address, not the API address — prefer the external URL when the
+      // client is reached through a reverse proxy. Nothing here fetches it.
+      const url = (isQui ? (cfg.QUI_EXTERNAL_URL || cfg.QUI_HOST)
+                         : (cfg.QB_EXTERNAL_URL  || cfg.QB_HOST)) || ''
       setClient(url ? { name: isQui ? 'qui' : 'qBittorrent', url } : null)
       setClientDeleteAllowed(!!cfg.ALLOW_CLIENT_DELETE)
     }).catch(() => {})
@@ -518,9 +521,10 @@ export default function Triage({ onNavigate, cleanupCount }) {
   const deletableItems = selectedItems.filter(i => i.hash)
 
   // Superseded items are the only ones a force import applies to — the rest
-  // have no library file to replace. Of those, only same-quality ones qualify.
-  const supersededSelected = selectedItems.filter(i => i.verdict === 'superseded')
-  const forceImportItems   = supersededSelected.filter(canForceImport)
+  // have no library file to replace. Of those, only same-quality ones qualify;
+  // the action is absent rather than disabled for the others, because the rows
+  // already sit under a "lower than library" heading that says why.
+  const forceImportItems = selectedItems.filter(i => i.verdict === 'superseded' && canForceImport(i))
 
   // Open the confirm modal and resolve each selected torrent's live cross-seed
   // group so the user can choose per-item: delete just this torrent, or the
@@ -868,12 +872,10 @@ export default function Triage({ onNavigate, cleanupCount }) {
               <ActionButton onClick={handleRescan} disabled={busy != null} title="Tell Sonarr/Radarr to rescan these folders and retry the import">
                 {busy === 'rescan' ? 'Rescanning…' : 'Trigger Rescan'}
               </ActionButton>
-              {supersededSelected.length > 0 && (
-                <ActionButton onClick={handleForceImport} disabled={busy != null || forceImportItems.length === 0}
-                  title={forceImportItems.length === 0
-                    ? 'Only same-quality releases can be force-imported — the selected ones are downgrades on what the library already holds, which Sonarr/Radarr are right to refuse'
-                    : `Replace the library file with this release via Sonarr/Radarr's "Import Anyway" — the only way past the upgrade check a same-quality swap can never pass`}>
-                  {busy === 'force' ? 'Importing…' : `Force import${forceImportItems.length ? ` (${forceImportItems.length})` : ''}`}
+              {forceImportItems.length > 0 && (
+                <ActionButton onClick={handleForceImport} disabled={busy != null}
+                  title={`Replace the library file with this release via Sonarr/Radarr's "Import Anyway" — the only way past the upgrade check a same-quality swap can never pass`}>
+                  {busy === 'force' ? 'Importing…' : `Force import (${forceImportItems.length})`}
                 </ActionButton>
               )}
               <ActionButton onClick={handleExclude} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">

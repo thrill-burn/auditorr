@@ -122,6 +122,13 @@ extend to it. Either:
 - enforce authentication at the proxy itself (basic auth, an SSO forward-auth
   provider, an allow-list).
 
+If you also proxy qui, qBittorrent, Sonarr, or Radarr, set an **External URL**
+for each so auditorr's `↗` buttons link to the proxied address while it keeps
+connecting internally — see
+[External URLs](configuration.md#external-urls-reverse-proxy). Keeping the two
+separate is what lets you put SSO in front of those apps without breaking
+auditorr's scans, since it never fetches the external address.
+
 ---
 
 ## Strict mode

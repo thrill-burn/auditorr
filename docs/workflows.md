@@ -116,15 +116,17 @@ decided and tells you in plain words:
 > Nothing will import — Not a quality revision upgrade for existing movie file(s)
 
 **Force import** is the way past it. It uses the arr's own *Import Anyway*,
-replacing the library file with this release. It appears on superseded items and
-is only enabled when the torrent is the **same quality** as the file you already
-have — typically after a trump, where the tracker made you swap one release for
-an equivalent one.
+replacing the library file with this release. It appears on superseded items
+that are the **same quality** as the file you already have — typically after a
+trump, where the tracker made you swap one release for an equivalent one.
 
 If the torrent is genuinely worse than what you have — 1080p against a 2160p
-library file, a WEB-DL against a Bluray — the button stays disabled. That
+library file, a WEB-DL against a Bluray — the action isn't offered at all. That
 refusal isn't a bug to work around; those torrents are fine as cross-seeds, and
-your library is right to keep the better copy.
+your library is right to keep the better copy. If you do want one of them anyway
+— a corrupt library file, or a 1080p Remux auditorr ranks below a 2160p WEB-DL
+because resolution decides first — use Sonarr/Radarr's own Manual Import, which
+handles one deliberate file at a time.
 
 > Force import replaces a file you already have. It's the one Triage action that
 > changes your library rather than your torrent client, so it's deliberately

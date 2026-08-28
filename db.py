@@ -17,6 +17,12 @@ DEFAULT_CONFIG = {
     'QB_PASS':            '',
     'QUI_HOST':           '',
     'QUI_API_KEY':        '',
+    # Browser-facing link addresses, for setups reached through a reverse proxy.
+    # Blank means "same as the host above" — see link_base() in arr.py. These are
+    # never fetched by the server; the *_HOST keys stay the API address so that an
+    # auth proxy in front of the UI can't break scanning.
+    'QB_EXTERNAL_URL':    '',
+    'QUI_EXTERNAL_URL':   '',
     'ALLOW_CLIENT_DELETE': False,  # Workflows may delete torrents+files via the client (opt-in)
     'MEDIA_PATH':         '/data/media',
     'REMOTE_PATH':        '/data/torrents',
@@ -42,6 +48,8 @@ DEFAULT_CONFIG = {
     'SONARR_API_KEY':     '',
     'RADARR_URL':         '',
     'RADARR_API_KEY':     '',
+    'SONARR_EXTERNAL_URL': '',  # Browser-facing link address; blank = SONARR_URL
+    'RADARR_EXTERNAL_URL': '',  # Browser-facing link address; blank = RADARR_URL
     'SONARR_REMOTE_PATH': '',  # Path as Sonarr sees it (inside its container)
     'RADARR_REMOTE_PATH': '',  # Path as Radarr sees it (inside its container)
     'ARR_CONNECTIONS':    [],  # Optional multi-instance Sonarr/Radarr connections
@@ -53,6 +61,48 @@ DEFAULT_CONFIG = {
 # Ordered to match the four dashboard cards (and the config donut's segments).
 SCORE_WEIGHT_KEYS = ('WEIGHT_HARDLINKED', 'WEIGHT_ORPHANED',
                      'WEIGHT_NOT_IMPORTED', 'WEIGHT_DUPLICATES')
+
+# The browser-facing link addresses, paired with the API address each falls back
+# to when blank. Order is the order they appear in the Config UI.
+EXTERNAL_URL_KEYS = (
+    ('QB_EXTERNAL_URL',     'QB_HOST',     'qBittorrent External URL'),
+    ('QUI_EXTERNAL_URL',    'QUI_HOST',    'qui External URL'),
+    ('SONARR_EXTERNAL_URL', 'SONARR_URL',  'Sonarr External URL'),
+    ('RADARR_EXTERNAL_URL', 'RADARR_URL',  'Radarr External URL'),
+)
+
+# The API addresses. Checked on save too, but only as a warning — see
+# url_problem() for why an existing install must never be locked out of Config.
+API_URL_KEYS = (
+    ('QB_HOST',    'qBittorrent Host URL'),
+    ('QUI_HOST',   'qui Host URL'),
+    ('SONARR_URL', 'Sonarr URL'),
+    ('RADARR_URL', 'Radarr URL'),
+)
+
+
+def url_problem(label, value, max_len=300):
+    """Describe what's wrong with a configured URL, or None if it's usable.
+
+    http/https only. An API address with any other scheme can't be fetched, and
+    a *link* address with one (javascript:, data:) would execute in the page
+    instead of navigating. A missing scheme is rejected as well: "media.example
+    .com" renders as a *relative* link into auditorr, so it fails silently and
+    looks like the feature is broken rather than the value.
+
+    Callers decide the severity. New keys treat this as an error — nothing is
+    stored there yet, so no install can be locked out. The pre-existing API keys
+    treat it as a warning: an install that has held an unschemed URL for months
+    must still be able to save unrelated settings.
+    """
+    text = str(value or '').strip()
+    if not text:
+        return None
+    if len(text) > max_len:
+        return f"{label} is too long"
+    if not text.lower().startswith(('http://', 'https://')):
+        return f"{label} must start with http:// or https://"
+    return None
 
 
 def score_weight_points(cfg):
@@ -644,6 +694,14 @@ def validate_config(data):
                 if str(preset).lower() not in allowed_disc_presets:
                     errors.append(f"DISC_RIP_EXCLUSION_PRESETS[{i}] must be one of bluray, dvd")
 
+    # Hard error: these keys are new, so nothing can already be stored in one and
+    # no existing install can be locked out of its own settings page by this.
+    for key, _api_key, label in EXTERNAL_URL_KEYS:
+        if key in data:
+            problem = url_problem(label, data.get(key))
+            if problem:
+                errors.append(problem)
+
     arr_connections = data.get('ARR_CONNECTIONS')
     if arr_connections is not None:
         if not isinstance(arr_connections, list):
@@ -669,6 +727,13 @@ def validate_config(data):
                     errors.append(f"ARR_CONNECTIONS[{i}].base_url is too long")
                 if conn.get('url') and len(str(conn.get('url'))) > 300:
                     errors.append(f"ARR_CONNECTIONS[{i}].url is too long")
+                # _merge_arr_connection_secrets copies every incoming key
+                # verbatim, so a field with no validator here is stored entirely
+                # unchecked. This one goes straight into a browser address bar.
+                ext_problem = url_problem(
+                    f"ARR_CONNECTIONS[{i}].external_url", conn.get('external_url'))
+                if ext_problem:
+                    errors.append(ext_problem)
                 if conn.get('media_path') and len(str(conn.get('media_path'))) > 300:
                     errors.append(f"ARR_CONNECTIONS[{i}].media_path is too long")
                 if conn.get('local_media_path') and len(str(conn.get('local_media_path'))) > 300:

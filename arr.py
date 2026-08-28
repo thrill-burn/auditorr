@@ -17,6 +17,7 @@ _ARR_MEDIA_INDEX_TTL = 120
 _SERVICE_MAP = {
     'sonarr': {
         'url_key':      'SONARR_URL',
+        'external_key': 'SONARR_EXTERNAL_URL',
         'key_key':      'SONARR_API_KEY',
         'remote_key':   'SONARR_REMOTE_PATH',
         'command':      'DownloadedEpisodesScan',
@@ -26,6 +27,7 @@ _SERVICE_MAP = {
     },
     'radarr': {
         'url_key':      'RADARR_URL',
+        'external_key': 'RADARR_EXTERNAL_URL',
         'key_key':      'RADARR_API_KEY',
         'remote_key':   'RADARR_REMOTE_PATH',
         'command':      'DownloadedMoviesScan',
@@ -34,6 +36,25 @@ _SERVICE_MAP = {
         'name':         'Radarr',
     },
 }
+
+
+def link_base(conn):
+    """The address to put in front of a *browser* link for this connection.
+
+    Presentation only. This is the reverse-proxy-facing address when one is
+    configured, which the server must never fetch — an auth proxy or an
+    external-only DNS name in front of it would break API calls that the
+    internal address serves fine.
+
+    That separation is kept structural rather than by convention: _arr_get and
+    _arr_command take a base_url *string* positionally and are never handed a
+    connection dict, so there is no call site where this value could be
+    mistaken for the API address. Keep it that way.
+    """
+    if not isinstance(conn, dict):
+        return ''
+    external = str(conn.get('external_url') or '').strip()
+    return (external or str(conn.get('base_url') or '')).rstrip('/')
 
 
 def normalize_arr_connections(cfg, service=None):
@@ -64,6 +85,7 @@ def normalize_arr_connections(cfg, service=None):
                 'service': svc_name,
                 'name': svc['name'],
                 'base_url': url,
+                'external_url': cfg.get(svc['external_key'], ''),
                 'api_key': api_key,
                 'remote_path': cfg.get(svc['remote_key'], ''),
             }))
@@ -982,12 +1004,17 @@ def _normalize_arr_connection(raw):
     api_key = str(raw.get('api_key') or raw.get('apiKey') or '').strip()
     if not base_url or not api_key:
         return None
+    # Deliberately single-key, unlike base_url above: that alias is why
+    # validate_config has to length-check both 'base_url' and 'url', and a second
+    # alias here would let the validator check one name while this reads another.
+    external_url = str(raw.get('external_url') or '').strip().rstrip('/')
     conn_id = str(raw.get('id') or f"{service}-{_slug(raw.get('name') or service)}").strip()
     return {
         'id': conn_id,
         'service': service,
         'name': str(raw.get('name') or _SERVICE_MAP[service]['name']).strip(),
         'base_url': base_url,
+        'external_url': external_url,
         'api_key': api_key,
         'remote_path': str(raw.get('remote_path') or raw.get('remotePath') or '').strip(),
         'media_path': str(raw.get('media_path') or raw.get('mediaPath') or '').strip(),
@@ -1624,5 +1651,5 @@ def arr_search(cfg, service, file_path):
             f"'{title}' not found in {svc['name']} library. "
             f"Make sure it is added and monitored in {svc['name']} first."
         )
-    result_url = best_conn['base_url'].rstrip('/') + svc['slug_prefix'] + best['titleSlug']
+    result_url = link_base(best_conn) + svc['slug_prefix'] + best['titleSlug']
     return {"url": result_url, "title": best.get('title', title), "connection_id": best_conn['id']}

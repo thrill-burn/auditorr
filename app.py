@@ -20,7 +20,7 @@ import next_steps
 import sources
 from db import (
     DATA_DIR,
-    DEFAULT_CONFIG, SCORE_WEIGHT_KEYS,
+    DEFAULT_CONFIG, SCORE_WEIGHT_KEYS, API_URL_KEYS, url_problem,
     init_db,
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
@@ -41,7 +41,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -527,6 +527,14 @@ def handle_config():
             p = str(data.get(key, ''))
             if p and not os.path.exists(p):
                 warnings.append(f"{label} '{p}' does not exist inside the container")
+        # A warning, not an error: an install that has held a schemeless URL for
+        # months still saves, and still gets told. Blocking here would lock it out
+        # of every unrelated setting on the page.
+        for key, label in API_URL_KEYS:
+            if key in data:
+                problem = url_problem(label, data.get(key))
+                if problem:
+                    warnings.append(problem)
         try:
             existing = db_load_config()
             new_conf = {
@@ -536,6 +544,14 @@ def handle_config():
                 'QB_PASS':            str(data['QB_PASS']) if data.get('QB_PASS') else existing.get('QB_PASS',''),
                 'QUI_HOST':           str(data.get('QUI_HOST', '')),
                 'QUI_API_KEY':        str(data['QUI_API_KEY']) if data.get('QUI_API_KEY') else existing.get('QUI_API_KEY', ''),
+                # This dict is a full replacement, and most string keys above
+                # default to '' — safe only because Config.jsx always sends them.
+                # These fall back to the stored value instead, so a save from a
+                # client that doesn't know the keys (a browser holding a stale
+                # bundle, most likely) leaves them alone rather than silently
+                # clearing someone's proxy URLs.
+                'QB_EXTERNAL_URL':    str(data.get('QB_EXTERNAL_URL',    existing.get('QB_EXTERNAL_URL', ''))),
+                'QUI_EXTERNAL_URL':   str(data.get('QUI_EXTERNAL_URL',   existing.get('QUI_EXTERNAL_URL', ''))),
                 'ALLOW_CLIENT_DELETE': bool(data.get('ALLOW_CLIENT_DELETE', existing.get('ALLOW_CLIENT_DELETE', False))),
                 'MEDIA_PATH':         str(data.get('MEDIA_PATH', '')),
                 'REMOTE_PATH':        str(data.get('REMOTE_PATH', '')),
@@ -560,6 +576,8 @@ def handle_config():
                 'SONARR_API_KEY':     str(data['SONARR_API_KEY']) if data.get('SONARR_API_KEY') else existing.get('SONARR_API_KEY', ''),
                 'RADARR_URL':         str(data.get('RADARR_URL', '')),
                 'RADARR_API_KEY':     str(data['RADARR_API_KEY']) if data.get('RADARR_API_KEY') else existing.get('RADARR_API_KEY', ''),
+                'SONARR_EXTERNAL_URL': str(data.get('SONARR_EXTERNAL_URL', existing.get('SONARR_EXTERNAL_URL', ''))),
+                'RADARR_EXTERNAL_URL': str(data.get('RADARR_EXTERNAL_URL', existing.get('RADARR_EXTERNAL_URL', ''))),
                 'SONARR_REMOTE_PATH': str(data.get('SONARR_REMOTE_PATH', '')),
                 'RADARR_REMOTE_PATH': str(data.get('RADARR_REMOTE_PATH', '')),
                 'ARR_CONNECTIONS':    _merge_arr_connection_secrets(
@@ -1529,7 +1547,7 @@ def workflows_trump_search_release():
     prefix = '/movie/' if item.get('service') == 'radarr' else '/series/'
     fallback_url = ''
     if conn:
-        fallback_url = (conn['base_url'].rstrip('/') + prefix
+        fallback_url = (link_base(conn) + prefix
                         + (item.get('title_slug') or str(item.get('arr_id') or '')))
 
     try:
@@ -1750,7 +1768,7 @@ def workflows_triage():
             return ''
         prefix = '/movie/' if entry.get('service') == 'radarr' else '/series/'
         slug = entry.get('title_slug') or ''
-        return conn['base_url'].rstrip('/') + prefix + (slug or str(entry.get('arr_id') or ''))
+        return link_base(conn) + prefix + (slug or str(entry.get('arr_id') or ''))
 
     items = []
     for g in group_list:
@@ -2173,7 +2191,7 @@ def workflows_acquire_candidates():
 
     all_conns = normalize_arr_connections(cfg)
     conn_by_id = {c['id']: c for c in all_conns}
-    fallback_base_url = all_conns[0]['base_url'] if all_conns else ''
+    fallback_base_url = link_base(all_conns[0]) if all_conns else ''
 
     candidates = []
     resolved_count = 0
@@ -2194,11 +2212,11 @@ def workflows_acquire_candidates():
             slug_prefix = svc_map.get(service, {}).get('slug_prefix', '/')
             title_slug = arr_item.get('titleSlug') or arr_item.get('title_slug')
             conn = conn_by_id.get(conn_id)
-            base_url = conn['base_url'] if conn else ''
+            base_url = link_base(conn) if conn else ''
             if title_slug:
-                arr_url = base_url.rstrip('/') + slug_prefix + title_slug
+                arr_url = base_url + slug_prefix + title_slug
             else:
-                arr_url = base_url.rstrip('/') + slug_prefix + str(arr_id) if arr_id else base_url
+                arr_url = base_url + slug_prefix + str(arr_id) if arr_id else base_url
             candidates.append({
                 **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
                 'resolved': True,
@@ -2215,7 +2233,7 @@ def workflows_acquire_candidates():
             search_url = ''
             if fallback_base_url:
                 term = os.path.splitext(filename)[0]
-                search_url = fallback_base_url.rstrip('/') + '/add/new?term=' + urllib.parse.quote(term)
+                search_url = fallback_base_url + '/add/new?term=' + urllib.parse.quote(term)
             candidates.append({
                 **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
                 'resolved': False,
@@ -2409,9 +2427,9 @@ def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
         ep_ids   = arr_item.get('episode_ids') or []
         t_slug   = arr_item.get('titleSlug') or arr_item.get('title_slug')
         conn     = conn_by_id.get(conn_id)
-        base_url = conn['base_url'] if conn else ''
+        base_url = link_base(conn) if conn else ''
         slug     = svc_slug.get(service, '/')
-        arr_url  = (base_url.rstrip('/') + slug + t_slug) if t_slug else (base_url.rstrip('/') + slug + str(arr_id) if arr_id else base_url)
+        arr_url  = (base_url + slug + t_slug) if t_slug else (base_url + slug + str(arr_id) if arr_id else base_url)
         flat.append({
             'path': rel_path, 'size': f.get('size', 0),
             'arr_service': service, 'arr_connection_id': conn_id,

@@ -188,7 +188,9 @@ function Step1({ data, onChange, onNext, onSkip }) {
 
       {!isQui ? (
         <>
-          <Field label="Host URL" placeholder="http://192.168.1.x:8080" value={data.QB_HOST} onChange={v => { onChange('QB_HOST', v); setTestStatus(null) }} style={{ marginBottom: 14 }} />
+          <Field label="Host URL" placeholder="http://192.168.1.x:8080"
+            hint="The address auditorr connects from. Behind a reverse proxy, use the internal one — you can add your public URL for links later in Settings."
+            value={data.QB_HOST} onChange={v => { onChange('QB_HOST', v); setTestStatus(null) }} style={{ marginBottom: 14 }} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
             <Field label="Username" placeholder="admin" value={data.QB_USER} onChange={v => { onChange('QB_USER', v); setTestStatus(null) }} />
             <Field label="Password" type="password" placeholder="password" value={data.QB_PASS} onChange={v => { onChange('QB_PASS', v); setTestStatus(null) }} />
@@ -199,7 +201,9 @@ function Step1({ data, onChange, onNext, onSkip }) {
           <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 14 }}>
             qui aggregates multiple qBittorrent instances behind one API endpoint — ideal for multi-instance setups sharing a common filesystem (e.g. mergerfs).
           </p>
-          <Field label="Host URL" placeholder="http://192.168.1.x:7476" value={data.QUI_HOST || ''} onChange={v => { onChange('QUI_HOST', v); setTestStatus(null) }} style={{ marginBottom: 14 }} />
+          <Field label="Host URL" placeholder="http://192.168.1.x:7476"
+            hint="The address auditorr connects from. Behind a reverse proxy, use the internal one — you can add your public URL for links later in Settings."
+            value={data.QUI_HOST || ''} onChange={v => { onChange('QUI_HOST', v); setTestStatus(null) }} style={{ marginBottom: 14 }} />
           <Field label="API Key" type="password"
             hint="Create a full-access key in qui under Settings → API Keys."
             placeholder="api key…" value={data.QUI_API_KEY || ''} onChange={v => { onChange('QUI_API_KEY', v); setTestStatus(null) }} style={{ marginBottom: 20 }} />
@@ -407,6 +411,7 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
       <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Optional: Sonarr & Radarr</div>
       <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
         Can be set up later. Required only for interactive search in the Media explorer. API keys are in each app under Settings → General.
+        Use the address auditorr connects from — behind a reverse proxy, the internal one. You can add public URLs for links later in Settings.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 8 }}>

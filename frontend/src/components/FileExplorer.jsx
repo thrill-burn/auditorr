@@ -492,7 +492,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
     setSonarrState('loading')
     try {
       const data = await api.sonarrSearch(node.path)
-      window.open(data.url, '_blank')
+      window.open(data.url, '_blank', 'noopener')
       setSonarrState('success')
       toast(`Opened ${data.title} in Sonarr — run Interactive Search to find a seeding version`, 'success')
       setTimeout(() => setSonarrState('idle'), 3000)
@@ -508,7 +508,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
     setRadarrState('loading')
     try {
       const data = await api.radarrSearch(node.path)
-      window.open(data.url, '_blank')
+      window.open(data.url, '_blank', 'noopener')
       setRadarrState('success')
       toast(`Opened ${data.title} in Radarr — run Interactive Search to find a seeding version`, 'success')
       setTimeout(() => setRadarrState('idle'), 3000)
@@ -648,7 +648,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
     setSonarrState('loading')
     try {
       const data = await api.sonarrSearch(node.path)
-      window.open(data.url, '_blank')
+      window.open(data.url, '_blank', 'noopener')
       setSonarrState('success')
       toast(`Opened ${data.title} in Sonarr — run Interactive Search to find a seeding version`, 'success')
       setTimeout(() => setSonarrState('idle'), 3000)
@@ -664,7 +664,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
     setRadarrState('loading')
     try {
       const data = await api.radarrSearch(node.path)
-      window.open(data.url, '_blank')
+      window.open(data.url, '_blank', 'noopener')
       setRadarrState('success')
       toast(`Opened ${data.title} in Radarr — run Interactive Search to find a seeding version`, 'success')
       setTimeout(() => setRadarrState('idle'), 3000)
@@ -908,8 +908,11 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       setSonarrConfigured(!!c.SONARR_URL || arrConnections.some(conn => String(conn.service || '').toLowerCase() === 'sonarr'))
       setRadarrConfigured(!!c.RADARR_URL || arrConnections.some(conn => String(conn.service || '').toLowerCase() === 'radarr'))
       setTorrentSource(c.TORRENT_SOURCE || 'qbit')
-      setQbHost(c.QB_HOST || '')
-      setQuiHost(c.QUI_HOST || '')
+      // These two are only ever used to build links the browser opens, so they
+      // resolve to the external address when one is set. The API address stays
+      // server-side — nothing here should ever fetch from these.
+      setQbHost(c.QB_EXTERNAL_URL || c.QB_HOST || '')
+      setQuiHost(c.QUI_EXTERNAL_URL || c.QUI_HOST || '')
       setHideExcluded(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
     }).catch(() => {})
   }, [])
