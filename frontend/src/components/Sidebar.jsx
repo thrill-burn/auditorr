@@ -108,7 +108,7 @@ const NAV = [
 
 const WORKFLOW_TAB_IDS = ['backfill', 'triage', 'cleanup', 'dedupe', 'trumped']
 
-export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel, workflowCounts, showNextSteps = true }) {
+export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel, workflowCounts }) {
   const scoreC = score != null ? scoreColor(score) : 'var(--text-dim)'
   const scoreDisplay = score != null ? Math.round(Number(score)) : null
   const csDisplay = crossSeedMultiplier != null ? crossSeedMultiplier.toFixed(2) : null
@@ -187,7 +187,6 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
       {/* Nav */}
       <nav style={{ flex: 1, padding: '10px 10px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
         {NAV.map(({ id, label, icon, children }) => {
-          if (id === 'next-steps' && !showNextSteps) return null
           if (children) {
             const isGroupActive = children.some(c => c.id === active)
             const isOpen = openGroups.has(id)

@@ -173,7 +173,6 @@ function AppInner() {
   const [activeImports,      setActiveImports]      = useState([])
   const [importPanelOpen,    setImportPanelOpen]    = useState(false)
   const [authBlocked,        setAuthBlocked]        = useState(false)  // server refuses: AUDITORR_SECRET unset
-  const [nextStepsOn,        setNextStepsOn]        = useState(true)   // NEXT_STEPS_ENABLED config flag
   const prevScanRef        = useRef(false)
   const intervalRef        = useRef(null)
   const filesFetchingRef   = useRef({ media: false, torrents: false })
@@ -244,7 +243,6 @@ function AppInner() {
 
   useEffect(() => {
     api.getConfig().then(cfg => {
-      setNextStepsOn(cfg.NEXT_STEPS_ENABLED !== false)
       if (localStorage.getItem('auditorr_setup_dismissed')) return
       const isQui = cfg.TORRENT_SOURCE === 'qui'
       const unconfigured = isQui ? !cfg.QUI_HOST : !cfg.QB_HOST
@@ -337,7 +335,7 @@ function AppInner() {
     setShowWizard(false)
     // Land on Rounds, not the dashboard — a fresh install has no numbers
     // to read yet, but Rounds can always answer "what should I be doing".
-    if (nextStepsOn) { setHashTab('next-steps'); setTab('next-steps') }
+    setHashTab('next-steps'); setTab('next-steps')
   }
 
   const handleWizardSkip = () => {
@@ -419,7 +417,6 @@ function AppInner() {
         crossSeedMultiplier={crossSeedMultiplier}
         activeImportCount={activeImports.filter(j => !['done', 'error'].includes(j.status)).length}
         onOpenImportPanel={() => setImportPanelOpen(true)}
-        showNextSteps={nextStepsOn}
         workflowCounts={(() => {
           const det = results?.dashboard?.current?.details
           if (!det) return null

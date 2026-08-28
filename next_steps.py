@@ -1745,7 +1745,6 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
     stage = 'running' if has_audit else 'setup'
 
     return {
-        'enabled': True,
         'stage': stage,
         'health': {'score': dashboard.get('score'), 'status': dashboard.get('status')},
         'rank': {**_rank_for(points), 'points': points},

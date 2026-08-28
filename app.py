@@ -425,8 +425,6 @@ def get_next_steps():
     hotspot. Do not add it to `_is_heavy_mem_path`; it must never qualify.
     """
     cfg = db_load_config()
-    if not cfg.get('NEXT_STEPS_ENABLED', True):
-        return jsonify({"enabled": False})
     lifetime_up = 0
     try:
         snap = db_get_latest_upload_snapshot() or {}

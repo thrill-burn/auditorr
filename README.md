@@ -20,7 +20,7 @@ tells you what's wrong with your library. Five automated workflows fix it.
 
 ## What's new in 1.7.2
 
-- **[Rounds](#rounds)** - a new page that ranks the five workflows by what your library actually needs, and keeps score with prizes that are deliberately useless.
+- **[Rounds](#rounds)** - a new page that tells you which workflows your library needs right now, which to do first, and keeps score with useless prizes.
 - **Force import** - [Triage](#triage) can now replace a same-quality file Sonarr / Radarr refuses to upgrade, using their own *Import Anyway*.
 - **Health score weighting** - split the 100 points however you like, or stop scoring a category entirely. For setups that delete torrents once seeding is done.
 - **External URLs** - a separate browser-facing address per service, for reverse proxies. Blank means "same as before".

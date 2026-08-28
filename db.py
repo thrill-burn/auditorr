@@ -55,7 +55,6 @@ DEFAULT_CONFIG = {
     'ARR_CONNECTIONS':    [],  # Optional multi-instance Sonarr/Radarr connections
     'ACQUIRE_DOWNLOAD_FROM': [],  # Indexer names to download from (Workflows)
     'ACQUIRE_SEEDING_ON':    [],  # Indexer names the file must also be on (Workflows)
-    'NEXT_STEPS_ENABLED': True,   # Show the Next steps page (ranked workflows + prizes)
 }
 
 # Ordered to match the four dashboard cards (and the config donut's segments).

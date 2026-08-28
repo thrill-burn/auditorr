@@ -694,14 +694,6 @@ export default function NextSteps({ onNavigate }) {
 
   if (error) return <div style={{ padding: 'var(--page-gutter)' }}><WorkflowError message={error} /></div>
   if (!data)  return <div style={{ padding: 'var(--page-gutter)' }}><LoadingRow label="Working out what you should be doing…" /></div>
-  if (data.enabled === false) {
-    return (
-      <div style={{ padding: 'var(--page-gutter)', color: 'var(--text-dim)', fontSize: 13 }}>
-        Rounds is turned off. Enable it in Config if you want it back.
-      </div>
-    )
-  }
-
   const { setup, rows, health } = data
   const byId = Object.fromEntries((rows || []).map(r => [r.id, r]))
   const baseline = ['cleanup', 'dedupe'].map(id => byId[id]).filter(Boolean)
