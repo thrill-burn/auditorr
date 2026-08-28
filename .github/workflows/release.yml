@@ -13,10 +13,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # body_path used to be CHANGELOG.md itself, which published the entire
+      # file — every version back to 1.0 — as the notes for one release.
+      # Print from the first "## " heading up to the second: the newest section.
+      - name: Extract release notes
+        run: awk '/^## /{n++} n==1' CHANGELOG.md > RELEASE_NOTES.md
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           generate_release_notes: false
