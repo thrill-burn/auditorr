@@ -18,9 +18,14 @@ tells you what's wrong with your library. Five automated workflows fix it.
 
 ---
 
-## Fixed in 1.7.1
+## What's new in 1.7.2
 
-- **Closed by default off-LAN** - with no access key set, [remote requests are refused](docs/remote-access.md). LAN is unaffected.
+- **[Rounds](#rounds)** - a new page that ranks the five workflows by what your library actually needs, and keeps score with prizes that are deliberately useless.
+- **Force import** - [Triage](#triage) can now replace a same-quality file Sonarr / Radarr refuses to upgrade, using their own *Import Anyway*.
+- **Health score weighting** - split the 100 points however you like, or stop scoring a category entirely. For setups that delete torrents once seeding is done.
+- **External URLs** - a separate browser-facing address per service, for reverse proxies. Blank means "same as before".
+
+Upgrading from 1.7.0 or earlier? 1.7.1 [closed off-LAN API access by default](docs/remote-access.md) - LAN is unaffected.
 
 ## What's new in 1.7.0
 
@@ -64,7 +69,21 @@ tells you what's wrong with your library. Five automated workflows fix it.
 
 ## Workflows
 
-The dashboard tells you what's wrong; **workflows** fix it.
+The dashboard tells you what's wrong; **workflows** fix it. **Rounds** tells you
+which one to open.
+
+### Rounds
+
+Every workflow in one ranked list, in a fixed order you walk again and again:
+**Baseline** you clear once and then watch, **Ongoing** never has a last item,
+**On demand** waits for a tracker to ask. Each row states what it would cost you
+to ignore it. Underneath sits a shelf of **useless prizes** — about 500 named
+tiers and 87 one-off feats, in the spirit of Progress Quest, awarded for work
+you were going to do anyway and never taken back.
+
+<p>
+  <a href="docs/rounds.png"><img src="docs/rounds.png" alt="Rounds" width="100%" /></a>
+</p>
 
 ### Backfill
 

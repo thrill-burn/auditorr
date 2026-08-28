@@ -19,6 +19,54 @@ before running, or a confirmed action on selections you made.
 
 ---
 
+## Rounds
+
+**Rounds** is the index for the five. It's the page to open when you know
+something needs doing but not which thing.
+
+Each workflow gets one row, in a state auditorr works out from your last audit:
+
+| State | Means |
+| --- | --- |
+| **Needs you** | Over the threshold you configured for that component. |
+| **Blocked** | Can't run until you finish something in Config. |
+| **Could improve** | Under the threshold, but there's still something there. |
+| **Clear** | Nothing to do. The row stays, so you know it's being watched. |
+| **On standby** | Trumped only. It starts when a tracker PMs you, not before. |
+
+The rows sit in three fixed sections, and the sections are the point:
+
+- **Baseline** — Cleanup and Dedupe. Clear these once at the start, then keep an
+  eye on them. They collapse to a single line once they're clear.
+- **Ongoing** — Triage, then Backfill. These never have a last item. New
+  downloads keep refilling Triage, and a library that keeps growing keeps
+  finding new gaps for Backfill.
+- **On demand** — Trumped. Nothing to do until a tracker asks.
+
+The order never changes between visits, and it isn't ranked by whichever number
+is biggest today. Hardlinked Media is 70 of the 100 health points because it's
+the *hardest* thing to fix, not the first — sorting by score would hand a new
+install the slowest workflow in the app as step one.
+
+<p><img src="rounds.png" alt="Rounds" width="100%" /></p>
+
+### Useless prizes
+
+Under the work is a shelf of prizes, and the heading is not being modest: about
+500 tiers across 31 ladders, plus 87 one-off feats, for things like how much you
+have, how much you've given back, and how long auditorr has been running. Every
+rung is named rather than numbered — the joke only works if it's specific — and
+each medallion shows which rung you're on out of how many, and says what its
+number counts, because a name like *Geological Layer* means nothing on its own.
+Open one and you get the full ladder: every rung named, with the threshold that
+unlocks it.
+
+They're monotonic: prizes are awarded for what you've done and are never taken
+back if your library shrinks or a count climbs again. Nothing about them appears
+anywhere else in the app.
+
+---
+
 ## Backfill
 
 **Targets orphaned media**: files in your library with no hardlink to any

@@ -126,6 +126,15 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 - **`AUDITORR_TRUSTED_NETWORKS`** — extra CIDRs treated as local, e.g. Tailscale's `100.64.0.0/10` (CGNAT, so not covered by the RFC1918 check)
 - **`AUDITORR_REQUIRE_AUTH`** — strict mode with no local exemption; set without a secret it fails closed (503 `auth_not_configured`) behind a self-recovering full-page setup notice
 
+### Shipped in v1.7.2
+- **Rounds** — a new page (`next_steps.py`, `/api/next_steps`) that ranks the five workflows into fixed Baseline / Ongoing / On demand sections, each row in a computed state, plus a monotonic prize layer of ~500 named tiers across 31 ladders and 87 feats. Never bottoms out, never nags off-page. Design in `prompts/NEXT_STEPS.md`
+- **Configurable health-score weights** — the 70/10/10/10 split is now a donut in Config; a component set to `0` reads *Not scored* and keeps its card. Exists for setups that delete torrents once seeding requirements are met, where Hardlinked Media collapses by design
+- **Force import in Triage** — `ManualImport` with `replaceExistingFiles`, the only path past `UpgradeSpecification` for a same-quality trump replacement; offered only where quality matches, deliberately absent on downgrades
+- **Rescan honesty + correctness** — release-folder targeting, explicit `Copy` import mode so a seeding torrent's file is never moved, `manualimport` probes so a refusal reports its real reason, and folder lookups no longer scoped by `movieId`/`seriesId` (which returned the existing library file instead of the folder)
+- **External URLs (#21)** — an optional browser-facing address per service alongside the API address, for reverse proxies; link-building only, never fetched server-side
+- **Trumped title gating** — the title core is a required gate rather than one score among many, so quality agreement can no longer manufacture a match between unrelated releases; the PM's indexer is a priority, never a filter
+- **arm64 images** — multi-arch publish (`linux/amd64,linux/arm64`) with the frontend stage pinned to the build host
+
 ---
 
 ## Future Ideas
