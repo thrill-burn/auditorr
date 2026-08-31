@@ -242,6 +242,26 @@ imported yet.
 
 ---
 
+## Half my library is invisible to Sonarr/Radarr features
+
+Symptoms cluster: Backfill offers candidates from only one of your libraries and
+its **Root Folders** list is missing entries, Triage can't tell superseded
+torrents from unknown ones, deep links work for some files and not others.
+
+If you run **more than one Sonarr or Radarr**, this was a bug in v1.7.2 and
+earlier: the *Additional Sonarr/Radarr instances* list replaced the primary
+Sonarr/Radarr fields instead of adding to them, so your main pair was ignored —
+while their settings stayed on the Config page and still passed their own test
+button. **Upgrading is the entire fix**; there's nothing to re-enter.
+
+To confirm which instances auditorr is actually reading, use Config →
+Integrations → **Test Arr Connections** (the button below the instance list, not
+the per-service Test buttons above it). It prints one line per connection with a
+managed file count and a sample path. Every instance you run should be listed,
+and none should read `0 managed files`.
+
+---
+
 ## Sonarr/Radarr buttons open the wrong thing, or nothing
 
 auditorr deep-links into your arrs by matching the file's path to their library.

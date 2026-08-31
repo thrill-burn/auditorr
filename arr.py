@@ -63,47 +63,76 @@ def link_base(conn):
     return (external or str(conn.get('base_url') or '')).rstrip('/')
 
 
+def _endpoint_key(base_url):
+    """Comparison key for "the same server" — scheme, case and trailing slash
+    folded, so http/https against one host:port is one instance, not two."""
+    return re.sub(r'^https?://', '', str(base_url or '').strip().rstrip('/').lower())
+
+
 def normalize_arr_connections(cfg, service=None):
     """Return normalized Sonarr/Radarr connection records.
 
-    Supports the legacy singleton config keys and the new ARR_CONNECTIONS list.
+    The legacy singleton keys (SONARR_URL / RADARR_URL) and the ARR_CONNECTIONS
+    list are **merged, not chosen between**. ARR_CONNECTIONS used to *replace*
+    the singletons: adding a single extra instance silently retired the primary
+    Sonarr and Radarr, while their fields stayed on the Config page, kept
+    saving, and kept passing their own connection test. Nothing read them, so
+    an entire library became invisible to every consumer of this function —
+    Backfill candidates, Triage's library comparison, indexers, deep links,
+    rescan, force import, trump (#22). The UI has always called the list
+    "Additional Sonarr/Radarr instances", which is what they now are.
+
+    A singleton is dropped when an explicit entry already covers it — the same
+    id, or the same service pointed at the same base_url — so an install that
+    migrated by copying its primary into the list does not index it twice.
     """
-    raw_connections = cfg.get('ARR_CONNECTIONS')
-    normalized = []
+    explicit = []
+    for raw in (cfg.get('ARR_CONNECTIONS') or []):
+        if not isinstance(raw, dict):
+            continue
+        conn = _normalize_arr_connection(raw)
+        if conn and (service is None or conn['service'] == service):
+            explicit.append(conn)
 
-    if isinstance(raw_connections, list) and raw_connections:
-        for raw in raw_connections:
-            if not isinstance(raw, dict):
-                continue
-            conn = _normalize_arr_connection(raw)
-            if conn and (service is None or conn['service'] == service):
-                normalized.append(conn)
-    else:
-        for svc_name, svc in _SERVICE_MAP.items():
-            url = str(cfg.get(svc['url_key'], '')).strip()
-            api_key = str(cfg.get(svc['key_key'], '')).strip()
-            if not url or not api_key:
-                continue
-            if service is not None and svc_name != service:
-                continue
-            normalized.append(_normalize_arr_connection({
-                'id': f'{svc_name}-default',
-                'service': svc_name,
-                'name': svc['name'],
-                'base_url': url,
-                'external_url': cfg.get(svc['external_key'], ''),
-                'api_key': api_key,
-                'remote_path': cfg.get(svc['remote_key'], ''),
-            }))
-
-    seen = set()
-    deduped = []
-    for conn in normalized:
-        if conn['id'] in seen:
+    # Only user-authored ids can genuinely collide, and a collision there is a
+    # config error worth refusing. A singleton that clashes is ours to resolve,
+    # and is skipped below rather than raising.
+    seen_ids = set()
+    for conn in explicit:
+        if conn['id'] in seen_ids:
             raise ValueError(f"Duplicate Arr connection id: {conn['id']}")
-        seen.add(conn['id'])
-        deduped.append(conn)
-    return deduped
+        seen_ids.add(conn['id'])
+    covered = {(c['service'], _endpoint_key(c['base_url'])) for c in explicit}
+
+    legacy = []
+    for svc_name, svc in _SERVICE_MAP.items():
+        if service is not None and svc_name != service:
+            continue
+        url = str(cfg.get(svc['url_key'], '')).strip()
+        api_key = str(cfg.get(svc['key_key'], '')).strip()
+        if not url or not api_key:
+            continue
+        conn = _normalize_arr_connection({
+            'id': f'{svc_name}-default',
+            'service': svc_name,
+            'name': svc['name'],
+            'base_url': url,
+            'external_url': cfg.get(svc['external_key'], ''),
+            'api_key': api_key,
+            'remote_path': cfg.get(svc['remote_key'], ''),
+        })
+        if conn is None:
+            continue
+        if conn['id'] in seen_ids or (conn['service'], _endpoint_key(conn['base_url'])) in covered:
+            continue
+        seen_ids.add(conn['id'])
+        legacy.append(conn)
+
+    # Primary first, matching the Config page's own order. Callers that fall
+    # back to "the first connection" for a link base (acquire_candidates' /add/new
+    # search) should land on the main instance, not whichever extra library
+    # happens to sit at the top of the list.
+    return legacy + explicit
 
 
 def fetch_arr_media_index(cfg, force=False):

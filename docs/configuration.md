@@ -164,9 +164,18 @@ the search-and-grab half of the workflows.
 | **Remote path** | The library path *as Sonarr/Radarr sees it*, if it differs from auditorr's. |
 | **External URL** | Optional. Where *your browser* reaches it, if that differs — see [External URLs](#external-urls-reverse-proxy). |
 
-Multiple instances are supported — add them as additional connections when you
-run, say, a 4K Radarr alongside a 1080p one. Each carries its own External URL
-field, so a split library behind a proxy links correctly per instance.
+Multiple instances are supported — add them under **Additional Sonarr/Radarr
+instances** when you run, say, a 4K Radarr alongside a 1080p one. Those are read
+*alongside* the primary Sonarr/Radarr fields above, not instead of them, so the
+primary pair stays in use. Listing the same server in both places is harmless —
+it's read once. Each connection carries its own Remote path and External URL, so
+a split library behind a proxy links correctly per instance.
+
+> **In v1.7.2 and earlier** the additional-instances list replaced the primary fields
+> rather than adding to them, so filling it in switched your main Sonarr and
+> Radarr off while their settings stayed on screen and still passed their test
+> button. If you run more than one instance, upgrade — there is nothing to
+> re-enter, and your counts will move on the first scan afterwards.
 
 ---
 

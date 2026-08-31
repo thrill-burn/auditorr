@@ -925,7 +925,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         <div style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Additional Sonarr/Radarr instances</label>
           <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 10 }}>
-            Add extra Sonarr or Radarr servers for split libraries such as 4K, anime, or kids. Leave this empty to use only the primary Sonarr/Radarr fields above.
+            Add extra Sonarr or Radarr servers for split libraries such as 4K, anime, or kids. These are used <em>alongside</em> the primary Sonarr/Radarr above, not instead of them.
           </span>
           {arrConnections.length === 0 ? (
             <div style={{ padding: '10px 12px', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', color: 'var(--text-dim)', fontSize: 11, marginBottom: 10 }}>
