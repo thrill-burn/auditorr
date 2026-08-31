@@ -312,6 +312,17 @@ export function WorkflowError({ message }) {
   )
 }
 
+// Something is degraded but the page still works — distinct from WorkflowError,
+// which means the page has nothing to show.
+export function WorkflowWarning({ children }) {
+  if (!children) return null
+  return (
+    <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 'var(--r)', color: 'var(--yellow)', fontSize: 13, lineHeight: 1.5 }}>
+      {children}
+    </div>
+  )
+}
+
 // ── Checkbox ──────────────────────────────────────────────────────────────────
 export function Checkbox({ checked, indeterminate, onChange }) {
   return (

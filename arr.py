@@ -10,8 +10,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
 
-_arr_media_index_cache = {'data': None, 'ts': 0}
+_arr_media_index_cache = {'data': None, 'ts': 0, 'errors': []}
 _ARR_MEDIA_INDEX_TTL = 120
+# Bulk list endpoints (/api/v3/movie, /api/v3/series) return the entire library
+# in one response — seconds of JSON on a large instance, where the 10s default
+# that suits per-item calls is thin. Timing out here is not a visible error: the
+# connection simply contributes no rows, and every file it manages stops
+# resolving as though the instance were never configured.
+_ARR_LIST_TIMEOUT = 60
 
 # Service config map: url_key, api_key_key, remote_path_key, command, list_path, slug_prefix, display_name
 _SERVICE_MAP = {
@@ -109,6 +115,7 @@ def fetch_arr_media_index(cfg, force=False):
     if not force and _arr_media_index_cache['data'] is not None and (now - _arr_media_index_cache['ts']) < _ARR_MEDIA_INDEX_TTL:
         return _arr_media_index_cache['data']
     media = []
+    errors = []
     for conn in normalize_arr_connections(cfg):
         try:
             if conn['service'] == 'radarr':
@@ -118,9 +125,25 @@ def fetch_arr_media_index(cfg, force=False):
             media.extend(_apply_arr_media_path_mapping(rows, conn, cfg))
         except Exception as e:
             log.warning("Could not fetch %s media from %s: %s", conn['service'], conn['id'], e)
+            errors.append({'connection_id': conn['id'], 'name': conn['name'],
+                           'service': conn['service'], 'message': str(e)})
     _arr_media_index_cache['data'] = media
+    _arr_media_index_cache['errors'] = errors
     _arr_media_index_cache['ts'] = now
     return media
+
+
+def arr_media_index_errors():
+    """Connections whose media index failed on the most recent fetch.
+
+    The index is a flat list of rows, so an instance that errored is
+    indistinguishable from one that manages nothing — its files just stop
+    resolving. Anything that presents resolution results to the user reads this
+    so a failure is reported rather than left to be inferred from an
+    unexplained gap. Cached alongside the data, so it describes the list the
+    caller just received.
+    """
+    return list(_arr_media_index_cache.get('errors') or [])
 
 
 def fetch_arr_indexers(cfg):
@@ -1058,7 +1081,7 @@ def _path_norm(path):
 
 def _fetch_radarr_media(conn):
     rows = []
-    for movie in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie'):
+    for movie in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie', timeout=_ARR_LIST_TIMEOUT):
         movie_file = movie.get('movieFile') or {}
         path = movie_file.get('path')
         if not path:
@@ -1083,7 +1106,7 @@ def _fetch_radarr_media(conn):
 
 
 def _fetch_sonarr_media(conn):
-    series_list = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series')
+    series_list = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT)
     valid_series = [(s, s['id']) for s in series_list if s.get('id') is not None]
     if not valid_series:
         return []
@@ -1118,11 +1141,25 @@ def _fetch_sonarr_media(conn):
         return rows
 
     all_rows = []
+    failed = []
     max_workers = min(8, len(valid_series))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_fetch_episode_files, s, sid): sid for s, sid in valid_series}
         for future in as_completed(futures):
-            all_rows.extend(future.result())
+            try:
+                all_rows.extend(future.result())
+            except Exception as e:
+                # One unreachable series must not discard the instance. Sonarr
+                # needs a call per series where Radarr needs one in total, so
+                # re-raising here made a single timeout anywhere in a library of
+                # hundreds read to every caller as "this Sonarr manages nothing"
+                # — every one of its files silently unresolvable.
+                failed.append(futures[future])
+                log.warning("Could not fetch episode files for series %s on %s: %s",
+                            futures[future], conn['id'], e)
+    if failed:
+        log.error("%s: %d of %d series could not be read — their episodes will not "
+                  "resolve to library items", conn['id'], len(failed), len(valid_series))
     return all_rows
 
 
@@ -1288,7 +1325,7 @@ def fetch_arr_all_titles(cfg, force=False):
     for conn in normalize_arr_connections(cfg):
         try:
             if conn['service'] == 'radarr':
-                for m in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie'):
+                for m in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie', timeout=_ARR_LIST_TIMEOUT):
                     rows.append({
                         'service':       'radarr',
                         'connection_id': conn['id'],
@@ -1299,7 +1336,7 @@ def fetch_arr_all_titles(cfg, force=False):
                         'has_file':      bool(m.get('hasFile')),
                     })
             else:
-                for s in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series'):
+                for s in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT):
                     stats = s.get('statistics') or {}
                     rows.append({
                         'service':       'sonarr',

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+- **Backfill merged shows across two Sonarr instances (#22)** — candidates were grouped by series id and season alone, but series ids are per-instance: both your Sonarrs number their first series `1`. Two unrelated shows that happened to share an id collapsed into a single candidate, and the survivor kept its own instance — so the absorbed show's episodes were never searched, and the release search that did run went to the wrong Sonarr for the wrong series. The grouping key now includes the connection, so each instance's shows stay their own candidates. Movies were never affected (Radarr candidates aren't grouped).
+- **One unreachable series discarded an entire Sonarr library** — Sonarr needs an API call per series where Radarr needs one in total, and a single failure among hundreds aborted the whole instance's file index. To everything downstream that looked identical to a Sonarr managing nothing: its files stopped resolving, its titles vanished from the Backfill folder list, and Triage lost the library comparison that tells a superseded item from an unknown one. A series that can't be read is now skipped and logged, and the rest of the library comes back.
+- **Library listings could time out on large instances** — the full `/api/v3/movie` and `/api/v3/series` responses were fetched on the 10-second timeout that suits single-item calls. On a big library that is not a comfortable margin, and exceeding it produced no visible error — just an instance that appeared to manage nothing. Those two bulk listings now get 60 seconds; nothing else changed.
+- **A Sonarr/Radarr instance that failed to load said nothing** — if auditorr couldn't read an instance, its files silently fell out of Backfill, taking their entries in the *Root Folders* list with them, and the page gave no hint that anything was missing. Backfill now names the instances it couldn't read and says plainly that everything they manage is absent from the list below.
+
+### Known issues
+- The *Root Folders* list on Backfill is derived from the first path segment below your `MEDIA_PATH`, not from the root folders configured in Sonarr/Radarr — auditorr doesn't read those. If your root folders sit more than one level below `MEDIA_PATH`, several of them collapse into a single entry. Under investigation (#22).
+
 ## v1.7.2 — 2026-08-27
 
 ### Features

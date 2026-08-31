@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import {
   Chip, LabeledChips, IndexerChips, FolderChips, SortPicker, CountPicker,
-  SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError,
+  SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError, WorkflowWarning,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
 } from './shared'
 
@@ -26,7 +26,9 @@ function groupCandidates(candidates) {
   for (const c of candidates) {
     if (c.resolved && c.arr_service === 'sonarr') {
       const season = parseSeason(c.path)
-      const key = `${c.arr_id}_S${season ?? 'x'}`
+      // Series ids are per-instance — two Sonarrs both number from 1, so a bare
+      // id merges unrelated shows into one candidate (mirrors the server key).
+      const key = `${c.arr_connection_id}_${c.arr_id}_S${season ?? 'x'}`
       if (key in sonarrMap) {
         const g = groups[sonarrMap[key]]
         g.file_count++
@@ -460,6 +462,7 @@ export default function Backfill({ onNavigate }) {
   const [totalUnseeded, setTotalUnseeded] = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [loadError,     setLoadError]     = useState(null)
+  const [arrErrors,     setArrErrors]     = useState([])   // instances whose media index failed
 
   // Config — indexer strategy (persisted server-side via saveAcquirePrefs)
   const [downloadFrom,    setDownloadFrom]    = useState([])
@@ -501,6 +504,7 @@ export default function Backfill({ onNavigate }) {
         const resolved = grouped.filter(c => c.resolved)
         setAllGroups(resolved)
         setTotalUnseeded((cdata.resolved_count || 0) + (cdata.unresolved_count || 0))
+        setArrErrors(cdata.arr_errors || [])
         setIndexers(idata.indexers || [])
         setDownloadFrom(cfg.ACQUIRE_DOWNLOAD_FROM || [])
         setSeedingOn(cfg.ACQUIRE_SEEDING_ON || [])
@@ -600,6 +604,20 @@ export default function Backfill({ onNavigate }) {
         />
 
         <WorkflowError message={loadError} />
+
+        <WorkflowWarning>
+          {arrErrors.length > 0 && (
+            <>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {arrErrors.length} Sonarr/Radarr instance{arrErrors.length !== 1 ? 's' : ''} could not be read
+              </div>
+              <div>
+                Everything {arrErrors.length !== 1 ? 'they manage' : 'it manages'} is missing from the
+                candidates and folders below. {arrErrors.map(e => `${e.name || e.connection_id}: ${e.message}`).join(' · ')}
+              </div>
+            </>
+          )}
+        </WorkflowWarning>
 
         {loading ? (
           <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>

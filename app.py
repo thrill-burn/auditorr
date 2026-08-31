@@ -41,7 +41,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
@@ -2249,6 +2249,11 @@ def workflows_acquire_candidates():
         "candidates": candidates,
         "resolved_count": resolved_count,
         "unresolved_count": unresolved_count,
+        # An instance whose index failed contributes no rows, which is
+        # indistinguishable from one managing nothing: its files fall to
+        # unresolved and drop out of the page entirely, folder chips included.
+        # Report it rather than leaving the user to infer a gap.
+        "arr_errors": arr_media_index_errors(),
     })
 
 
@@ -2444,7 +2449,10 @@ def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
     for c in flat:
         if c['arr_service'] == 'sonarr':
             season = _gen_parse_season(c['path'])
-            key = f"{c['arr_id']}_S{season}"
+            # Series ids are per-instance, so two Sonarrs both number from 1 and
+            # a bare id merges unrelated shows — the winner keeps its own
+            # connection and the loser's episodes are searched against it.
+            key = f"{c['arr_connection_id']}_{c['arr_id']}_S{season}"
             if key in sonarr_map:
                 g = groups[sonarr_map[key]]
                 g['file_count'] += 1

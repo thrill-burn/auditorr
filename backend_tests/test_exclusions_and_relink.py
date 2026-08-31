@@ -353,7 +353,7 @@ class ArrConnectionTests(unittest.TestCase):
             ],
         }
 
-        def fake_get(base_url, _api_key, _path):
+        def fake_get(base_url, _api_key, _path, **_kw):
             if "radarr-main" in base_url:
                 return [{"title": "Wrong Movie", "cleanTitle": "wrongmovie", "titleSlug": "wrong-movie"}]
             return [{"title": "The Matrix", "cleanTitle": "thematrix", "titleSlug": "the-matrix"}]
@@ -384,7 +384,7 @@ class ArrConnectionTests(unittest.TestCase):
             ],
         }
 
-        def fake_get(base_url, _api_key, path):
+        def fake_get(base_url, _api_key, path, **_kw):
             if "radarr-main" in base_url and path == "/api/v3/movie":
                 return [{
                     "id": 10,
@@ -457,7 +457,7 @@ class ArrConnectionTests(unittest.TestCase):
             ],
         }
 
-        def fake_get(base_url, _api_key, path):
+        def fake_get(base_url, _api_key, path, **_kw):
             if path == "/api/v3/movie":
                 title = "The Matrix" if "radarr-main" in base_url else "The Matrix 4K"
                 root = "/movies" if "radarr-main" in base_url else "/movies-4k"
