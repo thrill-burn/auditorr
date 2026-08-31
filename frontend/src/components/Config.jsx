@@ -1003,8 +1003,20 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           {arrTestStatus?.connections?.length > 0 && (
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
               {arrTestStatus.connections.map(conn => (
-                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: conn.ok ? 'var(--text-dim)' : 'var(--red)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {conn.ok ? 'ok' : 'error'} · {conn.name || conn.id} · {conn.service} · {conn.managed_file_count || 0} managed file{conn.managed_file_count === 1 ? '' : 's'}
+                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: conn.ok ? 'var(--text-dim)' : 'var(--red)' }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {conn.ok ? 'ok' : 'error'} · {conn.name || conn.id} · {conn.service} · {conn.managed_file_count || 0} managed file{conn.managed_file_count === 1 ? '' : 's'}
+                    {conn.message ? ` · ${conn.message}` : ''}
+                  </div>
+                  {/* The path this instance reports, after path mapping — the only
+                      place you can see what auditorr will actually try to match
+                      against your library, and the first thing to check when an
+                      instance connects fine but resolves nothing. */}
+                  {conn.sample_paths?.[0] && (
+                    <div style={{ opacity: 0.7, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      ↳ {conn.sample_paths[0]}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
