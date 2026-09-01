@@ -1090,7 +1090,11 @@ TIER_TITLES = {
         'Perpetual Load', 'The Sky Rests Here',
     ],
     'oldfaithful': [
-        'Still Up', 'A Week Old', 'A Month Up', 'Seasoned', 'Half a Year',
+        # 'Six Months Up', not 'Half a Year': Chronicler and Watcher already
+        # share that rung name, and "Closest to unlocking" happily shows one
+        # ladder's current rung beside another's next one — three tiles reading
+        # "Half a Year" at once, for three unrelated numbers.
+        'Still Up', 'A Week Old', 'A Month Up', 'Seasoned', 'Six Months Up',
         'Anniversary', 'Two Years Deep', 'Vintage', 'Five Years Untouched',
         'Older Than the Drive It Sits On', 'A Decade of Uptime',
         'Outlasted the Tracker',
@@ -1145,7 +1149,11 @@ def _fmt_plain(n):
 
 
 def _fmt_pct(n):
-    return f"{float(n):g}%"
+    """One decimal at most. `%g` gives six *significant* figures, so a hardlink
+    ratio rendered fine at 98.1% and came out as "85.0408%" the moment the
+    number had more digits in front of the point."""
+    v = round(float(n or 0), 1)
+    return f"{int(v)}%" if v == int(v) else f"{v}%"
 
 
 def _fmt_days(n):

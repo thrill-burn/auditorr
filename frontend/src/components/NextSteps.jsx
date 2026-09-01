@@ -511,10 +511,27 @@ function Prizes({ data }) {
   )
 }
 
+// One rule, every section. Density follows the row's *state*, never which
+// section it happens to sit in — Ongoing used to force every card expanded and
+// On demand keyed off the Kingmaker tally, so three identically-cleared rows
+// rendered three different ways and the page read as though its own sections
+// disagreed about what "clear" looks like. A row that wants something is full
+// size; a row that is fine is a quiet line. That is the job of a ranked index.
+const isCompact = row => !['fix', 'optimize', 'blocked'].includes(row.state)
+
 // ── Workflow card ────────────────────────────────────────────────────────────
 function WorkflowCard({ row, onNavigate, compact }) {
   const meta = STATE_META[row.state] || STATE_META.maintain
   const actionable = row.state === 'fix' || row.state === 'optimize'
+  // The headline slot holds two different kinds of content, and the state is
+  // what decides which: actionable rows get a *readout* ("12 orphaned files ·
+  // 500 GB"), everything else gets a *sentence* (`clear_line`, or the blocked
+  // reason). Setting a sentence in monospace made the calmest cards the widest
+  // and heaviest on the page. Keyed on state, not on `compact` — the Ongoing
+  // section renders its cards expanded whatever their state, so a cleared
+  // Triage card is prose in an expanded card and the compact flag never sees it.
+  const proseHeadline  = !actionable
+  const needsAttention = actionable || row.state === 'blocked'
 
   return (
     <div style={{
@@ -524,15 +541,20 @@ function WorkflowCard({ row, onNavigate, compact }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
         <Dot color={row.accent} />
-        {/* Compact stays a rung smaller. A cleared Cleanup/Dedupe card is a
-            one-line acknowledgement, not a heading — flattening these to one
-            size made the two calmest cards on the page the loudest. */}
-        <span style={{ fontSize: compact ? 'var(--font-md)' : 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
+        {/* Also keyed on meaning rather than on `compact`, and for the same
+            reason: a cleared Triage sits in the always-expanded Ongoing section
+            and a cleared Dedupe sits in Baseline, so keying on the layout flag
+            gave two identically-cleared cards different sized titles. A row
+            that wants something is a rung larger; a row that is fine is not. */}
+        <span style={{ fontSize: needsAttention ? 'var(--font-lg)' : 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', padding: '2px 8px',
           borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}`, color: meta.color,
         }}>{meta.label}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{row.nature}</span>
+        {/* Also prose ("Clear once, then watch"), so also sans. The pill beside
+            it stays mono: a status label is closer to data than to a sentence,
+            and it matches the chips on the workflow pages. */}
+        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{row.nature}</span>
         {row.score_lost > 0 && (
           <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginLeft: 'auto' }}>
             {row.score_lost} of {row.score_max} pts lost
@@ -540,19 +562,12 @@ function WorkflowCard({ row, onNavigate, compact }) {
         )}
       </div>
 
-      {/* One slot, two kinds of content — and they must not be set the same
-          way. An actionable card's headline is *data* ("12 orphaned files ·
-          500 GB"): mono, and the most prominent thing on the card. A cleared
-          card's headline is a *sentence* ("No duplicates. You are not paying
-          for the same bytes twice."), and setting a sentence in monospace made
-          the calmest cards on the page the widest and heaviest things on it.
-          Prose gets sans, at the same rung as the teaching paragraph. */}
       <div style={{
-        fontFamily: compact ? 'var(--sans)' : 'var(--mono)',
-        fontSize: compact ? 'var(--font-base)' : 'var(--font-md)',
-        fontWeight: compact ? 400 : 600,
-        color: compact ? 'var(--text-dim)' : 'var(--text)',
-        lineHeight: compact ? 1.5 : 1.3,
+        fontFamily: proseHeadline ? 'var(--sans)' : 'var(--mono)',
+        fontSize: proseHeadline ? 'var(--font-base)' : 'var(--font-md)',
+        fontWeight: proseHeadline ? 400 : 600,
+        color: proseHeadline ? 'var(--text-dim)' : 'var(--text)',
+        lineHeight: proseHeadline ? 1.5 : 1.3,
       }}>
         {row.headline}
       </div>
@@ -573,7 +588,11 @@ function WorkflowCard({ row, onNavigate, compact }) {
           display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 220 }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text)' }}>
+            {/* Sans, like every other sentence on this page. "Clean for 25
+                days · no kills yet" is prose with a number in it, not a
+                readout — the mono here was the same mistake as the cleared
+                headline above, and read as a third typeface on one card. */}
+            <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>
               {row.reward.headline}
             </span>
             {!compact && (
@@ -765,8 +784,7 @@ export default function NextSteps({ onNavigate }) {
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {baseline.map(r => (
-                <WorkflowCard key={r.id} row={r} onNavigate={onNavigate}
-                  compact={!['fix', 'optimize', 'blocked'].includes(r.state)} />
+                <WorkflowCard key={r.id} row={r} onNavigate={onNavigate} compact={isCompact(r)} />
               ))}
             </div>
           </Section>
@@ -774,7 +792,7 @@ export default function NextSteps({ onNavigate }) {
           <Section title="Ongoing" sub="These never have a last item.">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {['triage', 'backfill'].map(id => byId[id]).filter(Boolean).map(r => (
-                <WorkflowCard key={r.id} row={r} onNavigate={onNavigate} compact={false} />
+                <WorkflowCard key={r.id} row={r} onNavigate={onNavigate} compact={isCompact(r)} />
               ))}
             </div>
           </Section>
@@ -788,8 +806,13 @@ export default function NextSteps({ onNavigate }) {
                  means the only user who earned it never sees it. */
               defaultOpen={(byId.trumped.reward?.tally || 0) > 0}
             >
+              {/* The tally still decides whether the *section* opens — a user
+                  who has earned a Kingmaker streak must not have it hidden
+                  behind a closed section — but the card itself follows the same
+                  state rule as every other card. A compact card still renders
+                  its reward line, so nothing is lost by collapsing it. */}
               <WorkflowCard row={byId.trumped} onNavigate={onNavigate}
-                compact={!((byId.trumped.reward?.tally || 0) > 0)} />
+                compact={isCompact(byId.trumped)} />
             </Section>
           )}
         </>
