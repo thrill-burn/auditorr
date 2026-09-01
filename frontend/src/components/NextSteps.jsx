@@ -390,7 +390,10 @@ function Prizes({ data }) {
           middle and read as two columns that were not really a pair. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="trophy" size={17} /></span>
-        <span style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>Useless prizes</span>
+        {/* Same rung as "Baseline" / "Ongoing" / "On demand". It is a peer of
+            those sections, not a bigger thing than them — and it sits last
+            precisely so it does not outrank the work. */}
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Useless prizes</span>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
           {prizes.earned} / {prizes.total}
         </span>
@@ -521,7 +524,10 @@ function WorkflowCard({ row, onNavigate, compact }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
         <Dot color={row.accent} />
-        <span style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
+        {/* Compact stays a rung smaller. A cleared Cleanup/Dedupe card is a
+            one-line acknowledgement, not a heading — flattening these to one
+            size made the two calmest cards on the page the loudest. */}
+        <span style={{ fontSize: compact ? 'var(--font-md)' : 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', padding: '2px 8px',
           borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}`, color: meta.color,
@@ -534,9 +540,19 @@ function WorkflowCard({ row, onNavigate, compact }) {
         )}
       </div>
 
+      {/* One slot, two kinds of content — and they must not be set the same
+          way. An actionable card's headline is *data* ("12 orphaned files ·
+          500 GB"): mono, and the most prominent thing on the card. A cleared
+          card's headline is a *sentence* ("No duplicates. You are not paying
+          for the same bytes twice."), and setting a sentence in monospace made
+          the calmest cards on the page the widest and heaviest things on it.
+          Prose gets sans, at the same rung as the teaching paragraph. */}
       <div style={{
-        fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: compact ? 400 : 600,
-        color: compact ? 'var(--text-dim)' : 'var(--text)', lineHeight: 1.3,
+        fontFamily: compact ? 'var(--sans)' : 'var(--mono)',
+        fontSize: compact ? 'var(--font-base)' : 'var(--font-md)',
+        fontWeight: compact ? 400 : 600,
+        color: compact ? 'var(--text-dim)' : 'var(--text)',
+        lineHeight: compact ? 1.5 : 1.3,
       }}>
         {row.headline}
       </div>
