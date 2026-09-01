@@ -100,6 +100,7 @@ export const api = {
   watchImport:        (params) => req('/workflows/watch_import',      { method: 'POST', body: JSON.stringify(params) }),
   watchImportStatus:  (jobId)  => req('/workflows/watch_import/status?job_id=' + jobId),
   watchImportActive:  ()       => req('/workflows/watch_import/active'),
+  importCheck:        (items)  => req('/workflows/import_check',        { method: 'POST', body: JSON.stringify({ items }) }),
   startGenerate:  (params) => req('/workflows/generate',        { method: 'POST', body: JSON.stringify(params) }),
   generateStatus: (jobId)  => req('/workflows/generate/status?job_id=' + jobId),
   stopGenerate:   (jobId)  => req('/workflows/generate/stop',   { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),

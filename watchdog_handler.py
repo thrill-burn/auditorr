@@ -14,6 +14,7 @@ from audit import run_audit_process
 log = logging.getLogger(__name__)
 
 _observer = None
+_handler  = None
 
 # Background scans defer while a workflow session is active (scan RSS and
 # workflow-request RSS stack — the 751MB field peak was a watchdog scan under
@@ -89,8 +90,36 @@ class AuditDebounceHandler(FileSystemEventHandler):
     def on_moved(self,   event): self._reset_timer()
 
 
+def nudge_watchdog(reason=''):
+    """Start the debounce clock for a change the filesystem cannot reveal.
+
+    Workflow actions change state the watcher is blind to. Removing a dead
+    cross-seed registration with `delete_files` off touches no file at all —
+    only the torrent client — and adding an exclusion pattern touches only
+    config, yet both change every count auditorr reports. Without this the row
+    vanished from the page it was clicked on while the sidebar badge, the
+    dashboard and the other workflow pages stayed wrong until the *scheduled*
+    audit hours later.
+
+    Deliberately the same entry point a filesystem event uses, rather than
+    starting a scan directly like the Trumped flow does. That buys three things
+    for free: the cooldown debounce, so a user clicking through twenty rows
+    coalesces into one scan rather than twenty; the workflow-active deferral, so
+    the scan waits until the session goes quiet instead of stacking its memory
+    peak on top of the page's; and the post-scan suppression window. A direct
+    `try_start_scanning` would bypass all three — that is right for a Trumped
+    swap, which is one deliberate act, and wrong for a bulk multi-select page.
+    """
+    h = _handler
+    if h is None:
+        return False
+    h._reset_timer()
+    log.info("Watchdog: nudged by %s, audit scheduled.", reason or 'a workflow action')
+    return True
+
+
 def start_watchdog():
-    global _observer
+    global _observer, _handler
     cfg   = db_load_config()
     if not cfg.get('WATCHDOG_ENABLED', True):
         log.info("Watchdog: disabled in config, not starting.")
@@ -104,6 +133,7 @@ def start_watchdog():
         return int(db_load_config().get('WATCHDOG_COOLDOWN', 60))
 
     handler   = AuditDebounceHandler(get_cooldown)
+    _handler  = handler
     _observer = Observer()
     for path in paths:
         _observer.schedule(handler, path, recursive=True)

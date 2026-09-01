@@ -88,6 +88,10 @@ def _norm_torrent(t):
         'uploaded':  t.get('uploaded') or t.get('uploadedEver') or 0,
         'name':      t.get('name') or '',
         'category':  t.get('category') or '',
+        # Cumulative seconds spent seeding. Present on the list payload (the
+        # same field fetch_torrent_details reads), so the Next steps seeding-time
+        # ladders cost no extra call.
+        'seeding_time': t.get('seeding_time') or t.get('seedingTime') or 0,
     }
 
 
@@ -253,7 +257,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                      seen_hashes):
+                      seen_hashes, seed_totals=None):
     inst_id   = inst['id']
     inst_name = inst.get('name', str(inst_id))
 
@@ -358,6 +362,14 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
                 if status == 'Seeding':
                     tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + nt['size']
+            # Seeding-time aggregates for the Next steps prize layer — inside the
+            # dedup block for the same reason the upload totals are: a hash seen
+            # on three instances must be counted once.
+            if seed_totals is not None:
+                seed_secs = int(nt.get('seeding_time') or 0)
+                if seed_secs > 0:
+                    seed_totals['byte_secs'] += (nt['size'] or 0) * seed_secs
+                    seed_totals['max_secs']   = max(seed_totals['max_secs'], seed_secs)
 
         save_path = nt['save_path']
         raw_save_path = save_path
@@ -492,12 +504,13 @@ def _fetch_inner(cfg):
     tracker_upload       = {}
     tracker_seeding_size = {}
     seen_hashes          = set()  # deduplicate stats across all instances
+    seed_totals          = {'byte_secs': 0, 'max_secs': 0}
 
     for inst in eligible:
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                               seen_hashes)
+                               seen_hashes, seed_totals)
         except Exception as e:
             log.warning(f"qui: skipping instance {inst.get('name','?')} due to error: {e}")
 
@@ -510,6 +523,9 @@ def _fetch_inner(cfg):
         for host in all_hosts
     }
     tracker_snapshot['_instance_count'] = len(eligible)
+    # '_'-prefixed: every per-tracker loop already skips these.
+    tracker_snapshot['_seed_byte_secs'] = seed_totals['byte_secs']
+    tracker_snapshot['_max_seed_secs']  = seed_totals['max_secs']
 
     if not file_map:
         log.warning(

@@ -44,7 +44,7 @@ from audit import run_audit_process, process_health_metrics, compute_upload_stat
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
-from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop
+from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
 from debug import (
     install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events,
     start_memory_monitor, record_heavy_request, malloc_trim, process_rss_mb,
@@ -1038,6 +1038,11 @@ _TRIAGE_GROUP_CAP = 500
 # against qui/qBittorrent stays at the audit's own ceiling.
 _TRIAGE_VERIFY_BATCH_MAX = 200
 
+# Cap on one import-check request. This is one arr call per item and the client
+# polls it every few seconds, so it is deliberately smaller than the tracker
+# verify batch — a rescan selection is a handful of rows, not a whole library.
+_IMPORT_CHECK_MAX = 60
+
 
 def _triage_verdict_under(alternatives, health):
     """Select a verdict from its live-health alternatives (None → drop row)."""
@@ -1067,6 +1072,11 @@ def workflows_exclude():
             added += 1
     cfg['EXCLUSION_PATTERNS'] = existing
     db_save_config(cfg)
+    # No file changed, so the watcher will never notice this on its own — but
+    # every count auditorr reports just moved. Debounced, so clicking through a
+    # page of suggestion chips still costs one scan.
+    if added:
+        nudge_watchdog('exclusion patterns added')
     return jsonify({"status": "success", "added": added, "total": len(existing)})
 
 
@@ -1158,6 +1168,13 @@ def workflows_remove_torrents():
         return jsonify({"status": "error", "message": str(e)}), 502
     log.info("Client delete: removed %d/%d torrent(s) (mode=%s, files_deleted=%d, files_kept=%d)",
              removed, len(items), mode, files_deleted, files_kept)
+    # A keep-files removal touches the client and nothing else, so there is no
+    # filesystem event for the watcher to see — yet the torrent is gone and
+    # every count that mentions it is now wrong. Even a delete-files removal is
+    # worth nudging: it makes the audit start from the last *action* rather than
+    # from whichever inotify event happened to arrive last.
+    if removed:
+        nudge_watchdog('torrents removed via the client')
     return jsonify({"status": "success", "removed": removed, "requested": len(items),
                     "files_deleted": files_deleted, "files_kept": files_kept})
 
@@ -1204,8 +1221,55 @@ def workflows_force_import():
 
     imported = sum(1 for r in results if r.get('imported'))
     log.info("Force import: %d/%d item(s) imported", imported, len(results))
+    if imported:
+        nudge_watchdog('files force-imported')
     return jsonify({"status": "success", "imported": imported,
                     "requested": len(results), "results": results})
+
+
+@app.route('/api/workflows/import_check', methods=['POST'])
+@require_auth
+def workflows_import_check():
+    """Report each item's current Sonarr/Radarr file id.
+
+    Exists so a Triage rescan can finish visibly. Rescanning hands the file to
+    the arr, which imports on its own schedule and reports nothing back, and the
+    Triage row is built from the last audit — so the row used to sit there
+    looking untouched until the watchdog eventually scanned, minutes later. The
+    client snapshots these ids before the rescan and polls afterwards: an id
+    that changed means the arr took the file, and the row can go.
+
+    Deliberately the same primitive `force_import_files` confirms success with,
+    for the same reason — the arr's command status is not trustworthy, but its
+    own file id is. Stateless: the caller holds the baseline, so nothing here
+    has to be remembered between requests.
+    """
+    cfg   = db_load_config()
+    items = (request.json or {}).get('items') or []
+    if not items:
+        return jsonify({"status": "error", "message": "No items provided"}), 400
+
+    results = []
+    for item in items[:_IMPORT_CHECK_MAX]:
+        key     = str(item.get('key') or '')
+        service = str(item.get('service') or '')
+        if service not in ('sonarr', 'radarr') or not item.get('connection_id') \
+                or item.get('arr_id') is None:
+            # Not something the arr can be asked about — the caller keeps
+            # showing it until an audit clears it.
+            results.append({"key": key, "file_id": None, "checked": False})
+            continue
+        try:
+            fid = get_arr_file_id(cfg, service, item['connection_id'], item['arr_id'])
+            results.append({"key": key, "file_id": fid, "checked": True})
+        except Exception as e:
+            # `checked: false` is not `file_id: null` — one means "could not
+            # ask", the other means "asked, and it holds no file". Collapsing
+            # them would read an unreachable arr as a successful import.
+            log.warning("Import check failed for %s %s: %s", service, item.get('arr_id'), e)
+            results.append({"key": key, "file_id": None, "checked": False})
+
+    return jsonify({"status": "success", "results": results})
 
 
 @app.route('/api/workflows/triage/resolve_groups', methods=['POST'])

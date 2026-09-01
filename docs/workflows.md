@@ -52,14 +52,24 @@ install the slowest workflow in the app as step one.
 
 ### Useless prizes
 
-Under the work is a shelf of prizes, and the heading is not being modest: about
-500 tiers across 31 ladders, plus 87 one-off feats, for things like how much you
+Under the work is a shelf of prizes, and the heading is not being modest: over
+700 tiers across 40 ladders, plus 104 one-off feats, for things like how much you
 have, how much you've given back, and how long auditorr has been running. Every
 rung is named rather than numbered — the joke only works if it's specific — and
 each medallion shows which rung you're on out of how many, and says what its
 number counts, because a name like *Geological Layer* means nothing on its own.
 Open one and you get the full ladder: every rung named, with the threshold that
 unlocks it.
+
+The shelf tries hard not to go dead once your library is in good shape, which is
+the point at which a prize layer usually gives up on you. Several ladders exist
+specifically for that: **Conservator** is the largest library you've ever held
+with nothing at all wrong with it, **Atlas** multiplies everything you seed by
+how long you've seeded it (the one number that can't be bought — 20 TB held for
+five years beats 500 TB held for three weeks), **Old Faithful** is your
+longest-lived single torrent, and **Fire Brigade** counts messes you cleared
+within a day of them appearing, because a library that stays clean never gets
+another chance to kill one.
 
 They're monotonic: prizes are awarded for what you've done and are never taken
 back if your library shrinks or a count climbs again. Nothing about them appears

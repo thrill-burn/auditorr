@@ -125,11 +125,20 @@ REWARD_KIND = {
 LADDER_OWNER = {
     'exterminator': ('cleanup',),
     'sentinel':     ('cleanup',),
+    'tidiness':     ('cleanup',),
     'clonehunter':  ('dedupe',),
     'shoveler':     ('triage',),
+    'purity':       ('triage',),
     'lapidary':     ('backfill',),
     'alchemist':    ('backfill',),
     'kingmaker':    ('trumped',),
+    # The cross-cutting ones: nothing is wrong anywhere, so every pile-clearing
+    # workflow feeds them. Flawless additionally needs a perfect hardlink ratio,
+    # which is Backfill's job.
+    'conservator':  ('cleanup', 'dedupe', 'triage'),
+    'unblemished':  ('cleanup', 'dedupe', 'triage'),
+    'firebrigade':  ('cleanup', 'dedupe'),
+    'flawless':     ('cleanup', 'dedupe', 'triage', 'backfill'),
 }
 
 # Empty progress record. Persisted in app_meta under `ns_progress` and advanced
@@ -143,6 +152,16 @@ EMPTY_PROGRESS = {
     'dupe_kills': 0,
     'orphan_breaks': 0,       # times a clean orphan state regressed
     'dupe_breaks': 0,
+    # When the current mess started, per zombie. Latched so the *next* kill can
+    # be timed: a library that is genuinely well kept stops earning kills (a
+    # kill needs a mess to return first), so the axis that still discriminates
+    # between two clean libraries is how fast a mess dies once it appears.
+    'orphan_break_at': None,
+    'dupe_break_at': None,
+    'fast_fixes': 0,          # messes cleared within _FAST_FIX_HOURS of appearing
+    # Consecutive-clean streak across all three piles at once. Sentinel watches
+    # orphans alone; this is the one a library in genuinely good shape can run.
+    'immaculate_since': None,
     'last_ni_count': None,
     'last_excl_fp': None,
     # Last scan's dead cross-seed registrations, by hash. The shovel counter
@@ -168,6 +187,12 @@ EMPTY_PROGRESS = {
 
 # Ceiling on the persisted dead-registration hash set (see `last_dead_regs`).
 _DEAD_REG_CAP = 10000
+
+# How quickly a returning mess has to be cleared to count as a fast fix. A day
+# is the honest unit: audits are hourly at best, most people look at this once
+# an evening, and "I dealt with it the same day" is the behaviour worth paying
+# for. Anything tighter would mostly measure scan cadence.
+_FAST_FIX_HOURS = 24
 
 # The canonical sequence. This is the sort order inside every bucket.
 WORKFLOW_ORDER = ('cleanup', 'dedupe', 'triage', 'backfill', 'trumped')
@@ -360,6 +385,7 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
     for key, count_key in (('orphan', 'orphaned_torrent_count'),
                            ('dupe',   'duplicate_count')):
         since_key = f'{key}_clean_since'
+        break_key = f'{key}_break_at'
         is_clean  = (det.get(count_key, 0) or 0) == 0
         if is_clean:
             if not p[since_key]:
@@ -367,12 +393,30 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
                 # a kill — a first audit that happens to be clean killed nothing.
                 if not first_run:
                     p[f'{key}_kills'] = int(p[f'{key}_kills'] or 0) + 1
+                    # How long the mess survived. Only messes we watched arrive
+                    # can be timed: a pile that was already there when auditorr
+                    # was installed has no start, and guessing one would hand out
+                    # a fast fix for work done before the first scan.
+                    elapsed = _hours_since(p.get(break_key), now)
+                    if elapsed is not None and elapsed <= _FAST_FIX_HOURS:
+                        p['fast_fixes'] = int(p.get('fast_fixes') or 0) + 1
                 p[since_key] = stamp
+            p[break_key] = None
         else:
             if p[since_key]:
                 # It was clean and now it isn't — that is the thing to tell them.
                 p[f'{key}_breaks'] = int(p[f'{key}_breaks'] or 0) + 1
+                p[break_key] = stamp
             p[since_key] = None
+
+    # The all-three-zeros streak. Deliberately stricter than Sentinel and looser
+    # than a health score of 100: it asks whether anything is *waiting on you*,
+    # which the hardlink ratio is not.
+    if _is_immaculate(det):
+        if not p.get('immaculate_since'):
+            p['immaculate_since'] = stamp
+    else:
+        p['immaculate_since'] = None
 
     # Latch everything that could otherwise regress.
     if state:
@@ -424,6 +468,34 @@ def _days_since(stamp, now=None):
     return max(0, delta.days)
 
 
+def _hours_since(stamp, now=None):
+    if not stamp:
+        return None
+    try:
+        delta = (now or datetime.now()) - datetime.fromisoformat(stamp)
+    except (ValueError, TypeError):
+        return None
+    return max(0.0, delta.total_seconds() / 3600.0)
+
+
+def _is_immaculate(det):
+    """Nothing is waiting on you: no orphans, no duplicates, nothing unimported.
+
+    Deliberately *not* a health score of 100, which also demands a perfect
+    hardlink ratio — that is Backfill's aspiration, not a statement about
+    whether the library needs attention. The size guards keep an empty install
+    from being congratulated for having nothing wrong with nothing.
+    """
+    det = det or {}
+    return bool(
+        (det.get('total_torrents_size', 0) or 0) > 0
+        and (det.get('total_media_size', 0) or 0) > 0
+        and (det.get('orphaned_torrent_count', 0) or 0) == 0
+        and (det.get('duplicate_count', 0) or 0) == 0
+        and (det.get('not_imported_count', 0) or 0) == 0
+    )
+
+
 def _recoverable(score, maximum):
     """Health-score points currently being lost in a category."""
     try:
@@ -461,9 +533,8 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
         'score_lost': _recoverable(det.get('or_score'), det.get('or_max', 10)),
         'score_max': round(float(det.get('or_max', 10) or 0), 1),
         'teaching': (
-            "Files in your torrent folder that your torrent client has no knowledge of. "
-            "They cost you disk and earn you nothing. Cleanup groups them by release folder "
-            "and writes a delete script you review and run yourself."
+            "Files in your torrent folder your client has no record of. Cleanup groups them "
+            "by release folder and writes a delete script you run yourself."
         ),
         'clear_line': 'No orphans. Every file in your torrent folder is accounted for.',
     })
@@ -480,9 +551,8 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
         'score_lost': _recoverable(det.get('dup_score'), det.get('dup_max', 10)),
         'score_max': round(float(det.get('dup_max', 10) or 0), 1),
         'teaching': (
-            "Bit-for-bit identical files that share no inode — you are paying for the same "
-            "bytes twice. Dedupe groups them and writes a script that replaces the copies "
-            "with hardlinks."
+            "Identical files that don't share an inode — the same bytes paid for twice. "
+            "Dedupe writes a script that replaces the copies with hardlinks."
         ),
         'clear_line': 'No duplicates. You are not paying for the same bytes twice.',
     })
@@ -513,9 +583,8 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
         'score_lost': _recoverable(det.get('ni_score'), det.get('ni_max', 10)),
         'score_max': round(float(det.get('ni_max', 10) or 0), 1),
         'teaching': (
-            "Seeding torrents with no matching file in your media folder. Triage explains "
-            "why each one never landed — unregistered, superseded, still importing — and "
-            "gives you the right action per verdict instead of one blunt delete."
+            "Seeding torrents with no file in your media folder. Triage says why each one "
+            "never landed and gives you the right action per verdict."
         ),
         'clear_line': 'Everything you are seeding is imported and accounted for.',
     })
@@ -542,9 +611,8 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
         'score_lost': _recoverable(det.get('hl_score'), det.get('hl_max', 70)),
         'score_max': round(float(det.get('hl_max', 70) or 0), 1),
         'teaching': (
-            "Media in your library with no torrent behind it — dead weight on your disk that "
-            "earns no ratio. Backfill matches it against your indexers and grabs a release "
-            "that hardlinks straight onto the file you already have."
+            "Media with no torrent behind it — disk that earns no ratio. Backfill searches "
+            "your indexers for a release that hardlinks onto the file you already have."
         ),
         'clear_line': 'Effectively your whole library is hardlinked and seeding.',
     })
@@ -559,9 +627,8 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
         'state': 'standby', 'blocked_reason': None,
         'count': 0, 'bytes': 0, 'score_lost': 0.0, 'score_max': 0.0,
         'teaching': (
-            "Got a trump PM from a tracker? Paste it here. Trumped finds the torrents you are "
-            "seeding for that release, confirms the cross-seed group, and swaps in the "
-            "replacement without breaking the hardlinks."
+            "Paste a trump PM. Trumped finds the torrents you are seeding for that release, "
+            "confirms the cross-seed group, and swaps in the replacement."
         ),
         'clear_line': 'Nothing to do until a tracker sends you a trump notice.',
     })
@@ -729,9 +796,16 @@ LADDER_FACET = {
     'hoard':         ('have',    'library'),
     'packrat':       ('have',    'torrents'),
     'archivist':     ('have',    'files'),
+    'librarian':     ('have',    'titles'),
+    'videophile':    ('have',    '2160p'),
+    'provenance':    ('have',    'oldest'),
     'vaultkeeper':   ('have',    'hardlinked'),
-    'tidiness':      ('have',    'clean'),
-    'purity':        ('have',    'imported'),
+    # 'swept'/'landed', not 'clean' — Sentinel already owns 'clean' for days,
+    # and these three now measure clean *bytes*, which is the exact ambiguity
+    # this field exists to remove.
+    'tidiness':      ('have',    'swept'),
+    'purity':        ('have',    'landed'),
+    'conservator':   ('have',    'spotless'),
 
     'seedbearer':    ('give',    'seeding'),
     'benefactor':    ('give',    'uploaded'),
@@ -742,15 +816,20 @@ LADDER_FACET = {
     'pollinator':    ('give',    'cross-seeded'),
     'alchemist':     ('give',    'multiplier'),
     'diplomat':      ('give',    'trackers'),
+    'atlas':         ('give',    'held'),
+    'oldfaithful':   ('give',    'oldest seed'),
 
     'shoveler':      ('work',    'shovelled'),
     'exterminator':  ('work',    'orphan kills'),
     'clonehunter':   ('work',    'dupe kills'),
     'kingmaker':     ('work',    'swaps'),
     'sentinel':      ('work',    'clean'),
+    'firebrigade':   ('work',    'quick fixes'),
+    'unblemished':   ('work',    'unbroken'),
     'lapidary':      ('work',    'hardlinked'),
     'custodian':     ('work',    'best health'),
     'steady':        ('work',    'at 90+'),
+    'flawless':      ('work',    'at 100'),
 
     'auditor':       ('machine', 'audits'),
     'watcher':       ('machine', 'audited'),
@@ -968,6 +1047,74 @@ TIER_TITLES = {
         'Isotopically Pure', 'Refined To Nothing', 'Theoretically Clean',
         'Purity Itself',
     ],
+    # Clean *at scale*. The tier names are the whole argument for the rebase:
+    # "No Dust Exists Here" was previously awarded for owning 10 TB.
+    'conservator': [
+        'Nothing Out of Place', 'Tidy Shelf', 'Dusted', 'White Glove',
+        'Acid-Free', 'Archival Sleeve', 'Climate Controlled',
+        'Humidity Regulated', 'Museum Grade', 'Behind Glass', 'Velvet Rope',
+        'Nitrogen Atmosphere', 'Sealed Wing', 'No Visitors', 'Vacuum Vault',
+        'Nobody Is Allowed In', 'Preserved for the Nation',
+        'Sealed for Posterity', 'Legally a Monument', 'Outlives You',
+    ],
+    'librarian': [
+        'A Shelf', 'A Bookcase', 'A Reading Room', 'Reference Section',
+        # 'Civic Collection', not 'Municipal Library' — Archivist already has
+        # that rung, and Archivist counts files while this counts titles, which
+        # is precisely the pair that must not share a word.
+        'Local Branch', 'Civic Collection', 'Regional Collection',
+        'Legal Deposit', 'National Collection', 'Copyright Library',
+        'Everything Ever Made', 'The Catalogue Is Its Own Project',
+        'You Have Watched None of These', 'Accession Number Overflow',
+    ],
+    'videophile': [
+        'First Pixels', 'Some of It', 'A Proper Screen', 'Worth the Bandwidth',
+        'Discerning', 'Videophile', 'Format Snob', 'Only the Best',
+        'Nothing Under 2160', 'Pixel Baron', 'Bitrate Enthusiast',
+        'There Is No Higher Format', 'Waiting on 8K',
+        'The Panel Cannot Keep Up', 'Beyond Human Vision',
+        'More Pixels Than Sense', 'Resolution Maximalist', 'Awaiting Better Eyes',
+    ],
+    'provenance': [
+        'Last Month', 'Last Season', 'Half a Year Back', 'Last Year',
+        'Two Years On', 'Predates the Rebuild', 'Five Years In',
+        'Older Than the Array', 'A Decade Held', 'Older Than the Format',
+        'You Do Not Remember Downloading This',
+    ],
+    'atlas': [
+        'A Small Favour', 'Holding Steady', 'The Long Shift', 'Bearing Up',
+        'Never Set It Down', 'Atlas', 'Weight of the World',
+        'Arms Have Gone Numb', 'Forgot It Was There', 'Tectonic Patience',
+        'Continental Drift', 'Older Than Most Trackers', 'Measured in Geology',
+        'Outlasts the Hardware', 'Still Holding', 'It Holds Itself Now',
+        'Perpetual Load', 'The Sky Rests Here',
+    ],
+    'oldfaithful': [
+        'Still Up', 'A Week Old', 'A Month Up', 'Seasoned', 'Half a Year',
+        'Anniversary', 'Two Years Deep', 'Vintage', 'Five Years Untouched',
+        'Older Than the Drive It Sits On', 'A Decade of Uptime',
+        'Outlasted the Tracker',
+    ],
+    'unblemished': [
+        'A Quiet Day', 'Two Quiet Days', 'Uneventful', 'A Week of Nothing',
+        'Suspiciously Calm', 'A Month of Silence', 'Nothing Has Happened',
+        'Nothing Continues To Happen', 'Half a Year, No Notes',
+        'A Year Without Incident', 'Two Years of Nothing',
+        'Nothing Ever Happens Here', 'A Decade of Silence',
+    ],
+    'flawless': [
+        'Briefly Perfect', 'Twice Perfect', 'Three Days Perfect',
+        'A Perfect Week', 'Statistically Improbable', 'A Perfect Month',
+        'Showing Off', 'This Is Just Who You Are', 'Half a Year Flawless',
+        'A Perfect Year', 'Nobody Asked For This', 'Perfection Sustained',
+        'A Decade Without a Flaw',
+    ],
+    'firebrigade': [
+        'On It', 'Quick Sweep', 'Same Day Service', 'Rapid Response',
+        'Within the Hour', 'Fire Brigade', 'Standing Army', 'Always On Call',
+        'Before You Noticed', 'It Was Handled', 'Preemptive',
+        'Nothing Gets Old Here', 'Reflexive', 'It Never Had a Chance',
+    ],
     'completionist': [
         'First Prize', 'Getting Started', 'Ten Trinkets', 'Collector',
         'Cabinet Filling', 'Serious Collection', 'Hoarder of Nothing',
@@ -1017,6 +1164,30 @@ def _fmt_mb(n):
 
 def _fmt_x(n):
     return f"{float(n):.2f}×"
+
+
+# Seconds in a year, for the byte-seconds ladders. Julian year — nothing here is
+# precise enough for the distinction to matter, but the constant should be one
+# thing rather than two.
+_YEAR_SECS = 365.25 * 86400
+
+
+def _fmt_tb_years(byte_secs):
+    """Byte-seconds rendered as TB·years — 'this much, held for this long'."""
+    v = float(byte_secs or 0) / (TB * _YEAR_SECS)
+    if v < 0.01:
+        return f"{v:.3f} TB·yr"
+    if v < 1:
+        return f"{v:.2f} TB·yr"
+    return f"{v:,.1f} TB·yr"
+
+
+def _fmt_span(days):
+    """Days, switching to years once 'n days' stops being readable."""
+    d = float(days or 0)
+    if d < 365:
+        return _pluralize(int(d), 'day')
+    return f"{d / 365.25:.1f} years"
 
 
 def _ladder(lid, name, blurb, value, thresholds, fmt, points_step=25, peaks=None):
@@ -1232,6 +1403,31 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                 _days_at_or_above(runs, 90),
                 [1, 2, 3, 7, 14, 30, 60, 90, 180, 365, 730, 1825, 3650],
                 _fmt_days, 40),
+        # Sentinel watches orphans alone. This one asks whether *anything* is
+        # waiting on you, which is the streak a library in genuinely good shape
+        # can actually run.
+        L('unblemished', 'Unblemished',
+                'Consecutive days with nothing wrong: no orphans, no duplicates, nothing unimported.',
+                _days_since((progress or {}).get('immaculate_since')) or 0,
+                [1, 2, 3, 7, 14, 30, 60, 90, 180, 365, 730, 1825, 3650],
+                _fmt_days, 40),
+        # Not "Flawless": Custodian's rung 15 already carries that word, and a
+        # medallion sharing a name with another medallion's rung is the exact
+        # ambiguity the `measures` field exists to kill.
+        L('flawless', 'Full Marks',
+                'Consecutive days at a health score of exactly 100. Steady Hand, for people who cannot stop.',
+                _days_at_or_above(runs, 100),
+                [1, 2, 3, 7, 14, 30, 60, 90, 180, 365, 730, 1825, 3650],
+                _fmt_days, 45),
+        # The fix for a perverse incentive: Exterminator and Clone Hunter only
+        # pay when a mess returns, so a library that stays clean can never earn
+        # another kill. This pays for how fast the mess dies instead, which is
+        # the thing a well-run library is actually good at.
+        L('firebrigade', 'Fire Brigade',
+                f'Messes cleared within {_FAST_FIX_HOURS} hours of appearing. It never stood a chance.',
+                int((progress or {}).get('fast_fixes') or 0),
+                [1, 2, 3, 5, 8, 12, 20, 35, 50, 75, 100, 200, 500, 1000],
+                _fmt_plain, 40),
         L('chronicler', 'Chronicler',
                 'Days since your first audit. Time passes whether you scan or not. It passed anyway.',
                 _days_observed(runs),
@@ -1244,6 +1440,38 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                  100000, 250000, 500000, 1000000, 2500000, 5000000, 10000000,
                  25000000],
                 _fmt_plain, 25),
+        # The `have` shelf used to ask one question six times: Hoarder, Packrat,
+        # Vault Keeper, Tidiness and Purity are all bytes, and Archivist is the
+        # same bytes counted as files. Every one of them moves when you buy a
+        # drive and not one of them moves when you improve the library — which
+        # is why the shelf goes dead for exactly the user who has finished
+        # buying drives. These three ask different questions about the same pile.
+        L('librarian', 'Librarian',
+                'Distinct things you hold, rather than bytes. 60 TB of remuxes is not a big collection.',
+                det.get('title_count') or 0,
+                [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000,
+                 50000, 100000, 250000],
+                _fmt_plain, 25),
+        # Not owned by any workflow: `uhd_bytes` is read off the media library,
+        # and no auditorr workflow writes there. Backfill grabs torrents for
+        # media you already hold and Trumped swaps one release for the same
+        # release, so neither moves this — the arrs do, upgrading in place.
+        L('videophile', 'Videophile',
+                'Bytes held at 2160p. Not how much you have — how good what you have is.',
+                det.get('uhd_bytes') or 0,
+                [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
+                 500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
+                 100 * TB, 250 * TB, 500 * TB, 1 * PB],
+                _fmt_bytes, 30),
+        # Patience, not money — and mtime is the only witness. It lies after an
+        # array rebuild or an rsync without -t, which the blurb says out loud
+        # rather than implying a precision that is not there. The peaks latch
+        # means a reset can only fail to advance the ladder, never undo it.
+        L('provenance', 'Provenance',
+                'Age of the oldest thing you still have. Assuming nothing ever touched its timestamp.',
+                det.get('oldest_media_age_days') or 0,
+                [30, 90, 180, 365, 730, 1095, 1825, 2555, 3650, 5475, 7300],
+                _fmt_span, 30),
         L('seedling', 'Seedling',
                 'Torrents currently seeding. Each one a small, anonymous act of charity.',
                 seed_count,
@@ -1264,6 +1492,28 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                  500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
                  100 * TB, 250 * TB, 500 * TB, 1 * PB],
                 _fmt_bytes, 40),
+        # Time under load. The only ladder on the shelf that cannot be bought:
+        # every other byte ladder jumps the moment a drive is filled, and this
+        # one can only be earned by not touching things. 20 TB held for five
+        # years beats 500 TB held for three weeks, and there is nothing the
+        # bigger library can do about it except wait.
+        L('atlas', 'Atlas',
+                'Everything you have ever held up, multiplied by how long you held it.',
+                det.get('seed_byte_secs') or 0,
+                [x * TB * _YEAR_SECS for x in
+                 (0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 25, 50, 100, 250,
+                  500, 1000, 2500, 10000, 50000)],
+                _fmt_tb_years, 35),
+        # Deliberately a maximum, not a sum: a sum of seeding time is torrent-
+        # hours, which grows by owning more torrents and is Seedling crossed
+        # with Chronicler. The oldest single torrent has nothing to do with
+        # library size, so this is the one rung a small tidy library can hold
+        # that a hundred-terabyte seedbox cannot.
+        L('oldfaithful', 'Old Faithful',
+                'The longest you have held a single torrent up. Still there. Still nobody downloading it.',
+                (det.get('max_seed_secs') or 0) / 86400.0,
+                [1, 7, 30, 90, 180, 365, 730, 1095, 1825, 2555, 3650, 5475],
+                _fmt_span, 30),
         L('marathoner', 'Marathoner',
                 'Hours auditorr has spent staring at your files so that you did not have to.',
                 scan_secs,
@@ -1296,24 +1546,46 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                 peak_rss,
                 [128, 256, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 16384],
                 _fmt_mb, 25),
-        # These two were percentages and therefore capped at 100% — two ladders
-        # that could be maxed, in a design whose whole premise is that nothing
-        # ever tops out. Re-based on absolute bytes, so they grow with the
-        # library forever and a tidy 500 TB user still outranks a tidy 5 GB one.
+        # Clean **at scale**, and only while actually clean.
+        #
+        # These two began as percentages, which cap at 100% — two ladders that
+        # could be maxed, in a design whose premise is that nothing tops out.
+        # The fix was to re-base them on absolute bytes, and that fix collapsed
+        # the axis: "100% clean" expressed in bytes is just `total_tor`, so
+        # Tidiness, Purity and Packrat became three tiles reading one number,
+        # tiering in lockstep on identical curves. "No Dust Exists Here" was
+        # being awarded for owning 10 TB.
+        #
+        # Now the value is the *whole* torrent directory, but only on an audit
+        # where the relevant pile is empty — zero otherwise, with the peaks
+        # latch holding the high-water mark. So a spotless 5 TB library outranks
+        # a filthy 500 TB one until it sweeps, the tier names describe what was
+        # actually achieved, and the ladders still grow with the library forever.
+        #
+        # Existing users keep every rung: peaks latch by ladder id, so a
+        # grandfathered value simply stops advancing until the library is
+        # genuinely clean. Nothing is deducted, which is the rule.
         L('tidiness', 'Tidiness',
-                'Bytes in your torrent directory that are not orphaned junk. Sweep, then keep sweeping.',
-                max(0, total_tor - (det.get('orphaned_torrent_size', 0) or 0)),
+                'How big your torrent directory was, on a day when not one byte of it was orphaned.',
+                total_tor if (det.get('orphaned_torrent_count', 0) or 0) == 0 else 0,
                 [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
                  500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
                  100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
                 _fmt_bytes, 30),
         L('purity', 'Purity',
-                'Bytes you are seeding that actually made it into the library. The stuff that worked.',
-                max(0, total_tor - (det.get('not_imported_size', 0) or 0)),
+                'How much you were seeding, on a day when every last byte of it had landed in the library.',
+                total_tor if (det.get('not_imported_count', 0) or 0) == 0 else 0,
                 [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
                  500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
                  100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
                 _fmt_bytes, 30),
+        L('conservator', 'Conservator',
+                'The largest library you have ever held with nothing whatsoever wrong with it.',
+                (total_media + total_tor) if _is_immaculate(det) else 0,
+                [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
+                 500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
+                 100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
+                _fmt_bytes, 35),
     ]
 
 
@@ -1349,7 +1621,7 @@ _FEAT_GROUP_ORDER = {gid: i for i, (gid, _, _) in enumerate(FEAT_GROUPS)}
 
 
 def _feats(det, runs, cross, best_score, progress=None, ladders=None,
-           lifetime_up=0, seeding=0, n_trackers=0):
+           lifetime_up=0, seeding=0, n_trackers=0, all_clear=False):
     p = {**EMPTY_PROGRESS, **(progress or {})}
     durations   = [float(r.get('duration_seconds') or 0) for r in runs
                    if r.get('status') == 'ok' and r.get('duration_seconds')]
@@ -1384,6 +1656,19 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
     kills       = int(p.get('orphan_kills') or 0) + int(p.get('dupe_kills') or 0)
     trumps      = int(p.get('trumps') or 0)
     up          = float(lifetime_up or 0)
+    titles      = det.get('title_count') or 0
+    uhd_bytes   = det.get('uhd_bytes') or 0
+    oldest_days = det.get('oldest_media_age_days') or 0
+    max_seed_d  = (det.get('max_seed_secs') or 0) / 86400.0
+    immaculate  = _is_immaculate(det)
+    imm_days    = _days_since(p.get('immaculate_since')) or 0
+    # No score drop across the last ten audits, oldest → newest. Ten is enough
+    # to mean something and short enough that one bad week does not lock it out
+    # forever; the latch keeps it once earned.
+    recent = [float(r['health_score']) for r in ok_runs[:10]
+              if r.get('health_score') is not None][::-1]
+    never_back = len(recent) >= 10 and all(
+        b >= a for a, b in zip(recent, recent[1:]))
 
     defs = [
         # ── First steps ──────────────────────────────────────────────────────
@@ -1424,6 +1709,32 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
          total_tor > 0 and dead == 0, 150),
         ('clean', 'immaculate', 'Immaculate', 'Zero orphans, zero duplicates and zero not-imported at once.',
          total_tor > 0 and total_media > 0 and orphans == 0 and dupes == 0 and not_imp == 0, 500),
+        # The aspirational half of this shelf. Everything above is a zero state
+        # a good library reaches once and then owns forever, which leaves the
+        # section addressed to somebody who has not got there yet. These cross
+        # the zero states with scale and with time, so there is still something
+        # here for a library that has been spotless for a year.
+        ('clean', 'spotless_ten', 'Spotless at Ten',
+         'Hold zero orphans, zero duplicates and zero not-imported with 10 TB or more.',
+         immaculate and total_media >= 10 * TB, 250),
+        ('clean', 'spotless_fifty', 'Spotless at Fifty',
+         'Hold all three zeros with 50 TB or more. At this size that is a decision, not luck.',
+         immaculate and total_media >= 50 * TB, 400),
+        ('clean', 'spotless_hundred', 'Spotless at a Hundred',
+         'Hold all three zeros with 100 TB or more. Somebody is being very careful.',
+         immaculate and total_media >= 100 * TB, 600),
+        ('clean', 'no_notes', 'No Notes',
+         'Score a perfect 100 with a library over a terabyte. No asterisk, no empty install.',
+         best_score >= 100 and total_media >= TB, 400),
+        ('clean', 'nothing_left', 'Nothing Left To Do',
+         'Have every workflow report clear at the same time. Briefly, there is nothing to do.',
+         bool(all_clear), 300),
+        ('clean', 'never_back', 'Never Went Backwards',
+         'Complete ten audits in a row without the health score dropping once.',
+         never_back, 250),
+        ('clean', 'overqualified', 'Overqualified',
+         'Reach 99% hardlinked with 50 TB or more. The ratio was the easy part.',
+         hl_pct >= 99 and total_media >= 50 * TB, 500),
         ('clean', 'half_linked', 'Halfway Home', 'Get half your library hardlinked.',
          hl_pct >= 50, 100),
         ('clean', 'mostly_linked', 'Nine Tenths', 'Reach 90% hardlinked.',
@@ -1508,6 +1819,19 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
          total_media >= PB, 750),
         ('scale', 'two_pb', 'Are You a Datacenter?', 'Audit two petabytes or more. Genuinely, how.',
          total_media >= 2 * PB, 1000),
+        # Titles, not files or bytes — the one scale axis that says what the
+        # library *is*. A hundred is a shelf; a thousand is a problem.
+        ('scale', 'hundred_titles', 'A Hundred Titles', 'Hold a hundred distinct releases.',
+         titles >= 100, 75),
+        ('scale', 'thousand_titles', 'A Thousand Titles',
+         'Hold a thousand distinct releases. You have seen perhaps forty of them.',
+         titles >= 1000, 150),
+        ('scale', 'ten_thousand_titles', 'Ten Thousand Titles',
+         'Hold ten thousand distinct releases. The catalogue is now the hobby.',
+         titles >= 10000, 300),
+        ('scale', 'all_4k', 'Nothing But the Best',
+         'Have 90% of your library at 2160p. Storage is cheaper than compromise.',
+         total_media > 0 and uhd_bytes >= 0.9 * total_media, 350),
         ('scale', 'thousand_files', 'A Thousand Files', 'Have a thousand files under audit at once.',
          files >= 1000, 75),
         ('scale', 'ten_thousand_files', 'Ten Thousand Files', 'Have ten thousand files under audit at once.',
@@ -1590,6 +1914,27 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
          len(ok_runs) >= 50, 150),
         ('time', 'century', 'Century', 'Complete 100 audits.',
          len(ok_runs) >= 100, 200),
+        ('time', 'week_incident', 'A Week Without Incident',
+         'Hold all three zeros for seven consecutive days.',
+         imm_days >= 7, 200),
+        ('time', 'month_incident', 'A Month Without Incident',
+         'Hold all three zeros for thirty consecutive days.',
+         imm_days >= 30, 350),
+        ('time', 'year_incident', 'A Year Without Incident',
+         'Hold all three zeros for a full year. Nothing happened, at length.',
+         imm_days >= 365, 750),
+        ('time', 'anniversary', 'One Year Held',
+         'Seed a single torrent for a full year without interruption.',
+         max_seed_d >= 365, 200),
+        # Both of these reward something that predates auditorr, which is the
+        # whole point: the veteran arrives with history, and a prize layer that
+        # starts everyone at zero has nothing to say to them on day one.
+        ('time', 'old_guard', 'The Old Guard',
+         'Still be seeding something you started before you installed auditorr.',
+         max_seed_d > observed > 0, 150),
+        ('time', 'predates_install', 'It Was Always Here',
+         'Hold a file older than auditorr has been watching. It came with the drive.',
+         oldest_days > observed > 0, 100),
         ('time', 'veteran', 'Old Timer', 'Keep auditorr running for a full year.',
          observed >= 365, 400),
         ('time', 'ancient', 'Still Here', 'Keep auditorr running for five years. Genuinely, why.',
@@ -1682,8 +2027,13 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
     # are on.
     seeding    = sum((s or {}).get('seeding_size', 0) for s in (tracker_stats or {}).values())
     n_trackers = len([t for t in (tracker_stats or {}) if t and t != 'None'])
+    # Built before the feats because one of them ("Nothing Left To Do") is a
+    # statement about the spine rather than about the audit numbers.
+    rows = _workflow_rows(cfg, det, source_ok, arr_ok) if has_audit else []
+    all_clear = bool(rows) and all(r['state'] in ('maintain', 'standby') for r in rows)
     feats   = _feats(det, runs, cross, best_score, progress, ladders,
-                     lifetime_up=lifetime_uploaded, seeding=seeding, n_trackers=n_trackers)
+                     lifetime_up=lifetime_uploaded, seeding=seeding,
+                     n_trackers=n_trackers, all_clear=all_clear)
 
     # Meta ladders — prizes for collecting prizes, which is either the most or
     # the least useless thing on this page. Computed last because they measure
@@ -1711,7 +2061,6 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
     tiers_earned = sum(l['tier'] for l in ladders) + sum(1 for f in feats if f['earned'])
     tiers_total  = sum(l['tiers_total'] for l in ladders) + len(feats)
 
-    rows = _workflow_rows(cfg, det, source_ok, arr_ok) if has_audit else []
     by_id = {l['id']: l for l in ladders}
     for r in rows:
         r['headline'] = _headline(r)

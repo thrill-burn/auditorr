@@ -6,6 +6,7 @@ import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
   Checkbox, ActionBar, ActionButton, Spinner, SpinKeyframes, HDR_STYLE,
+  useAuditComplete,
 } from './shared'
 
 const VERDICTS = [
@@ -194,7 +195,7 @@ function QualityChip({ label, hdr, dim }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending }) {
+function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending, rescanned }) {
   const p = item.parsed || {}
   const seTag = p.season != null
     ? ` · S${String(p.season).padStart(2, '0')}${p.episode != null ? 'E' + String(p.episode).padStart(2, '0') : ' pack'}`
@@ -223,6 +224,17 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {item.file_count > 1 && (
             <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
               {item.file_count} files
+            </span>
+          )}
+          {rescanned && (
+            <span
+              title="Handed to Sonarr/Radarr. The arr imports on its own schedule, and this row is built from the last audit — it clears once a scan has seen the result."
+              style={{
+                fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0,
+                border: '1px solid var(--blue)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
+              }}
+            >
+              rescan sent
             </span>
           )}
         </div>
@@ -345,6 +357,14 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
   )
 }
 
+// Rows already acted on, by item key. Module-level on purpose: it has to
+// outlive the component. The report is rebuilt from the *last audit*, so
+// leaving Triage and coming back re-fetched rows the user had just deleted or
+// excluded — they reappeared, looking like the action had failed, and stayed
+// until a scan. Cleared when an audit lands, which is the point the server's
+// own answer becomes correct.
+const DISMISSED = new Set()
+
 export default function Triage({ onNavigate, cleanupCount }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
@@ -352,6 +372,11 @@ export default function Triage({ onNavigate, cleanupCount }) {
   const [error,    setError]    = useState(null)
   const [selected, setSelected] = useState(() => new Set())
   const [busy,     setBusy]     = useState(null)   // 'rescan' | 'exclude' | 'delete' | null
+  // Items handed to Sonarr/Radarr this session. Deleting or excluding drops the
+  // row immediately, but a rescan cannot: the arr imports on its own schedule
+  // and tells us nothing, and the row is built from audit-time data anyway. So
+  // the row stays and says so, rather than looking like the click did nothing.
+  const [rescanned, setRescanned] = useState(() => new Set())
   const [confirmOpen, setConfirmOpen] = useState(false)
   // Cross-seed groups resolved live when the delete modal opens, keyed by the
   // item's recorded hash → [{hash, instance_id, name, tracker, seeding_time…}].
@@ -446,9 +471,17 @@ export default function Triage({ onNavigate, cleanupCount }) {
     setError(null)
     setSelected(new Set())
     setVerify(null)
+    setRescanned(new Set())
     verifyGen.current++   // cancel any in-flight verification
     api.triageReport()
-      .then(r => { setReport(r); runVerify(r?.items) })
+      .then(r => {
+        // Drop anything acted on since the last audit — the server cannot know
+        // yet, because its answer is that audit.
+        const kept = (r?.items || []).filter(i => !DISMISSED.has(itemKey(i)))
+        const rep  = { ...r, items: kept }
+        setReport(rep)
+        runVerify(kept)
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
     api.getConfig().then(cfg => {
@@ -480,8 +513,15 @@ export default function Triage({ onNavigate, cleanupCount }) {
 
   useEffect(() => {
     load()
-    return () => { verifyGen.current++ }   // stop verifying after unmount
+    return () => { verifyGen.current++; importGen.current++ }   // stop polling after unmount
   }, [load])
+
+  // Phase 1 answers from the *last audit's* stored rows, so a fix that changes
+  // the filesystem — a rescan that imports, a delete — cannot show up until a
+  // scan has run. Hooking the audit-complete event is therefore the only thing
+  // that actually clears those rows; the actions themselves nudge the watchdog
+  // so that scan comes within a cooldown rather than at the next scheduled one.
+  useAuditComplete(useCallback(() => { DISMISSED.clear(); load() }, [load]))
 
   const items = report?.items || []
   const byVerdict = useMemo(() => {
@@ -576,6 +616,58 @@ export default function Triage({ onNavigate, cleanupCount }) {
     return [...byHash.values()]
   }, [deletableItems, groups, scopes])
 
+  // ── Rescan follow-through ──────────────────────────────────────────────────
+  //
+  // A rescan is the one action whose result arrives from outside auditorr: the
+  // command hands the file to Sonarr/Radarr, which imports on its own schedule
+  // and tells us nothing. The arr's own file id is the honest signal that it
+  // landed — the same one force_import confirms with, and for the same reason
+  // (the command status is not trustworthy). So: snapshot, then watch it move.
+  //
+  // Cheap by construction — one arr call per selected row, a handful of polls,
+  // and it stops the moment every row has answered.
+  const importGen = useRef(0)
+
+  const descriptorsFor = items => items.map(i => ({
+    key: itemKey(i), service: i.library.service,
+    connection_id: i.library.connection_id, arr_id: i.library.arr_id,
+  }))
+
+  const snapshotFileIds = useCallback(async items => {
+    try {
+      const resp = await api.importCheck(descriptorsFor(items))
+      const m = {}
+      for (const r of resp.results || []) if (r.checked) m[r.key] = JSON.stringify(r.file_id ?? null)
+      return m
+    } catch (_) {
+      return null   // no baseline, so no watch — the audit still clears the row
+    }
+  }, [])
+
+  const watchForImport = useCallback(async (items, baseline) => {
+    const gen = ++importGen.current
+    let waiting = items.filter(i => itemKey(i) in baseline)
+    for (let attempt = 0; attempt < 20 && waiting.length; attempt++) {
+      await new Promise(r => setTimeout(r, 6000))
+      if (gen !== importGen.current) return          // superseded or unmounted
+      let resp
+      try { resp = await api.importCheck(descriptorsFor(waiting)) } catch (_) { return }
+      if (gen !== importGen.current) return
+      // Only a *checked* answer that differs from the baseline counts. An arr
+      // that could not be reached reports checked:false, which must never read
+      // as "the file changed" and retire a row that is still a problem.
+      const landed = new Set((resp.results || [])
+        .filter(r => r.checked && JSON.stringify(r.file_id ?? null) !== baseline[r.key])
+        .map(r => r.key))
+      if (landed.size) {
+        landed.forEach(k => DISMISSED.add(k))
+        setReport(r => ({ ...r, items: (r?.items || []).filter(i => !landed.has(itemKey(i))) }))
+        toast(`${landed.size} import${landed.size === 1 ? '' : 's'} confirmed by Sonarr/Radarr`, 'success')
+        waiting = waiting.filter(i => !landed.has(itemKey(i)))
+      }
+    }
+  }, [toast])
+
   const handleClientDelete = async () => {
     setBusy('delete')
     try {
@@ -588,6 +680,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
       if (resp.files_kept)    parts.push(`${resp.files_kept} kept (still seeded elsewhere)`)
       toast(parts.join(' · '), 'success')
       const keys = new Set(deletableItems.map(itemKey))
+      keys.forEach(k => DISMISSED.add(k))
       setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
       setSelected(new Set())
       setConfirmOpen(false)
@@ -607,6 +700,12 @@ export default function Triage({ onNavigate, cleanupCount }) {
       else if (svc === 'sonarr') sonarrPaths.push(item.rep_path)
       else { sonarrPaths.push(item.rep_path); radarrPaths.push(item.rep_path) }
     }
+    // Snapshot the arr's file ids *before* the scan command, so the watcher
+    // below has something to compare against. Only items matched to a library
+    // entry can be watched; the rest fall back to clearing on the next audit.
+    const watchable = selectedItems.filter(
+      i => i.library?.arr_id != null && i.library?.connection_id && i.library?.service)
+    const baseline = watchable.length ? await snapshotFileIds(watchable) : null
     let ok = 0
     const results = []
     const collect = r => { results.push(...(r?.results || [])); ok++ }
@@ -615,7 +714,13 @@ export default function Triage({ onNavigate, cleanupCount }) {
     if (ok > 0) {
       const rejected = results.filter(r => (r.rejections || []).length > 0)
       if (rejected.length === 0) {
-        toast('Rescan triggered — check Sonarr/Radarr for import results', 'success')
+        // Mark the whole submitted batch rather than matching results back to
+        // rows: the arr reports per *scan target*, which is the release folder
+        // or the file itself, not the rep_path that was sent.
+        const keys = selectedItems.map(itemKey)
+        setRescanned(prev => new Set([...prev, ...keys]))
+        toast('Rescan sent to Sonarr/Radarr — watching for the import', 'success')
+        if (baseline) watchForImport(watchable, baseline)
       } else if (rejected.length === results.length) {
         toast(`Nothing will import — ${rejectionSummary(rejected)}`, 'error')
       } else {
@@ -642,6 +747,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
       const failed = (resp.results || []).filter(r => !r.imported)
       if (done.size) {
         toast(`Imported ${done.size} of ${resp.requested} — the library file was replaced`, 'success')
+        done.forEach(k => DISMISSED.add(k))
         setReport(r => ({ ...r, items: (r?.items || []).filter(i => !done.has(itemKey(i))) }))
         setSelected(new Set())
       }
@@ -659,6 +765,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
       const resp = await api.excludePatterns(patterns)
       toast(`Added ${resp.added} exclusion rule${resp.added !== 1 ? 's' : ''} — applies from the next audit`, 'success')
       const keys = new Set(selectedItems.map(itemKey))
+      keys.forEach(k => DISMISSED.add(k))
       setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
       setSelected(new Set())
     } catch (e) {
@@ -676,6 +783,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
       const resp = await api.excludePatterns(sugg.patterns)
       toast(`Excluding ${sugg.patterns.join(', ')} — added ${resp.added} rule${resp.added !== 1 ? 's' : ''}, visible in Config → Excluded Files`, 'success')
       const hit = p => { const lp = p.toLowerCase(); return (sugg.match || []).some(m => lp.includes(m)) }
+      for (const i of (report?.items || [])) if (hit(i.rep_path)) DISMISSED.add(itemKey(i))
       setReport(r => ({
         ...r,
         items: (r?.items || []).filter(i => !hit(i.rep_path)),
@@ -693,12 +801,9 @@ export default function Triage({ onNavigate, cleanupCount }) {
         title="Triage"
         accent="var(--red)"
         blurb="Every torrent that needs your attention: dead on the tracker (imported or not), quality superseded, import failures, or not in your library at all — and what to do about each."
-        right={!loading && (
-          <button onClick={load} style={{
-            fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
-            border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-          }}>↻ Refresh</button>
-        )}
+        /* No Refresh button: the page re-reads itself when an audit lands
+           (`useAuditComplete`), which is the only event that can change what it
+           shows. A button here would have been a stale page with a button. */
       />
 
       <WorkflowError message={error} />
@@ -820,6 +925,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
                     onOpenClient={openInClient}
                     onNavigate={onNavigate}
                     pending={!!verify?.running && !!item.hash && !item.verified}
+                    rescanned={rescanned.has(itemKey(item))}
                   />
                 ))}
               </div>

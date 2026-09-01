@@ -1,4 +1,34 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
+
+// ── Staying current ───────────────────────────────────────────────────────────
+//
+// Every workflow page fetches its own report — those live outside App's
+// `results`, so App refreshing after an audit did nothing for them and a page
+// left open across a scan showed pre-scan data until you navigated away and
+// back. App dispatches `auditorr:audit_complete` when a scan finishes; this
+// subscribes a page's own loader to it.
+//
+// **This replaces the per-page Refresh buttons, which were a stale page with a
+// button on it.** Polling was considered and rejected, on cost and on logic:
+// every one of these reports is built from the *last audit's* stored rows, so
+// a poll between audits re-fetches identical bytes — and not cheap ones.
+// Cleanup and Dedupe deserialize the full file list (the known RAM hotspot),
+// and Triage's verify phase fans out to the torrent client's per-torrent
+// tracker endpoint on a deliberately capped 8-worker pool. There is exactly
+// one event that can change what these pages show, so listen for that one.
+//
+// The chain closes without the user doing anything: act on an item, the
+// watchdog sees the filesystem change, defers while the session is still
+// active, scans, and this fires.
+export function useAuditComplete(onComplete) {
+  const ref = useRef(onComplete)
+  ref.current = onComplete
+  useEffect(() => {
+    const h = () => ref.current && ref.current()
+    window.addEventListener('auditorr:audit_complete', h)
+    return () => window.removeEventListener('auditorr:audit_complete', h)
+  }, [])
+}
 
 // ── Shared option lists ───────────────────────────────────────────────────────
 export const QUALITY_RES_OPTIONS = [

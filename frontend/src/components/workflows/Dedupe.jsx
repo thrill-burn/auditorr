@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
-  Checkbox, ActionBar, ActionButton, SpinKeyframes,
+  Checkbox, ActionBar, ActionButton, SpinKeyframes, useAuditComplete,
 } from './shared'
 
 function StatBox({ label, value, sub, color }) {
@@ -103,6 +103,9 @@ export default function Dedupe({ onNavigate, onScript }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+  // Built from the last audit, so running a dedupe script changes nothing here
+  // until a scan has seen it. This is what clears the groups.
+  useAuditComplete(load)
 
   const groups = report?.groups || []
   const linkable = useMemo(() => groups.filter(g => !g.cross_fs), [groups])
@@ -137,12 +140,7 @@ export default function Dedupe({ onNavigate, onScript }) {
         title="Dedupe"
         accent="var(--purple)"
         blurb="Bit-for-bit identical files that don't share an inode — true copies wasting disk space. The generated script verifies each pair with cmp, then replaces the copy with a hardlink: every path survives and every torrent keeps seeding."
-        right={!loading && (
-          <button onClick={load} style={{
-            fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
-            border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-          }}>↻ Refresh</button>
-        )}
+        /* Re-reads itself when an audit lands — see `useAuditComplete`. */
       />
 
       <WorkflowError message={error} />

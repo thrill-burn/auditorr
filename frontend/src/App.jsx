@@ -257,6 +257,11 @@ function AppInner() {
       setScanState(state)
       if (prevScanRef.current && !state.is_scanning) {
         await fetchResults(true)
+        // Tell the workflow pages too. They each own their own fetch (the
+        // reports are not in `results`), so without this a page left open
+        // across an audit keeps rendering pre-scan data indefinitely — the
+        // same window idiom as `auditorr:import_started` below.
+        window.dispatchEvent(new CustomEvent('auditorr:audit_complete'))
         const msg = state.status_message?.startsWith('Audit error') ||
                     state.status_message?.startsWith('qBittorrent') ||
                     state.status_message?.startsWith('qui')

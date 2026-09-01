@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../api'
-import { LoadingRow, WorkflowError } from './workflows/shared'
+import { LoadingRow, WorkflowError, useAuditComplete } from './workflows/shared'
 
 // Rounds — "this is your prioritized (and rewarded) workflows page."
 //
@@ -88,6 +88,15 @@ const I = {
   highwater:    <><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></>,
   tidiness:     <><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></>,
   purity:       <><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7Z"/></>,
+  conservator:  <><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 20 7 4 7"/></>,
+  librarian:    <><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></>,
+  videophile:   <><rect x="2" y="7" width="20" height="15" rx="2"/><polyline points="17 2 12 7 7 2"/></>,
+  provenance:   <><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.17a2 2 0 0 0-.59-1.41L12 12l-4.41 4.42A2 2 0 0 0 7 17.83V22"/><path d="M7 2v4.17a2 2 0 0 0 .59 1.41L12 12l4.41-4.42A2 2 0 0 0 17 6.17V2"/></>,
+  atlas:        <><circle cx="12" cy="5" r="3"/><path d="M6.5 8h11l1.7 12.1a1 1 0 0 1-1 1.1H5.8a1 1 0 0 1-1-1.1z"/></>,
+  oldfaithful:  <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></>,
+  unblemished:  <><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></>,
+  flawless:     <><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M5 3v4"/><path d="M3 5h4"/></>,
+  firebrigade:  <><path d="M15 6.5V3a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v3.5"/><path d="M9 18h8"/><path d="M18 3h-3"/><path d="M11 3a6 6 0 0 0-6 6v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a6 6 0 0 0-6-6"/></>,
   completionist:<><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></>,
   trophyhunter: <><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></>,
 }
@@ -148,12 +157,12 @@ function useCountUp(target, ms = 900) {
 function GroupHeader({ label, count, total, blurb }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>{label}</span>
+      <span style={{ fontSize: 'var(--font-base)', fontWeight: 700, color: 'var(--text)' }}>{label}</span>
       <span style={{
-        fontFamily: 'var(--mono)', fontSize: 10.5,
+        fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
         color: count === total ? 'var(--green)' : 'var(--text-dim)',
       }}>{count}/{total}</span>
-      {blurb && <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{blurb}</span>}
+      {blurb && <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{blurb}</span>}
       <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
     </div>
   )
@@ -188,7 +197,7 @@ function Medallion({ l, selected, onSelect }) {
       {/* Where you are out of how many there are. Mono, faint, out of the way. */}
       <span style={{
         position: 'absolute', top: 6, right: 8,
-        fontFamily: 'var(--mono)', fontSize: 9.5, lineHeight: 1,
+        fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', lineHeight: 1,
         color: l.maxed ? 'var(--green)' : 'var(--text-faint)',
       }}>
         {l.tier}/{l.tiers_total}
@@ -214,14 +223,14 @@ function Medallion({ l, selected, onSelect }) {
           in mono so you can still tell which ladder you are looking at. */}
       <div style={{ textAlign: 'center', minWidth: 0, width: '100%' }}>
         <div title={l.tier_label || `${l.name} — not started`} style={{
-          fontSize: 11.5, fontWeight: 600, lineHeight: 1.25,
+          fontSize: 'var(--font-base)', fontWeight: 600, lineHeight: 1.25,
           color: earned ? 'var(--text)' : 'var(--text-faint)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {l.tier_label || '—'}
         </div>
         <div style={{
-          fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--text-faint)', marginTop: 3,
+          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', marginTop: 3,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {l.name}
@@ -231,7 +240,7 @@ function Medallion({ l, selected, onSelect }) {
             "maxed" is no longer needed here — the ring is green and the corner
             reads n/n. */}
         <div style={{
-          fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 2,
+          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {l.value_label}
@@ -260,15 +269,15 @@ function LadderDetail({ l, onClose }) {
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)' }}>{l.name}</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+            <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{l.name}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               {l.tier} / {l.tiers_total} rungs
             </span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
               now {l.value_label}{l.measures ? ` ${l.measures}` : ''}
             </span>
           </div>
-          <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: 620 }}>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: 620 }}>
             {l.blurb}
           </p>
         </div>
@@ -293,7 +302,7 @@ function LadderDetail({ l, onClose }) {
               border: `1px solid ${isNext ? 'var(--accent)' : 'transparent'}`,
             }}>
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--text-faint)',
+                fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
                 minWidth: 16, textAlign: 'right', flexShrink: 0,
               }}>{t.n}</span>
               {t.earned
@@ -303,20 +312,20 @@ function LadderDetail({ l, onClose }) {
                     border: '1px solid var(--border2)',
                   }} />}
               <span style={{
-                fontSize: 11.5, flex: 1, minWidth: 0,
+                fontSize: 'var(--font-sm)', flex: 1, minWidth: 0,
                 color: t.earned ? 'var(--text)' : isNext ? 'var(--accent)' : 'var(--text-faint)',
                 fontWeight: isNext ? 600 : 400,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>{t.label}</span>
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 10, flexShrink: 0,
+                fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', flexShrink: 0,
                 color: t.earned ? 'var(--text-dim)' : 'var(--text-faint)',
               }}>{t.at_label}</span>
             </div>
           )
         })}
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
         {l.maxed
           ? 'Maxed. There is nothing above this one.'
           : `Next rung ${l.next_n} of ${l.tiers_total} — ${l.next_label} at ${l.next_at_label}.`}
@@ -336,12 +345,12 @@ function RankReadout({ rank }) {
   const points = useCountUp(rank.points)
   return (
     <div style={{ textAlign: 'right', minWidth: 190, flexShrink: 0 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{rank.name}</div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.15 }}>
-        {points.toLocaleString()}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
+      <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>{rank.name}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1.15 }}>
+        {points.toLocaleString()}<span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
       </div>
       <div style={{ marginTop: 6 }}><Track pct={rank.pct} /></div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)', marginTop: 5 }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', marginTop: 5 }}>
         {rank.next_name
           ? `${rank.next_name} at ${rank.next_at.toLocaleString()}`
           : 'nothing left to become'}
@@ -381,8 +390,8 @@ function Prizes({ data }) {
           middle and read as two columns that were not really a pair. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="trophy" size={17} /></span>
-        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Useless prizes</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
+        <span style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>Useless prizes</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
           {prizes.earned} / {prizes.total}
         </span>
       </div>
@@ -399,7 +408,9 @@ function Prizes({ data }) {
           return (
             <div key={g.id || 'all'} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <GroupHeader label={g.label} count={g.earned} total={g.total} blurb={g.blurb} />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(108px, 1fr))', gap: 8 }}>
+              {/* 120, not 108: the rung labels moved up to the 12px rung of the
+                  scale, and the tile is where the name has to survive. */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 8 }}>
                 {items.map(l => (
                   <Medallion key={l.id} l={l} selected={l.id === openLadder} onSelect={setOpenLadder} />
                 ))}
@@ -415,7 +426,7 @@ function Prizes({ data }) {
           says what you are climbing and how far up it sits. */}
       {closest.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)' }}>Closest to unlocking</span>
+          <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text-dim)' }}>Closest to unlocking</span>
           {closest.map(l => (
             <button
               key={l.id}
@@ -430,13 +441,13 @@ function Prizes({ data }) {
                 <Icon name={l.id} size={14} />
               </span>
               <span style={{ minWidth: 180, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                <span style={{ fontSize: 11.5, color: 'var(--text)', fontWeight: 600 }}>{l.next_label}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--text-faint)' }}>
+                <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)', fontWeight: 600 }}>{l.next_label}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
                   {l.name} · rung {l.next_n} of {l.tiers_total}
                 </span>
               </span>
               <span style={{ flex: 1, minWidth: 60 }}><Track pct={l.pct} height={3} /></span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)', minWidth: 110, textAlign: 'right' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', minWidth: 110, textAlign: 'right' }}>
                 {l.value_label} / {l.next_at_label}
               </span>
             </button>
@@ -448,7 +459,7 @@ function Prizes({ data }) {
         onClick={() => setShowAll(s => !s)}
         style={{
           alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-          fontSize: 11.5, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 'var(--font-base)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
         }}
       >
         {showAll ? 'Hide feats' : `Show all ${feats.length} feats`}
@@ -480,11 +491,11 @@ function Prizes({ data }) {
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                         {f.earned && <Dot color="var(--green)" size={6} />}
-                        <span style={{ fontSize: 12, fontWeight: 600, color: f.earned ? 'var(--text)' : 'var(--text-faint)' }}>{f.label}</span>
+                        <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: f.earned ? 'var(--text)' : 'var(--text-faint)' }}>{f.label}</span>
                         <span style={{ flex: 1 }} />
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>+{f.points}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>+{f.points}</span>
                       </div>
-                      <span style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.45 }}>{f.desc}</span>
+                      <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.45 }}>{f.desc}</span>
                     </div>
                   ))}
                 </div>
@@ -510,28 +521,31 @@ function WorkflowCard({ row, onNavigate, compact }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
         <Dot color={row.accent} />
-        <span style={{ fontSize: compact ? 13 : 16, fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
+        <span style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
         <span style={{
-          fontFamily: 'var(--mono)', fontSize: 10.5, padding: '2px 8px',
+          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', padding: '2px 8px',
           borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}`, color: meta.color,
         }}>{meta.label}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-faint)' }}>{row.nature}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{row.nature}</span>
         {row.score_lost > 0 && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginLeft: 'auto' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginLeft: 'auto' }}>
             {row.score_lost} of {row.score_max} pts lost
           </span>
         )}
       </div>
 
       <div style={{
-        fontFamily: 'var(--mono)', fontSize: compact ? 12.5 : 18, fontWeight: compact ? 400 : 700,
+        fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: compact ? 400 : 600,
         color: compact ? 'var(--text-dim)' : 'var(--text)', lineHeight: 1.3,
       }}>
         {row.headline}
       </div>
 
+      {/* Secondary to the headline above it, so a rung below it on the scale.
+          780px at 13px ran to ~110 characters a line, which is twice what the
+          rest of the app sets prose at. */}
       {!compact && (
-        <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.65, margin: 0, maxWidth: 780 }}>
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0, maxWidth: 620 }}>
           {row.teaching}
         </p>
       )}
@@ -543,11 +557,11 @@ function WorkflowCard({ row, onNavigate, compact }) {
           display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 220 }}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text)' }}>
               {row.reward.headline}
             </span>
             {!compact && (
-              <span style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+              <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.5 }}>
                 {row.reward.detail}
               </span>
             )}
@@ -565,15 +579,15 @@ function WorkflowCard({ row, onNavigate, compact }) {
                 <Icon name={row.next_prize.ladder_id} size={16} />
               </span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text)' }}>
+                <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
                   Next: {row.next_prize.label}
                 </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 9.5, color: 'var(--text-faint)' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
                   {row.next_prize.ladder}
                   {row.next_prize.n ? ` · rung ${row.next_prize.n} of ${row.next_prize.of}` : ''}
                 </span>
                 <Track pct={row.next_prize.pct} height={3} />
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-faint)' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
                   {row.next_prize.value_label} / {row.next_prize.at}
                 </span>
               </div>
@@ -591,7 +605,7 @@ function WorkflowCard({ row, onNavigate, compact }) {
             border: `1px solid ${actionable ? 'var(--accent)' : 'var(--border2)'}`,
             background: actionable ? 'var(--accent)' : 'var(--surface2)',
             color: actionable ? '#0a0a0a' : 'var(--text)',
-            fontSize: 12.5, fontWeight: 600,
+            fontSize: 'var(--font-base)', fontWeight: 600,
           }}
         >
           {row.state === 'blocked' ? 'Open Config →' : `Open ${row.label} →`}
@@ -614,8 +628,8 @@ function Section({ title, sub, done, doneLine, children, defaultOpen = true }) {
         }}
       >
         {done && <Dot color="var(--green)" size={7} />}
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>{title}</span>
-        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{done ? doneLine : sub}</span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{title}</span>
+        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{done ? doneLine : sub}</span>
         <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
           strokeLinecap="round" strokeLinejoin="round"
@@ -637,8 +651,8 @@ function SetupPanel({ setup, onNavigate }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <Dot color="var(--accent)" />
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Finish setting up</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Finish setting up</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
           {setup.done} / {setup.total}
         </span>
       </div>
@@ -666,10 +680,10 @@ function SetupPanel({ setup, onNavigate }) {
               )}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, color: s.done ? 'var(--text-dim)' : 'var(--text)', fontWeight: s.done ? 400 : 600 }}>{s.label}</div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>{s.hint}</div>
+              <div style={{ fontSize: 'var(--font-base)', color: s.done ? 'var(--text-dim)' : 'var(--text)', fontWeight: s.done ? 400 : 600 }}>{s.label}</div>
+              <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>{s.hint}</div>
             </div>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: s.done ? 'var(--green)' : 'var(--text-faint)', flexShrink: 0 }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: s.done ? 'var(--green)' : 'var(--text-faint)', flexShrink: 0 }}>
               +{s.points}
             </span>
           </div>
@@ -684,13 +698,17 @@ export default function NextSteps({ onNavigate }) {
   const [data, setData]   = useState(null)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
-    let alive = true
+  const load = useCallback(() => {
     api.nextSteps()
-      .then(d => { if (alive) setData(d) })
-      .catch(e => { if (alive) setError(e.message) })
-    return () => { alive = false }
+      .then(d => setData(d))
+      .catch(e => setError(e.message))
   }, [])
+
+  useEffect(() => { load() }, [load])
+  // Every number here — states, counts, ladder peaks, feats — is written by an
+  // audit, so that is the one event that can change this page. Without this it
+  // sat on pre-scan data for as long as it was left open.
+  useAuditComplete(load)
 
   if (error) return <div style={{ padding: 'var(--page-gutter)' }}><WorkflowError message={error} /></div>
   if (!data)  return <div style={{ padding: 'var(--page-gutter)' }}><LoadingRow label="Working out what you should be doing…" /></div>
@@ -704,13 +722,13 @@ export default function NextSteps({ onNavigate }) {
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Rounds</div>
+          <div style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Rounds</div>
           {/* Only the setup-stage blurb survives: with no audit on record the
               sections below are empty and the page needs to say why. Once they
               fill in, the section headers state the plan better than a paragraph
               restating it above them did. */}
           {data.stage === 'setup' && (
-            <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 760 }}>
+            <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 760 }}>
               auditorr has nothing to audit yet. Finish the checklist and the rest of this page fills in.
             </p>
           )}
@@ -724,9 +742,9 @@ export default function NextSteps({ onNavigate }) {
         <>
           <Section
             title="Baseline"
-            sub="Clear these first. They should stay clear — auditorr tells you when they don't."
+            sub="Clear these first. They should stay clear."
             done={baselineClear}
-            doneLine="Clear — auditorr is watching in case they come back."
+            doneLine="Clear. auditorr is watching."
             defaultOpen={!baselineClear}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -737,7 +755,7 @@ export default function NextSteps({ onNavigate }) {
             </div>
           </Section>
 
-          <Section title="Ongoing" sub="These never have a last item. That is normal.">
+          <Section title="Ongoing" sub="These never have a last item.">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {['triage', 'backfill'].map(id => byId[id]).filter(Boolean).map(r => (
                 <WorkflowCard key={r.id} row={r} onNavigate={onNavigate} compact={false} />
@@ -766,7 +784,7 @@ export default function NextSteps({ onNavigate }) {
       {data.stage !== 'setup' && <Prizes data={data} />}
 
       {health?.score != null && (
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-faint)' }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
           Library health {health.score} · {health.status} · {data.audits} audit{data.audits === 1 ? '' : 's'} on record
           {data.streak_90 > 0 && ` · ${data.streak_90} day${data.streak_90 === 1 ? '' : 's'} at 90+`}
         </div>

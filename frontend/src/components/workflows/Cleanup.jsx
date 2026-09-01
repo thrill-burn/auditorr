@@ -4,7 +4,7 @@ import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
-  Checkbox, ActionBar, ActionButton, SpinKeyframes,
+  Checkbox, ActionBar, ActionButton, SpinKeyframes, useAuditComplete,
 } from './shared'
 
 function ageLabel(mtime) {
@@ -108,6 +108,10 @@ function FolderGroup({ group, selected, onToggleFile, onToggleGroup }) {
   )
 }
 
+// Paths excluded since the last audit, by rel path. Module-level so it outlives
+// the component — see the same set in Triage.jsx for why.
+const DISMISSED = new Set()
+
 export default function Cleanup({ onNavigate, onScript, triageCount }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
@@ -121,12 +125,22 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     setError(null)
     setSelected(new Set())
     api.cleanupReport()
-      .then(setReport)
+      .then(r => setReport({
+        ...r,
+        // Excluded since the last audit — the server's answer is that audit, so
+        // without this they reappear the moment you navigate back.
+        groups: (r?.groups || [])
+          .map(g => ({ ...g, files: (g.files || []).filter(f => !DISMISSED.has(f.path)) }))
+          .filter(g => g.files.length > 0),
+      }))
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => { load() }, [load])
+  // The report is built from the last audit, so running a delete script changes
+  // nothing here until a scan has seen it. This is what clears the rows.
+  useAuditComplete(useCallback(() => { DISMISSED.clear(); load() }, [load]))
 
   const groups = report?.groups || []
   const fileByPath = useMemo(() => {
@@ -191,6 +205,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     try {
       const resp = await api.excludePatterns(patterns)
       toast(`Added ${resp.added} exclusion rule${resp.added !== 1 ? 's' : ''} — applies from the next audit`, 'success')
+      selected.forEach(p => DISMISSED.add(p))
       setReport(r => ({
         ...r,
         groups: (r?.groups || [])
@@ -212,12 +227,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
         title="Cleanup"
         accent="var(--yellow)"
         blurb="Files in your torrent folder that qBittorrent has no knowledge of. Review them by release folder, then generate a delete script for your selection — or exclude the ones you put there on purpose."
-        right={!loading && (
-          <button onClick={load} style={{
-            fontSize: 12, padding: '6px 16px', borderRadius: 'var(--r)', cursor: 'pointer',
-            border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-          }}>↻ Refresh</button>
-        )}
+        /* Re-reads itself when an audit lands — see `useAuditComplete`. */
       />
 
       <WorkflowError message={error} />

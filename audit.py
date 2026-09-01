@@ -66,9 +66,15 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
     key_order   = []
     scanned     = scanned_so_far
     stat_errors = 0
+    # Oldest media file, for the Next steps "Provenance" ladder. Tracked as a
+    # running minimum here rather than stored per record on purpose: mtime is
+    # already in the stat struct below (free), but an extra field on every
+    # inode_map entry is ~8 bytes x every file in the library, which is the
+    # known RAM hotspot. A scalar costs nothing.
+    oldest_mtime = None
     if not os.path.exists(base_path):
         log.warning(f"Path does not exist, skipping: {base_path}")
-        return key_order, scanned, stat_errors
+        return key_order, scanned, stat_errors, oldest_mtime
     for root, _, files in os.walk(base_path):
         for filename in files:
             full_path = os.path.join(root, filename)
@@ -132,6 +138,9 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         inode_map[file_key]['media_excluded'] = excluded
                         if inode_map[file_key]['size'] == 0:
                             inode_map[file_key]['size'] = size
+                        if not excluded and st.st_mtime > 0 and (
+                                oldest_mtime is None or st.st_mtime < oldest_mtime):
+                            oldest_mtime = st.st_mtime
                 key_order.append(file_key)
             except Exception as e:
                 log.warning(f"Could not stat {full_path}: {e}")
@@ -142,7 +151,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 if total_ref[0] % 500 == 0:
                     set_state(total_files=total_ref[0])
             update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
-    return key_order, scanned, stat_errors
+    return key_order, scanned, stat_errors, oldest_mtime
 
 
 # Size groups larger than this are skipped entirely. Real media duplicates come
@@ -273,7 +282,45 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
 # Health metrics
 # ---------------------------------------------------------------------------
 
-def process_health_metrics(media_files, torrent_files, cfg, update_history=True):
+# Filename markers for a 2160p release. Substring tests, not a regex: this runs
+# once per media file on libraries that reach eight figures, and the cheapest
+# thing that is right most of the time wins. A folder called "4K Movies" marks
+# everything beneath it, which is a false positive only in the sense that it is
+# probably true.
+_UHD_MARKERS = ('2160p', 'uhd', '4k')
+
+
+def _library_shape(scoring_media):
+    """Two 'what you have' facts that are not the library's size.
+
+    * `title_count` — distinct release folders, at the same two-segment depth
+      Cleanup groups orphans at (a category dir is never a title on its own).
+    * `uhd_bytes` — bytes held at 2160p, the one library-shape number a
+      workflow can move without buying a disk (Backfill and Trumped both
+      raise it in place).
+
+    Titles are counted into a set of *hashes* rather than strings: exact enough
+    for a useless prize, and a set of ints on a 100k-title library is a few MB
+    against the tens it would otherwise hold in path strings.
+    """
+    title_keys = set()
+    uhd_bytes  = 0
+    for f in scoring_media:
+        path = f.get('path') or ''
+        if not path:
+            continue
+        parts = path.replace('\\', '/').split('/')
+        title_keys.add(hash('/'.join(parts[:2]) if len(parts) > 1 else parts[0]))
+        low = path.lower()
+        for marker in _UHD_MARKERS:
+            if marker in low:
+                uhd_bytes += f.get('size', 0) or 0
+                break
+    return {'title_count': len(title_keys), 'uhd_bytes': uhd_bytes}
+
+
+def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
+                           extra_details=None):
     history = db_load_history()
     now     = datetime.now()
     or_ratio  = float(cfg.get('OR_RATIO',  0.01))
@@ -348,6 +395,13 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True)
             # old hardcoded 70/10/10/10 next to weighted scores.
             "hl_max": round(hl_max,1), "or_max": round(or_max,1),
             "ni_max": round(ni_max,1), "dup_max": round(dup_max,1),
+            # Library shape, for the Next steps prize layer. Scalars, folded into
+            # a pass over scoring_media that already runs.
+            **_library_shape(scoring_media),
+            # Seeding time (from the source layer) and oldest media file (from
+            # the walk). Passed in rather than computed here — neither is
+            # derivable from the assembled file records.
+            **(extra_details or {}),
         }
     }
     if update_history:
@@ -1013,12 +1067,12 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         inode_map          = {}
         exclusion_patterns = expand_exclusion_patterns(cfg)
         compiled_excl      = compile_exclusions(exclusion_patterns)
-        torrent_key_order, scanned, torrent_errors = _walk_directory(
+        torrent_key_order, scanned, torrent_errors, _ = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
         _enter_phase("disk", "Scanning media directory...")
-        media_key_order, _, media_errors = _walk_directory(
+        media_key_order, _, media_errors, oldest_media_mtime = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
@@ -1033,7 +1087,20 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             torrent_key_order, media_key_order, inode_map, duplicate_map)
         del torrent_key_order, media_key_order, inode_map, duplicate_map
         _enter_phase("post", "Computing health metrics...")
-        dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg)
+        # Prize-layer inputs that only exist outside the file records: seeding
+        # time rides the source layer's torrent list, oldest_media_age_days the
+        # walk's own stat calls. Age is stored, not the timestamp — the ladder
+        # wants "how long have you had this", and a stored age cannot drift into
+        # the future if the clock moves.
+        _extra_details = {
+            'seed_byte_secs': tracker_snapshot.get('_seed_byte_secs', 0),
+            'max_seed_secs':  tracker_snapshot.get('_max_seed_secs', 0),
+            'oldest_media_age_days': (
+                max(0, int((time.time() - oldest_media_mtime) // 86400))
+                if oldest_media_mtime else 0),
+        }
+        dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg,
+                                                    extra_details=_extra_details)
         cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
         tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
         not_imported_paths = _not_imported_paths(torrent_files_data)

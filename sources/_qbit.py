@@ -81,6 +81,13 @@ def _fetch_inner(cfg):
     tracker_map = {}
     health_map  = {}
     files_map   = {}
+    # Seeding-time aggregates for the Next steps prize layer. Both ride the
+    # torrents list this loop already holds — `seeding_time` comes back on
+    # `torrents_info`, so neither costs an API call or a per-torrent fan-out.
+    # Scalars only: putting either on a file record would multiply it across
+    # every file of every torrent and grow files_json, the known RAM hotspot.
+    seed_byte_secs = 0
+    max_seed_secs  = 0
     with ThreadPoolExecutor(max_workers=16) as executor:
         futures = {executor.submit(_fetch_torrent_data, t): t for t in torrents}
         for future in as_completed(futures):
@@ -99,6 +106,10 @@ def _fetch_inner(cfg):
 
     for torrent in torrents:
         hosts     = tracker_map.get(torrent.hash, ['Unknown'])
+        seed_secs = int(getattr(torrent, 'seeding_time', 0) or 0)
+        if seed_secs > 0:
+            seed_byte_secs += (torrent.size or 0) * seed_secs
+            max_seed_secs   = max(max_seed_secs, seed_secs)
         for h in hosts:
             trackers_set.add(h)
             tracker_upload[h] = tracker_upload.get(h, 0) + torrent.uploaded
@@ -158,6 +169,9 @@ def _fetch_inner(cfg):
         for host in all_hosts
     }
     tracker_snapshot['_instance_count'] = 1
+    # '_'-prefixed: every per-tracker loop already skips these.
+    tracker_snapshot['_seed_byte_secs'] = seed_byte_secs
+    tracker_snapshot['_max_seed_secs']  = max_seed_secs
 
     return file_map, sorted(trackers_set), tracker_snapshot
 

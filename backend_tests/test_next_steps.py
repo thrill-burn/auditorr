@@ -1,9 +1,10 @@
 """Next steps page — workflow ordering, states, and the (useless) prize ladders."""
 
 import os
+from datetime import datetime, timedelta
 
 import next_steps
-from audit import count_pile_resolved, file_signatures, SIG_IMPORTED
+from audit import count_pile_resolved, file_signatures, SIG_IMPORTED, _library_shape
 
 
 GB = 1024 ** 3
@@ -786,3 +787,209 @@ def test_an_audit_never_clears_trump_credit():
     assert p2['trumps'] == 1
     assert p2['trump_torrents'] == 3
     assert p2['trump_max_group'] == 3
+
+
+# ── The aspirational tier ────────────────────────────────────────────────────
+#
+# Everything below exists because the prize layer used to go dead for exactly
+# the user who had done the work: the zombie ladders need a mess to return
+# before they pay again, every "clean library" feat is earned once on the first
+# scan, and the `have` shelf was six tiles all reading the library's size.
+
+def _ladder(st, lid):
+    return next(l for l in st['ladders'] if l['id'] == lid)
+
+
+def test_clean_byte_ladders_no_longer_restate_the_torrent_directory():
+    """Packrat, Tidiness and Purity used to be one number on three tiles.
+
+    Each subtracted a penalty term that is a couple of percent on any library
+    worth the name, against rungs 2-2.5x apart — so all three sat on the same
+    rung forever and "No Dust Exists Here" was awarded for owning 10 TB.
+    """
+    dirty = _details(orphaned_torrent_count=5, orphaned_torrent_size=50 * GB,
+                     not_imported_count=5, not_imported_size=50 * GB)
+    st = next_steps.build_state(_cfg(), _results(dirty), _runs())
+    assert _ladder(st, 'packrat')['tier'] > 0
+    assert _ladder(st, 'tidiness')['tier'] == 0
+    assert _ladder(st, 'purity')['tier'] == 0
+
+    st2 = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    assert _ladder(st2, 'tidiness')['tier'] == _ladder(st2, 'packrat')['tier']
+
+
+def test_a_spotless_small_library_outranks_a_filthy_large_one():
+    """The whole point of the rebase: on the clean shelves, care beats spend."""
+    small_clean = _details(total_media_size=2 * TB, hardlinked_media_size=2 * TB,
+                           total_torrents_size=2 * TB)
+    big_dirty = _details(total_media_size=500 * TB, hardlinked_media_size=500 * TB,
+                         total_torrents_size=500 * TB,
+                         orphaned_torrent_count=900, orphaned_torrent_size=9 * TB)
+    clean = next_steps.build_state(_cfg(), _results(small_clean), _runs())
+    filthy = next_steps.build_state(_cfg(), _results(big_dirty), _runs())
+    assert _ladder(clean, 'tidiness')['tier'] > _ladder(filthy, 'tidiness')['tier']
+    assert _ladder(filthy, 'packrat')['tier'] > _ladder(clean, 'packrat')['tier']
+
+
+def test_conservator_needs_every_pile_empty():
+    st = next_steps.build_state(_cfg(), _results(_details(duplicate_count=1)), _runs())
+    assert _ladder(st, 'conservator')['tier'] == 0
+    st2 = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    assert _ladder(st2, 'conservator')['tier'] > 0
+
+
+def test_rebased_ladders_keep_grandfathered_rungs():
+    """A latched peak is earned. The rebase may stall a ladder, never demote it."""
+    cfg = _cfg()
+    clean = _details()
+    st = next_steps.build_state(cfg, _results(clean), _runs())
+    peak_tier = _ladder(st, 'tidiness')['tier']
+    p = next_steps.update_progress(None, cfg, clean, state=st)
+
+    dirty = _details(orphaned_torrent_count=500, orphaned_torrent_size=TB)
+    st2 = next_steps.build_state(cfg, _results(dirty), _runs(), progress=p)
+    assert _ladder(st2, 'tidiness')['tier'] == peak_tier
+
+
+def test_a_mess_cleared_the_same_day_is_a_fast_fix():
+    """Exterminator only pays when a mess *returns*, so a permanently clean
+    library can never earn another kill. Fire Brigade pays for the response."""
+    cfg = _cfg()
+    clean, dirty = _details(), _details(orphaned_torrent_count=3)
+    t0 = datetime(2026, 8, 1, 9, 0, 0)
+
+    p = next_steps.update_progress(None, cfg, clean, now=t0)
+    p = next_steps.update_progress(p, cfg, dirty, now=t0 + timedelta(hours=1))
+    assert p['orphan_break_at'] and p['orphan_breaks'] == 1
+    p = next_steps.update_progress(p, cfg, clean, now=t0 + timedelta(hours=5))
+    assert p['fast_fixes'] == 1
+    assert p['orphan_break_at'] is None, 'the timer must reset with the kill'
+
+
+def test_a_mess_left_for_a_week_is_not_a_fast_fix():
+    cfg = _cfg()
+    clean, dirty = _details(), _details(duplicate_count=4)
+    t0 = datetime(2026, 8, 1, 9, 0, 0)
+    p = next_steps.update_progress(None, cfg, clean, now=t0)
+    p = next_steps.update_progress(p, cfg, dirty, now=t0 + timedelta(hours=1))
+    p = next_steps.update_progress(p, cfg, clean, now=t0 + timedelta(days=7))
+    assert p['dupe_kills'] == 1
+    assert p['fast_fixes'] == 0
+
+
+def test_a_mess_that_predates_auditorr_earns_no_fast_fix():
+    """No break was observed, so there is no clock. Guessing one would pay for
+    work done before the first scan."""
+    cfg = _cfg()
+    t0 = datetime(2026, 8, 1, 9, 0, 0)
+    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=9), now=t0)
+    p = next_steps.update_progress(p, cfg, _details(), now=t0 + timedelta(hours=2))
+    assert p['orphan_kills'] == 1, 'still a kill'
+    assert p['fast_fixes'] == 0, 'but not a timed one'
+
+
+def test_immaculate_streak_holds_and_breaks():
+    cfg = _cfg()
+    t0 = datetime(2026, 8, 1, 9, 0, 0)
+    p = next_steps.update_progress(None, cfg, _details(), now=t0)
+    started = p['immaculate_since']
+    assert started
+    p = next_steps.update_progress(p, cfg, _details(), now=t0 + timedelta(days=3))
+    assert p['immaculate_since'] == started, 'a held streak must not restart'
+
+    p = next_steps.update_progress(p, cfg, _details(not_imported_count=2),
+                                   now=t0 + timedelta(days=4))
+    assert p['immaculate_since'] is None
+
+    st = next_steps.build_state(cfg, _results(_details()), _runs(),
+                                progress={**p, 'immaculate_since': started})
+    assert _ladder(st, 'unblemished')['tier'] > 0
+
+
+def test_seeding_time_feeds_atlas_and_old_faithful():
+    """Both read summary scalars the source layer already had in hand."""
+    year = 365.25 * 86400
+    det = _details(seed_byte_secs=int(40 * TB * year), max_seed_secs=int(2.5 * year))
+    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    atlas = _ladder(st, 'atlas')
+    assert atlas['tier'] > 0 and 'TB·yr' in atlas['value_label']
+    assert _ladder(st, 'oldfaithful')['tier'] >= 7, 'two and a half years of uptime'
+
+
+def test_patience_beats_capacity_on_the_time_ladders():
+    """The one shelf a small library can win: Old Faithful has nothing to do
+    with size, so a 2 TB library holds a rung a 500 TB seedbox cannot."""
+    year = 365.25 * 86400
+    patient = _details(total_media_size=2 * TB, total_torrents_size=2 * TB,
+                       max_seed_secs=int(6 * year))
+    huge = _details(total_media_size=500 * TB, total_torrents_size=500 * TB,
+                    max_seed_secs=int(30 * 86400))
+    a = next_steps.build_state(_cfg(), _results(patient), _runs())
+    b = next_steps.build_state(_cfg(), _results(huge), _runs())
+    assert _ladder(a, 'oldfaithful')['tier'] > _ladder(b, 'oldfaithful')['tier']
+    assert _ladder(b, 'hoard')['tier'] > _ladder(a, 'hoard')['tier']
+
+
+def test_library_shape_counts_titles_not_files():
+    """Two seasons of one show are one title; the category dir is never one."""
+    media = [
+        {'path': 'tv/Some Show/Season 1/ep1.mkv', 'size': 1},
+        {'path': 'tv/Some Show/Season 2/ep2.mkv', 'size': 1},
+        {'path': 'tv/Other Show/Season 1/ep1.mkv', 'size': 1},
+        {'path': 'movies/A Film (2020)/film.mkv', 'size': 1},
+    ]
+    assert _library_shape(media)['title_count'] == 3
+
+
+def test_library_shape_totals_uhd_bytes():
+    media = [
+        {'path': 'movies/A Film (2020) 2160p WEB-DL/film.mkv', 'size': 100},
+        {'path': 'movies/B Film (2021) UHD BluRay/film.mkv', 'size': 50},
+        {'path': 'movies/C Film (2019) 1080p WEB-DL/film.mkv', 'size': 25},
+    ]
+    assert _library_shape(media)['uhd_bytes'] == 150
+
+
+def test_windows_paths_do_not_inflate_the_title_count():
+    media = [
+        {'path': 'tv\\Some Show\\Season 1\\ep1.mkv', 'size': 1},
+        {'path': 'tv\\Some Show\\Season 2\\ep2.mkv', 'size': 1},
+    ]
+    assert _library_shape(media)['title_count'] == 1
+
+
+def test_titles_and_uhd_climb_their_own_ladders():
+    det = _details(title_count=1200, uhd_bytes=3 * TB)
+    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    assert _ladder(st, 'librarian')['tier'] >= 7
+    assert _ladder(st, 'videophile')['tier'] > 0
+    earned = {f['id'] for f in st['feats'] if f['earned']}
+    assert {'hundred_titles', 'thousand_titles'} <= earned
+
+
+def test_nothing_left_to_do_needs_the_whole_spine_clear():
+    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    assert next(f for f in st['feats'] if f['id'] == 'nothing_left')['earned']
+
+    busy = _details(orphaned_torrent_count=99, orphaned_torrent_size=TB, or_score=1.0)
+    st2 = next_steps.build_state(_cfg(), _results(busy), _runs())
+    assert not next(f for f in st2['feats'] if f['id'] == 'nothing_left')['earned']
+
+
+def test_the_new_ladders_ratchet_like_the_old_ones():
+    """Same hostile-history rule: points accrue, and never come back."""
+    cfg = _cfg()
+    year = 365.25 * 86400
+    good = _details(title_count=5000, uhd_bytes=10 * TB, oldest_media_age_days=2000,
+                    seed_byte_secs=int(50 * TB * year), max_seed_secs=int(3 * year))
+    st = next_steps.build_state(cfg, _results(good), _runs())
+    p = next_steps.update_progress(None, cfg, good, state=st)
+    before = st['rank']['points']
+
+    # Everything gets worse at once: the library shrinks, the shelves empty, the
+    # oldest file is deleted and half the seeds are dropped.
+    ruin = _details(total_media_size=GB, total_torrents_size=GB, title_count=1,
+                    uhd_bytes=0, oldest_media_age_days=0, seed_byte_secs=0,
+                    max_seed_secs=0, orphaned_torrent_count=50, duplicate_count=9)
+    st2 = next_steps.build_state(cfg, _results(ruin), _runs(), progress=p)
+    assert st2['rank']['points'] >= before
