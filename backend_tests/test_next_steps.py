@@ -195,11 +195,33 @@ def test_no_audit_yet_is_setup_stage():
     assert st['hero'] is None
 
 
-def test_every_row_has_teaching_copy_and_a_headline():
+def test_every_row_has_teaching_copy_and_a_summary():
     st = next_steps.build_state(_cfg(), _results(_details()), _runs())
     for r in st['rows']:
         assert r['teaching'] and len(r['teaching']) > 40
-        assert r['headline']
+        assert r['summary']
+
+
+def test_only_rows_with_something_to_count_carry_a_stat_line():
+    """The stat is the mono readout at the foot of the card. A cleared or
+    blocked row has no figure worth one, and a fabricated "0 orphans" would
+    hand the calmest cards the exact signal the busy ones use for work."""
+    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    for r in st['rows']:
+        if r['state'] in ('blocked', 'maintain', 'standby'):
+            assert r['stat'] == ''
+        else:
+            assert r['stat']
+
+
+def test_backfill_prints_its_ratio_once():
+    """"85% hardlinked" in the stat and "85% now" in the reward line was the
+    same number twice on one card — identically so, on a library at its peak."""
+    det = _details(total_media_size=100 * TB, hardlinked_media_size=85 * TB)
+    st  = next_steps.build_state(_cfg(), _results(det), _runs())
+    bf  = _row(st, 'backfill')
+    assert '85' in bf['stat'] and 'hardlinked' in bf['stat']
+    assert '85' not in bf['reward']['headline']
 
 
 # ── Setup tier ───────────────────────────────────────────────────────────────

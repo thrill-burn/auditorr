@@ -515,45 +515,44 @@ function Prizes({ data }) {
 // section it happens to sit in — Ongoing used to force every card expanded and
 // On demand keyed off the Kingmaker tally, so three identically-cleared rows
 // rendered three different ways and the page read as though its own sections
-// disagreed about what "clear" looks like. A row that wants something is full
-// size; a row that is fine is a quiet line. That is the job of a ranked index.
+// disagreed about what "clear" looks like. A row that wants something carries
+// its stat line and its button; a row that is fine is a quiet line.
+//
+// Density is the *only* thing state changes. It does not change type size:
+// every workflow card titles at --font-md whatever its state, because a bigger
+// title on a busy row made Backfill loom over Triage for no reason a reader
+// could name. The state pill, its colour and the presence of a stat line all
+// already say which rows want something.
 const isCompact = row => !['fix', 'optimize', 'blocked'].includes(row.state)
 
 // ── Workflow card ────────────────────────────────────────────────────────────
+//
+// Fixed shape, top to bottom, so every card is read the same way:
+//   title · state · nature      →  one prose line  →  [stats · payout · prize]
+// Numbers live at the foot and nowhere else. When the readout sat directly
+// under the title it competed with it, and the same figure could then appear
+// again in the payout line below — which is exactly what Backfill did, printing
+// its hardlink ratio twice on one card.
 function WorkflowCard({ row, onNavigate, compact }) {
   const meta = STATE_META[row.state] || STATE_META.maintain
   const actionable = row.state === 'fix' || row.state === 'optimize'
-  // The headline slot holds two different kinds of content, and the state is
-  // what decides which: actionable rows get a *readout* ("12 orphaned files ·
-  // 500 GB"), everything else gets a *sentence* (`clear_line`, or the blocked
-  // reason). Setting a sentence in monospace made the calmest cards the widest
-  // and heaviest on the page. Keyed on state, not on `compact` — the Ongoing
-  // section renders its cards expanded whatever their state, so a cleared
-  // Triage card is prose in an expanded card and the compact flag never sees it.
-  const proseHeadline  = !actionable
-  const needsAttention = actionable || row.state === 'blocked'
 
   return (
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
-      boxShadow: 'var(--elev-1)', padding: compact ? '12px 16px' : '18px 20px',
-      display: 'flex', flexDirection: 'column', gap: compact ? 6 : 11,
+      boxShadow: 'var(--elev-1)', padding: compact ? '12px 16px' : '16px 20px',
+      display: 'flex', flexDirection: 'column', gap: compact ? 6 : 10,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
         <Dot color={row.accent} />
-        {/* Also keyed on meaning rather than on `compact`, and for the same
-            reason: a cleared Triage sits in the always-expanded Ongoing section
-            and a cleared Dedupe sits in Baseline, so keying on the layout flag
-            gave two identically-cleared cards different sized titles. A row
-            that wants something is a rung larger; a row that is fine is not. */}
-        <span style={{ fontSize: needsAttention ? 'var(--font-lg)' : 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
         <span style={{
           fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', padding: '2px 8px',
           borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}`, color: meta.color,
         }}>{meta.label}</span>
-        {/* Also prose ("Clear once, then watch"), so also sans. The pill beside
-            it stays mono: a status label is closer to data than to a sentence,
-            and it matches the chips on the workflow pages. */}
+        {/* Prose ("Clear once, then watch"), so sans. The pill beside it stays
+            mono: a status label is closer to data than to a sentence, and it
+            matches the chips on the workflow pages. */}
         <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{row.nature}</span>
         {row.score_lost > 0 && (
           <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginLeft: 'auto' }}>
@@ -562,40 +561,41 @@ function WorkflowCard({ row, onNavigate, compact }) {
         )}
       </div>
 
-      <div style={{
-        fontFamily: proseHeadline ? 'var(--sans)' : 'var(--mono)',
-        fontSize: proseHeadline ? 'var(--font-base)' : 'var(--font-md)',
-        fontWeight: proseHeadline ? 400 : 600,
-        color: proseHeadline ? 'var(--text-dim)' : 'var(--text)',
-        lineHeight: proseHeadline ? 1.5 : 1.3,
-      }}>
-        {row.headline}
-      </div>
+      {/* One line of prose under the title, always — what the workflow does on
+          a row that wants something, what "clear" means on one that doesn't.
+          620px, because 780 at this size ran ~110 characters a line, twice what
+          the rest of the app sets prose at. */}
+      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0, maxWidth: 620 }}>
+        {row.summary}
+      </p>
 
-      {/* Secondary to the headline above it, so a rung below it on the scale.
-          780px at 13px ran to ~110 characters a line, which is twice what the
-          rest of the app sets prose at. */}
-      {!compact && (
-        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0, maxWidth: 620 }}>
-          {row.teaching}
-        </p>
-      )}
-
-      {/* What this workflow pays out, and the next prize it feeds. */}
-      {row.reward && (
+      {/* The foot: what there is to do, what it pays, what it unlocks.
+          Top-aligned, not centred: the prize box is three lines and a track, so
+          a cleared row's single payout line used to float in the middle of it
+          with a dead band above and below. */}
+      {(row.stat || row.reward) && (
         <div style={{
           borderTop: '1px solid var(--border)', paddingTop: 10,
-          display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap',
         }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 220 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 220 }}>
+            {/* The numbers. Mono and --text so it reads as a readout, but on
+                the body rung of the scale — a rung up it became the loudest
+                thing on the card and out-shouted the title above it. */}
+            {row.stat && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
+                {row.stat}
+              </span>
+            )}
             {/* Sans, like every other sentence on this page. "Clean for 25
                 days · no kills yet" is prose with a number in it, not a
-                readout — the mono here was the same mistake as the cleared
-                headline above, and read as a third typeface on one card. */}
-            <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>
-              {row.reward.headline}
-            </span>
-            {!compact && (
+                readout; the mono it used to carry read as a third typeface. */}
+            {row.reward && (
+              <span style={{ fontSize: 'var(--font-base)', color: row.stat ? 'var(--text-dim)' : 'var(--text)' }}>
+                {row.reward.headline}
+              </span>
+            )}
+            {row.reward && !compact && (
               <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.5 }}>
                 {row.reward.detail}
               </span>
@@ -761,9 +761,11 @@ export default function NextSteps({ onNavigate }) {
           {/* Only the setup-stage blurb survives: with no audit on record the
               sections below are empty and the page needs to say why. Once they
               fill in, the section headers state the plan better than a paragraph
-              restating it above them did. */}
+              restating it above them did. Same rung and same measure as every
+              other paragraph on the page — it was a rung up and 140px wider,
+              which made the one sentence a first-run user sees the odd one out. */}
           {data.stage === 'setup' && (
-            <p style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 760 }}>
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.55, maxWidth: 620 }}>
               auditorr has nothing to audit yet. Finish the checklist and the rest of this page fills in.
             </p>
           )}

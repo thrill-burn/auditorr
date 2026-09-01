@@ -686,7 +686,11 @@ def _reward_line(row, progress, det):
         cur  = row.get('ratio_pct', 0.0)
         peak = round(float(p['hl_peak'] or 0.0), 1)
         gap  = round(max(0.0, 100.0 - peak), 1)
-        line = f"{cur}% now · best ever {peak}%"
+        # The current ratio is already the card's own stat line, so "85% now ·
+        # best ever 85%" printed the same number twice on one card — and on a
+        # library sitting at its peak, printed it identically. This slot is the
+        # *payout*, and the payout here is the ratchet: your best ever.
+        line = 'At your best ever.' if cur >= peak else f"Best ever {peak}%."
         detail = (f"{gap} points from perfect." if gap
                   else 'Perfect. Genuinely nothing left to hardlink.')
         return {'kind': kind, 'headline': line,
@@ -728,11 +732,30 @@ def _fmt_bytes(n):
     return f"{n:.1f} EB"
 
 
-def _headline(row):
+def _summary(row):
+    """The one prose line under the card title — what this row is, right now.
+
+    Every card gets exactly one, chosen by state: what is blocking it, what the
+    workflow does, or what "clear" means for it. The *numbers* are not in here;
+    they are the stat line at the foot of the card. Keeping the two apart is
+    what stopped Backfill saying "85% hardlinked" twice on one card.
+    """
     if row['state'] == 'blocked':
         return row['blocked_reason'] or 'Not configured yet.'
     if row['state'] in ('maintain', 'standby'):
         return row['clear_line']
+    return row['teaching']
+
+
+def _stat(row):
+    """The mono readout at the foot of the card — the numbers, and only those.
+
+    Empty for a row with nothing to count: a cleared or blocked workflow has no
+    figure worth a monospace line, and inventing "0 orphans" for one would give
+    the calmest cards a readout the busy ones use to signal work.
+    """
+    if row['state'] in ('blocked', 'maintain', 'standby'):
+        return ''
     size = _fmt_bytes(row['bytes'])
     if row['id'] == 'cleanup':
         return f"{_pluralize(row['count'], 'orphaned file')} · {size}"
@@ -2071,8 +2094,9 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
 
     by_id = {l['id']: l for l in ladders}
     for r in rows:
-        r['headline'] = _headline(r)
-        r['reward']   = _reward_line(r, progress, det)
+        r['summary'] = _summary(r)
+        r['stat']    = _stat(r)
+        r['reward']  = _reward_line(r, progress, det)
         # The carrot: which prizes this specific workflow moves, and the nearest
         # one still locked. Abstract shelves do not motivate; "clear these and
         # you hit Shoveler V" does.
