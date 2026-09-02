@@ -3,7 +3,7 @@ import SetupWizard  from './components/SetupWizard'
 import ChangeLog    from './components/ChangeLog'
 import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
-import NextSteps    from './components/NextSteps'
+import Rounds       from './components/Rounds'
 import FileExplorer from './components/FileExplorer'
 import Config       from './components/Config'
 import Trackers     from './components/Trackers'
@@ -462,8 +462,10 @@ function AppInner() {
               onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
             />
           )}
+          {/* Tab id stays `next-steps` — it is in users' bookmarks. Only the
+              component was renamed to match what the page calls itself. */}
           {tab === 'next-steps' && (
-            <NextSteps onNavigate={handleTabChange} />
+            <Rounds onNavigate={handleTabChange} />
           )}
           {(tab === 'media' || tab === 'torrents') && (
             <FileExplorer

@@ -15,8 +15,13 @@ import { LoadingRow, WorkflowError, useAuditComplete } from './workflows/shared'
 // useless-prizes joke out loud; the shelf lands harder against a flat frame,
 // for the same reason its own subhead was cut.
 //
-// Only the label changed. The module, route, config key and tab id all stay
-// `next_steps` / `next-steps` so bookmarks and stored config keep working.
+// This file and its component are named for the page. Everything that is a
+// compatibility surface is not: the tab id (`next-steps`), the route, the
+// endpoint (`/api/next_steps`), `api.nextSteps`, the backend module
+// (`next_steps.py`) and the config key all keep the old name, because
+// bookmarks and stored config match on those. Renaming any of them breaks a
+// user's saved link; renaming this file breaks nothing, which is exactly why
+// it is the one that moved.
 //
 // Layout, top to bottom:
 //   1. Baseline        — Cleanup + Dedupe. Collapses to one line once clear.
@@ -542,12 +547,52 @@ function WorkflowCard({ row, onNavigate, compact }) {
   const meta = STATE_META[row.state] || STATE_META.maintain
   const actionable = row.state === 'fix' || row.state === 'optimize'
 
+  // Rendered *inside* the foot's left column, directly under the lines it
+  // follows — not after the foot row. The row's height is set by whichever
+  // side is taller, and that is almost always the prize box (a label, a
+  // ladder, a track and a value). A button placed after the row therefore
+  // clears the *prize box*, so it sank to the bottom of a column whose text
+  // had already ended, opening a dead band that read as broken alignment.
+  // It only looked deliberate while the left column happened to run three
+  // lines deep; Backfill dropping to one exposed it.
+  const button = (actionable || row.state === 'blocked') ? (
+    <button
+      onClick={() => onNavigate(row.state === 'blocked' ? 'config' : row.id)}
+      style={{
+        alignSelf: 'flex-start', marginTop: 8,
+        padding: compact ? '7px 14px' : '9px 18px', borderRadius: 'var(--r)', cursor: 'pointer',
+        border: `1px solid ${actionable ? 'var(--accent)' : 'var(--border2)'}`,
+        background: actionable ? 'var(--accent)' : 'var(--surface2)',
+        color: actionable ? '#0a0a0a' : 'var(--text)',
+        fontSize: 'var(--font-base)', fontWeight: 600,
+      }}
+    >
+      {row.state === 'blocked' ? 'Open Config →' : `Open ${row.label} →`}
+    </button>
+  ) : null
+
   return (
+    // Two real columns: everything the card says on the left, the prize on the
+    // right, top-aligned and level with the title.
+    //
+    // It used to be one vertical stack whose last element happened to hold two
+    // things side by side, which put the prize box *below* the prose and made
+    // the card as tall as prose + box stacked. It also drew a full-width rule
+    // across a layout that was already two columns, so the rule cut through the
+    // prize box — which carries its own border — leaving two separators doing
+    // one job on that half. The rule is kept, because after Backfill's foot
+    // became a sans sentence only brightness separates it from the prose above,
+    // and without a divider that card reads as three paragraphs. It is just
+    // scoped to the column whose content it actually divides.
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
       boxShadow: 'var(--elev-1)', padding: compact ? '12px 16px' : '16px 20px',
-      display: 'flex', flexDirection: 'column', gap: compact ? 6 : 10,
+      display: 'flex', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap',
     }}>
+      <div style={{
+        flex: 1, minWidth: 280,
+        display: 'flex', flexDirection: 'column', gap: compact ? 6 : 10,
+      }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
         <Dot color={row.accent} />
         <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
@@ -559,11 +604,6 @@ function WorkflowCard({ row, onNavigate, compact }) {
             mono: a status label is closer to data than to a sentence, and it
             matches the chips on the workflow pages. */}
         <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{row.nature}</span>
-        {row.score_lost > 0 && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginLeft: 'auto' }}>
-            {row.score_lost} of {row.score_max} pts lost
-          </span>
-        )}
       </div>
 
       {/* One line of prose under the title, always — what the workflow does on
@@ -574,85 +614,75 @@ function WorkflowCard({ row, onNavigate, compact }) {
         {row.summary}
       </p>
 
-      {/* The foot: what there is to do, what it pays, what it unlocks.
-          Top-aligned, not centred: the prize box is three lines and a track, so
-          a cleared row's single payout line used to float in the middle of it
-          with a dead band above and below. */}
+      {/* The foot: the numbers, what they pay, and the way in. The rule spans
+          this column only — see the note on the card. */}
       {(row.stat || row.reward) && (
         <div style={{
-          borderTop: '1px solid var(--border)', paddingTop: 10,
-          display: 'flex', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap',
+          borderTop: '1px solid var(--border)', paddingTop: compact ? 7 : 10,
+          display: 'flex', flexDirection: 'column', gap: 3,
         }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 220 }}>
-            {/* The numbers. Mono and --text so it reads as a readout, but on
-                the body rung of the scale — a rung up it became the loudest
-                thing on the card and out-shouted the title above it. */}
-            {row.stat && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
-                {row.stat}
-              </span>
-            )}
-            {/* Sans, like every other sentence on this page. "Clean for 25
-                days · no kills yet" is prose with a number in it, not a
-                readout; the mono it used to carry read as a third typeface. */}
-            {row.reward && (
-              <span style={{ fontSize: 'var(--font-base)', color: row.stat ? 'var(--text-dim)' : 'var(--text)' }}>
-                {row.reward.headline}
-              </span>
-            )}
-            {/* Optional, and empty on purpose for Backfill: its payout line
-                already carries the ratio and the idle bytes, and a second
-                sentence under it put a three-line foot next to Triage's one. */}
-            {row.reward?.detail && !compact && (
-              <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.5 }}>
-                {row.reward.detail}
-              </span>
-            )}
-          </div>
-
-          {row.next_prize && (
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
-              padding: '7px 12px', borderRadius: 'var(--r)',
-              background: 'var(--surface2)', border: '1px solid var(--border2)', minWidth: 210,
-            }}>
-              <span style={{ color: 'var(--accent)', display: 'flex', flexShrink: 0 }}>
-                {/* The ladder the *next* rung belongs to — prizes[0] can be a
-                    maxed ladder, which would put the wrong icon here. */}
-                <Icon name={row.next_prize.ladder_id} size={16} />
-              </span>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
-                <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
-                  Next: {row.next_prize.label}
-                </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
-                  {row.next_prize.ladder}
-                  {row.next_prize.n ? ` · rung ${row.next_prize.n} of ${row.next_prize.of}` : ''}
-                </span>
-                <Track pct={row.next_prize.pct} height={3} />
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
-                  {row.next_prize.value_label} / {row.next_prize.at}
-                </span>
-              </div>
-            </div>
+          {/* The numbers. Mono and --text so it reads as a readout, but on
+              the body rung of the scale — a rung up it became the loudest
+              thing on the card and out-shouted the title above it. */}
+          {row.stat && (
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
+              {row.stat}
+            </span>
           )}
+          {/* Sans, like every other sentence on this page. "Clean for 25
+              days · no kills yet" is prose with a number in it, not a
+              readout; the mono it used to carry read as a third typeface. */}
+          {row.reward && (
+            <span style={{ fontSize: 'var(--font-base)', color: row.stat ? 'var(--text-dim)' : 'var(--text)' }}>
+              {row.reward.headline}
+            </span>
+          )}
+          {/* Optional, and empty on purpose for Backfill: its payout line
+              already carries the ratio and the idle bytes, and a second
+              sentence under it put a three-line foot next to Triage's one. */}
+          {row.reward?.detail && !compact && (
+            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.5 }}>
+              {row.reward.detail}
+            </span>
+          )}
+          {button}
         </div>
       )}
 
-      {(actionable || row.state === 'blocked') && (
-        <button
-          onClick={() => onNavigate(row.state === 'blocked' ? 'config' : row.id)}
-          style={{
-            alignSelf: 'flex-start', marginTop: 2,
-            padding: compact ? '7px 14px' : '9px 18px', borderRadius: 'var(--r)', cursor: 'pointer',
-            border: `1px solid ${actionable ? 'var(--accent)' : 'var(--border2)'}`,
-            background: actionable ? 'var(--accent)' : 'var(--surface2)',
-            color: actionable ? '#0a0a0a' : 'var(--text)',
-            fontSize: 'var(--font-base)', fontWeight: 600,
-          }}
-        >
-          {row.state === 'blocked' ? 'Open Config →' : `Open ${row.label} →`}
-        </button>
+      {/* Fallback only. Every row carries a `reward`, so the foot above always
+          renders and always hosts the button; this keeps an actionable row
+          clickable if a payload ever arrives without one. */}
+      {!(row.stat || row.reward) && button}
+      </div>
+
+      {/* The right column. Top-aligned and level with the title on every card,
+          which is what the header's "N of M pts lost" readout used to occupy —
+          it was removed so this slot is the same slot on all five rows. */}
+      {row.next_prize && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+          padding: '7px 12px', borderRadius: 'var(--r)',
+          background: 'var(--surface2)', border: '1px solid var(--border2)', minWidth: 210,
+        }}>
+          <span style={{ color: 'var(--accent)', display: 'flex', flexShrink: 0 }}>
+            {/* The ladder the *next* rung belongs to — prizes[0] can be a
+                maxed ladder, which would put the wrong icon here. */}
+            <Icon name={row.next_prize.ladder_id} size={16} />
+          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
+              Next: {row.next_prize.label}
+            </span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+              {row.next_prize.ladder}
+              {row.next_prize.n ? ` · rung ${row.next_prize.n} of ${row.next_prize.of}` : ''}
+            </span>
+            <Track pct={row.next_prize.pct} height={3} />
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+              {row.next_prize.value_label} / {row.next_prize.at}
+            </span>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -737,7 +767,7 @@ function SetupPanel({ setup, onNavigate }) {
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
-export default function NextSteps({ onNavigate }) {
+export default function Rounds({ onNavigate }) {
   const [data, setData]   = useState(null)
   const [error, setError] = useState(null)
 
