@@ -3,7 +3,7 @@
 import os
 from datetime import datetime, timedelta
 
-import next_steps
+import rounds
 from audit import count_pile_resolved, file_signatures, SIG_IMPORTED, _library_shape
 
 
@@ -61,7 +61,7 @@ def _row(state, wf_id):
 
 def test_clean_library_never_bottoms_out():
     """Every workflow still gets a row, and none of them read as a problem."""
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     assert len(st['rows']) == 5
     assert {r['state'] for r in st['rows']} <= {'maintain', 'standby'}
     assert st['hero'] is not None
@@ -69,7 +69,7 @@ def test_clean_library_never_bottoms_out():
 
 def test_orphans_over_threshold_become_fix():
     det = _details(orphaned_torrent_count=12, orphaned_torrent_size=500 * GB, or_score=4.5)
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert _row(st, 'cleanup')['state'] == 'fix'
     assert st['hero'] == 'cleanup'
 
@@ -77,7 +77,7 @@ def test_orphans_over_threshold_become_fix():
 def test_under_threshold_is_optimize_not_fix():
     """Below the configured ratio it is a nice-to-have, not a problem."""
     det = _details(orphaned_torrent_count=2, orphaned_torrent_size=1 * GB, or_score=9.9)
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert _row(st, 'cleanup')['state'] == 'optimize'
 
 
@@ -92,7 +92,7 @@ def test_baseline_work_outranks_ongoing_work():
         orphaned_torrent_count=12, orphaned_torrent_size=500 * GB, or_score=4.5,
         hardlinked_media_size=int(9.7 * TB), hl_score=68.0,
     )
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert st['hero'] == 'cleanup'
 
 
@@ -102,14 +102,14 @@ def test_even_a_catastrophic_hardlink_gap_waits_for_the_baseline():
         orphaned_torrent_count=1, orphaned_torrent_size=1 * GB, or_score=9.7,
         hardlinked_media_size=1 * TB, hl_score=7.0,
     )
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert _row(st, 'backfill')['state'] == 'fix'
     assert st['hero'] == 'cleanup'
 
 
 def test_backfill_leads_once_the_baseline_is_clear():
     det = _details(hardlinked_media_size=4 * TB, hl_score=28.0)
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert st['baseline_clear']
     assert st['hero'] == 'backfill'
 
@@ -121,7 +121,7 @@ def test_both_baseline_rows_precede_all_ongoing_work():
         orphaned_torrent_count=12, orphaned_torrent_size=500 * GB, or_score=4.5,
         hardlinked_media_size=4 * TB, hl_score=28.0,
     )
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     order = [r['id'] for r in st['rows']]
     assert set(order[:2]) == {'cleanup', 'dedupe'}
     assert order.index('backfill') > max(order.index('cleanup'), order.index('dedupe'))
@@ -134,7 +134,7 @@ def test_sequence_inside_a_stage_is_fixed_not_impact_ranked():
         duplicate_count=8, duplicate_size=400 * GB, dup_score=3.0,   # 7.0 lost
         orphaned_torrent_count=2, orphaned_torrent_size=200 * GB, or_score=9.0,  # 1.0 lost
     )
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert st['hero'] == 'cleanup'
 
 
@@ -144,13 +144,13 @@ def test_triage_is_ongoing_and_ranks_ahead_of_backfill():
         not_imported_count=6, not_imported_size=200 * GB, ni_score=8.0,
         hardlinked_media_size=4 * TB, hl_score=28.0,
     )
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     order = [r['id'] for r in st['rows']]
     assert order.index('triage') < order.index('backfill')
 
 
 def test_each_row_states_whether_the_job_ever_ends():
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     natures = {r['id']: r['nature'] for r in st['rows']}
     assert natures['cleanup'] == natures['dedupe'] == 'Clear once, then watch'
     assert natures['triage'] == 'Keeps coming back'
@@ -158,7 +158,7 @@ def test_each_row_states_whether_the_job_ever_ends():
 
 
 def test_stage_labels_are_present_for_grouping():
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     stages = {r['id']: r['stage'] for r in st['rows']}
     assert stages['cleanup'] == stages['dedupe'] == 'baseline'
     assert stages['triage'] == stages['backfill'] == 'ongoing'
@@ -169,34 +169,34 @@ def test_blocked_never_outranks_an_actionable_fix():
     """A user who simply doesn't run an arr must not be nagged forever."""
     det = _details(orphaned_torrent_count=12, orphaned_torrent_size=500 * GB, or_score=4.5)
     cfg = _cfg(SONARR_URL='', SONARR_API_KEY='')
-    st = next_steps.build_state(cfg, _results(det), _runs())
+    st = rounds.build_state(cfg, _results(det), _runs())
     assert _row(st, 'backfill')['state'] == 'blocked'
     assert st['hero'] == 'cleanup'
 
 
 def test_dead_seeds_alone_raise_triage_off_maintain():
     det = _details(dead_seed_count=3)
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert _row(st, 'triage')['state'] == 'optimize'
 
 
 def test_trumped_is_never_prioritized():
     """It is PM-driven — no audit signal should ever promote it."""
     det = _details(orphaned_torrent_count=50, orphaned_torrent_size=2 * TB, or_score=0.0)
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert _row(st, 'trumped')['state'] == 'standby'
     assert st['rows'][-1]['id'] == 'trumped'
 
 
 def test_no_audit_yet_is_setup_stage():
-    st = next_steps.build_state(_cfg(), {}, [])
+    st = rounds.build_state(_cfg(), {}, [])
     assert st['stage'] == 'setup'
     assert st['rows'] == []
     assert st['hero'] is None
 
 
 def test_every_row_has_teaching_copy_and_a_summary():
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     for r in st['rows']:
         assert r['teaching'] and len(r['teaching']) > 40
         assert r['summary']
@@ -206,7 +206,7 @@ def test_only_rows_with_something_to_count_carry_a_stat_line():
     """The stat is the mono readout at the foot of the card. A cleared or
     blocked row has no figure worth one, and a fabricated "0 orphans" would
     hand the calmest cards the exact signal the busy ones use for work."""
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     for r in st['rows']:
         if r['state'] in ('blocked', 'maintain', 'standby'):
             assert r['stat'] == ''
@@ -220,7 +220,7 @@ def test_backfill_says_it_all_on_one_line():
     stat slot stays empty — filling both is what made this card three lines
     tall next to their one."""
     det = _details(total_media_size=100 * TB, hardlinked_media_size=85 * TB)
-    st  = next_steps.build_state(_cfg(), _results(det), _runs())
+    st  = rounds.build_state(_cfg(), _results(det), _runs())
     bf  = _row(st, 'backfill')
     assert bf['state'] == 'fix', 'the busiest state, where the foot was widest'
     assert bf['stat'] == ''
@@ -233,28 +233,28 @@ def test_backfill_never_carries_a_stat_in_any_state():
     for det in (_details(total_media_size=100 * TB, hardlinked_media_size=85 * TB),
                 _details(total_media_size=100 * TB, hardlinked_media_size=99 * TB),
                 _details()):
-        st = next_steps.build_state(_cfg(), _results(det), _runs())
+        st = rounds.build_state(_cfg(), _results(det), _runs())
         assert _row(st, 'backfill')['stat'] == ''
 
 
 # ── Setup tier ───────────────────────────────────────────────────────────────
 
 def test_setup_incomplete_without_source():
-    st = next_steps.build_state(_cfg(QB_HOST=''), {}, [])
+    st = rounds.build_state(_cfg(QB_HOST=''), {}, [])
     assert not st['setup']['complete']
     assert not next(s for s in st['setup']['steps'] if s['id'] == 'source')['done']
 
 
 def test_setup_completes_with_either_arr():
     cfg = _cfg(SONARR_URL='', SONARR_API_KEY='', RADARR_URL='http://r', RADARR_API_KEY='k')
-    st = next_steps.build_state(cfg, _results(_details()), _runs())
+    st = rounds.build_state(cfg, _results(_details()), _runs())
     assert st['setup']['complete']
 
 
 def test_arr_connections_list_counts_as_configured():
     cfg = _cfg(SONARR_URL='', SONARR_API_KEY='',
                ARR_CONNECTIONS=[{'service': 'sonarr', 'url': 'http://s', 'api_key': 'k'}])
-    st = next_steps.build_state(cfg, _results(_details()), _runs())
+    st = rounds.build_state(cfg, _results(_details()), _runs())
     assert next(s for s in st['setup']['steps'] if s['id'] == 'sonarr')['done']
     assert _row(st, 'backfill')['state'] != 'blocked'
 
@@ -263,14 +263,14 @@ def test_arr_connections_list_counts_as_configured():
 
 def test_ladders_are_dense():
     """Progress Quest rules: lots of tiers, so the next one is always close."""
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     assert len(st['ladders']) >= 10
     assert st['prizes']['total'] >= 100
 
 
 def test_every_ladder_reports_where_you_are_on_it():
     """A band name alone ("Pack Rat") says nothing about how far up you are."""
-    st = next_steps.build_state(_cfg(), _results(_details(total_media_size=15 * TB)), _runs())
+    st = rounds.build_state(_cfg(), _results(_details(total_media_size=15 * TB)), _runs())
     for l in st['ladders']:
         assert l['tiers_total'] == len(l['tiers'])
         assert 0 <= l['tier'] <= l['tiers_total']
@@ -283,18 +283,18 @@ def test_every_ladder_reports_where_you_are_on_it():
 
 def test_every_ladder_rung_is_individually_named():
     """Roman-numeral fallback is a safety net, not a shipping state."""
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     for l in st['ladders']:
-        titles = next_steps.TIER_TITLES.get(l['id']) or []
+        titles = rounds.TIER_TITLES.get(l['id']) or []
         assert len(titles) >= l['tiers_total'], f"{l['id']} runs out of names"
 
 
 def test_every_ladder_says_what_its_number_counts():
     """Eight ladders render bytes. "12.4 TB" alone names none of them."""
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
-    known = {gid for gid, _, _ in next_steps.LADDER_GROUPS}
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
+    known = {gid for gid, _, _ in rounds.LADDER_GROUPS}
     for l in st['ladders']:
-        assert l['id'] in next_steps.LADDER_FACET, f"{l['id']} has no facet"
+        assert l['id'] in rounds.LADDER_FACET, f"{l['id']} has no facet"
         assert l['measures'], f"{l['id']} does not say what it measures"
         assert l['group'] in known
     for g in st['ladder_groups']:
@@ -307,7 +307,7 @@ def test_every_ladder_says_what_its_number_counts():
 
 def test_next_prize_names_its_ladder_and_its_rung():
     det = _details(not_imported_count=40, not_imported_size=500 * GB, ni_score=3.0)
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     prize = _row(st, 'triage')['next_prize']
     assert prize['ladder'] and prize['ladder_id']
     assert prize['n'] and prize['of'] and prize['n'] <= prize['of']
@@ -316,8 +316,8 @@ def test_next_prize_names_its_ladder_and_its_rung():
 # ── Feats ────────────────────────────────────────────────────────────────────
 
 def test_every_feat_belongs_to_a_declared_group():
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
-    known = {gid for gid, _, _ in next_steps.FEAT_GROUPS}
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
+    known = {gid for gid, _, _ in rounds.FEAT_GROUPS}
     assert {f['group'] for f in st['feats']} <= known
     assert len({f['id'] for f in st['feats']}) == len(st['feats']), 'duplicate feat id'
     for g in st['feat_groups']:
@@ -340,14 +340,14 @@ def test_a_small_library_still_has_something_to_earn_on_every_axis():
     )
     res = _results(det, tracker_file_stats={'one.cc': {'seeding_size': 150 * GB,
                                                        'seeding_count': 90}})
-    st = next_steps.build_state(_cfg(), res, _runs(3), lifetime_uploaded=20 * GB)
+    st = rounds.build_state(_cfg(), res, _runs(3), lifetime_uploaded=20 * GB)
     by_group = {g['id']: g for g in st['feat_groups']}
     for gid in ('start', 'clean', 'scale', 'give'):
         assert by_group[gid]['earned'] >= 1, f"nothing reachable in '{gid}'"
 
 
 def test_ladder_progress_is_between_tiers_not_from_zero():
-    st = next_steps.build_state(_cfg(), _results(_details(total_media_size=15 * TB)), _runs())
+    st = rounds.build_state(_cfg(), _results(_details(total_media_size=15 * TB)), _runs())
     hoard = next(l for l in st['ladders'] if l['id'] == 'hoard')
     assert hoard['tier'] > 0
     assert 0 <= hoard['pct'] <= 100
@@ -355,7 +355,7 @@ def test_ladder_progress_is_between_tiers_not_from_zero():
 
 
 def test_unearned_ladder_awards_no_points():
-    st = next_steps.build_state(_cfg(QB_HOST=''), {}, [])
+    st = rounds.build_state(_cfg(QB_HOST=''), {}, [])
     for ladder in st['ladders']:
         if ladder['tier'] == 0:
             assert ladder['points'] == 0
@@ -368,19 +368,19 @@ def test_streak_requires_consecutive_days():
         {'ran_at': '2026-08-04T10:00:00', 'status': 'ok', 'health_score': 99.0},
     ]
     # The 40.0 day breaks it — the older 99.0 must not count.
-    assert next_steps._days_at_or_above(runs, 90) <= 1
+    assert rounds._days_at_or_above(runs, 90) <= 1
 
 
 def test_failed_runs_are_ignored_everywhere():
     runs = [{'ran_at': '2026-08-06T10:00:00', 'status': 'aborted', 'health_score': None}]
-    st = next_steps.build_state(_cfg(), {}, runs)
+    st = rounds.build_state(_cfg(), {}, runs)
     assert st['audits'] == 0
     assert st['stage'] == 'setup'
 
 
 def test_rank_advances_with_points_and_reports_next():
-    low  = next_steps.build_state(_cfg(QB_HOST=''), {}, [])
-    high = next_steps.build_state(_cfg(), _results(_details(total_media_size=50 * TB)), _runs(200))
+    low  = rounds.build_state(_cfg(QB_HOST=''), {}, [])
+    high = rounds.build_state(_cfg(), _results(_details(total_media_size=50 * TB)), _runs(200))
     assert high['rank']['points'] > low['rank']['points']
     assert high['rank']['index'] >= low['rank']['index']
     assert low['rank']['next_name']
@@ -389,7 +389,7 @@ def test_rank_advances_with_points_and_reports_next():
 
 def test_payload_carries_no_file_lists():
     """This endpoint is polled — it must never grow a full file list."""
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     assert 'media_files' not in st and 'torrent_files' not in st
 
 
@@ -397,7 +397,7 @@ def test_default_paths_do_not_tick_the_box_on_a_fresh_install():
     """Config ships non-empty path defaults — they must not read as configured."""
     cfg = _cfg(MEDIA_PATH='/data/media/definitely-not-here',
                LOCAL_PATH='/data/torrents/definitely-not-here')
-    st = next_steps.build_state(cfg, {}, [])
+    st = rounds.build_state(cfg, {}, [])
     assert not next(s for s in st['setup']['steps'] if s['id'] == 'paths')['done']
 
 
@@ -406,7 +406,7 @@ def test_default_paths_do_not_tick_the_box_on_a_fresh_install():
 # shape: a defended streak, a cumulative pile, a ratcheting best.
 
 def test_reward_kinds_match_the_work():
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     kinds = {r['id']: r['reward_kind'] for r in st['rows']}
     assert kinds['cleanup'] == kinds['dedupe'] == 'zombie'
     assert kinds['triage'] == 'shovel'
@@ -416,13 +416,13 @@ def test_reward_kinds_match_the_work():
 def test_shovel_count_is_cumulative_and_never_decreases():
     """The pile refills forever; what you already dug is permanent."""
     cfg, p = _cfg(), None
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=100))
+    p = rounds.update_progress(p, cfg, _details(not_imported_count=100))
     assert p['shoveled'] == 0, 'the first audit has no previous scan to credit against'
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=40), resolved=60)
+    p = rounds.update_progress(p, cfg, _details(not_imported_count=40), resolved=60)
     assert p['shoveled'] == 60
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=90), resolved=0)
+    p = rounds.update_progress(p, cfg, _details(not_imported_count=90), resolved=0)
     assert p['shoveled'] == 60, 'a growing pile must not erase past work'
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=10), resolved=80)
+    p = rounds.update_progress(p, cfg, _details(not_imported_count=10), resolved=80)
     assert p['shoveled'] == 140
 
 
@@ -438,9 +438,9 @@ def test_shovel_credit_survives_an_exclusion_change():
     upstream, where hiding something simply produces no transition to count.
     """
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(not_imported_count=100))
+    p = rounds.update_progress(None, cfg, _details(not_imported_count=100))
     hidden = _cfg(EXCLUSION_PATTERNS=['*.sfv'])
-    p = next_steps.update_progress(p, hidden, _details(not_imported_count=5), resolved=5)
+    p = rounds.update_progress(p, hidden, _details(not_imported_count=5), resolved=5)
     assert p['shoveled'] == 5, 'deleted files must pay out even if a pattern was added too'
 
 
@@ -591,30 +591,30 @@ def test_legacy_signatures_still_credit_not_imported_files():
 
 def test_update_progress_round_trips_the_dead_registration_set():
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(), dead_regs={'H2', 'H1'})
+    p = rounds.update_progress(None, cfg, _details(), dead_regs={'H2', 'H1'})
     assert p['last_dead_regs'] == ['H1', 'H2']
     # None must not read as "they all went away" on the next scan.
-    p2 = next_steps.update_progress(p, cfg, _details())
+    p2 = rounds.update_progress(p, cfg, _details())
     assert p2['last_dead_regs'] == ['H1', 'H2']
 
 
 def test_crystal_ratchets_on_best_ever():
     """Hardlinking goes up and down; a bad week must not take a tier away."""
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(
+    p = rounds.update_progress(None, cfg, _details(
         total_media_size=100 * GB, hardlinked_media_size=90 * GB))
     assert round(p['hl_peak'], 1) == 90.0
-    p = next_steps.update_progress(p, cfg, _details(
+    p = rounds.update_progress(p, cfg, _details(
         total_media_size=100 * GB, hardlinked_media_size=60 * GB))
     assert round(p['hl_peak'], 1) == 90.0, 'peak must not regress'
 
 
 def test_sentinel_streak_starts_when_clean_and_breaks_loudly():
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=0))
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=0))
     assert p['orphan_clean_since'] is not None
     assert p['orphan_breaks'] == 0
-    p = next_steps.update_progress(p, cfg, _details(orphaned_torrent_count=7))
+    p = rounds.update_progress(p, cfg, _details(orphaned_torrent_count=7))
     assert p['orphan_clean_since'] is None
     assert p['orphan_breaks'] == 1, 'a clean state coming undone is worth telling them'
 
@@ -622,9 +622,9 @@ def test_sentinel_streak_starts_when_clean_and_breaks_loudly():
 def test_a_break_never_subtracts_points():
     """Regressions are information, not punishment."""
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=0))
-    p = next_steps.update_progress(p, cfg, _details(orphaned_torrent_count=7))
-    st = next_steps.build_state(cfg, _results(_details(orphaned_torrent_count=7)),
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=0))
+    p = rounds.update_progress(p, cfg, _details(orphaned_torrent_count=7))
+    st = rounds.build_state(cfg, _results(_details(orphaned_torrent_count=7)),
                                 _runs(), progress=p)
     assert st['rank']['points'] > 0
     assert next(f for f in st['feats'] if f['id'] == 'orphans_returned')['earned']
@@ -632,8 +632,8 @@ def test_a_break_never_subtracts_points():
 
 def test_never_clean_shows_no_phantom_kills():
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=5))
-    st = next_steps.build_state(cfg, _results(_details(orphaned_torrent_count=5)),
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=5))
+    st = rounds.build_state(cfg, _results(_details(orphaned_torrent_count=5)),
                                 _runs(), progress=p)
     assert 'no kills yet' in _row(st, 'cleanup')['reward']['headline']
 
@@ -641,7 +641,7 @@ def test_never_clean_shows_no_phantom_kills():
 def test_every_row_explains_how_it_pays_out():
     """A headline always. The second sentence is optional — Backfill's foot is
     deliberately one line, so it ships a headline and nothing under it."""
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     for r in st['rows']:
         assert r['reward']['headline']
         assert 'detail' in r['reward']
@@ -652,26 +652,26 @@ def test_every_row_explains_how_it_pays_out():
 def test_killing_a_zombie_is_repeatable_and_cumulative():
     """They should have stayed dead. Every trip back to zero is a fresh kill."""
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=40))
-    p = next_steps.update_progress(p, cfg, _details(orphaned_torrent_count=0))   # kill 1
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=40))
+    p = rounds.update_progress(p, cfg, _details(orphaned_torrent_count=0))   # kill 1
     assert p['orphan_kills'] == 1 and p['orphan_breaks'] == 0
-    p = next_steps.update_progress(p, cfg, _details(orphaned_torrent_count=9))   # risen
+    p = rounds.update_progress(p, cfg, _details(orphaned_torrent_count=9))   # risen
     assert p['orphan_kills'] == 1 and p['orphan_breaks'] == 1
-    p = next_steps.update_progress(p, cfg, _details(orphaned_torrent_count=0))   # kill 2
+    p = rounds.update_progress(p, cfg, _details(orphaned_torrent_count=0))   # kill 2
     assert p['orphan_kills'] == 2
 
 
 def test_a_library_clean_from_day_one_killed_nothing():
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=0))
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=0))
     assert p['orphan_kills'] == 0
     assert p['orphan_clean_since'] is not None
 
 
 def test_kills_and_breaks_are_tracked_per_zombie():
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=5, duplicate_count=5))
-    p = next_steps.update_progress(p, cfg, _details(orphaned_torrent_count=0, duplicate_count=5))
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=5, duplicate_count=5))
+    p = rounds.update_progress(p, cfg, _details(orphaned_torrent_count=0, duplicate_count=5))
     assert p['orphan_kills'] == 1 and p['dupe_kills'] == 0
 
 
@@ -697,31 +697,31 @@ def test_points_never_decrease_across_any_sequence_of_audits():
     ]
     progress, last_points = None, -1
     for i, (det, resolved) in enumerate(history):
-        state = next_steps.build_state(cfg, _results(det), _runs(i + 1), progress=progress)
+        state = rounds.build_state(cfg, _results(det), _runs(i + 1), progress=progress)
         pts = state['rank']['points']
         assert pts >= last_points, (
             f'points dropped at step {i}: {last_points} -> {pts}')
         last_points = pts
-        progress = next_steps.update_progress(progress, cfg, det, state=state,
+        progress = rounds.update_progress(progress, cfg, det, state=state,
                                               resolved=resolved)
 
 
 def test_a_kill_earns_points_and_a_break_never_removes_them():
     cfg = _cfg()
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=40))
-    st = next_steps.build_state(cfg, _results(_details()), _runs(), progress=p)
-    p = next_steps.update_progress(p, cfg, _details(orphaned_torrent_count=0), state=st)
-    after_kill = next_steps.build_state(
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=40))
+    st = rounds.build_state(cfg, _results(_details()), _runs(), progress=p)
+    p = rounds.update_progress(p, cfg, _details(orphaned_torrent_count=0), state=st)
+    after_kill = rounds.build_state(
         cfg, _results(_details()), _runs(), progress=p)['rank']['points']
 
     risen = _details(orphaned_torrent_count=9)
-    st2 = next_steps.build_state(cfg, _results(risen), _runs(), progress=p)
-    p = next_steps.update_progress(p, cfg, risen, state=st2)
-    after_break = next_steps.build_state(
+    st2 = rounds.build_state(cfg, _results(risen), _runs(), progress=p)
+    p = rounds.update_progress(p, cfg, risen, state=st2)
+    after_break = rounds.build_state(
         cfg, _results(risen), _runs(), progress=p)['rank']['points']
 
     assert after_break >= after_kill, 'a zombie rising must never cost points'
-    assert next(f for f in next_steps.build_state(
+    assert next(f for f in rounds.build_state(
         cfg, _results(risen), _runs(), progress=p)['feats']
         if f['id'] == 'first_kill')['earned']
 
@@ -730,12 +730,12 @@ def test_ladder_tiers_are_never_demoted():
     """A shrinking library must not take back a Hoarder tier."""
     cfg = _cfg()
     big = _details(total_media_size=20 * TB)
-    st = next_steps.build_state(cfg, _results(big), _runs(), progress=None)
+    st = rounds.build_state(cfg, _results(big), _runs(), progress=None)
     tier_at_peak = next(l for l in st['ladders'] if l['id'] == 'hoard')['tier']
-    p = next_steps.update_progress(None, cfg, big, state=st)
+    p = rounds.update_progress(None, cfg, big, state=st)
 
     small = _details(total_media_size=1 * GB)
-    st2 = next_steps.build_state(cfg, _results(small), _runs(), progress=p)
+    st2 = rounds.build_state(cfg, _results(small), _runs(), progress=p)
     assert next(l for l in st2['ladders'] if l['id'] == 'hoard')['tier'] == tier_at_peak
 
 
@@ -747,13 +747,13 @@ def test_ladder_tiers_are_never_demoted():
 # the execute endpoint rather than from `run_audit_process`.
 
 def test_record_trump_counts_swaps_groups_and_the_biggest_group():
-    p = next_steps.record_trump(None, torrents=4)
+    p = rounds.record_trump(None, torrents=4)
     assert p['trumps'] == 1
     assert p['trump_torrents'] == 4
     assert p['trump_max_group'] == 4
     assert p['last_trump_at']
 
-    p = next_steps.record_trump(p, torrents=1)
+    p = rounds.record_trump(p, torrents=1)
     assert p['trumps'] == 2
     assert p['trump_torrents'] == 5
     # A later, smaller swap must not lower the latched peak.
@@ -761,8 +761,8 @@ def test_record_trump_counts_swaps_groups_and_the_biggest_group():
 
 
 def test_record_trump_is_pure_and_defaults_to_one_torrent():
-    before = next_steps.record_trump(None)
-    after = next_steps.record_trump(before)
+    before = rounds.record_trump(None)
+    after = rounds.record_trump(before)
     assert before['trumps'] == 1 and after['trumps'] == 2, 'must not mutate its input'
     assert after['trump_torrents'] == 2
 
@@ -770,14 +770,14 @@ def test_record_trump_is_pure_and_defaults_to_one_torrent():
 def test_trump_swaps_climb_the_kingmaker_ladder_and_earn_points():
     cfg = _cfg()
     res = _results(_details())
-    base = next_steps.build_state(cfg, res, _runs(), progress=None)
+    base = rounds.build_state(cfg, res, _runs(), progress=None)
     km = next(l for l in base['ladders'] if l['id'] == 'kingmaker')
     assert km['tier'] == 0 and km['value'] == 0
 
     p = None
     for _ in range(5):
-        p = next_steps.record_trump(p, torrents=1)
-    after = next_steps.build_state(cfg, res, _runs(), progress=p)
+        p = rounds.record_trump(p, torrents=1)
+    after = rounds.build_state(cfg, res, _runs(), progress=p)
     km2 = next(l for l in after['ladders'] if l['id'] == 'kingmaker')
     assert km2['tier'] >= 4, km2['tier']
     assert after['rank']['points'] > base['rank']['points']
@@ -792,26 +792,26 @@ def test_bulk_feat_needs_one_big_group_not_an_accumulated_total():
     res = _results(_details())
     many_small = None
     for _ in range(6):
-        many_small = next_steps.record_trump(many_small, torrents=1)
-    st = next_steps.build_state(cfg, res, _runs(), progress=many_small)
+        many_small = rounds.record_trump(many_small, torrents=1)
+    st = rounds.build_state(cfg, res, _runs(), progress=many_small)
     assert not next(f for f in st['feats'] if f['id'] == 'trump_entourage')['earned']
 
-    one_big = next_steps.record_trump(None, torrents=4)
-    st2 = next_steps.build_state(cfg, res, _runs(), progress=one_big)
+    one_big = rounds.record_trump(None, torrents=4)
+    st2 = rounds.build_state(cfg, res, _runs(), progress=one_big)
     assert next(f for f in st2['feats'] if f['id'] == 'trump_entourage')['earned']
 
 
 def test_trumped_row_carries_its_reward_and_next_prize():
     cfg = _cfg()
     res = _results(_details())
-    cold = _row(next_steps.build_state(cfg, res, _runs(), progress=None), 'trumped')
+    cold = _row(rounds.build_state(cfg, res, _runs(), progress=None), 'trumped')
     assert cold['reward_kind'] == 'tribute'
     assert 'not asked' in cold['reward']['headline']
     # Even at zero the card names the rung it is working toward.
     assert cold['next_prize']['ladder_id'] == 'kingmaker'
 
-    p = next_steps.record_trump(next_steps.record_trump(None, torrents=3))
-    warm = _row(next_steps.build_state(cfg, res, _runs(), progress=p), 'trumped')
+    p = rounds.record_trump(rounds.record_trump(None, torrents=3))
+    warm = _row(rounds.build_state(cfg, res, _runs(), progress=p), 'trumped')
     assert '2 paid' in warm['reward']['headline']
     assert '4 registrations' in warm['reward']['headline']
 
@@ -821,9 +821,9 @@ def test_an_audit_never_clears_trump_credit():
     trump counters must survive that, or every scan would wipe them."""
     cfg = _cfg()
     det = _details()
-    p = next_steps.record_trump(None, torrents=3)
-    st = next_steps.build_state(cfg, _results(det), _runs(), progress=p)
-    p2 = next_steps.update_progress(p, cfg, det, state=st, resolved=0)
+    p = rounds.record_trump(None, torrents=3)
+    st = rounds.build_state(cfg, _results(det), _runs(), progress=p)
+    p2 = rounds.update_progress(p, cfg, det, state=st, resolved=0)
     assert p2['trumps'] == 1
     assert p2['trump_torrents'] == 3
     assert p2['trump_max_group'] == 3
@@ -849,12 +849,12 @@ def test_clean_byte_ladders_no_longer_restate_the_torrent_directory():
     """
     dirty = _details(orphaned_torrent_count=5, orphaned_torrent_size=50 * GB,
                      not_imported_count=5, not_imported_size=50 * GB)
-    st = next_steps.build_state(_cfg(), _results(dirty), _runs())
+    st = rounds.build_state(_cfg(), _results(dirty), _runs())
     assert _ladder(st, 'packrat')['tier'] > 0
     assert _ladder(st, 'tidiness')['tier'] == 0
     assert _ladder(st, 'purity')['tier'] == 0
 
-    st2 = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st2 = rounds.build_state(_cfg(), _results(_details()), _runs())
     assert _ladder(st2, 'tidiness')['tier'] == _ladder(st2, 'packrat')['tier']
 
 
@@ -865,16 +865,16 @@ def test_a_spotless_small_library_outranks_a_filthy_large_one():
     big_dirty = _details(total_media_size=500 * TB, hardlinked_media_size=500 * TB,
                          total_torrents_size=500 * TB,
                          orphaned_torrent_count=900, orphaned_torrent_size=9 * TB)
-    clean = next_steps.build_state(_cfg(), _results(small_clean), _runs())
-    filthy = next_steps.build_state(_cfg(), _results(big_dirty), _runs())
+    clean = rounds.build_state(_cfg(), _results(small_clean), _runs())
+    filthy = rounds.build_state(_cfg(), _results(big_dirty), _runs())
     assert _ladder(clean, 'tidiness')['tier'] > _ladder(filthy, 'tidiness')['tier']
     assert _ladder(filthy, 'packrat')['tier'] > _ladder(clean, 'packrat')['tier']
 
 
 def test_conservator_needs_every_pile_empty():
-    st = next_steps.build_state(_cfg(), _results(_details(duplicate_count=1)), _runs())
+    st = rounds.build_state(_cfg(), _results(_details(duplicate_count=1)), _runs())
     assert _ladder(st, 'conservator')['tier'] == 0
-    st2 = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st2 = rounds.build_state(_cfg(), _results(_details()), _runs())
     assert _ladder(st2, 'conservator')['tier'] > 0
 
 
@@ -885,7 +885,7 @@ def test_conservator_counts_hardlinked_bytes_once():
     hardlinked you were, i.e. worst in the state the ladder rewards."""
     det = _details(total_media_size=10 * TB, hardlinked_media_size=10 * TB,
                    total_torrents_size=10 * TB)
-    st  = next_steps.build_state(_cfg(), _results(det), _runs())
+    st  = rounds.build_state(_cfg(), _results(det), _runs())
     assert _ladder(st, 'conservator')['value'] == 10 * TB
     # Under the gate the torrent tree is a subset of the media tree, so
     # Conservator and Hoarder describe the same bytes. It stays a separate
@@ -901,12 +901,12 @@ def test_conservator_only_latches_a_library_that_was_clean_at_the_time():
     cfg   = _cfg()
     clean = _details(total_media_size=2 * TB, hardlinked_media_size=2 * TB,
                      total_torrents_size=2 * TB)
-    st    = next_steps.build_state(cfg, _results(clean), _runs())
-    p     = next_steps.update_progress(None, cfg, clean, state=st)
+    st    = rounds.build_state(cfg, _results(clean), _runs())
+    p     = rounds.update_progress(None, cfg, clean, state=st)
 
     grew_dirty = _details(total_media_size=50 * TB, hardlinked_media_size=50 * TB,
                           total_torrents_size=50 * TB, orphaned_torrent_count=9)
-    st2 = next_steps.build_state(cfg, _results(grew_dirty), _runs(), progress=p)
+    st2 = rounds.build_state(cfg, _results(grew_dirty), _runs(), progress=p)
     assert _ladder(st2, 'hoard')['tier'] > _ladder(st, 'hoard')['tier']
     assert _ladder(st2, 'conservator')['tier'] == _ladder(st, 'conservator')['tier']
 
@@ -915,12 +915,12 @@ def test_rebased_ladders_keep_grandfathered_rungs():
     """A latched peak is earned. The rebase may stall a ladder, never demote it."""
     cfg = _cfg()
     clean = _details()
-    st = next_steps.build_state(cfg, _results(clean), _runs())
+    st = rounds.build_state(cfg, _results(clean), _runs())
     peak_tier = _ladder(st, 'tidiness')['tier']
-    p = next_steps.update_progress(None, cfg, clean, state=st)
+    p = rounds.update_progress(None, cfg, clean, state=st)
 
     dirty = _details(orphaned_torrent_count=500, orphaned_torrent_size=TB)
-    st2 = next_steps.build_state(cfg, _results(dirty), _runs(), progress=p)
+    st2 = rounds.build_state(cfg, _results(dirty), _runs(), progress=p)
     assert _ladder(st2, 'tidiness')['tier'] == peak_tier
 
 
@@ -931,10 +931,10 @@ def test_a_mess_cleared_the_same_day_is_a_fast_fix():
     clean, dirty = _details(), _details(orphaned_torrent_count=3)
     t0 = datetime(2026, 8, 1, 9, 0, 0)
 
-    p = next_steps.update_progress(None, cfg, clean, now=t0)
-    p = next_steps.update_progress(p, cfg, dirty, now=t0 + timedelta(hours=1))
+    p = rounds.update_progress(None, cfg, clean, now=t0)
+    p = rounds.update_progress(p, cfg, dirty, now=t0 + timedelta(hours=1))
     assert p['orphan_break_at'] and p['orphan_breaks'] == 1
-    p = next_steps.update_progress(p, cfg, clean, now=t0 + timedelta(hours=5))
+    p = rounds.update_progress(p, cfg, clean, now=t0 + timedelta(hours=5))
     assert p['fast_fixes'] == 1
     assert p['orphan_break_at'] is None, 'the timer must reset with the kill'
 
@@ -943,9 +943,9 @@ def test_a_mess_left_for_a_week_is_not_a_fast_fix():
     cfg = _cfg()
     clean, dirty = _details(), _details(duplicate_count=4)
     t0 = datetime(2026, 8, 1, 9, 0, 0)
-    p = next_steps.update_progress(None, cfg, clean, now=t0)
-    p = next_steps.update_progress(p, cfg, dirty, now=t0 + timedelta(hours=1))
-    p = next_steps.update_progress(p, cfg, clean, now=t0 + timedelta(days=7))
+    p = rounds.update_progress(None, cfg, clean, now=t0)
+    p = rounds.update_progress(p, cfg, dirty, now=t0 + timedelta(hours=1))
+    p = rounds.update_progress(p, cfg, clean, now=t0 + timedelta(days=7))
     assert p['dupe_kills'] == 1
     assert p['fast_fixes'] == 0
 
@@ -955,8 +955,8 @@ def test_a_mess_that_predates_auditorr_earns_no_fast_fix():
     work done before the first scan."""
     cfg = _cfg()
     t0 = datetime(2026, 8, 1, 9, 0, 0)
-    p = next_steps.update_progress(None, cfg, _details(orphaned_torrent_count=9), now=t0)
-    p = next_steps.update_progress(p, cfg, _details(), now=t0 + timedelta(hours=2))
+    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=9), now=t0)
+    p = rounds.update_progress(p, cfg, _details(), now=t0 + timedelta(hours=2))
     assert p['orphan_kills'] == 1, 'still a kill'
     assert p['fast_fixes'] == 0, 'but not a timed one'
 
@@ -964,17 +964,17 @@ def test_a_mess_that_predates_auditorr_earns_no_fast_fix():
 def test_immaculate_streak_holds_and_breaks():
     cfg = _cfg()
     t0 = datetime(2026, 8, 1, 9, 0, 0)
-    p = next_steps.update_progress(None, cfg, _details(), now=t0)
+    p = rounds.update_progress(None, cfg, _details(), now=t0)
     started = p['immaculate_since']
     assert started
-    p = next_steps.update_progress(p, cfg, _details(), now=t0 + timedelta(days=3))
+    p = rounds.update_progress(p, cfg, _details(), now=t0 + timedelta(days=3))
     assert p['immaculate_since'] == started, 'a held streak must not restart'
 
-    p = next_steps.update_progress(p, cfg, _details(not_imported_count=2),
+    p = rounds.update_progress(p, cfg, _details(not_imported_count=2),
                                    now=t0 + timedelta(days=4))
     assert p['immaculate_since'] is None
 
-    st = next_steps.build_state(cfg, _results(_details()), _runs(),
+    st = rounds.build_state(cfg, _results(_details()), _runs(),
                                 progress={**p, 'immaculate_since': started})
     assert _ladder(st, 'unblemished')['tier'] > 0
 
@@ -983,7 +983,7 @@ def test_seeding_time_feeds_atlas_and_old_faithful():
     """Both read summary scalars the source layer already had in hand."""
     year = 365.25 * 86400
     det = _details(seed_byte_secs=int(40 * TB * year), max_seed_secs=int(2.5 * year))
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     atlas = _ladder(st, 'atlas')
     assert atlas['tier'] > 0 and 'TB·yr' in atlas['value_label']
     assert _ladder(st, 'oldfaithful')['tier'] >= 7, 'two and a half years of uptime'
@@ -997,8 +997,8 @@ def test_patience_beats_capacity_on_the_time_ladders():
                        max_seed_secs=int(6 * year))
     huge = _details(total_media_size=500 * TB, total_torrents_size=500 * TB,
                     max_seed_secs=int(30 * 86400))
-    a = next_steps.build_state(_cfg(), _results(patient), _runs())
-    b = next_steps.build_state(_cfg(), _results(huge), _runs())
+    a = rounds.build_state(_cfg(), _results(patient), _runs())
+    b = rounds.build_state(_cfg(), _results(huge), _runs())
     assert _ladder(a, 'oldfaithful')['tier'] > _ladder(b, 'oldfaithful')['tier']
     assert _ladder(b, 'hoard')['tier'] > _ladder(a, 'hoard')['tier']
 
@@ -1033,7 +1033,7 @@ def test_windows_paths_do_not_inflate_the_title_count():
 
 def test_titles_and_uhd_climb_their_own_ladders():
     det = _details(title_count=1200, uhd_bytes=3 * TB)
-    st = next_steps.build_state(_cfg(), _results(det), _runs())
+    st = rounds.build_state(_cfg(), _results(det), _runs())
     assert _ladder(st, 'librarian')['tier'] >= 7
     assert _ladder(st, 'videophile')['tier'] > 0
     earned = {f['id'] for f in st['feats'] if f['earned']}
@@ -1041,11 +1041,11 @@ def test_titles_and_uhd_climb_their_own_ladders():
 
 
 def test_nothing_left_to_do_needs_the_whole_spine_clear():
-    st = next_steps.build_state(_cfg(), _results(_details()), _runs())
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
     assert next(f for f in st['feats'] if f['id'] == 'nothing_left')['earned']
 
     busy = _details(orphaned_torrent_count=99, orphaned_torrent_size=TB, or_score=1.0)
-    st2 = next_steps.build_state(_cfg(), _results(busy), _runs())
+    st2 = rounds.build_state(_cfg(), _results(busy), _runs())
     assert not next(f for f in st2['feats'] if f['id'] == 'nothing_left')['earned']
 
 
@@ -1055,8 +1055,8 @@ def test_the_new_ladders_ratchet_like_the_old_ones():
     year = 365.25 * 86400
     good = _details(title_count=5000, uhd_bytes=10 * TB, oldest_media_age_days=2000,
                     seed_byte_secs=int(50 * TB * year), max_seed_secs=int(3 * year))
-    st = next_steps.build_state(cfg, _results(good), _runs())
-    p = next_steps.update_progress(None, cfg, good, state=st)
+    st = rounds.build_state(cfg, _results(good), _runs())
+    p = rounds.update_progress(None, cfg, good, state=st)
     before = st['rank']['points']
 
     # Everything gets worse at once: the library shrinks, the shelves empty, the
@@ -1064,5 +1064,5 @@ def test_the_new_ladders_ratchet_like_the_old_ones():
     ruin = _details(total_media_size=GB, total_torrents_size=GB, title_count=1,
                     uhd_bytes=0, oldest_media_age_days=0, seed_byte_secs=0,
                     max_seed_secs=0, orphaned_torrent_count=50, duplicate_count=9)
-    st2 = next_steps.build_state(cfg, _results(ruin), _runs(), progress=p)
+    st2 = rounds.build_state(cfg, _results(ruin), _runs(), progress=p)
     assert st2['rank']['points'] >= before

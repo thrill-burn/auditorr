@@ -590,13 +590,15 @@ function WorkflowCard({ row, onNavigate, compact }) {
       display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
       gap: 20, flexWrap: 'wrap',
     }}>
-      {/* Capped at the same 620px the prose has always used, so the rule below
-          is exactly as wide as the text it divides. Uncapped, the column filled
-          the card and drew an 824px rule under 602px of prose — 200px of it
-          ruling off empty space. `space-between` keeps the prize box hard right
-          whatever the column does. */}
+      {/* Runs to the prize box and stops — no width of its own. It briefly
+          carried the prose's old 620px cap so the rule would not overhang the
+          text, but that made the column narrower than the card actually
+          allows: prose wrapped early with 200px of empty card beside it, and
+          copy got measured against an invented limit rather than the real one.
+          The rule matching the text is now the *copy's* job, not the column's —
+          see `teaching` in next_steps.py, which must fit on one line. */}
       <div style={{
-        flex: '1 1 320px', maxWidth: 620,
+        flex: '1 1 320px',
         display: 'flex', flexDirection: 'column', gap: compact ? 6 : 10,
       }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>

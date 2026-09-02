@@ -21,7 +21,7 @@ from db import (
     db_save_file_signatures, db_load_file_signatures,
     db_get_meta, db_set_meta, db_delete_meta,
 )
-import next_steps
+import rounds
 from state import get_state, set_state, update_progress
 from debug import process_rss_mb, container_memory, host_available_mb, malloc_trim
 
@@ -1220,9 +1220,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # update_progress then unions in whatever was newly earned. This is
             # what makes the prize layer ratchet — points accrue for action and
             # nothing is ever deducted for inaction or regression.
-            _ns_state = next_steps.build_state(
+            _ns_state = rounds.build_state(
                 cfg, result, db_get_recent_runs(limit=2000), progress=_ns_prev)
-            db_set_meta('ns_progress', next_steps.update_progress(
+            db_set_meta('ns_progress', rounds.update_progress(
                 _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
                 dead_regs=dead_registration_hashes(torrent_files_data)))
         except Exception as e:

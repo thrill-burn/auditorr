@@ -16,7 +16,7 @@ from datetime import datetime
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-import next_steps
+import rounds
 import sources
 from db import (
     DATA_DIR,
@@ -435,7 +435,7 @@ def get_next_steps():
         )
     except Exception as e:
         log.warning(f"Next steps: could not read upload snapshot: {e}")
-    return jsonify(next_steps.build_state(
+    return jsonify(rounds.build_state(
         cfg, db_load_results(), db_get_recent_runs(),
         lifetime_uploaded=lifetime_up, progress=db_get_meta('ns_progress')))
 
@@ -1706,7 +1706,7 @@ def workflows_trump_execute():
     # progress pass reads the updated counter.
     if removed:
         try:
-            db_set_meta('ns_progress', next_steps.record_trump(
+            db_set_meta('ns_progress', rounds.record_trump(
                 db_get_meta('ns_progress'), torrents=removed))
         except Exception as e:
             log.warning("Could not record trump on Next steps progress: %s", e)
