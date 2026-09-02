@@ -547,19 +547,24 @@ function WorkflowCard({ row, onNavigate, compact }) {
   const meta = STATE_META[row.state] || STATE_META.maintain
   const actionable = row.state === 'fix' || row.state === 'optimize'
 
-  // Rendered *inside* the foot's left column, directly under the lines it
-  // follows — not after the foot row. The row's height is set by whichever
-  // side is taller, and that is almost always the prize box (a label, a
-  // ladder, a track and a value). A button placed after the row therefore
-  // clears the *prize box*, so it sank to the bottom of a column whose text
-  // had already ended, opening a dead band that read as broken alignment.
-  // It only looked deliberate while the left column happened to run three
-  // lines deep; Backfill dropping to one exposed it.
+  // Bottom-left, on the card's own alignment spine — the same left edge as the
+  // dot, the title, the prose, the rule and the readout.
+  //
+  // It was briefly right-aligned at the end of the foot row, to close a gap
+  // under a one-line foot. That was the wrong read of the gap: the bottom-right
+  // of the card is empty either way, because the prize box is *top*-right, so
+  // moving the button there filled nothing and cost two things. It stranded the
+  // button ~440px from the readout it acts on, and it parked it directly under
+  // the prize box, which reads as though "Open Backfill" belongs to Ratio
+  // Alchemist rather than to the workflow. Left-aligned also gives a stronger
+  // consistency guarantee than right-aligned did: the left edge is the same x
+  // on every card whatever the copy says, where the right edge moved the moment
+  // the column's width cap came off.
   const button = (actionable || row.state === 'blocked') ? (
     <button
       onClick={() => onNavigate(row.state === 'blocked' ? 'config' : row.id)}
       style={{
-        alignSelf: 'flex-start', flexShrink: 0,
+        alignSelf: 'flex-start', flexShrink: 0, marginTop: 10,
         padding: compact ? '7px 14px' : '9px 18px', borderRadius: 'var(--r)', cursor: 'pointer',
         border: `1px solid ${actionable ? 'var(--accent)' : 'var(--border2)'}`,
         background: actionable ? 'var(--accent)' : 'var(--surface2)',
@@ -622,19 +627,13 @@ function WorkflowCard({ row, onNavigate, compact }) {
         {row.summary}
       </p>
 
-      {/* The foot: the numbers on the left, the way in on the right, on one
-          row. Stacking the button under them cost a whole row of height and,
-          on a one-line foot like Backfill's, left the button sitting 77px
-          below the prize box with the bottom-right of the card empty. Beside
-          the numbers it also anchors the far end of the rule, which otherwise
-          ran out over nothing. Top-aligned, so on a three-line foot the button
-          still sits level with the readout rather than drifting to the middle. */}
+      {/* The foot: the numbers, then the way in — both on the card's left
+          edge, in reading order. */}
       {(row.stat || row.reward) && (
         <div style={{
           borderTop: '1px solid var(--border)', paddingTop: compact ? 7 : 10,
-          display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap',
+          display: 'flex', flexDirection: 'column', gap: 3,
         }}>
-        <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 3 }}>
           {/* The numbers. Mono and --text so it reads as a readout, but on
               the body rung of the scale — a rung up it became the loudest
               thing on the card and out-shouted the title above it. */}
@@ -659,7 +658,6 @@ function WorkflowCard({ row, onNavigate, compact }) {
               {row.reward.detail}
             </span>
           )}
-          </div>
           {button}
         </div>
       )}
