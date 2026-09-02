@@ -214,14 +214,27 @@ def test_only_rows_with_something_to_count_carry_a_stat_line():
             assert r['stat']
 
 
-def test_backfill_prints_its_ratio_once():
-    """"85% hardlinked" in the stat and "85% now" in the reward line was the
-    same number twice on one card — identically so, on a library at its peak."""
+def test_backfill_says_it_all_on_one_line():
+    """Backfill's foot is a single sans payout line, matching Triage and
+    Trumped beside it. It carries the ratio and the idle bytes, and the mono
+    stat slot stays empty — filling both is what made this card three lines
+    tall next to their one."""
     det = _details(total_media_size=100 * TB, hardlinked_media_size=85 * TB)
     st  = next_steps.build_state(_cfg(), _results(det), _runs())
     bf  = _row(st, 'backfill')
-    assert '85' in bf['stat'] and 'hardlinked' in bf['stat']
-    assert '85' not in bf['reward']['headline']
+    assert bf['state'] == 'fix', 'the busiest state, where the foot was widest'
+    assert bf['stat'] == ''
+    head = bf['reward']['headline']
+    assert '85' in head and 'hardlinked' in head and 'TB' in head
+    assert bf['reward']['detail'] == '', 'a second sentence is the third line'
+
+
+def test_backfill_never_carries_a_stat_in_any_state():
+    for det in (_details(total_media_size=100 * TB, hardlinked_media_size=85 * TB),
+                _details(total_media_size=100 * TB, hardlinked_media_size=99 * TB),
+                _details()):
+        st = next_steps.build_state(_cfg(), _results(det), _runs())
+        assert _row(st, 'backfill')['stat'] == ''
 
 
 # ── Setup tier ───────────────────────────────────────────────────────────────
@@ -626,9 +639,14 @@ def test_never_clean_shows_no_phantom_kills():
 
 
 def test_every_row_explains_how_it_pays_out():
+    """A headline always. The second sentence is optional — Backfill's foot is
+    deliberately one line, so it ships a headline and nothing under it."""
     st = next_steps.build_state(_cfg(), _results(_details()), _runs())
     for r in st['rows']:
-        assert r['reward']['headline'] and r['reward']['detail']
+        assert r['reward']['headline']
+        assert 'detail' in r['reward']
+        if r['id'] != 'backfill':
+            assert r['reward']['detail']
 
 
 def test_killing_a_zombie_is_repeatable_and_cumulative():
@@ -858,6 +876,39 @@ def test_conservator_needs_every_pile_empty():
     assert _ladder(st, 'conservator')['tier'] == 0
     st2 = next_steps.build_state(_cfg(), _results(_details()), _runs())
     assert _ladder(st2, 'conservator')['tier'] > 0
+
+
+def test_conservator_counts_hardlinked_bytes_once():
+    """`total_media_size` and `total_torrents_size` are two walks of two trees
+    that hold the same bytes, so a hardlinked file lands in both sums. Adding
+    them made a 10 TB library read 20 TB — and the error grew with how well
+    hardlinked you were, i.e. worst in the state the ladder rewards."""
+    det = _details(total_media_size=10 * TB, hardlinked_media_size=10 * TB,
+                   total_torrents_size=10 * TB)
+    st  = next_steps.build_state(_cfg(), _results(det), _runs())
+    assert _ladder(st, 'conservator')['value'] == 10 * TB
+    # Under the gate the torrent tree is a subset of the media tree, so
+    # Conservator and Hoarder describe the same bytes. It stays a separate
+    # ladder because the *peak* differs: Hoarder latches your largest library,
+    # Conservator your largest spotless one.
+    assert _ladder(st, 'conservator')['value'] == _ladder(st, 'hoard')['value']
+    assert _ladder(st, 'conservator')['tier'] == _ladder(st, 'hoard')['tier']
+
+
+def test_conservator_only_latches_a_library_that_was_clean_at_the_time():
+    """The two peaks are what separate this from Hoarder. A library that grows
+    while messy advances Hoarder and leaves Conservator where it was."""
+    cfg   = _cfg()
+    clean = _details(total_media_size=2 * TB, hardlinked_media_size=2 * TB,
+                     total_torrents_size=2 * TB)
+    st    = next_steps.build_state(cfg, _results(clean), _runs())
+    p     = next_steps.update_progress(None, cfg, clean, state=st)
+
+    grew_dirty = _details(total_media_size=50 * TB, hardlinked_media_size=50 * TB,
+                          total_torrents_size=50 * TB, orphaned_torrent_count=9)
+    st2 = next_steps.build_state(cfg, _results(grew_dirty), _runs(), progress=p)
+    assert _ladder(st2, 'hoard')['tier'] > _ladder(st, 'hoard')['tier']
+    assert _ladder(st2, 'conservator')['tier'] == _ladder(st, 'conservator')['tier']
 
 
 def test_rebased_ladders_keep_grandfathered_rungs():

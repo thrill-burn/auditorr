@@ -683,18 +683,20 @@ def _reward_line(row, progress, det):
         }
 
     if kind == 'crystal':
-        cur  = row.get('ratio_pct', 0.0)
-        peak = round(float(p['hl_peak'] or 0.0), 1)
-        gap  = round(max(0.0, 100.0 - peak), 1)
-        # The current ratio is already the card's own stat line, so "85% now ·
-        # best ever 85%" printed the same number twice on one card — and on a
-        # library sitting at its peak, printed it identically. This slot is the
-        # *payout*, and the payout here is the ratchet: your best ever.
-        line = 'At your best ever.' if cur >= peak else f"Best ever {peak}%."
-        detail = (f"{gap} points from perfect." if gap
-                  else 'Perfect. Genuinely nothing left to hardlink.')
-        return {'kind': kind, 'headline': line,
-                'detail': detail + ' Your best never goes back down.'}
+        # Backfill's whole foot is this one line. It used to be three — a mono
+        # stat readout, the best-ever ratchet, and a sentence explaining the
+        # ratchet — while Triage and Trumped next to it were a single sans line
+        # each, so the one card that never finishes was also the loudest thing
+        # on the page. The ratio and the idle bytes are the only figures worth a
+        # line here, and they read as a sentence, so they live in the sans
+        # payout slot with the other workflows' lines rather than in `_stat`.
+        # (The best-ever ratchet still drives the Lapidary/Alchemist ladders,
+        # which the card's own `next_prize` box shows beside this line.)
+        pct  = row.get('ratio_pct', 0.0)
+        idle = float(row.get('bytes') or 0)
+        line = (f"{pct}% hardlinked · {_fmt_bytes(idle)} earning nothing" if idle
+                else f"{pct}% hardlinked · every byte is earning")
+        return {'kind': kind, 'headline': line, 'detail': ''}
 
     if kind == 'tribute':
         swaps = int(p.get('trumps') or 0)
@@ -753,6 +755,11 @@ def _stat(row):
     Empty for a row with nothing to count: a cleared or blocked workflow has no
     figure worth a monospace line, and inventing "0 orphans" for one would give
     the calmest cards a readout the busy ones use to signal work.
+
+    Also empty for Backfill in *every* state — a ratio and the bytes behind it
+    are a sentence, not a tally, so they ride the one payout line in
+    `_reward_line` instead. Giving that row both slots is what made it three
+    lines tall beside Triage's one.
     """
     if row['state'] in ('blocked', 'maintain', 'standby'):
         return ''
@@ -771,8 +778,6 @@ def _stat(row):
         if row.get('dead_registrations'):
             parts.append(_pluralize(row['dead_registrations'], 'dead registration'))
         return ' · '.join(parts) or 'Items need a verdict'
-    if row['id'] == 'backfill':
-        return f"{row['ratio_pct']}% hardlinked · {size} earning nothing"
     return ''
 
 
@@ -1610,9 +1615,26 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                  500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
                  100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],
                 _fmt_bytes, 30),
+        # `total_media` alone, NOT `total_media + total_tor`. The two are
+        # separate walks of two trees that, in a hardlink setup, are mostly the
+        # same bytes — every hardlinked file carries its full size into both
+        # sums, so adding them counted a 10 TB library as 20 TB. Worse, the
+        # error scales with how well hardlinked you are, so the tile inflated
+        # most in exactly the state it exists to reward.
+        #
+        # `total_media` is not a substitute for the sum, it *is* the sum
+        # de-duplicated: `_is_immaculate` requires zero orphans and zero
+        # not-imported, so under this gate every scoring torrent file has a
+        # library counterpart and the torrent tree is a subset of the media
+        # tree. The union of the two is the media tree.
+        #
+        # What keeps this from being Hoarder with extra steps is the gate plus
+        # the peaks latch — the largest library you held *while spotless* is a
+        # different peak from the largest you ever held, for anyone whose
+        # library has ever been messy. Same shape as Tidiness and Purity above.
         L('conservator', 'Conservator',
                 'The largest library you have ever held with nothing whatsoever wrong with it.',
-                (total_media + total_tor) if _is_immaculate(det) else 0,
+                total_media if _is_immaculate(det) else 0,
                 [1 * GB, 5 * GB, 10 * GB, 25 * GB, 50 * GB, 100 * GB, 250 * GB,
                  500 * GB, 1 * TB, 2 * TB, 5 * TB, 10 * TB, 25 * TB, 50 * TB,
                  100 * TB, 250 * TB, 500 * TB, 1 * PB, 2 * PB, 5 * PB],

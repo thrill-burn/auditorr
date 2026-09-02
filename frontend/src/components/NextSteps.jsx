@@ -533,6 +533,11 @@ const isCompact = row => !['fix', 'optimize', 'blocked'].includes(row.state)
 // under the title it competed with it, and the same figure could then appear
 // again in the payout line below — which is exactly what Backfill did, printing
 // its hardlink ratio twice on one card.
+//
+// The foot is at most three lines, and only a row that genuinely has three
+// things to say uses all three. Which slots a row fills is the server's call
+// (`_stat` / `_reward_line`): Backfill fills one, the sans payout line, so it
+// reads as the same single line Triage and Trumped show beside it.
 function WorkflowCard({ row, onNavigate, compact }) {
   const meta = STATE_META[row.state] || STATE_META.maintain
   const actionable = row.state === 'fix' || row.state === 'optimize'
@@ -595,7 +600,10 @@ function WorkflowCard({ row, onNavigate, compact }) {
                 {row.reward.headline}
               </span>
             )}
-            {row.reward && !compact && (
+            {/* Optional, and empty on purpose for Backfill: its payout line
+                already carries the ratio and the idle bytes, and a second
+                sentence under it put a three-line foot next to Triage's one. */}
+            {row.reward?.detail && !compact && (
               <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.5 }}>
                 {row.reward.detail}
               </span>
