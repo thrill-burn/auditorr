@@ -559,7 +559,7 @@ function WorkflowCard({ row, onNavigate, compact }) {
     <button
       onClick={() => onNavigate(row.state === 'blocked' ? 'config' : row.id)}
       style={{
-        alignSelf: 'flex-start', marginTop: 8,
+        alignSelf: 'flex-start', flexShrink: 0,
         padding: compact ? '7px 14px' : '9px 18px', borderRadius: 'var(--r)', cursor: 'pointer',
         border: `1px solid ${actionable ? 'var(--accent)' : 'var(--border2)'}`,
         background: actionable ? 'var(--accent)' : 'var(--surface2)',
@@ -587,10 +587,16 @@ function WorkflowCard({ row, onNavigate, compact }) {
     <div style={{
       background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
       boxShadow: 'var(--elev-1)', padding: compact ? '12px 16px' : '16px 20px',
-      display: 'flex', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap',
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+      gap: 20, flexWrap: 'wrap',
     }}>
+      {/* Capped at the same 620px the prose has always used, so the rule below
+          is exactly as wide as the text it divides. Uncapped, the column filled
+          the card and drew an 824px rule under 602px of prose — 200px of it
+          ruling off empty space. `space-between` keeps the prize box hard right
+          whatever the column does. */}
       <div style={{
-        flex: 1, minWidth: 280,
+        flex: '1 1 320px', maxWidth: 620,
         display: 'flex', flexDirection: 'column', gap: compact ? 6 : 10,
       }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
@@ -610,17 +616,23 @@ function WorkflowCard({ row, onNavigate, compact }) {
           a row that wants something, what "clear" means on one that doesn't.
           620px, because 780 at this size ran ~110 characters a line, twice what
           the rest of the app sets prose at. */}
-      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0, maxWidth: 620 }}>
+      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0 }}>
         {row.summary}
       </p>
 
-      {/* The foot: the numbers, what they pay, and the way in. The rule spans
-          this column only — see the note on the card. */}
+      {/* The foot: the numbers on the left, the way in on the right, on one
+          row. Stacking the button under them cost a whole row of height and,
+          on a one-line foot like Backfill's, left the button sitting 77px
+          below the prize box with the bottom-right of the card empty. Beside
+          the numbers it also anchors the far end of the rule, which otherwise
+          ran out over nothing. Top-aligned, so on a three-line foot the button
+          still sits level with the readout rather than drifting to the middle. */}
       {(row.stat || row.reward) && (
         <div style={{
           borderTop: '1px solid var(--border)', paddingTop: compact ? 7 : 10,
-          display: 'flex', flexDirection: 'column', gap: 3,
+          display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap',
         }}>
+        <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 3 }}>
           {/* The numbers. Mono and --text so it reads as a readout, but on
               the body rung of the scale — a rung up it became the loudest
               thing on the card and out-shouted the title above it. */}
@@ -645,6 +657,7 @@ function WorkflowCard({ row, onNavigate, compact }) {
               {row.reward.detail}
             </span>
           )}
+          </div>
           {button}
         </div>
       )}
@@ -657,12 +670,25 @@ function WorkflowCard({ row, onNavigate, compact }) {
 
       {/* The right column. Top-aligned and level with the title on every card,
           which is what the header's "N of M pts lost" readout used to occupy —
-          it was removed so this slot is the same slot on all five rows. */}
+          it was removed so this slot is the same slot on all five rows.
+
+          `width`, not `minWidth`. As a floor it only held the narrow boxes
+          level and let anything wider grow to fit, so a real page rendered
+          210 / 230 / 250 and the right edge jittered as you scrolled. 260 is
+          the widest box actually measured (250, set by "Ratio Alchemist · rung
+          6 of 14") plus one character, because that ladder's own rung count
+          reaches "rung 10 of 14" and two digits would otherwise wrap. Sized off
+          what renders, not off the longest tier name in the table — a box wide
+          enough for "Nothing Continues To Happen" would be wide on every card
+          for a label almost nobody sees. That label wraps to a second line
+          instead, which costs one card some height and keeps the name intact;
+          truncating it would eat the joke. */}
       {row.next_prize && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
           padding: '7px 12px', borderRadius: 'var(--r)',
-          background: 'var(--surface2)', border: '1px solid var(--border2)', minWidth: 210,
+          background: 'var(--surface2)', border: '1px solid var(--border2)',
+          width: 260, maxWidth: '100%',
         }}>
           <span style={{ color: 'var(--accent)', display: 'flex', flexShrink: 0 }}>
             {/* The ladder the *next* rung belongs to — prizes[0] can be a

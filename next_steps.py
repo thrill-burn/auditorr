@@ -536,7 +536,10 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
             "Files in your torrent folder your client has no record of. Cleanup groups them "
             "by release folder and writes a delete script you run yourself."
         ),
-        'clear_line': 'No orphans. Every file in your torrent folder is accounted for.',
+        # Cleanup and Triage are mirror images — a file with no torrent, and a
+        # torrent with no file — so their cleared lines must say which direction
+        # they check. Both used to end "accounted for", which named neither.
+        'clear_line': 'No orphans. Every file in your torrent folder belongs to a live torrent.',
     })
 
     # ── Dedupe ───────────────────────────────────────────────────────────────
@@ -586,7 +589,12 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
             "Seeding torrents with no file in your media folder. Triage says why each one "
             "never landed and gives you the right action per verdict."
         ),
-        'clear_line': 'Everything you are seeding is imported and accounted for.',
+        # "Verdict" is Triage's own word (see `teaching`, and the `_stat`
+        # fallback), which keeps this distinct from Cleanup's "orphans" rather
+        # than reaching for a second synonym for the same idea. The second
+        # clause covers both halves of the pile: not-imported *and* the dead
+        # registrations that are imported but no longer wanted.
+        'clear_line': 'Nothing needs a verdict. Everything you seed is imported and still wanted.',
     })
 
     # ── Backfill ─────────────────────────────────────────────────────────────
@@ -610,10 +618,11 @@ def _workflow_rows(cfg, det, source_ok, arr_ok):
         'count': 0, 'bytes': unlinked, 'ratio_pct': round(hl_ratio * 100, 1),
         'score_lost': _recoverable(det.get('hl_score'), det.get('hl_max', 70)),
         'score_max': round(float(det.get('hl_max', 70) or 0), 1),
-        'teaching': (
-            "Media with no torrent behind it — disk that earns no ratio. Backfill searches "
-            "your indexers for a release that hardlinks onto the file you already have."
-        ),
+        # One clause, deliberately — the only `teaching` on the page that is not
+        # two sentences. The second half ("Backfill searches your indexers for a
+        # release that hardlinks onto the file you already have") ran the line
+        # to two rows on the card and restated what the button already offers.
+        'teaching': "Media with no torrent behind it — space that earns no ratio.",
         'clear_line': 'Effectively your whole library is hardlinked and seeding.',
     })
 
