@@ -2655,6 +2655,33 @@ def workflows_generate_stop():
 
 _import_watches = {}  # job_id -> {status, message, title, service, completed_at}
 
+# Guards the read-modify-write on the `ns_progress` app_meta row. A user grabs
+# several Backfill candidates at once and each import watch finishes on its own
+# daemon thread, so unlike the trump credit (one request thread, one swap) this
+# one genuinely races itself.
+_ns_progress_lock = threading.Lock()
+
+
+def _record_backfill_credit(files):
+    """Credit a confirmed Backfill import on the Rounds prize layer.
+
+    Counted at the event rather than in `run_audit_process`, for the reason
+    `rounds.record_backfill` documents: the next scan sees a library that got a
+    little better hardlinked, which is indistinguishable from an arr upgrading
+    something on its own, and the media file is replaced on import so the path a
+    transition diff would key on frequently does not survive the import.
+
+    Fired from exactly the point the UI tells the user "Imported successfully" —
+    the prize layer and the workflow page must not disagree about whether the
+    thing landed.
+    """
+    try:
+        with _ns_progress_lock:
+            db_set_meta('ns_progress', rounds.record_backfill(
+                db_get_meta('ns_progress'), files=files))
+    except Exception as e:
+        log.warning("Could not record backfill on Rounds progress: %s", e)
+
 
 @app.route('/api/workflows/watch_import', methods=['POST'])
 @require_auth
@@ -2664,6 +2691,10 @@ def workflows_watch_import():
     connection_id = data.get('connection_id', '')
     arr_id        = data.get('arr_id')
     title         = data.get('title', '') or ''
+    # The candidate group's file count — a Sonarr season pack is one grab and N
+    # episodes, and Matchmaker counts files. Clamped in `record_backfill`;
+    # missing (an older frontend bundle) simply credits one.
+    files         = data.get('files', 1)
     if not service or not connection_id or arr_id is None:
         return jsonify({'status': 'error', 'message': 'Missing parameters'}), 400
 
@@ -2679,6 +2710,12 @@ def workflows_watch_import():
     cfg = db_load_config()
 
     def do_watch():
+        def mark_done():
+            watch['status']       = 'done'
+            watch['message']      = 'Imported successfully'
+            watch['completed_at'] = time.time()
+            _record_backfill_credit(files)
+
         try:
             # Brief delay so qBit + Sonarr/Radarr have time to register the grab before we poll
             time.sleep(8)
@@ -2694,9 +2731,7 @@ def workflows_watch_import():
 
             if not last_active:
                 # Queue cleared naturally (standard quality upgrade auto-imported)
-                watch['status']       = 'done'
-                watch['message']      = 'Imported successfully'
-                watch['completed_at'] = time.time()
+                mark_done()
                 return
 
             # If the item is still downloading (not yet importPending), the 300 s poll
@@ -2707,9 +2742,7 @@ def workflows_watch_import():
                 watch['message'] = 'Downloading — waiting for completion'
                 last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=7200)
                 if not last_active:
-                    watch['status']       = 'done'
-                    watch['message']      = 'Imported successfully'
-                    watch['completed_at'] = time.time()
+                    mark_done()
                     return
 
             # Queue didn't clear — extract context for manual import
@@ -2752,10 +2785,9 @@ def workflows_watch_import():
                 msgs = [m for msg in stuck_rec.get('statusMessages', []) for m in msg.get('messages', [])]
                 watch['status']  = 'error'
                 watch['message'] = 'Import stalled: ' + ('; '.join(msgs) or 'queue item remained')
+                watch['completed_at'] = time.time()
             else:
-                watch['status']       = 'done'
-                watch['message']      = 'Imported successfully'
-            watch['completed_at'] = time.time()
+                mark_done()
         except Exception as e:
             log.warning("Auto-import failed for %s/%s: %s", service, arr_id, e)
             watch['status']       = 'error'

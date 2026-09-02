@@ -46,6 +46,29 @@ function groupCandidates(candidates) {
   return groups
 }
 
+// The library-resolution readout, said with its noun in front of the numbers.
+//
+// Kept as its own sentence rather than folded into the candidate count beside
+// it, because the two are not the same unit and cannot be divided into each
+// other: a candidate is a *group* (one Sonarr season is one candidate however
+// many episodes it holds) while both of these are *files*. Printed as
+// "15 searchable candidates (2612 total unseeded)", that read as a catastrophic
+// resolution gap on a healthy library and cost a real issue (#22) a round of
+// back-and-forth to rule out. The gap it does describe is also overstated by
+// nature: the media walk indexes every file, so the total includes subtitles,
+// NFOs and artwork, which no arr indexes and none of which can ever match.
+//
+// It also describes the whole library, where the candidate count narrows with
+// the folder and title filters — another reason the two must not share a
+// sentence that implies one is a fraction of the other.
+function matchedFilesLine(matched, total) {
+  if (!total) return ''
+  const t = total.toLocaleString()
+  if (matched <= 0)    return `None of your ${t} unseeded files matched your Sonarr/Radarr library.`
+  if (matched >= total) return `All ${t} unseeded files matched your Sonarr/Radarr library.`
+  return `Of ${t} unseeded files, ${matched.toLocaleString()} matched your Sonarr/Radarr library.`
+}
+
 function groupByFolder(candidates) {
   const map = {}
   for (const c of candidates) {
@@ -100,6 +123,10 @@ function ResultItem({ item }) {
         connection_id: item.arr_connection_id,
         arr_id:        item.arr_id,
         title:         item.arr_title || '',
+        // Matchmaker (Rounds) counts files, and a season pack is one grab with
+        // a dozen episodes behind it. Credited server-side only if the import
+        // actually lands.
+        files:         item.file_count || 1,
       })
       window.dispatchEvent(new CustomEvent('auditorr:import_started'))
       if (!mountedRef.current) return
@@ -459,7 +486,11 @@ export default function Backfill({ onNavigate }) {
   // Data loaded on mount
   const [indexers,      setIndexers]      = useState([])
   const [allGroups,     setAllGroups]     = useState([])   // resolved+grouped candidates, raw
+  // Both file counts, not candidate counts. The candidate figure below is
+  // groups (a Sonarr season is one candidate, however many episodes), so the
+  // two can only be reported as separate claims — see the Search Depth copy.
   const [totalUnseeded, setTotalUnseeded] = useState(0)
+  const [matchedFiles,  setMatchedFiles]  = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [loadError,     setLoadError]     = useState(null)
   const [arrErrors,     setArrErrors]     = useState([])   // instances whose media index failed
@@ -504,6 +535,7 @@ export default function Backfill({ onNavigate }) {
         const resolved = grouped.filter(c => c.resolved)
         setAllGroups(resolved)
         setTotalUnseeded((cdata.resolved_count || 0) + (cdata.unresolved_count || 0))
+        setMatchedFiles(cdata.resolved_count || 0)
         setArrErrors(cdata.arr_errors || [])
         setIndexers(idata.indexers || [])
         setDownloadFrom(cfg.ACQUIRE_DOWNLOAD_FROM || [])
@@ -539,6 +571,9 @@ export default function Backfill({ onNavigate }) {
   }, [folders, selectedFolders])
 
   const willSearch = searchCount === null ? availableCount : Math.min(availableCount, searchCount)
+
+  const matchedLine = useMemo(
+    () => matchedFilesLine(matchedFiles, totalUnseeded), [matchedFiles, totalUnseeded])
 
   const startPoll = useCallback((id) => {
     const poll = async () => {
@@ -704,7 +739,11 @@ export default function Backfill({ onNavigate }) {
               <SectionLabel>Search Depth</SectionLabel>
               <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
                 Each candidate queries your indexers — expect 10–90s per search depending on your setup.
-                {availableCount > 0 && ` ${availableCount} searchable candidate${availableCount !== 1 ? 's' : ''}${totalUnseeded > availableCount ? ` (${totalUnseeded} total unseeded)` : ''}.`}
+                {availableCount > 0 && ` ${availableCount.toLocaleString()} searchable candidate${availableCount !== 1 ? 's' : ''}.`}
+                {/* Shown even at zero candidates: that is the case where a
+                    resolution failure is most likely and the numbers matter
+                    most, and the old copy hid it behind availableCount > 0. */}
+                {matchedLine && ` ${matchedLine}`}
               </div>
               <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount || 999} />
             </div>

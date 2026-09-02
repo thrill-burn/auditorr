@@ -53,7 +53,7 @@ install the slowest workflow in the app as step one.
 ### Useless prizes
 
 Under the work is a shelf of prizes, and the heading is not being modest: over
-700 tiers across 40 ladders, plus 104 one-off feats, for things like how much you
+650 tiers across 42 ladders, plus 109 one-off feats, for things like how much you
 have, how much you've given back, and how long auditorr has been running. Every
 rung is named rather than numbered — the joke only works if it's specific — and
 each medallion shows which rung you're on out of how many, and says what its
@@ -70,6 +70,15 @@ five years beats 500 TB held for three weeks), **Old Faithful** is your
 longest-lived single torrent, and **Fire Brigade** counts messes you cleared
 within a day of them appearing, because a library that stays clean never gets
 another chance to kill one.
+
+Each workflow row also carries one prize of its own, shown beside the work, and
+**none of them is measured in bytes** — a prize that grows when you buy a drive
+isn't a prize for anything. Cleanup and Dedupe each get a pair: how long you've
+held the clean state (**Sentinel**, **Singleton**) and how many times you've had
+to take it back (**Exterminator**, **Clone Hunter**). Triage counts items
+shovelled off the pile (**Shoveler**) and Backfill counts files you found a
+torrent for (**Matchmaker**), because those two never finish. Trumped tallies
+swaps you complied with (**Kingmaker**).
 
 They're monotonic: prizes are awarded for what you've done and are never taken
 back if your library shrinks or a count climbs again. Nothing about them appears

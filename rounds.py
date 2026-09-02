@@ -30,6 +30,8 @@ import hashlib
 import logging
 from datetime import datetime, timedelta
 
+from arr import normalize_arr_connections
+
 log = logging.getLogger(__name__)
 
 # Ordering is **staged and sequenced**, not scored.
@@ -90,9 +92,15 @@ NATURE = {
 #
 #   zombie   — Cleanup, Dedupe. You should have killed these for good, but they
 #              claw their way back: an arr re-downloads something, a move goes
-#              wrong. So there are two rewards, not one — a **kill** every time
-#              you drive the count back to zero (repeatable, cumulative), and a
-#              **streak** for how long the clean state holds. When they rise
+#              wrong. So there are two ladders each, and **both workflows get
+#              both**: a **streak** for how long the clean state has held
+#              (Sentinel, Singleton) and a **kill** every time you drive the
+#              count back to zero (Exterminator, Clone Hunter). The streak is
+#              the headline — it is the state you are defending, and it is the
+#              one that moves every day whether or not anything went wrong. The
+#              kill tally is the second clause, never the lead: a card reading
+#              "no kills yet" on a library that has been spotless for a month
+#              says the wrong thing about which number matters. When they rise
 #              again you get a cheeky badge rather than a penalty, because a
 #              break is information the user wants ("something upstream is
 #              misbehaving"). Nothing here ever subtracts.
@@ -102,9 +110,16 @@ NATURE = {
 #              permanently — the pile going back up never costs you what you
 #              already dug. There is always something to do and always a point
 #              for doing it.
-#   crystal  — Backfill. Aspirational polish toward a perfect 100%. It gets
-#              better and worse as the library grows, so the ladder tracks your
-#              **best ever** and ratchets: a bad week cannot take a tier away.
+#   crystal  — Backfill. Also cumulative, and for the same reason: a library
+#              grows, so unhardlinked media keeps appearing and you keep going
+#              back out to find torrents for it. The prize is the count of
+#              **files you actually put a torrent behind**, not the ratio or the
+#              bytes — a size ladder pays you for buying a drive, and the state
+#              ladders it replaced (Lapidary's best-ever %, Alchemist's
+#              multiplier) went still for exactly the user who had done the
+#              work. Both still exist on the shelf; neither is Backfill's carrot
+#              any more. The current ratio stays on the card as context, in the
+#              one payout line, after the tally.
 #   tribute  — Trumped. The only workflow you do not start: a tracker PMs you,
 #              and complying wins you nothing except continued good standing.
 #              So it pays in a tally of compliance rather than progress — a
@@ -122,23 +137,55 @@ REWARD_KIND = {
 # as an abstract shelf the user has to connect to their own actions. Ladders
 # absent here are library-wide (Hoarder, Auditor, Chronicler…) and appear only
 # in the top shelf, because no single workflow moves them.
+#
+# **No workflow's prize is measured in bytes.** A size ladder pays you for
+# buying a drive, and it goes still for exactly the user who has done the work,
+# so every ladder a workflow owns is either *time held clean* or *things you
+# did*. Four used to break that rule and all four are now shelf-only,
+# library-wide medallions (which is not a demotion — they still tier, still
+# score, and still latch): Tidiness and Purity are the torrent directory's size
+# on a good day, Conservator is the library's, and Lapidary and Alchemist are
+# ratios that sit at their peak precisely when a well-kept library has nothing
+# left to gain.
+#
+# Each workflow owns exactly the pair its work has:
+#   Cleanup / Dedupe — Sentinel + Exterminator, Singleton + Clone Hunter. The
+#     streak you are defending, and the number of times you have had to take it
+#     back. Dedupe had only the kill counter, so a library that had never let a
+#     duplicate through had nothing on the card at all.
+#   Triage / Backfill — Shoveler, Matchmaker. Cumulative counts of items
+#     handled, because these two never finish.
+#   Trumped — Kingmaker, a tally of compliance.
 LADDER_OWNER = {
-    'exterminator': ('cleanup',),
     'sentinel':     ('cleanup',),
-    'tidiness':     ('cleanup',),
+    'exterminator': ('cleanup',),
+    'singleton':    ('dedupe',),
     'clonehunter':  ('dedupe',),
     'shoveler':     ('triage',),
-    'purity':       ('triage',),
-    'lapidary':     ('backfill',),
-    'alchemist':    ('backfill',),
+    'matchmaker':   ('backfill',),
     'kingmaker':    ('trumped',),
     # The cross-cutting ones: nothing is wrong anywhere, so every pile-clearing
     # workflow feeds them. Flawless additionally needs a perfect hardlink ratio,
-    # which is Backfill's job.
-    'conservator':  ('cleanup', 'dedupe', 'triage'),
+    # which is Backfill's job. All three are days or counts — none is bytes.
     'unblemished':  ('cleanup', 'dedupe', 'triage'),
     'firebrigade':  ('cleanup', 'dedupe'),
     'flawless':     ('cleanup', 'dedupe', 'triage', 'backfill'),
+}
+
+# The one prize highlighted beside each workflow. Pinned, not "whichever rung is
+# nearest": the nearest-rung rule is right for browsing the shelf and wrong on a
+# card, because it hands the highlight to whatever happens to be a percent from
+# tipping over — so a Cleanup card that has been clean for a month could point
+# at Fire Brigade while the streak it is actually defending sat unmentioned.
+# Every workflow's headline prize is the thing its own `reward` line leads with:
+# the clean streak for the two zombies, the running tally for the two ongoing
+# ones. Falls back to the nearest locked ladder once the primary is maxed.
+LADDER_PRIMARY = {
+    'cleanup':  'sentinel',
+    'dedupe':   'singleton',
+    'triage':   'shoveler',
+    'backfill': 'matchmaker',
+    'trumped':  'kingmaker',
 }
 
 # Empty progress record. Persisted in app_meta under `ns_progress` and advanced
@@ -176,6 +223,17 @@ EMPTY_PROGRESS = {
     'trump_torrents': 0,      # registrations retired by those swaps (cross-seed groups)
     'trump_max_group': 0,     # biggest cross-seed group retired in one swap
     'last_trump_at': None,
+    # Backfill, counted at the event for the same reason Trumped is. The audit
+    # after a backfill sees a library that is simply better hardlinked, which is
+    # indistinguishable from an arr upgrading something on its own or a
+    # cross-seed script landing overnight — and the media file is *replaced* on
+    # import, so the path a transition diff would key on often does not survive
+    # the thing it is meant to measure. The grab is the evidence, and the import
+    # watch already confirms it landed.
+    'backfilled': 0,          # media files put back behind a torrent, ever
+    'backfill_releases': 0,   # grabs that completed an import (a season pack is one)
+    'backfill_max': 0,        # most files backfilled by a single grab
+    'last_backfill_at': None,
     # Everything below exists to make the prize layer **ratchet**. Most ladders
     # and feats read current state, which can regress — a library that shrinks,
     # a tracker you stop using, a zombie that rises. Without latching, a break
@@ -187,6 +245,12 @@ EMPTY_PROGRESS = {
 
 # Ceiling on the persisted dead-registration hash set (see `last_dead_regs`).
 _DEAD_REG_CAP = 10000
+
+# Ceiling on the files credited by one backfill grab. The number arrives from the
+# client (it is the candidate group's own file count — a Sonarr season pack is
+# one grab and N episodes), so it is clamped rather than trusted. A season of
+# anything is comfortably under this.
+_BACKFILL_FILES_CAP = 500
 
 # How quickly a returning mess has to be cleared to count as a fast fix. A day
 # is the honest unit: audits are hourly at best, most people look at this once
@@ -268,6 +332,28 @@ PB = 1024 ** 5
 # This is what makes the page useful on a brand-new install.
 # ---------------------------------------------------------------------------
 
+def _arr_services(cfg):
+    """Which arr services are actually connected — asked of the one function
+    that knows, never of a second inline read of ARR_CONNECTIONS.
+
+    Reading the raw list here was #22's own bug in miniature: this page tested
+    `conn['url']`, a legacy alias the Config page never writes (it writes
+    `base_url`), and skipped the api_key entirely. An install whose arrs live
+    *only* in the "Additional Sonarr/Radarr instances" list therefore showed
+    Backfill permanently `blocked` — "Connect Sonarr or Radarr" against two
+    working instances — and never ticked its Sonarr/Radarr setup steps.
+
+    normalize_arr_connections raises on user-authored duplicate ids. This page
+    is polled, so a config error must degrade to "no arr" rather than 500 the
+    whole page; the endpoints that can act on it report the error properly.
+    """
+    try:
+        return {c['service'] for c in normalize_arr_connections(cfg)}
+    except Exception as e:
+        log.warning("Could not resolve Arr connections for Rounds: %s", e)
+        return set()
+
+
 def _setup_steps(cfg, has_audit):
     source = cfg.get('TORRENT_SOURCE', 'qbit')
     source_ok = bool(cfg.get('QUI_HOST') if source == 'qui' else cfg.get('QB_HOST'))
@@ -279,15 +365,9 @@ def _setup_steps(cfg, has_audit):
         bool(p) and os.path.isdir(p)
         for p in (cfg.get('MEDIA_PATH'), cfg.get('LOCAL_PATH'))
     )
-    sonarr_ok = bool(cfg.get('SONARR_URL') and cfg.get('SONARR_API_KEY'))
-    radarr_ok = bool(cfg.get('RADARR_URL') and cfg.get('RADARR_API_KEY'))
-    for conn in (cfg.get('ARR_CONNECTIONS') or []):
-        if not conn.get('url'):
-            continue
-        if conn.get('service') == 'sonarr':
-            sonarr_ok = True
-        elif conn.get('service') == 'radarr':
-            radarr_ok = True
+    arr_services = _arr_services(cfg)
+    sonarr_ok = 'sonarr' in arr_services
+    radarr_ok = 'radarr' in arr_services
 
     return [
         {'id': 'source', 'label': f"Connect {'qui' if source == 'qui' else 'qBittorrent'}",
@@ -455,6 +535,41 @@ def record_trump(progress, torrents=1, now=None):
     # to it. Ratchets, like every other peak here.
     p['trump_max_group'] = max(int(p.get('trump_max_group') or 0), n)
     p['last_trump_at'] = (now or datetime.now()).isoformat()
+    return p
+
+
+def record_backfill(progress, files=1, now=None):
+    """Credit one completed Backfill import. Pure — returns a new dict.
+
+    Called from the import watch (`/api/workflows/watch_import`) the moment it
+    confirms the arr took the release, not from `run_audit_process`. Same
+    exception as `record_trump`, for a related reason: the following scan sees a
+    library that got a little better hardlinked, which is exactly what an arr
+    upgrading something on its own looks like, and the media file is *replaced*
+    on import so a path-keyed transition often cannot see it at all. The grab is
+    the evidence; the watch is the confirmation the UI already shows the user.
+
+    `files` is the candidate group's file count — a Sonarr season pack is one
+    grab and a dozen episodes, and the prize is files, so a season counts as a
+    season. It comes from the client, so it is clamped, never trusted.
+
+    Safe outside the audit because this is a plain increment of a discrete act
+    rather than a reading of current state: there is nothing here that could
+    regress and claw back points.
+    """
+    p = {**EMPTY_PROGRESS, **(progress or {})}
+    try:
+        n = int(files or 1)
+    except (TypeError, ValueError):
+        n = 1
+    n = max(1, min(n, _BACKFILL_FILES_CAP))
+    p['backfilled'] = int(p.get('backfilled') or 0) + n
+    p['backfill_releases'] = int(p.get('backfill_releases') or 0) + 1
+    # Latched separately from the running total, like `trump_max_group`: "a whole
+    # season in one grab" is a fact about a single release, and a pile of single
+    # films must not add up to it.
+    p['backfill_max'] = max(int(p.get('backfill_max') or 0), n)
+    p['last_backfill_at'] = (now or datetime.now()).isoformat()
     return p
 
 
@@ -661,24 +776,32 @@ def _reward_line(row, progress, det):
     kind = row['reward_kind']
 
     if kind == 'zombie':
+        # **The streak leads and the kill tally follows**, in every branch. Both
+        # of these rows used to open on the kill count, so a library that had
+        # simply never let a duplicate through read "no kills yet" — which
+        # states, wrongly, that the thing being measured is how many times you
+        # have had to fix it. What is being measured is the state you are
+        # holding; the kills say how hard it has been to hold.
         key    = 'orphan' if row['id'] == 'cleanup' else 'dupe'
         days   = _days_since(p[f'{key}_clean_since'])
         kills  = int(p[f'{key}_kills'] or 0)
         breaks = int(p[f'{key}_breaks'] or 0)
         noun   = 'Orphans' if key == 'orphan' else 'Duplicates'
-        kill_txt = f"{_pluralize(kills, 'kill')}" if kills else 'no kills yet'
+        # "Cleared n times", not "n kills": the tally is a subordinate clause
+        # here, and the mock-heroic word belongs on the ladder that owns it.
+        back_txt = (f"back to clean {kills}×" if kills else 'never needed clearing')
         if days is not None:
             streak = 'Clean as of today' if days == 0 else f"Clean for {_pluralize(days, 'day')}"
-            return {'kind': kind, 'headline': f"{streak} · {kill_txt}",
-                    'detail': ('You killed it. auditorr keeps watch in case it gets back up.'
+            return {'kind': kind, 'headline': f"{streak} · {back_txt}",
+                    'detail': ('You took it back. auditorr keeps watch in case it gets back up.'
                                if kills else
-                               'Clean so far. The counter starts the first time you have to fix it.')}
+                               'Clean so far. The streak is the prize; the clock is already running.')}
         if breaks:
-            return {'kind': kind, 'headline': f"{noun} are back · {kill_txt}",
-                    'detail': f"Risen {_pluralize(breaks, 'time')}. Drive it to zero again "
-                              f"for another kill — something upstream keeps reviving these."}
-        return {'kind': kind, 'headline': f"{noun} have never been cleared · {kill_txt}",
-                'detail': 'Get the count to zero once and you bank your first kill.'}
+            return {'kind': kind, 'headline': f"Streak broken · {noun.lower()} are back · {back_txt}",
+                    'detail': f"Risen {_pluralize(breaks, 'time')}. Drive it to zero again and the "
+                              f"clock restarts — something upstream keeps reviving these."}
+        return {'kind': kind, 'headline': f"No clean streak yet · {noun.lower()} have never been cleared",
+                'detail': 'Get the count to zero once and the clock starts.'}
 
     if kind == 'shovel':
         # The row count — every item Triage lists, including dead registrations.
@@ -696,16 +819,21 @@ def _reward_line(row, progress, det):
         # stat readout, the best-ever ratchet, and a sentence explaining the
         # ratchet — while Triage and Trumped next to it were a single sans line
         # each, so the one card that never finishes was also the loudest thing
-        # on the page. The ratio and the idle bytes are the only figures worth a
-        # line here, and they read as a sentence, so they live in the sans
-        # payout slot with the other workflows' lines rather than in `_stat`.
-        # (The best-ever ratchet still drives the Lapidary/Alchemist ladders,
-        # which the card's own `next_prize` box shows beside this line.)
+        # on the page.
+        #
+        # The **tally leads**, mirroring the shovel line beside it: what pays
+        # out here is the work, and a line opening on a percentage says the
+        # prize is the ratio. The ratio and the idle bytes follow as context —
+        # still the two figures worth a line, still a sentence rather than a
+        # tally, so they live in the sans payout slot rather than in `_stat`.
+        n    = int(p.get('backfilled') or 0)
         pct  = row.get('ratio_pct', 0.0)
         idle = float(row.get('bytes') or 0)
-        line = (f"{pct}% hardlinked · {_fmt_bytes(idle)} earning nothing" if idle
-                else f"{pct}% hardlinked · every byte is earning")
-        return {'kind': kind, 'headline': line, 'detail': ''}
+        lead = f"{n:,} backfilled so far" if n else 'Nothing backfilled yet'
+        tail = (f"{_fmt_bytes(idle)} earning nothing" if idle
+                else 'every byte is earning')
+        return {'kind': kind, 'headline': f"{lead} · {pct}% hardlinked, {tail}",
+                'detail': ''}
 
     if kind == 'tribute':
         swaps = int(p.get('trumps') or 0)
@@ -857,10 +985,14 @@ LADDER_FACET = {
     'oldfaithful':   ('give',    'oldest seed'),
 
     'shoveler':      ('work',    'shovelled'),
+    'matchmaker':    ('work',    'backfilled'),
     'exterminator':  ('work',    'orphan kills'),
     'clonehunter':   ('work',    'dupe kills'),
     'kingmaker':     ('work',    'swaps'),
     'sentinel':      ('work',    'clean'),
+    # Not 'clean' — Sentinel owns that word, and two tiles reading "12 days
+    # clean" for two different piles is the ambiguity this field exists to kill.
+    'singleton':     ('work',    'copy-free'),
     'firebrigade':   ('work',    'quick fixes'),
     'unblemished':   ('work',    'unbroken'),
     'lapidary':      ('work',    'hardlinked'),
@@ -954,6 +1086,17 @@ TIER_TITLES = {
         'Sisyphus Prime', 'Boulder Enthusiast', 'One With The Pile',
         'The Pile Is You', 'The Pile Was Always You',
     ],
+    # Backfill's effort ladder. The joke is that the work genuinely is
+    # matchmaking — you hold a lonely file and go looking for a release willing
+    # to take it on.
+    'matchmaker': [
+        'Blind Date', 'Second Setup', 'Three Happy Couples', 'Word of Mouth',
+        'Local Matchmaker', 'Professional Yenta', 'Marriage Broker',
+        'Registry Office', 'Reunion Specialist', 'Wedding Industrial Complex',
+        'Nobody Sits Alone', 'Every File Has Someone', 'Compulsory Pairing',
+        'Arranged By Algorithm', 'The Great Reconciliation',
+        'All Bytes Spoken For',
+    ],
     'exterminator': [
         'First Blood', 'Double Tap', 'Hat Trick', 'Pest Control',
         'Exterminator', 'Cleanser', 'Purifier', 'Scourge of Orphans',
@@ -980,6 +1123,17 @@ TIER_TITLES = {
         'Fortnight', 'A Clean Month', 'Two Months', 'A Quarter',
         'Half a Year', 'A Full Year', 'Two Years', 'Five Years',
         'A Decade of Vigilance',
+    ],
+    # Sentinel's opposite number, and deliberately sharing not one rung name
+    # with it: the two sit side by side in "Closest to unlocking", and two rows
+    # reading "A Full Week" for two different piles is exactly the confusion the
+    # naming rules exist to prevent.
+    'singleton': [
+        'One Original Day', 'Two Days Unduplicated', 'A Singular Weekend',
+        'A Week of Originals', 'Fortnight, No Copies', 'A Month Unrepeated',
+        'Two Months, One Each', 'A Quarter Without a Twin',
+        'Half a Year Singular', 'A Year of One Each', 'Two Years, No Doubles',
+        'Five Years Unrepeated', 'A Decade of Exactly One',
     ],
     'alchemist': [
         'Barely Multiplied', 'A Little Extra', 'Getting Clever', 'Efficient',
@@ -1404,6 +1558,20 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                 [1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
                  25000, 50000, 100000, 250000],
                 _fmt_plain, 35),
+        # Backfill's ladder, and the same shape as Shoveler on purpose: both are
+        # ongoing work, so both pay per item handled and neither can be maxed by
+        # buying a drive. This replaced Lapidary and Alchemist as the Backfill
+        # card's carrot — a best-ever ratio and a cross-seed multiplier both sit
+        # at their peak exactly when a well-kept library has nothing left to
+        # gain, so the one workflow that by definition never finishes had a
+        # prize that stopped moving. Curve starts at 1: the first film you find
+        # a torrent for tiers up.
+        L('matchmaker', 'Matchmaker',
+                'Files you found a torrent for. They were sitting there earning nothing. Now they work.',
+                (progress or {}).get('backfilled') or 0,
+                [1, 2, 3, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
+                 25000, 50000],
+                _fmt_plain, 35),
         # Zombies, tracked separately: orphans and duplicates come back for
         # different reasons, and each row deserves its own carrot rather than
         # both pointing at one shared counter.
@@ -1427,10 +1595,18 @@ def _ladders(det, runs, cross, tracker_stats, best_score, lifetime_up, progress=
                 int((progress or {}).get('trumps') or 0),
                 [1, 2, 3, 5, 8, 12, 20, 30, 50, 75, 100, 200, 500, 1000],
                 _fmt_plain, 40),
-        # Zombie: the streak of a clean state holding.
+        # Zombie: the streak of a clean state holding. One per zombie, because
+        # each row defends its own state — Dedupe used to have only its kill
+        # counter, so a library that had never let a duplicate through had
+        # nothing on the card at all, and the card said "no kills yet" about it.
         L('sentinel', 'Sentinel',
                 'Consecutive days with zero orphans. You killed them. Now you stand watch, alone.',
                 _days_since((progress or {}).get('orphan_clean_since')) or 0,
+                [1, 2, 3, 7, 14, 30, 60, 90, 180, 365, 730, 1825, 3650],
+                _fmt_days, 35),
+        L('singleton', 'Singleton',
+                'Consecutive days with zero duplicates. Everything you own, you own exactly once.',
+                _days_since((progress or {}).get('dupe_clean_since')) or 0,
                 [1, 2, 3, 7, 14, 30, 60, 90, 180, 365, 730, 1825, 3650],
                 _fmt_days, 35),
         L('alchemist', 'Ratio Alchemist',
@@ -1715,6 +1891,7 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
     multiplier  = float((cross or {}).get('multiplier') or 0)
     ratio       = (float(lifetime_up or 0) / seeding) if seeding else 0.0
     shoveled    = int(p.get('shoveled') or 0)
+    backfilled  = int(p.get('backfilled') or 0)
     kills       = int(p.get('orphan_kills') or 0) + int(p.get('dupe_kills') or 0)
     trumps      = int(p.get('trumps') or 0)
     up          = float(lifetime_up or 0)
@@ -1740,6 +1917,9 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
          len(ok_runs) >= 10, 75),
         ('start', 'first_shovel', 'First Shovelful', 'Work through a single not-imported item.',
          shoveled >= 1, 50),
+        ('start', 'first_backfill', 'First Introduction',
+         'Backfill a single file — find a torrent for something you already own.',
+         backfilled >= 1, 50),
         ('start', 'first_kill', 'It Had It Coming',
          'Drive orphans or duplicates back to zero for the first time.',
          kills >= 1, 100),
@@ -1814,6 +1994,18 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
          shoveled >= 1000, 300),
         ('grind', 'sisyphus', 'Sisyphus', 'Shovel 10,000 not-imported items. The boulder does not care.',
          shoveled >= 10000, 600),
+        # Backfill's half of the grind. Balanced like the shovel rungs above —
+        # ten is an evening, a thousand is a project, and the top one is for
+        # somebody who has been at this for years.
+        ('grind', 'ten_backfills', 'Ten Reunited',
+         'Backfill ten files. Ten things that were costing you space and earning nothing.',
+         backfilled >= 10, 75),
+        ('grind', 'hundred_backfills', 'A Hundred Reunited',
+         'Backfill a hundred files. The library keeps growing; so does this.',
+         backfilled >= 100, 150),
+        ('grind', 'thousand_backfills', 'Nothing Sits Idle',
+         'Backfill a thousand files. Every one of them found somebody.',
+         backfilled >= 1000, 300),
         # Sentinel breaks. Cleanup and Dedupe are done-once jobs, so the useful
         # signal is not "you did it again" — it is "it came undone." Awarded,
         # never deducted: a break is information the user wants.
@@ -1852,6 +2044,11 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
         ('absurd', 'trump_entourage', 'Deposed in Bulk',
          'Retire four or more registrations of the same release in a single trump swap.',
          int(p.get('trump_max_group') or 0) >= 4, 150),
+        # Latched off `backfill_max`, not the running total, for the same reason
+        # Deposed in Bulk is: a dozen single films must not add up to a season.
+        ('absurd', 'backfill_pack', 'A Season in One Go',
+         'Backfill ten or more files with a single grab. Somebody packed the whole season.',
+         int(p.get('backfill_max') or 0) >= 10, 150),
 
         # ── Scale ────────────────────────────────────────────────────────────
         # Rungs all the way down. A 2 TB library is the common case and must not
@@ -2066,11 +2263,7 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
 
     source = cfg.get('TORRENT_SOURCE', 'qbit')
     source_ok = bool(cfg.get('QUI_HOST') if source == 'qui' else cfg.get('QB_HOST'))
-    arr_ok = bool(
-        (cfg.get('SONARR_URL') and cfg.get('SONARR_API_KEY'))
-        or (cfg.get('RADARR_URL') and cfg.get('RADARR_API_KEY'))
-        or any(c.get('url') for c in (cfg.get('ARR_CONNECTIONS') or []))
-    )
+    arr_ok = bool(_arr_services(cfg))
 
     setup_steps = _setup_steps(cfg, has_audit)
     setup_done  = [s for s in setup_steps if s['done']]
@@ -2135,7 +2328,12 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
                  if r['id'] in owners and lid in by_id]
         owned.sort(key=lambda l: (l['maxed'], -l['pct']))
         r['prizes'] = owned
-        nxt = next((l for l in owned if not l['maxed']), None)
+        # Pinned, not nearest — see LADDER_PRIMARY. The highlighted prize has to
+        # be the one the row's own payout line already talks about, or the card
+        # says two different things about what it is measuring.
+        primary = by_id.get(LADDER_PRIMARY.get(r['id']))
+        nxt = (primary if primary and not primary['maxed']
+               else next((l for l in owned if not l['maxed']), None))
         r['next_prize'] = None if not nxt else {
             'ladder': nxt['name'], 'ladder_id': nxt['id'], 'label': nxt['next_label'],
             'at': nxt['next_at_label'], 'pct': nxt['pct'],

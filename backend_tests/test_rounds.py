@@ -252,11 +252,43 @@ def test_setup_completes_with_either_arr():
 
 
 def test_arr_connections_list_counts_as_configured():
+    """The key the Config page actually writes is `base_url` (#22).
+
+    This page used to read `conn['url']` — a legacy alias no save has produced
+    for a long time — so an install whose arrs live only in the "Additional
+    instances" list showed Backfill blocked against two working instances and
+    never ticked its Sonarr/Radarr setup steps. Both spellings are asserted:
+    the alias is still honoured for configs written before the UI settled.
+    """
+    for url_key in ('base_url', 'url'):
+        cfg = _cfg(SONARR_URL='', SONARR_API_KEY='',
+                   ARR_CONNECTIONS=[{'id': 'sonarr-uhd', 'service': 'sonarr',
+                                     url_key: 'http://s', 'api_key': 'k'}])
+        st = rounds.build_state(cfg, _results(_details()), _runs())
+        assert next(s for s in st['setup']['steps'] if s['id'] == 'sonarr')['done'], url_key
+        assert _row(st, 'backfill')['state'] != 'blocked', url_key
+
+
+def test_an_arr_connection_without_a_key_is_not_a_connection():
+    """Same rule normalize_arr_connections applies — a URL alone connects to
+    nothing, and Backfill would be blocked in fact whatever this page claimed."""
     cfg = _cfg(SONARR_URL='', SONARR_API_KEY='',
-               ARR_CONNECTIONS=[{'service': 'sonarr', 'url': 'http://s', 'api_key': 'k'}])
+               ARR_CONNECTIONS=[{'id': 'sonarr-uhd', 'service': 'sonarr',
+                                 'base_url': 'http://s'}])
     st = rounds.build_state(cfg, _results(_details()), _runs())
-    assert next(s for s in st['setup']['steps'] if s['id'] == 'sonarr')['done']
-    assert _row(st, 'backfill')['state'] != 'blocked'
+    assert not next(s for s in st['setup']['steps'] if s['id'] == 'sonarr')['done']
+    assert _row(st, 'backfill')['state'] == 'blocked'
+
+
+def test_a_broken_connection_list_does_not_take_the_page_down():
+    """Duplicate ids are a real config error and normalize_arr_connections
+    raises on them. This endpoint is polled — degrade to "no arr", never 500."""
+    cfg = _cfg(SONARR_URL='', SONARR_API_KEY='', ARR_CONNECTIONS=[
+        {'id': 'dup', 'service': 'sonarr', 'base_url': 'http://a', 'api_key': 'k'},
+        {'id': 'dup', 'service': 'sonarr', 'base_url': 'http://b', 'api_key': 'k'},
+    ])
+    st = rounds.build_state(cfg, _results(_details()), _runs())
+    assert _row(st, 'backfill')['state'] == 'blocked'
 
 
 # ── Useless prizes ───────────────────────────────────────────────────────────
@@ -630,12 +662,22 @@ def test_a_break_never_subtracts_points():
     assert next(f for f in st['feats'] if f['id'] == 'orphans_returned')['earned']
 
 
-def test_never_clean_shows_no_phantom_kills():
+def test_never_clean_leads_with_the_missing_streak_not_a_kill_count():
+    """A zombie row's headline is about the state, never the kill tally.
+
+    Both of these rows used to open on the kill count, so a library that had
+    simply never let a duplicate through read "no kills yet" — which says the
+    thing being measured is how often you have had to fix it. What is being
+    measured is the streak you are holding.
+    """
     cfg = _cfg()
-    p = rounds.update_progress(None, cfg, _details(orphaned_torrent_count=5))
-    st = rounds.build_state(cfg, _results(_details(orphaned_torrent_count=5)),
-                                _runs(), progress=p)
-    assert 'no kills yet' in _row(st, 'cleanup')['reward']['headline']
+    dirty = _details(orphaned_torrent_count=5, duplicate_count=5)
+    p = rounds.update_progress(None, cfg, dirty)
+    st = rounds.build_state(cfg, _results(dirty), _runs(), progress=p)
+    for wf in ('cleanup', 'dedupe'):
+        head = _row(st, wf)['reward']['headline']
+        assert head.startswith('No clean streak yet'), head
+        assert 'kill' not in head.lower(), head
 
 
 def test_every_row_explains_how_it_pays_out():
@@ -1066,3 +1108,186 @@ def test_the_new_ladders_ratchet_like_the_old_ones():
                     max_seed_secs=0, orphaned_torrent_count=50, duplicate_count=9)
     st2 = rounds.build_state(cfg, _results(ruin), _runs(), progress=p)
     assert st2['rank']['points'] >= before
+
+
+# ── Every workflow prize is effort or time, never bytes ──────────────────────
+#
+# A size ladder pays you for buying a drive, and it goes still for exactly the
+# user who has done the work. Five used to hang off a workflow card: Tidiness
+# and Purity (torrent-directory bytes), Conservator (library bytes), and
+# Lapidary/Alchemist (ratios that sit at their peak when there is nothing left
+# to gain). All five are shelf-only now.
+
+_SIZE_LADDERS = {'hoard', 'packrat', 'benefactor', 'seedbearer', 'vaultkeeper',
+                 'pollinator', 'videophile', 'tidiness', 'purity', 'conservator',
+                 'lapidary', 'alchemist', 'atlas', 'highwater', 'archivist'}
+
+
+def test_no_workflow_card_is_paid_in_bytes():
+    for lid, owners in rounds.LADDER_OWNER.items():
+        assert lid not in _SIZE_LADDERS, f"{lid} is a size/ratio ladder and owns {owners}"
+
+
+def test_the_retired_ladders_are_still_on_the_shelf():
+    """Shelf-only is not a demotion — they still tier, score and latch."""
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
+    on_shelf = {l['id'] for l in st['ladders']}
+    for lid in ('tidiness', 'purity', 'conservator', 'lapidary', 'alchemist'):
+        assert lid in on_shelf
+        assert _ladder(st, lid)['tiers_total'] > 0
+
+
+def test_each_workflow_owns_exactly_the_ladders_its_work_has():
+    owned = {}
+    for lid, owners in rounds.LADDER_OWNER.items():
+        for wf in owners:
+            owned.setdefault(wf, set()).add(lid)
+    # The two zombies each get both halves: the streak, and the times taken back.
+    assert {'sentinel', 'exterminator'} <= owned['cleanup']
+    assert {'singleton', 'clonehunter'} <= owned['dedupe']
+    assert 'shoveler' in owned['triage']
+    assert 'matchmaker' in owned['backfill']
+
+
+def test_the_highlighted_prize_is_pinned_not_nearest():
+    """The card's prize box must name the ladder its own payout line talks about.
+
+    "Whichever rung is closest" is right for browsing the shelf and wrong here:
+    it hands the highlight to whatever happens to be a percent from tipping
+    over, so a Cleanup row clean for a month could point at Fire Brigade while
+    the streak it is defending went unmentioned.
+    """
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
+    for wf, lid in rounds.LADDER_PRIMARY.items():
+        prize = _row(st, wf)['next_prize']
+        assert prize and prize['ladder_id'] == lid, (wf, prize)
+        assert prize['n'] and prize['of'] and prize['n'] <= prize['of']
+
+
+# ── Dedupe's clean streak ────────────────────────────────────────────────────
+
+def test_dedupe_has_a_clean_streak_of_its_own():
+    """Dedupe used to own only its kill counter, so a library that had never let
+    a duplicate through had nothing on the card and was told "no kills yet"."""
+    cfg = _cfg()
+    p = rounds.update_progress(None, cfg, _details(duplicate_count=0))
+    p['dupe_clean_since'] = (datetime.now() - timedelta(days=40)).isoformat()
+    st = rounds.build_state(cfg, _results(_details()), _runs(), progress=p)
+    single = _ladder(st, 'singleton')
+    assert single['value'] == 40
+    assert single['tier'] >= 6, single['tier']
+    assert single['group'] == 'work'
+    head = _row(st, 'dedupe')['reward']['headline']
+    assert head.startswith('Clean for 40 days'), head
+
+
+def test_the_two_streak_ladders_never_share_a_rung_name():
+    """They sit side by side in "Closest to unlocking"."""
+    assert not (set(rounds.TIER_TITLES['sentinel'])
+                & set(rounds.TIER_TITLES['singleton']))
+
+
+# ── Backfill pays per file, at the event ─────────────────────────────────────
+#
+# Counted from the import watch rather than from the audit, for the reason
+# `record_backfill` documents: the next scan sees a library that got a little
+# better hardlinked, which is what an arr upgrading something on its own looks
+# like, and the media file is replaced on import so a path-keyed transition
+# often cannot see it at all.
+
+def test_record_backfill_counts_files_releases_and_the_biggest_grab():
+    p = rounds.record_backfill(None, files=12)
+    assert p['backfilled'] == 12
+    assert p['backfill_releases'] == 1
+    assert p['backfill_max'] == 12
+    assert p['last_backfill_at']
+
+    p = rounds.record_backfill(p, files=1)
+    assert p['backfilled'] == 13
+    assert p['backfill_releases'] == 2
+    assert p['backfill_max'] == 12, 'a later, smaller grab must not lower the peak'
+
+
+def test_record_backfill_is_pure_and_clamps_what_the_client_sends():
+    before = rounds.record_backfill(None)
+    after = rounds.record_backfill(before)
+    assert before['backfilled'] == 1 and after['backfilled'] == 2, 'must not mutate its input'
+    assert rounds.record_backfill(None, files=0)['backfilled'] == 1
+    assert rounds.record_backfill(None, files=-5)['backfilled'] == 1
+    assert rounds.record_backfill(None, files='nonsense')['backfilled'] == 1
+    assert (rounds.record_backfill(None, files=10 ** 9)['backfilled']
+            == rounds._BACKFILL_FILES_CAP)
+
+
+def test_backfilled_files_climb_the_matchmaker_ladder_and_earn_points():
+    cfg = _cfg()
+    res = _results(_details())
+    base = rounds.build_state(cfg, res, _runs(), progress=None)
+    assert _ladder(base, 'matchmaker')['tier'] == 0
+
+    p = None
+    for _ in range(10):
+        p = rounds.record_backfill(p, files=1)
+    after = rounds.build_state(cfg, res, _runs(), progress=p)
+    assert _ladder(after, 'matchmaker')['tier'] >= 5
+    assert after['rank']['points'] > base['rank']['points']
+
+    earned = {f['id'] for f in after['feats'] if f['earned']}
+    assert {'first_backfill', 'ten_backfills'} <= earned
+    assert 'backfill_pack' not in earned, 'ten single grabs is not one season pack'
+
+
+def test_the_season_pack_feat_needs_one_big_grab():
+    st = rounds.build_state(_cfg(), _results(_details()), _runs(),
+                            progress=rounds.record_backfill(None, files=12))
+    assert next(f for f in st['feats'] if f['id'] == 'backfill_pack')['earned']
+
+
+def test_backfill_row_leads_with_the_tally_not_the_ratio():
+    cfg = _cfg()
+    idle = _details(total_media_size=10 * TB, hardlinked_media_size=9 * TB, hl_score=63.0)
+    cold = _row(rounds.build_state(cfg, _results(idle), _runs()), 'backfill')
+    assert cold['reward_kind'] == 'crystal'
+    assert cold['reward']['headline'].startswith('Nothing backfilled yet')
+    assert cold['next_prize']['ladder_id'] == 'matchmaker'
+
+    p = rounds.record_backfill(None, files=37)
+    warm = _row(rounds.build_state(cfg, _results(idle), _runs(), progress=p), 'backfill')
+    assert warm['reward']['headline'].startswith('37 backfilled so far')
+    # The ratio survives as context, after the tally — it is still the figure
+    # that says how much is left to do.
+    assert '% hardlinked' in warm['reward']['headline']
+    assert warm['reward']['detail'] == '', "Backfill's foot is deliberately one line"
+
+
+def test_an_audit_never_clears_backfill_credit():
+    """update_progress rebuilds from EMPTY_PROGRESS each run — an event counter
+    must survive that, or every scan would wipe it."""
+    cfg, det = _cfg(), _details()
+    p = rounds.record_backfill(None, files=6)
+    st = rounds.build_state(cfg, _results(det), _runs(), progress=p)
+    p2 = rounds.update_progress(p, cfg, det, state=st, resolved=0)
+    assert p2['backfilled'] == 6
+    assert p2['backfill_releases'] == 1
+    assert p2['backfill_max'] == 6
+
+
+def test_backfill_credit_survives_a_collapsing_hardlink_ratio():
+    """The whole reason it is no longer a ratio: doing the work must pay even
+    when the library grows faster than you can backfill it."""
+    cfg = _cfg()
+    p = None
+    for _ in range(25):
+        p = rounds.record_backfill(p, files=4)
+    great = _details(total_media_size=10 * TB, hardlinked_media_size=10 * TB)
+    peak = rounds.build_state(cfg, _results(great), _runs(), progress=p)
+    before = peak['rank']['points']
+    p = rounds.update_progress(p, cfg, great, state=peak)
+
+    # The library quadruples overnight and almost none of the new material is
+    # seeded — the state the old ratio ladder punished you for.
+    worse = _details(total_media_size=40 * TB, hardlinked_media_size=10 * TB, hl_score=17.5)
+    st = rounds.build_state(cfg, _results(worse), _runs(), progress=p)
+    assert st['rank']['points'] >= before
+    assert _ladder(st, 'matchmaker')['value'] == 100
+    assert _row(st, 'backfill')['reward']['headline'].startswith('100 backfilled so far')
