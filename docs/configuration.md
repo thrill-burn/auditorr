@@ -290,6 +290,11 @@ Off by default: excluded files still appear in File Explorer, marked as
 excluded, so you can see what your rules are doing. Turn it on once you trust
 them.
 
+This sets the starting position of the **Excluded** filter in File Explorer, and
+you can override it for a single visit from the toolbar there — `+` to see only
+excluded files, `-` to hide them. The setting wins again the next time you open
+the page.
+
 ### Where exclusions come from
 
 Besides typing them here, exclusions are written by the **Exclude** buttons on

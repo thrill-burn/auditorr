@@ -1117,7 +1117,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
           alerts.push({ msg: `Orphaned torrent data (${formatBytes(d.orphaned_torrent_size)}) is significantly above your threshold`, color: 'var(--yellow)', action: { label: 'View', tab: 'torrents', status: 'Orphaned' } })
         }
         if (d.not_imported_size > 0 && d.ni_limit > 0 && d.not_imported_size > d.ni_limit * 2) {
-          alerts.push({ msg: `Not-imported data (${formatBytes(d.not_imported_size)}) is significantly above your threshold`, color: 'var(--red)', action: { label: 'View', tab: 'torrents', status: 'NotImported', importFilter: 'notImported' } })
+          alerts.push({ msg: `Not-imported data (${formatBytes(d.not_imported_size)}) is significantly above your threshold`, color: 'var(--red)', action: { label: 'View', tab: 'torrents', importFilter: 'notImported' } })
         }
         if (d.duplicate_size > 0 && d.dup_limit > 0 && d.duplicate_size > d.dup_limit * 2) {
           alerts.push({ msg: `Duplicate data (${formatBytes(d.duplicate_size)}) is significantly above your threshold`, color: 'var(--purple)', action: { label: 'View', tab: 'media', status: 'Duplicate' } })

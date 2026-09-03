@@ -91,12 +91,13 @@ function Chip({ active, color, onClick, children, style }) {
   )
 }
 
-function TrackerChoiceButton({ active, tone, onClick, children, style }) {
+function ChoiceButton({ active, tone, onClick, children, style, title }) {
   const color = tone === 'exclude' ? 'var(--red)' : 'var(--green)'
   return (
     <button
       type="button"
       onClick={onClick}
+      title={title}
       style={Object.assign({
         padding: '4px 10px',
         borderRadius: 6,
@@ -116,6 +117,29 @@ function TrackerChoiceButton({ active, tone, onClick, children, style }) {
     >
       {children}
     </button>
+  )
+}
+
+// Tri-state filter for an orthogonal boolean flag (duplicate / excluded).
+// Neither button pressed = 'any' (the flag doesn't constrain the view), '+' =
+// only files carrying it, '-' = hide them. Same +/- vocabulary as the tracker
+// panel below, which is where this component's idiom comes from.
+function FlagToggle({ label, noun, value, onChange }) {
+  return (
+    <div style={{ display: 'flex' }}>
+      <ChoiceButton active={value === 'only'} tone="include"
+        title={`Show only ${noun}`}
+        onClick={() => onChange(value === 'only' ? 'any' : 'only')}
+        style={{ borderRadius: '6px 0 0 6px', borderRight: 'none' }}>
+        + {label}
+      </ChoiceButton>
+      <ChoiceButton active={value === 'hide'} tone="exclude"
+        title={`Hide ${noun}`}
+        onClick={() => onChange(value === 'hide' ? 'any' : 'hide')}
+        style={{ borderRadius: '0 6px 6px 0' }}>
+        -
+      </ChoiceButton>
+    </div>
   )
 }
 
@@ -884,12 +908,14 @@ function UnitSelect({ value, onChange }) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+// Status is genuinely mutually exclusive — a file is seeding or it is orphaned.
+// "Duplicate" and "Excluded" are orthogonal booleans and live in FlagToggles
+// instead: as chips in this row they could only ever be selected *instead of* a
+// status, so "orphaned but not excluded" was inexpressible (issue #23).
 const STATUS_FILTERS = [
-  { id: 'all',       label: 'All' },
-  { id: 'Seeding',   label: 'Seeding',    color: 'var(--green)' },
-  { id: 'Orphaned',  label: 'Orphaned',   color: 'var(--yellow)' },
-  { id: 'Duplicate', label: 'Duplicates', color: 'var(--purple)' },
-  { id: 'Excluded',  label: 'Excluded',   color: 'var(--text-dim)' },
+  { id: 'all',      label: 'All' },
+  { id: 'Seeding',  label: 'Seeding',  color: 'var(--green)' },
+  { id: 'Orphaned', label: 'Orphaned', color: 'var(--yellow)' },
 ]
 
 export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, revealPath }) {
@@ -917,8 +943,18 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     }).catch(() => {})
   }, [])
 
-  const [statusFilter, setStatusFilter] = useState(initialStatus || 'all')
-  const [importFilter, setImportFilter] = useState(initialImportFilter || 'all')
+  // Deep links still arrive in the old single-axis vocabulary (Dashboard cards,
+  // alert actions, hash routes), so they are mapped onto the split axes here
+  // rather than changing pendingNav's shape in App.jsx.
+  const [statusFilter, setStatusFilter] = useState(
+    initialStatus === 'Seeding' || initialStatus === 'Orphaned' ? initialStatus : 'all')
+  const [importFilter, setImportFilter] = useState(
+    initialImportFilter === 'notImported' || initialStatus === 'NotImported' ? 'notImported' : 'all')
+  const [dupFilter, setDupFilter] = useState(initialStatus === 'Duplicate' ? 'only' : 'any')
+  // null = untouched, so the config default governs — including when the config
+  // fetch lands after first paint. A click pins it for this visit only.
+  const [exclChoice, setExclChoice] = useState(initialStatus === 'Excluded' ? 'only' : null)
+  const exclFilter = exclChoice || (hideExcluded ? 'hide' : 'any')
   const [trackerInc,   setTrackerInc]   = useState(initialTracker ? [initialTracker] : [])
   const [trackerExc,   setTrackerExc]   = useState([])
   const [showTrackers, setShowTrackers] = useState(tab === 'torrents' || !!initialTracker)
@@ -969,14 +1005,13 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const isFlat       = !!debouncedNameQuery.trim() || !!revealPath || userFlat
 
   const filtered = useMemo(() => (files || []).filter(f => {
-    if (hideExcluded && f.excluded === true && statusFilter !== 'Excluded') return false
+    const sMatch = statusFilter === 'all' || f.status === statusFilter
 
-    let sMatch
-    if      (statusFilter === 'all')         sMatch = true
-    else if (statusFilter === 'Duplicate')   sMatch = (f.duplicate_paths||[]).length > 0
-    else if (statusFilter === 'NotImported') sMatch = !f.excluded && !f.imported && f.status !== 'Orphaned'
-    else if (statusFilter === 'Excluded')    sMatch = f.excluded === true
-    else                                     sMatch = f.status === statusFilter
+    const isDup = (f.duplicate_paths||[]).length > 0
+    const dMatch = dupFilter === 'any' || (dupFilter === 'only' ? isDup : !isDup)
+
+    const isExcl = f.excluded === true
+    const eMatch = exclFilter === 'any' || (exclFilter === 'only' ? isExcl : !isExcl)
 
     const iMatch = importFilter === 'all' || (importFilter === 'notImported' && !f.excluded && !f.imported && f.status !== 'Orphaned')
 
@@ -991,8 +1026,8 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     const szMin = sizeMinBytes === null || f.size >= sizeMinBytes
     const szMax = sizeMaxBytes === null || f.size <= sizeMaxBytes
 
-    return sMatch && iMatch && tMatch && scMatch && nMatch && szMin && szMax
-  }), [files, hideExcluded, statusFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
+    return sMatch && dMatch && eMatch && iMatch && tMatch && scMatch && nMatch && szMin && szMax
+  }), [files, statusFilter, dupFilter, exclFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
 
   const sortedFiltered = useMemo(() => {
     if (sortBy === 'size') return [...filtered].sort((a, b) => b.size - a.size)
@@ -1005,14 +1040,15 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   // Single-pass stats computation
   const stats = useMemo(() => {
-    let total = 0, totalSize = 0, seeding = 0, seedingSize = 0, orphaned = 0, orphanedSize = 0
+    let total = 0, totalSize = 0, seeding = 0, seedingSize = 0, orphaned = 0, orphanedSize = 0, excluded = 0
     for (const f of filtered) {
       total++
       totalSize += f.size
       if (f.status === 'Seeding') { seeding++; seedingSize += f.size }
       if (f.status === 'Orphaned') { orphaned++; orphanedSize += f.size }
+      if (f.excluded === true) excluded++
     }
-    return { total, totalSize, seeding, seedingSize, orphaned, orphanedSize }
+    return { total, totalSize, seeding, seedingSize, orphaned, orphanedSize, excluded }
   }, [filtered])
 
   const tree = useMemo(() => buildTree(filtered), [filtered])
@@ -1034,7 +1070,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const seedCountOptions = useMemo(() => {
     const counts = new Map()
     for (const f of files || []) {
-      if (hideExcluded && f.excluded === true && statusFilter !== 'Excluded') continue
+      if (exclFilter !== 'any' && (f.excluded === true) !== (exclFilter === 'only')) continue
       const n = seedCountValue(f)
       const bucket = n >= 5 ? '5plus' : n
       counts.set(bucket, (counts.get(bucket) || 0) + 1)
@@ -1048,7 +1084,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       options.push({ value: '5plus', label: '5x+', count: counts.get('5plus') || 0 })
     }
     return options
-  }, [files, hideExcluded, statusFilter, seedCount])
+  }, [files, exclFilter, seedCount])
 
   const exportCSV = () => {
     const rows = ['RelativePath,Size,Status,Imported,Trackers,LinkedPaths,DuplicatePaths',
@@ -1126,6 +1162,14 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
             <Chip key={id} active={statusFilter===id} color={color}
               onClick={() => setStatusFilter(id)}>{label}</Chip>
           ))}
+          <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />
+          <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginRight: 2 }}>+ only / - hide</span>
+          <FlagToggle label="Duplicates" noun="duplicate files"
+            value={dupFilter} onChange={setDupFilter} />
+          <FlagToggle
+            label={'Excluded' + (exclFilter === 'any' && stats.excluded > 0 ? ` (${stats.excluded.toLocaleString()})` : '')}
+            noun="excluded files"
+            value={exclFilter} onChange={setExclChoice} />
           {trackers.length > 0 && (
             <Chip active={trackerPanelOpen} color="var(--blue)"
               onClick={() => setShowTrackers(s => !s)}>
@@ -1202,23 +1246,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
               >Size</button>
             </div>
           )}
-
-          <button onClick={copyPaths} title={`Copy ${filtered.length} paths to clipboard`} style={{
-            padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
-            border: `1px solid ${copied ? 'var(--green)' : 'var(--border2)'}`,
-            background: copied ? 'var(--green)18' : 'transparent',
-            color: copied ? 'var(--green)' : 'var(--text-dim)',
-            cursor: 'pointer', transition: 'all 0.15s',
-          }}>{copied ? '✓ Copied!' : 'Copy Paths'}</button>
-
-          <button onClick={exportCSV} style={{
-            padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
-            border: '1px solid var(--border2)', background: 'transparent',
-            color: 'var(--text-dim)', cursor: 'pointer',
-          }}>Export CSV</button>
         </div>
 
-        {/* Row 2: search + size range */}
+        {/* Row 2: search + size range, then the two actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 0 8px', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <FilterInput value={nameQuery} onChange={setNameQuery} placeholder="🔎 search filename…" width={200} />
@@ -1246,6 +1276,24 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
               {filtered.length.toLocaleString()} match{filtered.length !== 1 ? 'es' : ''}
             </span>
           )}
+
+          {/* Actions, not filters — they sit on this row so the filter row above
+              has room for the status chips and both flag toggles without wrapping. */}
+          <div style={{ flex: 1 }} />
+
+          <button onClick={copyPaths} title={`Copy ${filtered.length} paths to clipboard`} style={{
+            padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
+            border: `1px solid ${copied ? 'var(--green)' : 'var(--border2)'}`,
+            background: copied ? 'var(--green)18' : 'transparent',
+            color: copied ? 'var(--green)' : 'var(--text-dim)',
+            cursor: 'pointer', transition: 'all 0.15s',
+          }}>{copied ? '✓ Copied!' : 'Copy Paths'}</button>
+
+          <button onClick={exportCSV} style={{
+            padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
+            border: '1px solid var(--border2)', background: 'transparent',
+            color: 'var(--text-dim)', cursor: 'pointer',
+          }}>Export CSV</button>
         </div>
       </div>
 
@@ -1261,16 +1309,16 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
             {trackers.map(t => (
               <div key={t} style={{ display:'flex' }}>
-                <TrackerChoiceButton active={trackerInc.includes(t)} tone="include"
+                <ChoiceButton active={trackerInc.includes(t)} tone="include"
                   onClick={() => toggleTracker('inc', t)}
                   style={{ borderRadius:'6px 0 0 6px', borderRight:'none' }}>
                   + {t}
-                </TrackerChoiceButton>
-                <TrackerChoiceButton active={trackerExc.includes(t)} tone="exclude"
+                </ChoiceButton>
+                <ChoiceButton active={trackerExc.includes(t)} tone="exclude"
                   onClick={() => toggleTracker('exc', t)}
                   style={{ borderRadius:'0 6px 6px 0', padding:'4px 10px' }}>
                   -
-                </TrackerChoiceButton>
+                </ChoiceButton>
               </div>
             ))}
             {activeTrackerCount > 0 && (
