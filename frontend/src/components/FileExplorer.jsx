@@ -1163,7 +1163,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
               onClick={() => setStatusFilter(id)}>{label}</Chip>
           ))}
           <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />
-          <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginRight: 2 }}>+ only / - hide</span>
           <FlagToggle label="Duplicates" noun="duplicate files"
             value={dupFilter} onChange={setDupFilter} />
           <FlagToggle
