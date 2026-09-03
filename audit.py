@@ -1220,11 +1220,17 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # update_progress then unions in whatever was newly earned. This is
             # what makes the prize layer ratchet — points accrue for action and
             # nothing is ever deducted for inaction or regression.
+            _ns_runs  = db_get_recent_runs(limit=2000)
             _ns_state = rounds.build_state(
-                cfg, result, db_get_recent_runs(limit=2000), progress=_ns_prev)
+                cfg, result, _ns_runs, progress=_ns_prev)
+            # `runs` is read once ever, on the audit that first writes a
+            # `history`: an install that predates the achievement timeline gets
+            # everything the audit log can prove dated retroactively. See
+            # rounds.history_from_runs.
             db_set_meta('ns_progress', rounds.update_progress(
                 _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
-                dead_regs=dead_registration_hashes(torrent_files_data)))
+                dead_regs=dead_registration_hashes(torrent_files_data),
+                runs=_ns_runs))
         except Exception as e:
             log.warning(f"Could not update Next steps progress: {e}")
         # Scan finished — clear the crash-loop streak so future startups scan normally

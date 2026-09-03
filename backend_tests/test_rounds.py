@@ -1359,6 +1359,152 @@ def test_the_record_survives_a_regression_like_everything_else_here():
     assert 'nothing_behind' in ids, 'a feat that was earned stays in the record'
 
 
+def _log(days, per_day=2, score=92.0, trigger='watchdog'):
+    """An audit log spanning `days` days, newest first, like db_get_recent_runs."""
+    out = []
+    for d in range(days):
+        for k in range(per_day):
+            out.append({
+                'ran_at': (datetime.now() - timedelta(days=d, hours=k)).isoformat(),
+                'status': 'ok', 'health_score': score, 'trigger': trigger,
+                'duration_seconds': 300, 'peak_rss_mb': 400,
+            })
+    return out
+
+
+def test_the_audit_log_dates_what_it_can_prove():
+    """Eleven ladders and twenty-seven feats are functions of the run list
+    alone. On a long-running install that is most of the record, and it is real
+    history rather than a guess."""
+    runs = _log(400)
+    dated = rounds.history_from_runs(runs)
+    assert dated, 'a 400-day log must yield a datable history'
+
+    # Only the whitelisted ids, and every entry stamped from a real run.
+    stamps = {str(r['ran_at']) for r in runs}
+    for e in dated:
+        assert e['at'] in stamps
+        if e['kind'] == 'rung':
+            assert e['id'] in rounds._RUN_DERIVED_LADDERS
+        else:
+            assert e['id'] in rounds._RUN_DERIVED_FEATS
+
+    # Oldest first, and each rung and feat recorded once.
+    assert [e['at'] for e in dated] == sorted(e['at'] for e in dated)
+    keys = [(e['kind'], e['id'], e.get('n')) for e in dated]
+    assert len(keys) == len(set(keys))
+
+    # Spread across the history, not stacked on one day — the whole point.
+    assert len({e['at'][:10] for e in dated}) > 5
+
+    # Auditor rung 1 lands on the first day; the later rungs cannot.
+    first = min(e['at'] for e in dated)
+    auditor = sorted((e for e in dated if e['id'] == 'auditor'), key=lambda e: e['n'])
+    assert auditor[0]['n'] == 1 and auditor[0]['at'] == first
+    assert auditor[-1]['at'] > auditor[0]['at']
+
+
+def test_dating_never_invents_a_library_it_cannot_see():
+    """The replay feeds empty details, so anything reading `det` would evaluate
+    against zeros and come out earned. The whitelist is what stops that."""
+    dated = rounds.history_from_runs(_log(400))
+    ids = {e['id'] for e in dated}
+    # Size, count and ratio ladders have no per-day record and must stay out.
+    assert not (ids & {'hoard', 'packrat', 'seedbearer', 'vaultkeeper', 'archivist',
+                       'librarian', 'shoveler', 'matchmaker', 'sentinel', 'singleton'})
+    # `empty_handed` is the trap: true for any log against an empty library.
+    assert 'empty_handed' not in ids
+    assert 'featherweight' not in ids
+
+
+def test_dating_an_empty_or_missing_log_is_simply_empty():
+    assert rounds.history_from_runs(None) == []
+    assert rounds.history_from_runs([]) == []
+    assert rounds.history_from_runs([{'status': 'ok'}]) == []
+
+
+def test_an_upgraded_install_dates_its_history_and_marks_the_rest():
+    cfg, det, runs = _cfg(), _details(), _log(400)
+    old = _advance(None, cfg, det)
+    del old['history']
+
+    st = rounds.build_state(cfg, _results(det), runs, progress=old)
+    p = rounds.update_progress(old, cfg, det, state=st, runs=runs)
+
+    dated = [e for e in p['history'] if e['kind'] != 'prior']
+    assert len(dated) > 20, 'a 400-day log should date a real chunk of the record'
+    assert len({e['at'][:10] for e in dated}) > 5
+
+    # The marker covers only what is genuinely undatable, and does not
+    # double-count anything the log just placed.
+    prior = _hist(p, 'prior')[0]
+    total_rungs = sum(l['tier'] for l in st['ladders'])
+    assert prior['rungs'] == total_rungs - sum(1 for e in dated if e['kind'] == 'rung')
+    assert prior['rungs'] > 0, 'library-size rungs stay undatable'
+    # And it is anchored to the oldest audit, so it sits at the foot of the list.
+    assert prior['at'] == min(str(r['ran_at']) for r in runs)
+    assert p['history'][0] is prior
+
+    # Points are untouched: dating something changes when, never whether.
+    assert (rounds.build_state(cfg, _results(det), runs, progress=p)['rank']['points']
+            == st['rank']['points'])
+
+
+def test_the_payload_sorts_by_date_and_does_not_trust_write_order():
+    """The regression that shipped in the first cut of the timeline.
+
+    Insertion order is chronological only while every append is newer than the
+    last, and the retroactive dating breaks exactly that: it appends entries
+    stamped up to *today* after a marker anchored to the *oldest* run, in the
+    same pass that then appends this run's own. Reversing the stored list put a
+    July date above a September one.
+    """
+    cfg, det, runs = _cfg(), _details(), _log(300)
+    old = _advance(None, cfg, det)
+    del old['history']
+    # `now` deliberately behind the newest run, which is what exposed it.
+    p = rounds.update_progress(
+        old, cfg, det, runs=runs,
+        now=datetime.now() - timedelta(days=40),
+        state=rounds.build_state(cfg, _results(det), runs, progress=old))
+
+    stored = [e['at'] for e in p['history']]
+    assert stored != sorted(stored), 'write order must genuinely be out of order here'
+
+    shown = [e['at'] for e in rounds.build_state(
+        cfg, _results(det), runs, progress=p)['history']]
+    assert shown == sorted(shown, reverse=True)
+    # And the marker still lands at the foot, on its own merits rather than by
+    # being inserted first.
+    last = rounds.build_state(cfg, _results(det), runs, progress=p)['history'][-1]
+    assert last['kind'] == 'prior'
+
+
+def test_dating_happens_once_and_only_on_the_upgrade():
+    cfg, det, runs = _cfg(), _details(), _log(200)
+    old = _advance(None, cfg, det)
+    del old['history']
+    p = rounds.update_progress(
+        old, cfg, det, runs=runs,
+        state=rounds.build_state(cfg, _results(det), runs, progress=old))
+    n = len(p['history'])
+
+    p2 = rounds.update_progress(
+        p, cfg, det, runs=runs,
+        state=rounds.build_state(cfg, _results(det), runs, progress=p))
+    assert len(p2['history']) == n, 'a second audit must not re-date anything'
+
+
+def test_a_caller_with_no_run_list_still_gets_a_correct_marker():
+    """Omitting `runs` costs the dates, never correctness."""
+    cfg, det = _cfg(), _details()
+    old = _advance(None, cfg, det)
+    del old['history']
+    p = _advance(old, cfg, det)
+    assert len(_hist(p, 'prior')) == 1
+    assert not [e for e in p['history'] if e['kind'] == 'rung']
+
+
 def test_an_upgraded_install_opens_with_an_honest_marker():
     """Progress that predates the timeline has latches but no dates, and there
     is no way to invent them. Say how much came before, then date the rest."""
@@ -1393,7 +1539,7 @@ def test_the_payload_ships_the_record_newest_first_and_unresolved():
     p = _advance(p, cfg, _details(total_media_size=90 * TB))
     st = rounds.build_state(cfg, _results(det), _runs(), progress=p)
 
-    assert st['history'] == list(reversed(p['history']))
+    assert sorted(map(str, st['history'])) == sorted(map(str, p['history']))
     ats = [e['at'] for e in st['history']]
     assert ats == sorted(ats, reverse=True)
     # Unresolved on purpose: the client names these from the ladders and feats

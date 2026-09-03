@@ -92,9 +92,18 @@ ends on the same figure as the rank at the top of the page. The shelf is what
 you have; this is what you did, and when. It shows the last few and expands to
 everything.
 
-Dates start from the version that introduced this. Prizes you were already
-holding can't be dated after the fact, so the record opens with a single line
-saying how many there were and begins keeping proper dates from your next audit.
+If you upgraded into this, the record isn't empty. On the first audit afterwards
+auditorr replays your audit log and dates everything that log can prove — audits
+completed, your best score, days observed, streaks at 90 and 100, scans by the
+watchdog, the scheduler and by hand, hours spent scanning, peak RAM. On a
+long-running install that is usually over a hundred entries going back to your
+first scan.
+
+The rest genuinely can't be dated afterwards. auditorr keeps no day-by-day
+record of library size or file counts, so there is no honest answer to "when did
+I pass 25 TB" — those are summed into one line at the foot of the record saying
+how many rungs and feats you were already holding. Everything from that point on
+is dated as it happens.
 
 ---
 

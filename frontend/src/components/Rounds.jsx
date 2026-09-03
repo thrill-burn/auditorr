@@ -626,7 +626,14 @@ function Timeline({ data }) {
         </span>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Scrolls in place once expanded rather than growing the page by twenty
+          thousand pixels. Not paginated and not virtualized: the list is
+          bounded at every rung of every ladder plus every feat — under 800,
+          ever — so there is nothing here for either to solve. */}
+      <div style={{
+        display: 'flex', flexDirection: 'column',
+        ...(showAll ? { maxHeight: '60vh', overflowY: 'auto' } : null),
+      }}>
         {shown.map((e, i) => {
           const day = fmtDay(e.at)
           // Only the first row of a day prints its date. Twenty rungs cross on

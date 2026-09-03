@@ -430,7 +430,7 @@ def exclusion_fingerprint(cfg):
 
 
 def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
-                    dead_regs=None):
+                    dead_regs=None, runs=None):
     """Advance the reward counters by one audit. Pure — returns a new dict.
 
     Called from `run_audit_process` after stats are computed. Everything here
@@ -453,6 +453,12 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
     next scan can diff against them. `None` leaves the stored set untouched —
     an audit that could not compute them must not read as "they all went away"
     and hand out credit for it on the following run.
+
+    `runs` is the audit log, used once and only on the audit that first writes a
+    `history` (see `history_from_runs`): an install that predates the timeline
+    gets everything the log can prove dated retroactively, and a marker for the
+    remainder. Omitting it costs only those dates — the marker then covers the
+    lot — so callers with no run list handy are still correct, just poorer.
     """
     p = {**EMPTY_PROGRESS, **(progress or {})}
     now = now or datetime.now()
@@ -551,16 +557,45 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
         p['feats_earned'] = sorted(already | earned_feats)
 
         if seeding:
-            # Everything standing before the timeline existed, counted rather
-            # than listed. `tier` is the rung count as of this build, so the
-            # rungs crossed on *this* run have to come back out of it.
+            # Date everything the audit log can actually prove, before falling
+            # back to the marker. On a long-running install this is most of the
+            # record: eleven ladders and twenty-seven feats are functions of the
+            # run list alone, and that list is kept.
+            #
+            # Where the log and this run's own detection both claim a rung, the
+            # **log wins**: it says when the rung was actually crossed, where
+            # `fresh` says only that the latch had not seen it yet — and on an
+            # install whose peaks lag the log (a wiped `ns_progress`, an audit
+            # that failed to record), stamping today's date on something the
+            # log places two years ago would be the one outright false claim
+            # this record could make. When both are right they agree anyway.
+            dated = history_from_runs(runs)
+            dated_keys = {(e['kind'], e['id'], e.get('n')) for e in dated}
+            fresh = [e for e in fresh
+                     if (e['kind'], e['id'], e.get('n')) not in dated_keys]
+            history.extend(dated)
+
+            # Whatever is left is genuinely undatable — library size, counts,
+            # ratios, seeding — because auditorr keeps no per-day record of any
+            # of it. Counted rather than listed, and rather than invented.
+            # `tier` is the rung count as of this build, so the rungs crossed on
+            # *this* run come back out of it too.
+            dated_rungs = sum(1 for e in dated if e['kind'] == 'rung')
+            dated_feats = {e['id'] for e in dated if e['kind'] == 'feat'}
             prior_rungs = max(0, sum(int(l.get('tier') or 0)
                                      for l in state.get('ladders') or [])
-                              - sum(1 for e in fresh if e['kind'] == 'rung'))
-            prior_feats = len(already)
+                              - sum(1 for e in fresh if e['kind'] == 'rung')
+                              - dated_rungs)
+            prior_feats = len(already - dated_feats)
             if prior_rungs or prior_feats:
-                history.append({'at': stamp, 'kind': 'prior',
-                                'rungs': prior_rungs, 'feats': prior_feats})
+                # Anchored to the oldest audit on record, not to today: it is
+                # the honest "you already had this much when the record opens",
+                # and it keeps the marker at the foot of the list where the
+                # oldest entry belongs rather than floating to the top.
+                oldest = min((str(r['ran_at']) for r in (runs or [])
+                              if r.get('ran_at')), default=stamp)
+                history.insert(0, {'at': oldest, 'kind': 'prior',
+                                   'rungs': prior_rungs, 'feats': prior_feats})
 
         history.extend(fresh)
         p['history'] = history[-_HISTORY_CAP:]
@@ -591,6 +626,92 @@ def record_trump(progress, torrents=1, now=None):
     p['trump_max_group'] = max(int(p.get('trump_max_group') or 0), n)
     p['last_trump_at'] = (now or datetime.now()).isoformat()
     return p
+
+
+# Ladders and feats whose value is a pure function of the **audit-run list**, and
+# can therefore be dated after the fact by replaying that list. Nothing else can:
+# every other ladder reads current library state (size, counts, ratios, seeding)
+# and auditorr keeps no per-day record of those, so asking "when did the library
+# first pass 25 TB" has no answer here and guessing one would be worse than the
+# marker that admits it.
+#
+# The lists are explicit rather than inferred because the replay feeds *empty*
+# details to `_ladders`/`_feats` — anything reading `det` would evaluate against
+# zeros and quietly come out earned (`Nothing To Audit` is the obvious one). The
+# whitelist is what makes that safe, so an entry may only be added here after
+# checking the definition touches nothing but `runs`.
+_RUN_DERIVED_LADDERS = frozenset({
+    'auditor', 'custodian', 'chronicler', 'watcher', 'nightwatch',
+    'clockwork', 'handson', 'marathoner', 'highwater', 'steady', 'flawless',
+})
+_RUN_DERIVED_FEATS = frozenset({
+    'first_contact', 'ten_audits', 'watched', 'punctual', 'speedrun',
+    'night_owl', 'blink', 'crash_survivor', 'marathon_scan', 'workhorse',
+    'control_freak', 'lean_machine', 'memory_hog', 'boring', 'century',
+    'first_week', 'first_month', 'first_quarter', 'veteran', 'ancient',
+    'flawless_week', 'flawless_month', 'never_back',
+    'health_half', 'health_good', 'health_great', 'perfect',
+})
+
+
+def history_from_runs(runs):
+    """Reconstruct dated history for everything the audit log can prove.
+
+    An install that predates the timeline has latched rungs with no dates, and
+    for most ladders that is permanent — auditorr stores no per-day record of
+    library size, so "when did Hoarder rung 12 land" is genuinely unanswerable.
+    But eleven ladders and twenty-seven feats are functions of the audit-run
+    list *alone*, and that list is kept: audits completed, best score, days
+    observed, streaks at 90 and 100, scans by trigger, time spent scanning, peak
+    RAM. Replaying it says exactly when each of those was crossed, which on a
+    long-running install is more than half the record.
+
+    Evaluated once per **distinct audit day**, not once per run: the page groups
+    by day, so that is the resolution being reported, and it keeps the cost
+    proportional to the history's span rather than to how often the watchdog
+    fires. Each entry is stamped with the last run of the day it first held
+    true — the most precise moment the log can actually support.
+
+    Returns entries oldest-first, deduplicated, ready to prepend to `history`.
+    """
+    runs = [r for r in (runs or []) if r.get('ran_at')]
+    if not runs:
+        return []
+    # Newest-first is what every consumer in this module expects — `never_back`
+    # slices `ok_runs[:10]` and reverses it, so handing it ascending runs would
+    # silently test the *oldest* ten audits instead of the newest.
+    asc  = sorted(runs, key=lambda r: str(r['ran_at']))
+    days = sorted({str(r['ran_at'])[:10] for r in asc})
+
+    out, seen_rungs, seen_feats = [], set(), set()
+    idx = 0
+    for day in days:
+        while idx < len(asc) and str(asc[idx]['ran_at'])[:10] <= day:
+            idx += 1
+        upto = asc[:idx]
+        if not upto:
+            continue
+        at = str(upto[-1]['ran_at'])
+        desc = upto[::-1]
+        best = max((float(r['health_score']) for r in desc
+                    if r.get('status') == 'ok' and r.get('health_score') is not None),
+                   default=0.0)
+        # Empty details on purpose: only the whitelisted ids are read, and every
+        # one of those ignores `det` entirely.
+        ladders = _ladders({}, desc, None, {}, best, 0, None)
+        for l in ladders:
+            if l['id'] not in _RUN_DERIVED_LADDERS:
+                continue
+            for t in l['tiers']:
+                key = (l['id'], t['n'])
+                if t['earned'] and key not in seen_rungs:
+                    seen_rungs.add(key)
+                    out.append({'at': at, 'kind': 'rung', 'id': l['id'], 'n': t['n']})
+        for f in _feats({}, desc, None, best, None, ladders):
+            if f['id'] in _RUN_DERIVED_FEATS and f['earned'] and f['id'] not in seen_feats:
+                seen_feats.add(f['id'])
+                out.append({'at': at, 'kind': 'feat', 'id': f['id']})
+    return out
 
 
 def record_backfill(progress, files=1, now=None):
@@ -2295,10 +2416,18 @@ def _timeline(progress):
     it happened to have on the day.
 
     Newest first because that is the order it is read in: "what did I just get",
-    not "how did this begin". Stored oldest-first, which is the order it is
-    written in — the two are separate concerns and the reversal is one line.
+    not "how did this begin".
+
+    **Sorted by `at`, not merely reversed.** Insertion order is chronological
+    only while every append is newer than the last, and the retroactive dating
+    breaks exactly that: it appends entries stamped from the audit log — right
+    up to today — after a marker anchored to the oldest run, in the same pass
+    that then appends this run's own. Trusting write order there put a July date
+    above a September one. Ties keep reversed-insertion order, so entries
+    sharing a timestamp still read newest-first within their audit.
     """
-    return list(reversed((progress or {}).get('history') or []))
+    stored = (progress or {}).get('history') or []
+    return sorted(reversed(stored), key=lambda e: str(e.get('at') or ''), reverse=True)
 
 
 def _rank_for(points):
