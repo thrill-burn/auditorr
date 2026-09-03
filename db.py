@@ -3,6 +3,7 @@ import json
 import zlib
 import sqlite3
 import logging
+import threading
 from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
@@ -532,6 +533,28 @@ def db_delete_meta(key):
         conn.commit()
     finally:
         conn.close()
+
+
+# Serializes read-modify-write on a single app_meta row. One process, several
+# threads: the audit advances `ns_progress` once per scan while the workflow
+# endpoints credit trumps and backfills from their own request threads.
+_meta_lock = threading.Lock()
+
+
+def db_update_meta(key, fn, default=None):
+    """Read-modify-write one app_meta row atomically. Returns the stored value.
+
+    `fn` receives the current value and returns the new one. The lock matters
+    because `ns_progress` is advanced from two directions — the audit, once per
+    scan, and the event endpoints (a trump swap, a confirmed backfill) on their
+    own threads — so a plain get/modify/set pair drops whichever write lost the
+    race, silently and permanently: these counters are cumulative, so a lost
+    increment is never recovered by the next one.
+    """
+    with _meta_lock:
+        value = fn(db_get_meta(key, default))
+        db_set_meta(key, value)
+        return value
 
 
 # ---------------------------------------------------------------------------

@@ -124,8 +124,8 @@ function ResultItem({ item }) {
         arr_id:        item.arr_id,
         title:         item.arr_title || '',
         // Matchmaker (Rounds) counts files, and a season pack is one grab with
-        // a dozen episodes behind it. Credited server-side only if the import
-        // actually lands.
+        // a dozen episodes behind it. Credited server-side when this call is
+        // accepted — the watch it starts is a helper, not the scorekeeper.
         files:         item.file_count || 1,
       })
       window.dispatchEvent(new CustomEvent('auditorr:import_started'))

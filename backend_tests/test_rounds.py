@@ -1189,11 +1189,12 @@ def test_the_two_streak_ladders_never_share_a_rung_name():
 
 # ── Backfill pays per file, at the event ─────────────────────────────────────
 #
-# Counted from the import watch rather than from the audit, for the reason
+# Counted at the grab rather than from the audit, for the reason
 # `record_backfill` documents: the next scan sees a library that got a little
 # better hardlinked, which is what an arr upgrading something on its own looks
 # like, and the media file is replaced on import so a path-keyed transition
-# often cannot see it at all.
+# often cannot see it at all. The grab is the evidence — not the import watch,
+# which is an in-memory thread that has to outlive the whole download.
 
 def test_record_backfill_counts_files_releases_and_the_biggest_grab():
     p = rounds.record_backfill(None, files=12)
@@ -1270,6 +1271,47 @@ def test_an_audit_never_clears_backfill_credit():
     assert p2['backfilled'] == 6
     assert p2['backfill_releases'] == 1
     assert p2['backfill_max'] == 6
+
+
+def test_a_credit_that_lands_mid_scan_survives_the_scans_write():
+    """The audit reads `ns_progress` at the top of its final phase and writes it
+    back when the phase completes. A grab credited in between is in the stored
+    row but not in the audit's copy, and a plain write erased it — silently, and
+    for good, since these counters are cumulative. Worse, the two are
+    correlated: the watchdog scans right after the filesystem change an import
+    causes."""
+    cfg, det = _cfg(), _details()
+    at_scan_start = rounds.record_backfill(None, files=2)
+    st = rounds.build_state(cfg, _results(det), _runs(), progress=at_scan_start)
+
+    # Two grabs land while the scan is finishing, plus a trump swap.
+    latest = rounds.record_backfill(at_scan_start, files=3)
+    latest = rounds.record_trump(latest, torrents=4)
+
+    computed = rounds.update_progress(at_scan_start, cfg, det, state=st, resolved=7)
+    assert computed['backfilled'] == 2, 'the audit only ever saw the stale read'
+
+    merged = rounds.merge_event_counters(computed, latest)
+    assert merged['backfilled'] == 5
+    assert merged['backfill_releases'] == 2
+    assert merged['backfill_max'] == 3
+    assert merged['trumps'] == 1 and merged['trump_torrents'] == 4
+    # Everything the audit *does* own still comes from the audit's own pass.
+    assert merged['shoveled'] == computed['shoveled'] == 7
+
+
+def test_merging_event_counters_never_lowers_one():
+    """Whichever side is ahead wins, so the merge is safe in both directions —
+    including the ordinary case where nothing landed during the scan."""
+    ahead = rounds.record_backfill(rounds.record_backfill(None, files=9), files=1)
+    behind = rounds.record_backfill(None, files=1)
+    for a, b in ((ahead, behind), (behind, ahead)):
+        merged = rounds.merge_event_counters(a, b)
+        assert merged['backfilled'] == 10
+        assert merged['backfill_max'] == 9
+        assert merged['last_backfill_at'] == max(a['last_backfill_at'], b['last_backfill_at'])
+    assert rounds.merge_event_counters(behind, None)['backfilled'] == 1
+    assert rounds.merge_event_counters(behind, {})['backfilled'] == 1
 
 
 def test_backfill_credit_survives_a_collapsing_hardlink_ratio():

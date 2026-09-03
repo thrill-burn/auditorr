@@ -628,6 +628,38 @@ def record_trump(progress, torrents=1, now=None):
     return p
 
 
+# The counters advanced by an *event* (`record_trump`, `record_backfill`)
+# rather than by a scan. Every one is cumulative or a latched peak, so the
+# larger of two readings is always the newer one.
+EVENT_COUNTERS = ('trumps', 'trump_torrents', 'trump_max_group',
+                  'backfilled', 'backfill_releases', 'backfill_max')
+EVENT_STAMPS   = ('last_trump_at', 'last_backfill_at')
+
+
+def merge_event_counters(computed, latest):
+    """Fold event credits that landed *during* a scan into that scan's write.
+
+    `update_progress` is built from the progress record read near the start of
+    the audit's final phase and written back when the phase completes. A trump
+    or backfill credited in between is in `latest` but not in `computed`, and a
+    plain write would erase it — the exact bug that made a grab score nothing
+    when it happened to land while a scan was finishing. Rare per event, but
+    silent and permanent when it hits, and the watchdog scans right after the
+    filesystem change a backfill causes, so the two are correlated rather than
+    independent.
+
+    Safe because these are the only fields the audit does not own: it never
+    computes them, it only carries them forward.
+    """
+    out = dict(computed or {})
+    latest = latest or {}
+    for key in EVENT_COUNTERS:
+        out[key] = max(int(out.get(key) or 0), int(latest.get(key) or 0))
+    for key in EVENT_STAMPS:
+        out[key] = max(out.get(key) or '', latest.get(key) or '') or None
+    return out
+
+
 # Ladders and feats whose value is a pure function of the **audit-run list**, and
 # can therefore be dated after the fact by replaying that list. Nothing else can:
 # every other ladder reads current library state (size, counts, ratios, seeding)
@@ -715,15 +747,27 @@ def history_from_runs(runs):
 
 
 def record_backfill(progress, files=1, now=None):
-    """Credit one completed Backfill import. Pure — returns a new dict.
+    """Credit one Backfill grab. Pure — returns a new dict.
 
-    Called from the import watch (`/api/workflows/watch_import`) the moment it
-    confirms the arr took the release, not from `run_audit_process`. Same
-    exception as `record_trump`, for a related reason: the following scan sees a
-    library that got a little better hardlinked, which is exactly what an arr
-    upgrading something on its own looks like, and the media file is *replaced*
-    on import so a path-keyed transition often cannot see it at all. The grab is
-    the evidence; the watch is the confirmation the UI already shows the user.
+    Called when the grab is accepted (`/api/workflows/watch_import`, which the
+    UI fires the moment the arr takes the release), not from
+    `run_audit_process`. Same exception as `record_trump`, for a related reason:
+    the following scan sees a library that got a little better hardlinked, which
+    is exactly what an arr upgrading something on its own looks like, and the
+    media file is *replaced* on import so a path-keyed transition often cannot
+    see it at all.
+
+    **The grab is the evidence, not the import.** This used to be credited from
+    `mark_done()` in the import watch — the point the UI says "Imported
+    successfully" — which sounds stricter and in practice only lost points that
+    had been earned. That confirmation lives in an in-memory thread that has to
+    survive the entire download (up to two hours) and every way it can end
+    early — the container restarting, an arr blip, a stalled import the user
+    then fixes by hand — dropped the credit for work that had actually
+    happened, silently and with no way to recover it. A layer whose first rule
+    is that points are never taken away must not hang them on the least durable
+    thing in the request path. The import watch still runs and still reports
+    honestly; it just no longer owns the scoring.
 
     `files` is the candidate group's file count — a Sonarr season pack is one
     grab and a dozen episodes, and the prize is files, so a season counts as a

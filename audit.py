@@ -19,7 +19,7 @@ from db import (
     db_save_change_log_entry,
     db_save_file_results,
     db_save_file_signatures, db_load_file_signatures,
-    db_get_meta, db_set_meta, db_delete_meta,
+    db_get_meta, db_set_meta, db_update_meta, db_delete_meta,
 )
 import rounds
 from state import get_state, set_state, update_progress
@@ -1227,10 +1227,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # `history`: an install that predates the achievement timeline gets
             # everything the audit log can prove dated retroactively. See
             # rounds.history_from_runs.
-            db_set_meta('ns_progress', rounds.update_progress(
+            _ns_next = rounds.update_progress(
                 _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
                 dead_regs=dead_registration_hashes(torrent_files_data),
-                runs=_ns_runs))
+                runs=_ns_runs)
+            # Written through a locked read-modify-write, merging the event
+            # counters as they stand *now*: `_ns_prev` was read at the top of
+            # this phase, and a trump or backfill credited since then would
+            # otherwise be erased by this write. See rounds.merge_event_counters.
+            db_update_meta('ns_progress',
+                           lambda latest: rounds.merge_event_counters(_ns_next, latest))
         except Exception as e:
             log.warning(f"Could not update Next steps progress: {e}")
         # Scan finished — clear the crash-loop streak so future startups scan normally

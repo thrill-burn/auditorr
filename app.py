@@ -34,7 +34,7 @@ from db import (
     db_get_change_log,
     db_get_latest_upload_snapshot,
     db_save_audit,
-    db_get_meta, db_set_meta, db_delete_meta,
+    db_get_meta, db_set_meta, db_update_meta, db_delete_meta,
 )
 from state import (
     get_state, set_state, try_start_scanning,
@@ -1706,8 +1706,8 @@ def workflows_trump_execute():
     # progress pass reads the updated counter.
     if removed:
         try:
-            db_set_meta('ns_progress', rounds.record_trump(
-                db_get_meta('ns_progress'), torrents=removed))
+            db_update_meta('ns_progress',
+                           lambda p: rounds.record_trump(p, torrents=removed))
         except Exception as e:
             log.warning("Could not record trump on Next steps progress: %s", e)
 
@@ -2655,15 +2655,9 @@ def workflows_generate_stop():
 
 _import_watches = {}  # job_id -> {status, message, title, service, completed_at}
 
-# Guards the read-modify-write on the `ns_progress` app_meta row. A user grabs
-# several Backfill candidates at once and each import watch finishes on its own
-# daemon thread, so unlike the trump credit (one request thread, one swap) this
-# one genuinely races itself.
-_ns_progress_lock = threading.Lock()
-
 
 def _record_backfill_credit(files):
-    """Credit a confirmed Backfill import on the Rounds prize layer.
+    """Credit a Backfill grab on the Rounds prize layer.
 
     Counted at the event rather than in `run_audit_process`, for the reason
     `rounds.record_backfill` documents: the next scan sees a library that got a
@@ -2671,14 +2665,17 @@ def _record_backfill_credit(files):
     something on its own, and the media file is replaced on import so the path a
     transition diff would key on frequently does not survive the import.
 
-    Fired from exactly the point the UI tells the user "Imported successfully" —
-    the prize layer and the workflow page must not disagree about whether the
-    thing landed.
+    Fired when the grab is accepted, **not** when the import watch below
+    confirms the file landed. The watch is an in-memory thread that has to live
+    through the whole download to award a point for something that already
+    happened, and every way it can end early — the container restarting mid
+    download, an arr blip, an import that stalls until the user finishes it by
+    hand — used to drop the credit with no way to earn it back. `db_update_meta`
+    rather than get/set because a scan may be writing the same row.
     """
     try:
-        with _ns_progress_lock:
-            db_set_meta('ns_progress', rounds.record_backfill(
-                db_get_meta('ns_progress'), files=files))
+        db_update_meta('ns_progress',
+                       lambda p: rounds.record_backfill(p, files=files))
     except Exception as e:
         log.warning("Could not record backfill on Rounds progress: %s", e)
 
@@ -2709,12 +2706,18 @@ def workflows_watch_import():
     _import_watches[job_id] = watch
     cfg = db_load_config()
 
+    # Scored here, at the grab, rather than from `mark_done` below: the watch is
+    # a best-effort helper that nurses the download into the library, and tying
+    # the prize to its survival meant a container restart or a stalled import
+    # erased credit for work the user had already done. See
+    # `_record_backfill_credit`.
+    _record_backfill_credit(files)
+
     def do_watch():
         def mark_done():
             watch['status']       = 'done'
             watch['message']      = 'Imported successfully'
             watch['completed_at'] = time.time()
-            _record_backfill_credit(files)
 
         try:
             # Brief delay so qBit + Sonarr/Radarr have time to register the grab before we poll
