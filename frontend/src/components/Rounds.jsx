@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { api } from '../api'
 import { LoadingRow, WorkflowError, useAuditComplete } from './workflows/shared'
 
@@ -106,6 +106,10 @@ const I = {
   flawless:     <><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M5 3v4"/><path d="M3 5h4"/></>,
   firebrigade:  <><path d="M15 6.5V3a1 1 0 0 0-1-1h-2a1 1 0 0 0-1 1v3.5"/><path d="M9 18h8"/><path d="M18 3h-3"/><path d="M11 3a6 6 0 0 0-6 6v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9a6 6 0 0 0-6-6"/></>,
   completionist:<><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></>,
+  // Not a ladder — the achievement record's own header. Deliberately not the
+  // clock-with-arrow: Old Faithful already wears that, and the two would sit in
+  // the same card the moment an Old Faithful rung landed.
+  record:       <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
   trophyhunter: <><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></>,
 }
 
@@ -519,6 +523,190 @@ function Prizes({ data }) {
   )
 }
 
+// ── How you got here — the achievement record, under the shelf ───────────────
+//
+// The shelf answers "what do I have". It cannot answer "what did I actually do,
+// and when" — a medallion reading *Sisyphus* says nothing about the evening it
+// was earned, and a wall of thirty of them says nothing about the order any of
+// it happened in. This is the same data on its other axis.
+//
+// Entries arrive unresolved (`{at, kind, id, n}`) and are named here from the
+// ladders and feats already in the payload, so the history never carries a
+// second frozen copy of every label and a renamed rung reads correctly.
+//
+// Preview then expand, not a bare toggle: a collapsed section that shows
+// nothing has to be opened before it can justify itself, and the most recent
+// few are the part anyone actually came for. Same shape either way — the date
+// gutter only prints on the first row of its day, so one repeated date does not
+// become a column of noise on a day when twenty rungs landed at once.
+const HISTORY_PREVIEW = 6
+
+function fmtDay(iso) {
+  const d = new Date(iso)
+  if (isNaN(d)) return String(iso || '').slice(0, 10)
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
+function Timeline({ data }) {
+  const [showAll, setShowAll] = useState(false)
+  const { history, ladders, feats, rank } = data
+
+  // Resolve once, not per render row. `prior` entries carry their own counts and
+  // resolve to nothing — they are the "earned before auditorr kept dates" marker
+  // an upgraded install opens with.
+  const byLadder = useMemo(() => Object.fromEntries((ladders || []).map(l => [l.id, l])), [ladders])
+  const byFeat   = useMemo(() => Object.fromEntries((feats   || []).map(f => [f.id, f])), [feats])
+
+  const named = useMemo(() => (history || []).map((e, i) => {
+    if (e.kind === 'prior') {
+      const bits = []
+      if (e.rungs) bits.push(`${e.rungs} rung${e.rungs === 1 ? '' : 's'}`)
+      if (e.feats) bits.push(`${e.feats} feat${e.feats === 1 ? '' : 's'}`)
+      return {
+        key: `p${i}`, at: e.at, icon: 'trophy', prior: true,
+        label: `${bits.join(' and ')} earned before this`,
+        meta: 'auditorr only started dating these at this upgrade', points: null,
+      }
+    }
+    if (e.kind === 'feat') {
+      const f = byFeat[e.id]
+      return {
+        key: `f${i}-${e.id}`, at: e.at, icon: 'trophy',
+        label: f ? f.label : e.id, meta: 'feat', points: f ? f.points : null,
+      }
+    }
+    const l = byLadder[e.id]
+    const t = l && (l.tiers || [])[e.n - 1]
+    return {
+      key: `r${i}-${e.id}-${e.n}`, at: e.at, icon: e.id,
+      label: t ? t.label : e.id,
+      meta: l ? `${l.name} · rung ${e.n} of ${l.tiers_total}` : `rung ${e.n}`,
+      points: t ? t.points : null,
+    }
+  }), [history, byLadder, byFeat])
+
+  // The running total is walked **backwards from the rank readout**, not
+  // forwards from zero. Forwards would disagree with the number at the top of
+  // the page: that total also carries the setup steps and, on an upgraded
+  // install, everything earned before the record started keeping dates —
+  // neither of which is a dated entry. Anchoring at the top makes the newest
+  // row equal the header exactly, and drops the residue where it belongs, on
+  // the oldest rows and on the `prior` marker, which is the row whose whole job
+  // is to say there was something before this.
+  const entries = useMemo(() => {
+    let running = (rank && rank.points) || 0
+    return named.map(e => {
+      const total = Math.max(0, running)
+      running -= e.points || 0
+      return { ...e, total }
+    })
+  }, [named, rank])
+
+  if (!entries.length) return null
+
+  const shown = showAll ? entries : entries.slice(0, HISTORY_PREVIEW)
+
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)',
+      boxShadow: 'var(--elev-1)', padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 14,
+    }}>
+      {/* Peer of "Useless prizes" and of the workflow sections — same rung of
+          the scale, same shape of header row. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="record" size={17} /></span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>How you got here</span>
+        {/* The points figure is what makes the right-hand column legible: it is
+            the same number the rank readout shows at the top of the page, and
+            the newest row's running total equals it, so the column explains
+            itself without a table header. */}
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+          {entries.length} recorded · {((rank && rank.points) || 0).toLocaleString()} pts
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {shown.map((e, i) => {
+          const day = fmtDay(e.at)
+          // Only the first row of a day prints its date. Twenty rungs cross on
+          // the first audit of a new install, and twenty identical dates in a
+          // column is a wall, not a timeline.
+          const newDay = i === 0 || fmtDay(shown[i - 1].at) !== day
+          return (
+            <div key={e.key} style={{ display: 'flex', alignItems: 'stretch', gap: 10 }}>
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
+                minWidth: 82, flexShrink: 0, paddingTop: 7, textAlign: 'right',
+              }}>
+                {newDay ? day : ''}
+              </span>
+              {/* The spine. A rule rather than a dot per row: the icons are
+                  already the per-row marker, and a second marker beside them
+                  reads as decoration. */}
+              <span style={{
+                width: 1, background: 'var(--border)', flexShrink: 0,
+                marginTop: newDay ? 6 : 0,
+                marginBottom: i === shown.length - 1 ? 8 : 0,
+              }} />
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 9,
+                flex: 1, minWidth: 0, padding: '5px 0 5px 2px',
+              }}>
+                <span style={{ color: e.prior ? 'var(--text-faint)' : 'var(--text-dim)', display: 'flex', flexShrink: 0 }}>
+                  <Icon name={e.icon} size={14} />
+                </span>
+                <span style={{
+                  fontSize: 'var(--font-base)', fontWeight: e.prior ? 400 : 600,
+                  color: e.prior ? 'var(--text-dim)' : 'var(--text)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{e.label}</span>
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
+                  flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{e.meta}</span>
+                {/* Two figures, and the order is the point: what this one was
+                    worth, then what you were on once you had it. The award is
+                    the fainter of the two — the running total is the column you
+                    read down, and it is the one that ties back to the rank at
+                    the top of the page. Fixed widths so both columns line up
+                    whatever the digit count. */}
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
+                  color: 'var(--text-faint)', flexShrink: 0,
+                  minWidth: 46, textAlign: 'right',
+                }}>{e.points != null ? `+${e.points}` : ''}</span>
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
+                  color: 'var(--text-dim)', flexShrink: 0,
+                  minWidth: 68, textAlign: 'right',
+                }}>{e.total.toLocaleString()}</span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {entries.length > HISTORY_PREVIEW && (
+        <button
+          onClick={() => setShowAll(s => !s)}
+          style={{
+            alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            fontSize: 'var(--font-base)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
+          }}
+        >
+          {showAll ? 'Show recent only' : `Show all ${entries.length}`}
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+            strokeLinecap="round" strokeLinejoin="round"
+            style={{ transform: showAll ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.5 }}>
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+        </button>
+      )}
+    </div>
+  )
+}
+
 // One rule, every section. Density follows the row's *state*, never which
 // section it happens to sit in — Ongoing used to force every card expanded and
 // On demand keyed off the Kingmaker tally, so three identically-cleared rows
@@ -890,6 +1078,13 @@ export default function Rounds({ onNavigate }) {
       {/* The shelf, last. Browsing prizes is a different intent from doing the
           work, and it was burying the work when it led the page. */}
       {data.stage !== 'setup' && <Prizes data={data} />}
+
+      {/* And the record of it, under the shelf: the shelf is what you have, this
+          is what you did. It sits after rather than before because it is the
+          rarer intent of the two — you come to the shelf to see what is next
+          and to this to look back. Renders nothing until there is something to
+          look back on. */}
+      {data.stage !== 'setup' && <Timeline data={data} />}
 
       {health?.score != null && (
         <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>

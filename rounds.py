@@ -241,10 +241,27 @@ EMPTY_PROGRESS = {
     # punishment this design refuses to hand out. Earned is earned.
     'peaks': {},              # ladder id -> best value ever seen
     'feats_earned': [],       # feat ids, latched on first earn
+    # When each of those was earned. `peaks` and `feats_earned` are latches and
+    # say only *whether* — so the shelf could show thirty medallions and answer
+    # nothing about what you actually did, or when. Appended oldest-first, one
+    # entry per rung crossed and per feat earned, written in the same pass that
+    # advances the latches so the two can never disagree.
+    #
+    # Deliberately **not** derived from `audit_runs`: a rung is crossed against
+    # the latched peak, which no history of scores can reconstruct, and runs are
+    # pruned while this is the permanent record of the layer.
+    'history': [],            # [{at, kind: rung|feat|prior, id, n}], oldest first
 }
 
 # Ceiling on the persisted dead-registration hash set (see `last_dead_regs`).
 _DEAD_REG_CAP = 10000
+
+# Ceiling on the achievement timeline. Every rung and feat fires exactly once —
+# rungs are crossed against a monotonic peak and feats are latched — so the real
+# ceiling is "every rung of every ladder plus every feat", currently under 800.
+# This is a guard against a corrupted or reset `peaks` map re-firing the lot,
+# not a working limit: at this value it never trims a real history.
+_HISTORY_CAP = 2000
 
 # Ceiling on the files credited by one backfill grab. The number arrives from the
 # client (it is the candidate group's own file count — a Sonarr season pack is
@@ -498,17 +515,55 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
     else:
         p['immaculate_since'] = None
 
-    # Latch everything that could otherwise regress.
+    # Latch everything that could otherwise regress — and date it on the way
+    # past. The latches say only *whether* something was earned; the timeline is
+    # written here, in the same pass, so the two cannot drift apart.
     if state:
+        raw = progress or {}
+        history = list(p.get('history') or [])
+        # An install that already has progress but no `history` key predates the
+        # timeline. Its rungs and feats are latched with no dates and can never
+        # get any — inventing them would be worse than admitting it — so the
+        # record opens with one honest marker saying how much came before, and
+        # fills in properly from here. A *fresh* install has no `raw` at all and
+        # gets no marker: everything it earns is about to be dated correctly.
+        seeding = bool(raw) and 'history' not in raw
+
         peaks = dict(p.get('peaks') or {})
+        fresh = []
         for ladder in state.get('ladders') or []:
-            prev = float(peaks.get(ladder['id']) or 0)
-            peaks[ladder['id']] = max(prev, float(ladder.get('value') or 0))
+            lid  = ladder['id']
+            prev = float(peaks.get(lid) or 0)
+            peaks[lid] = max(prev, float(ladder.get('value') or 0))
+            # A rung is *newly* earned when it is earned now and sits above the
+            # peak we had before. Read off the built tiers rather than
+            # re-deriving thresholds, so this can never disagree with the ladder
+            # the user is looking at. Monotonic peaks mean each rung fires once.
+            for t in ladder.get('tiers') or []:
+                if t.get('earned') and float(t.get('at') or 0) > prev:
+                    fresh.append({'at': stamp, 'kind': 'rung', 'id': lid, 'n': t['n']})
         p['peaks'] = peaks
-        p['feats_earned'] = sorted(
-            set(p.get('feats_earned') or [])
-            | {f['id'] for f in (state.get('feats') or []) if f.get('earned')}
-        )
+
+        earned_feats = {f['id'] for f in (state.get('feats') or []) if f.get('earned')}
+        already = set(p.get('feats_earned') or [])
+        fresh.extend({'at': stamp, 'kind': 'feat', 'id': fid}
+                     for fid in sorted(earned_feats - already))
+        p['feats_earned'] = sorted(already | earned_feats)
+
+        if seeding:
+            # Everything standing before the timeline existed, counted rather
+            # than listed. `tier` is the rung count as of this build, so the
+            # rungs crossed on *this* run have to come back out of it.
+            prior_rungs = max(0, sum(int(l.get('tier') or 0)
+                                     for l in state.get('ladders') or [])
+                              - sum(1 for e in fresh if e['kind'] == 'rung'))
+            prior_feats = len(already)
+            if prior_rungs or prior_feats:
+                history.append({'at': stamp, 'kind': 'prior',
+                                'rungs': prior_rungs, 'feats': prior_feats})
+
+        history.extend(fresh)
+        p['history'] = history[-_HISTORY_CAP:]
     return p
 
 
@@ -2228,6 +2283,24 @@ def _feats(det, runs, cross, best_score, progress=None, ladders=None,
     ]
 
 
+def _timeline(progress):
+    """The achievement record, newest first.
+
+    Deliberately **unresolved** — each entry is `{at, kind, id, n}` and nothing
+    else. The page already ships every ladder with its full rung list and every
+    feat with its label, so the client can name an entry from data it holds; and
+    duplicating those strings here would put a second, frozen copy of every
+    label on an endpoint whose whole design rule is to stay light. It also means
+    a renamed rung reads correctly in the history instead of preserving the name
+    it happened to have on the day.
+
+    Newest first because that is the order it is read in: "what did I just get",
+    not "how did this begin". Stored oldest-first, which is the order it is
+    written in — the two are separate concerns and the reversal is one line.
+    """
+    return list(reversed((progress or {}).get('history') or []))
+
+
 def _rank_for(points):
     name, floor, idx = RANKS[0][1], RANKS[0][0], 0
     for i, (threshold, label) in enumerate(RANKS):
@@ -2384,6 +2457,9 @@ def build_state(cfg, results, runs, lifetime_uploaded=0, progress=None):
             for gid, label, blurb in FEAT_GROUPS
         ],
         'prizes': {'earned': tiers_earned, 'total': tiers_total},
+        # What you earned and when, newest first. The shelf answers "what do I
+        # have"; nothing answered "what did I do, and when did it happen".
+        'history': _timeline(progress),
         'streak_90': _days_at_or_above(runs, 90),
         'audits': len(ok_runs),
     }

@@ -84,6 +84,18 @@ They're monotonic: prizes are awarded for what you've done and are never taken
 back if your library shrinks or a count climbs again. Nothing about them appears
 anywhere else in the app.
 
+### How you got here
+
+Under the shelf is the record: every rung and every feat, newest first, with the
+day it landed, what it was worth, and a running points total down the right that
+ends on the same figure as the rank at the top of the page. The shelf is what
+you have; this is what you did, and when. It shows the last few and expands to
+everything.
+
+Dates start from the version that introduced this. Prizes you were already
+holding can't be dated after the fact, so the record opens with a single line
+saying how many there were and begins keeping proper dates from your next audit.
+
 ---
 
 ## Backfill

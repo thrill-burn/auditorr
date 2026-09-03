@@ -83,6 +83,8 @@ you were going to do anyway and never taken back. They keep going once your
 library is tidy, which is when a prize layer usually gives up on you: the
 largest library you've ever held with nothing wrong with it, everything you
 seed multiplied by how long you've held it, your longest-lived single torrent.
+Under it all is the record of how you got here — every rung and feat, dated, in
+the order you earned them.
 
 <p>
   <a href="docs/rounds.png"><img src="docs/rounds.png" alt="Rounds" width="100%" /></a>

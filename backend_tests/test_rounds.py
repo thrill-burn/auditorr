@@ -1291,3 +1291,137 @@ def test_backfill_credit_survives_a_collapsing_hardlink_ratio():
     assert st['rank']['points'] >= before
     assert _ladder(st, 'matchmaker')['value'] == 100
     assert _row(st, 'backfill')['reward']['headline'].startswith('100 backfilled so far')
+
+
+# ── The achievement record ───────────────────────────────────────────────────
+#
+# `peaks` and `feats_earned` are latches: they say *whether* something was
+# earned and nothing about when. So the shelf could show thirty medallions and
+# answer nothing about what you actually did, or in what order.
+
+def _hist(p, kind=None):
+    return [e for e in (p.get('history') or []) if kind is None or e['kind'] == kind]
+
+
+def _advance(p, cfg, det, **kw):
+    """One audit: build with the previous progress, then latch — exactly what
+    `run_audit_process` does."""
+    st = rounds.build_state(cfg, _results(det), _runs(), progress=p)
+    return rounds.update_progress(p, cfg, det, state=st, **kw)
+
+
+def test_first_audit_dates_every_rung_and_feat_it_earns():
+    cfg, det = _cfg(), _details()
+    p = _advance(None, cfg, det)
+    rungs, feats = _hist(p, 'rung'), _hist(p, 'feat')
+    assert rungs and feats
+    # A fresh install has nothing standing before it — no marker, no apology.
+    assert not _hist(p, 'prior')
+    for e in rungs:
+        assert e['at'] and e['id'] and e['n'] >= 1
+    # It must agree with the shelf it is a record of.
+    st = rounds.build_state(cfg, _results(det), _runs(), progress=p)
+    assert len(rungs) == sum(l['tier'] for l in st['ladders'])
+    assert len(feats) == sum(1 for f in st['feats'] if f['earned'])
+
+
+def test_a_rung_is_recorded_once_and_only_when_it_is_crossed():
+    """Peaks are monotonic, so re-auditing the same library records nothing."""
+    cfg, det = _cfg(), _details(total_media_size=2 * TB)
+    p = _advance(None, cfg, det)
+    first = len(p['history'])
+    assert first > 0
+
+    p = _advance(p, cfg, det)
+    assert len(p['history']) == first, 'an unchanged audit must record nothing'
+
+    was = {(e['id'], e['n']) for e in _hist(p, 'rung')}
+    p = _advance(p, cfg, _details(total_media_size=60 * TB))
+    grew = {(e['id'], e['n']) for e in _hist(p, 'rung')} - was
+    assert any(lid == 'hoard' for lid, _ in grew), 'a crossed rung must be dated'
+    # Once each: the record holds no duplicate rung.
+    rungs = [(e['id'], e['n']) for e in _hist(p, 'rung')]
+    assert len(rungs) == len(set(rungs))
+
+    # A library that shrinks back crosses no rung and un-records none. (It can
+    # still *earn* something — Featherweight is a feat for a tiny library — which
+    # is the monotonic rule working, not a regression.)
+    before = {(e['id'], e['n']) for e in _hist(p, 'rung')}
+    p = _advance(p, cfg, _details(total_media_size=GB))
+    assert {(e['id'], e['n']) for e in _hist(p, 'rung')} == before
+
+
+def test_the_record_survives_a_regression_like_everything_else_here():
+    cfg = _cfg()
+    p = _advance(None, cfg, _details(orphaned_torrent_count=0))
+    p = _advance(p, cfg, _details(orphaned_torrent_count=40))
+    ids = {e['id'] for e in _hist(p, 'feat')}
+    assert 'nothing_behind' in ids, 'a feat that was earned stays in the record'
+
+
+def test_an_upgraded_install_opens_with_an_honest_marker():
+    """Progress that predates the timeline has latches but no dates, and there
+    is no way to invent them. Say how much came before, then date the rest."""
+    cfg, det = _cfg(), _details()
+    # An install as it looked before `history` existed: latches, no key.
+    old = _advance(None, cfg, det)
+    del old['history']
+    assert 'history' not in old
+
+    p = _advance(old, cfg, det)
+    prior = _hist(p, 'prior')
+    assert len(prior) == 1
+    assert prior[0]['rungs'] > 0 and prior[0]['feats'] > 0
+    assert p['history'][0]['kind'] == 'prior', 'the marker is the oldest entry'
+    # It counts what was already standing, not what this run earned.
+    st = rounds.build_state(cfg, _results(det), _runs(), progress=old)
+    assert prior[0]['rungs'] == sum(l['tier'] for l in st['ladders'])
+
+    # Only once — the next audit has a history key and adds no second apology.
+    p2 = _advance(p, cfg, det)
+    assert len(_hist(p2, 'prior')) == 1
+
+
+def test_a_fresh_install_never_gets_the_marker():
+    p = _advance(None, _cfg(), _details())
+    assert not _hist(p, 'prior')
+
+
+def test_the_payload_ships_the_record_newest_first_and_unresolved():
+    cfg, det = _cfg(), _details()
+    p = _advance(None, cfg, det)
+    p = _advance(p, cfg, _details(total_media_size=90 * TB))
+    st = rounds.build_state(cfg, _results(det), _runs(), progress=p)
+
+    assert st['history'] == list(reversed(p['history']))
+    ats = [e['at'] for e in st['history']]
+    assert ats == sorted(ats, reverse=True)
+    # Unresolved on purpose: the client names these from the ladders and feats
+    # already in the payload, so no label is stored twice or frozen at earn time.
+    for e in st['history']:
+        assert set(e) <= {'at', 'kind', 'id', 'n', 'rungs', 'feats'}
+    # Every entry must be nameable from what the payload already carries.
+    lids = {l['id'] for l in st['ladders']}
+    fids = {f['id'] for f in st['feats']}
+    for e in st['history']:
+        if e['kind'] == 'rung':
+            assert e['id'] in lids
+            ladder = next(l for l in st['ladders'] if l['id'] == e['id'])
+            assert 1 <= e['n'] <= ladder['tiers_total']
+        elif e['kind'] == 'feat':
+            assert e['id'] in fids
+
+
+def test_the_record_is_bounded():
+    cfg = _cfg()
+    p = {'history': [{'at': '2026-01-01T00:00:00', 'kind': 'feat', 'id': f'x{i}'}
+                     for i in range(rounds._HISTORY_CAP + 500)]}
+    p = _advance(p, cfg, _details())
+    assert len(p['history']) == rounds._HISTORY_CAP
+    # Trimmed from the oldest end, so the newest entries always survive.
+    assert p['history'][-1]['kind'] in ('rung', 'feat')
+
+
+def test_an_empty_record_ships_as_an_empty_list():
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
+    assert st['history'] == []
