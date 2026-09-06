@@ -53,7 +53,7 @@ from debug import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
 
-APP_VERSION = "1.7.2"
+APP_VERSION = "1.7.3"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()

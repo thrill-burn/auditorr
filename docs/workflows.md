@@ -92,6 +92,8 @@ ends on the same figure as the rank at the top of the page. The shelf is what
 you have; this is what you did, and when. It shows the last few and expands to
 everything.
 
+<p><img src="rounds-history.png" alt="The achievement record at the foot of Rounds" width="100%" /></p>
+
 Each row also says what it took, in full: `25.0 TB in the media library`, `30
 days without an orphan`, `500 audits by the watchdog`, `72.0 h spent scanning`.
 A name like *Geological Layer* is a punchline with no setup, and *rung 12 of 21*

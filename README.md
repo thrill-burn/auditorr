@@ -18,6 +18,14 @@ tells you what's wrong with your library. Five automated workflows fix it.
 
 ---
 
+## What's new in 1.7.3
+
+- **[How you got here](#rounds)** - a dated record of every prize you've earned, at the foot of Rounds. Upgrading doesn't start it empty: auditorr replays your audit log and dates everything that log can prove.
+- **Prizes for a library that's already tidy** - the shelf used to go quiet for exactly the people who'd done the work. Eleven new ladders aim at that, including the largest library you've ever held with nothing wrong with it, and everything you seed multiplied by how long you've held it.
+- **[File Explorer can say "not"](docs/configuration.md#excluded-files--folders)** - *Duplicates* and *Excluded* are their own `+` / `-` toggles now, so **orphaned but not excluded** is finally a question you can ask.
+- **Multiple Sonarr / Radarr instances actually work (#22)** - adding one to the additional-instances list used to switch your primary off. Upgrading is the whole fix.
+- **Every workflow's prize is now the work you did**, not the size of your drives - and acting on a row updates the sidebar, the dashboard and the other pages straight away.
+
 ## What's new in 1.7.2
 
 - **[Rounds](#rounds)** - a new page that tells you which workflows your library needs right now, which to do first, and keeps score with useless prizes.

@@ -262,6 +262,28 @@ and none should read `0 managed files`.
 
 ---
 
+## The Duplicate and Excluded filters vanished from File Explorer
+
+They moved, in v1.7.3. **Status** now holds only what is genuinely a status —
+All, Seeding, Orphaned — and *Duplicates* and *Excluded* sit beside it as their
+own `+` / `-` toggles: `+` for only those files, `-` to drop them, neither for
+the old behaviour.
+
+The point of the split is that they combine. As chips you could only ever pick
+one, so asking for *orphaned* left everything else unconstrained and **orphaned
+but not excluded** could not be expressed at all — which matters if you use the
+orphaned view as a list of releases you could upload, since one excluded `.srt`
+was enough to keep a release you had already seeded in the list, and in tree view
+its whole folder with it. That question is now *Orphaned* plus `-` on Excluded.
+
+The **Excluded** toggle also shows how many excluded files are mixed into your
+current view when it isn't constraining it, which is the quickest way to notice
+that's what you're looking at. Its starting position comes from
+[Hide excluded files from the explorer](configuration.md#hide-excluded-files-from-the-explorer);
+moving it in the toolbar lasts for the visit, not beyond it.
+
+---
+
 ## Sonarr/Radarr buttons open the wrong thing, or nothing
 
 auditorr deep-links into your arrs by matching the file's path to their library.
