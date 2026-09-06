@@ -536,9 +536,12 @@ function Prizes({ data }) {
 //
 // Naming is not enough on its own: a row reading "Geological Layer · Hoarder ·
 // rung 12 of 21" says when and where, and never *for what*. Each row therefore
-// also carries the terms it was earned on — the rung's threshold with the
-// ladder's own `measures` word ("25.0 TB library", "1.4 years held", "500
-// shovelled"), and for a feat, which has no threshold, its condition sentence.
+// also carries the terms it was earned on — the rung's threshold followed by
+// the ladder's `terms` phrase ("25.0 TB in the media library", "30 days without
+// an orphan", "500 audits by the watchdog"), and for a feat, which has no
+// threshold, its condition sentence. Deliberately not the tile's `measures`:
+// that word is written to sit under a medallion with its ladder name and blurb
+// around it, and "3 days unbroken" alone is unbroken at what.
 //
 // Preview then expand, not a bare toggle: a collapsed section that shows
 // nothing has to be opened before it can justify itself, and the most recent
@@ -547,15 +550,18 @@ function Prizes({ data }) {
 // become a column of noise on a day when twenty rungs landed at once.
 const HISTORY_PREVIEW = 6
 
-// `measures` is written for a medallion, where the value is a live number and
-// rarely 1. In the record it is a *threshold*, and every ladder's rung 1 is
-// frozen there — so a new install's first audit would print a screenful of
-// "1 audits", "1 seeds", "1 titles". Only ever touches a bare "1", and leaves
-// -ss alone so "1 spotless" survives.
-function singularise(value, word) {
-  if (value !== '1' || !word) return word
-  if (/(x|s|z|ch|sh)es$/.test(word)) return word.slice(0, -2)
-  return /ss$/.test(word) ? word : word.replace(/s$/, '')
+// A rung threshold is frozen at its number, and every ladder's rung 1 fires on
+// a new install's first audit — so without this the record opens on a screenful
+// of "1 audits completed", "1 torrents seeding", "1 swaps complied with". Only
+// ever touches the first word of a bare "1", which is why `terms` is written
+// noun-first (see LADDER_FACET), and leaves -ss alone so "1 spotless" survives.
+function singularise(value, phrase) {
+  if (value !== '1' || !phrase) return phrase
+  const [head, ...rest] = phrase.split(' ')
+  const one = /(x|s|z|ch|sh)es$/.test(head) ? head.slice(0, -2)
+    : /ss$/.test(head) ? head
+      : head.replace(/s$/, '')
+  return [one, ...rest].join(' ')
 }
 
 function fmtDay(iso) {
@@ -608,10 +614,13 @@ function Timeline({ data }) {
       metaMono: true,
       // What the rung actually took. The name is a punchline and the rung
       // number only says where it sits — neither says 25 TB, so a record built
-      // from the two answered "when" and never "for what". `measures` is the
-      // same word the medallion prints, which is what keeps ten byte ladders
-      // apart: "25.0 TB library" and "25.0 TB uploaded" are different evenings.
-      detail: t ? [t.at_label, singularise(t.at_label, l.measures)].filter(Boolean).join(' ') : '',
+      // from the two answered "when" and never "for what". `terms` rather than
+      // the tile's `measures`: the tile has its medallion, its ladder name and
+      // a blurb around it, so "unbroken" lands there and is unbroken at *what*
+      // here. Falls back to `measures` so a payload from before the field
+      // still says something.
+      detail: t ? [t.at_label, singularise(t.at_label, l.terms || l.measures)]
+        .filter(Boolean).join(' ') : '',
       points: t ? t.points : null,
     }
   }), [history, byLadder, byFeat])
@@ -694,9 +703,13 @@ function Timeline({ data }) {
                 <span style={{ color: e.prior ? 'var(--text-faint)' : 'var(--text-dim)', display: 'flex', flexShrink: 0 }}>
                   <Icon name={e.icon} size={14} />
                 </span>
+                {/* flexShrink 0: the rung's own name is the row, and it is
+                    short. When space runs out it is the ladder position beside
+                    it that gives way, not this. */}
                 <span style={{
                   fontSize: 'var(--font-base)', fontWeight: e.prior ? 400 : 600,
                   color: e.prior ? 'var(--text-dim)' : 'var(--text)',
+                  flexShrink: e.prior ? 1 : 0,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{e.label}</span>
                 <span style={{

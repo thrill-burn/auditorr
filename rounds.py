@@ -1163,6 +1163,26 @@ def _stat(row):
 #     faint straight after the value ("12.4 TB library", "3.90× ratio").
 #   * `group` — the shelf is themed rather than a wall of thirty, mirroring the
 #     feat groups exactly so the two sections read as one system.
+#
+# `terms` is the same job done at length, for "How you got here", where there is
+# no ladder name, no blurb and no tooltip beside the number. `measures` is tile
+# shorthand and leans on its medallion for context: under *Unblemished* the word
+# "unbroken" is enough, but in a list of a hundred dated rows "3 days unbroken"
+# is unbroken at *what*. Same for "clean", "landed", "swept", "spotless", "held".
+# So each ladder also carries a phrase that reads straight after its own
+# `at_label` and stands on its own — "3 days without an orphan".
+#
+# Three rules, all load-bearing:
+#   * It must fit. The record is one line per row, and the phrase shares that
+#     line with the rung name and the ladder position, so ~30 characters is the
+#     budget — past that the position starts ellipsizing away.
+#   * **Noun first on anything counted in plain numbers.** Every ladder's rung 1
+#     is frozen at "1", so the client singularises the first word ("1 audit
+#     completed"); "scheduled audits" would come out as "1 scheduled audits".
+#   * It has to read at both ends of the ladder. "in a row" was the obvious way
+#     to say streak and gives "1 day in a row" on every streak ladder's first
+#     rung, so these say "without an orphan" / "above health 90" instead, which
+#     is natural at one day and at ten years.
 LADDER_GROUPS = [
     ('have',    'What you have',
      'Size, count, and how much of it is in good order.'),
@@ -1176,61 +1196,61 @@ LADDER_GROUPS = [
      'The least useful things on the least useful page.'),
 ]
 
-# ladder id -> (group, what the number counts)
+# ladder id -> (group, what the number counts, the same said in full)
 LADDER_FACET = {
-    'hoard':         ('have',    'library'),
-    'packrat':       ('have',    'torrents'),
-    'archivist':     ('have',    'files'),
-    'librarian':     ('have',    'titles'),
-    'videophile':    ('have',    '2160p'),
-    'provenance':    ('have',    'oldest'),
-    'vaultkeeper':   ('have',    'hardlinked'),
+    'hoard':         ('have',    'library',      'in the media library'),
+    'packrat':       ('have',    'torrents',     'in the torrent directory'),
+    'archivist':     ('have',    'files',        'files under audit'),
+    'librarian':     ('have',    'titles',       'distinct titles held'),
+    'videophile':    ('have',    '2160p',        'of 2160p media'),
+    'provenance':    ('have',    'oldest',       'since your oldest file'),
+    'vaultkeeper':   ('have',    'hardlinked',   'of media hardlinked'),
     # 'swept'/'landed', not 'clean' — Sentinel already owns 'clean' for days,
     # and these three now measure clean *bytes*, which is the exact ambiguity
     # this field exists to remove.
-    'tidiness':      ('have',    'swept'),
-    'purity':        ('have',    'landed'),
-    'conservator':   ('have',    'spotless'),
+    'tidiness':      ('have',    'swept',        'of torrents, none orphaned'),
+    'purity':        ('have',    'landed',       'of torrents, all imported'),
+    'conservator':   ('have',    'spotless',     'of library with nothing wrong'),
 
-    'seedbearer':    ('give',    'seeding'),
-    'benefactor':    ('give',    'uploaded'),
-    'usurer':        ('give',    'ratio'),
+    'seedbearer':    ('give',    'seeding',      'of data seeding now'),
+    'benefactor':    ('give',    'uploaded',     'uploaded, all time'),
+    'usurer':        ('give',    'ratio',        'uploaded per byte seeded'),
     # 'seeds', not 'seeding' — Seedbearer already owns that word for bytes, and
     # two tiles reading "… seeding" is exactly the ambiguity this field fixes.
-    'seedling':      ('give',    'seeds'),
-    'pollinator':    ('give',    'cross-seeded'),
-    'alchemist':     ('give',    'multiplier'),
-    'diplomat':      ('give',    'trackers'),
-    'atlas':         ('give',    'held'),
-    'oldfaithful':   ('give',    'oldest seed'),
+    'seedling':      ('give',    'seeds',        'torrents seeding'),
+    'pollinator':    ('give',    'cross-seeded', 'on two or more trackers'),
+    'alchemist':     ('give',    'multiplier',   'cross-seed multiplier'),
+    'diplomat':      ('give',    'trackers',     'trackers you seed on'),
+    'atlas':         ('give',    'held',         'held, size × time'),
+    'oldfaithful':   ('give',    'oldest seed',  'on a single torrent'),
 
-    'shoveler':      ('work',    'shovelled'),
-    'matchmaker':    ('work',    'backfilled'),
-    'exterminator':  ('work',    'orphan kills'),
-    'clonehunter':   ('work',    'dupe kills'),
-    'kingmaker':     ('work',    'swaps'),
-    'sentinel':      ('work',    'clean'),
+    'shoveler':      ('work',    'shovelled',    'items cleared in Triage'),
+    'matchmaker':    ('work',    'backfilled',   'files backfilled'),
+    'exterminator':  ('work',    'orphan kills', 'times orphans hit zero'),
+    'clonehunter':   ('work',    'dupe kills',   'times duplicates hit zero'),
+    'kingmaker':     ('work',    'swaps',        'swaps complied with'),
+    'sentinel':      ('work',    'clean',        'without an orphan'),
     # Not 'clean' — Sentinel owns that word, and two tiles reading "12 days
     # clean" for two different piles is the ambiguity this field exists to kill.
-    'singleton':     ('work',    'copy-free'),
-    'firebrigade':   ('work',    'quick fixes'),
-    'unblemished':   ('work',    'unbroken'),
-    'lapidary':      ('work',    'hardlinked'),
-    'custodian':     ('work',    'best health'),
-    'steady':        ('work',    'at 90+'),
-    'flawless':      ('work',    'at 100'),
+    'singleton':     ('work',    'copy-free',    'without a duplicate'),
+    'firebrigade':   ('work',    'quick fixes',  'messes cleared inside a day'),
+    'unblemished':   ('work',    'unbroken',     'with nothing wrong at all'),
+    'lapidary':      ('work',    'hardlinked',   'of the library hardlinked'),
+    'custodian':     ('work',    'best health',  'best health score'),
+    'steady':        ('work',    'at 90+',       'above health 90'),
+    'flawless':      ('work',    'at 100',       'at health 100'),
 
-    'auditor':       ('machine', 'audits'),
-    'watcher':       ('machine', 'audited'),
-    'chronicler':    ('machine', 'running'),
-    'nightwatch':    ('machine', 'by watchdog'),
-    'clockwork':     ('machine', 'scheduled'),
-    'handson':       ('machine', 'by hand'),
-    'marathoner':    ('machine', 'scanning'),
-    'highwater':     ('machine', 'peak RAM'),
+    'auditor':       ('machine', 'audits',       'audits completed'),
+    'watcher':       ('machine', 'audited',      'that ran an audit'),
+    'chronicler':    ('machine', 'running',      'since your first audit'),
+    'nightwatch':    ('machine', 'by watchdog',  'audits by the watchdog'),
+    'clockwork':     ('machine', 'scheduled',    'audits by the scheduler'),
+    'handson':       ('machine', 'by hand',      'audits you ran by hand'),
+    'marathoner':    ('machine', 'scanning',     'spent scanning'),
+    'highwater':     ('machine', 'peak RAM',     'peak RAM in one scan'),
 
-    'completionist': ('meta',    'rungs'),
-    'trophyhunter':  ('meta',    'feats'),
+    'completionist': ('meta',    'rungs',        'rungs unlocked'),
+    'trophyhunter':  ('meta',    'feats',        'feats earned'),
 }
 
 
@@ -1637,10 +1657,10 @@ def _ladder(lid, name, blurb, value, thresholds, fmt, points_step=25, peaks=None
         pct  = max(0.0, min(1.0, (value - prev_at) / span)) * 100
     else:
         pct = 100.0
-    group, measures = LADDER_FACET.get(lid, ('have', ''))
+    group, measures, terms = LADDER_FACET.get(lid, ('have', '', ''))
     return {
         'id': lid, 'name': name, 'blurb': blurb,
-        'group': group, 'measures': measures,
+        'group': group, 'measures': measures, 'terms': terms,
         'value': value, 'value_label': fmt(value),
         'tier': len(earned), 'tiers_total': len(tiers),
         'tier_label': earned[-1]['label'] if earned else None,

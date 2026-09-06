@@ -328,6 +328,10 @@ def test_every_ladder_says_what_its_number_counts():
     for l in st['ladders']:
         assert l['id'] in rounds.LADDER_FACET, f"{l['id']} has no facet"
         assert l['measures'], f"{l['id']} does not say what it measures"
+        assert l['terms'], f"{l['id']} has no long-form terms"
+        # The record puts `terms` on one line beside the rung name and the
+        # ladder position. Past ~30 characters the position ellipsizes away.
+        assert len(l['terms']) <= 30, f"{l['id']} terms too long for one row"
         assert l['group'] in known
     for g in st['ladder_groups']:
         assert g['total'] > 0, f"{g['id']} is an empty shelf"
@@ -335,6 +339,24 @@ def test_every_ladder_says_what_its_number_counts():
         assert g['total'] == sum(l['tiers_total'] for l in st['ladders'] if l['group'] == g['id'])
     # Every ladder lands on exactly one shelf — none orphaned, none duplicated.
     assert sum(g['total'] for g in st['ladder_groups']) == st['prizes']['total'] - len(st['feats'])
+
+
+def test_terms_lead_with_the_noun_wherever_a_rung_sits_at_one():
+    """Every ladder's rung 1 fires on a new install's first audit, and the
+    record singularises the *first* word of `terms` so it does not read "1
+    audits completed". A ladder whose threshold renders as a bare "1" must
+    therefore lead with the plural noun: "scheduled audits" would come out as
+    "1 scheduled audits", and nothing on the client can rescue it from there."""
+    st = rounds.build_state(_cfg(), _results(_details()), _runs())
+    checked = 0
+    for l in st['ladders']:
+        if not any(t['at_label'] == '1' for t in l['tiers']):
+            continue
+        checked += 1
+        head = l['terms'].split()[0]
+        assert head.endswith('s') and not head.endswith('ss'), \
+            f"{l['id']}: terms must lead with the plural noun, got {l['terms']!r}"
+    assert checked, 'no ladder starts at 1 — this test stopped testing anything'
 
 
 def test_next_prize_names_its_ladder_and_its_rung():
