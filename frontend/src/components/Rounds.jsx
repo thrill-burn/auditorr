@@ -534,12 +534,29 @@ function Prizes({ data }) {
 // ladders and feats already in the payload, so the history never carries a
 // second frozen copy of every label and a renamed rung reads correctly.
 //
+// Naming is not enough on its own: a row reading "Geological Layer · Hoarder ·
+// rung 12 of 21" says when and where, and never *for what*. Each row therefore
+// also carries the terms it was earned on — the rung's threshold with the
+// ladder's own `measures` word ("25.0 TB library", "1.4 years held", "500
+// shovelled"), and for a feat, which has no threshold, its condition sentence.
+//
 // Preview then expand, not a bare toggle: a collapsed section that shows
 // nothing has to be opened before it can justify itself, and the most recent
 // few are the part anyone actually came for. Same shape either way — the date
 // gutter only prints on the first row of its day, so one repeated date does not
 // become a column of noise on a day when twenty rungs landed at once.
 const HISTORY_PREVIEW = 6
+
+// `measures` is written for a medallion, where the value is a live number and
+// rarely 1. In the record it is a *threshold*, and every ladder's rung 1 is
+// frozen there — so a new install's first audit would print a screenful of
+// "1 audits", "1 seeds", "1 titles". Only ever touches a bare "1", and leaves
+// -ss alone so "1 spotless" survives.
+function singularise(value, word) {
+  if (value !== '1' || !word) return word
+  if (/(x|s|z|ch|sh)es$/.test(word)) return word.slice(0, -2)
+  return /ss$/.test(word) ? word : word.replace(/s$/, '')
+}
 
 function fmtDay(iso) {
   const d = new Date(iso)
@@ -565,14 +582,21 @@ function Timeline({ data }) {
       return {
         key: `p${i}`, at: e.at, icon: 'trophy', prior: true,
         label: `${bits.join(' and ')} earned before this`,
-        meta: 'auditorr only started dating these at this upgrade', points: null,
+        meta: 'auditorr only started dating these at this upgrade',
+        detail: '', points: null,
       }
     }
     if (e.kind === 'feat') {
       const f = byFeat[e.id]
       return {
         key: `f${i}-${e.id}`, at: e.at, icon: 'trophy',
-        label: f ? f.label : e.id, meta: 'feat', points: f ? f.points : null,
+        label: f ? f.label : e.id,
+        // The feat's own condition, because the name never carries it: "It Was
+        // Always Here" and "Overqualified" say nothing about what was actually
+        // done. Sans, exactly as the same sentence is set on the shelf — it is
+        // prose, not a readout, and typeface follows kind.
+        meta: f && f.desc ? `feat · ${f.desc}` : 'feat',
+        detail: '', points: f ? f.points : null,
       }
     }
     const l = byLadder[e.id]
@@ -581,6 +605,13 @@ function Timeline({ data }) {
       key: `r${i}-${e.id}-${e.n}`, at: e.at, icon: e.id,
       label: t ? t.label : e.id,
       meta: l ? `${l.name} · rung ${e.n} of ${l.tiers_total}` : `rung ${e.n}`,
+      metaMono: true,
+      // What the rung actually took. The name is a punchline and the rung
+      // number only says where it sits — neither says 25 TB, so a record built
+      // from the two answered "when" and never "for what". `measures` is the
+      // same word the medallion prints, which is what keeps ten byte ladders
+      // apart: "25.0 TB library" and "25.0 TB uploaded" are different evenings.
+      detail: t ? [t.at_label, singularise(t.at_label, l.measures)].filter(Boolean).join(' ') : '',
       points: t ? t.points : null,
     }
   }), [history, byLadder, byFeat])
@@ -669,9 +700,26 @@ function Timeline({ data }) {
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{e.label}</span>
                 <span style={{
-                  fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
+                  ...(e.metaMono ? { fontFamily: 'var(--mono)' } : null),
+                  fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
                   flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{e.meta}</span>
+                {/* What it took, in its own column rather than tacked onto the
+                    meta above: the meta is the flexible one and ellipsizes
+                    first, which would drop precisely the figure this column
+                    exists to show. Dropped entirely on feats rather than left
+                    empty — they have no threshold, that being what makes them
+                    feats, and the 88px would come straight out of the sentence
+                    beside it, which is the longest thing in the card. The two
+                    number columns after it are fixed-width, so the right-hand
+                    edge stays put either way. */}
+                {e.detail && (
+                  <span style={{
+                    fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
+                    color: 'var(--text-dim)', flexShrink: 0,
+                    minWidth: 88, textAlign: 'right', whiteSpace: 'nowrap',
+                  }}>{e.detail}</span>
+                )}
                 {/* Two figures, and the order is the point: what this one was
                     worth, then what you were on once you had it. The award is
                     the fainter of the two — the running total is the column you

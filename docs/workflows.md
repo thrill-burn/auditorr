@@ -92,6 +92,12 @@ ends on the same figure as the rank at the top of the page. The shelf is what
 you have; this is what you did, and when. It shows the last few and expands to
 everything.
 
+Each row also says what it took. A rung shows the threshold it was earned at in
+that ladder's own units — `25.0 TB library`, `365 days at 90+`, `72.0 h
+scanning`, `500 by watchdog` — because a name like *Geological Layer* is a
+punchline with no setup, and *rung 12 of 21* only says where it sits. A feat has
+no threshold, so it shows the condition it was awarded on instead.
+
 If you upgraded into this, the record isn't empty. On the first audit afterwards
 auditorr replays your audit log and dates everything that log can prove — audits
 completed, your best score, days observed, streaks at 90 and 100, scans by the
