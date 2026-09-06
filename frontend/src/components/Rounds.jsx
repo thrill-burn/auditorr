@@ -523,7 +523,13 @@ function Prizes({ data }) {
   )
 }
 
-// ── How you got here — the achievement record, under the shelf ───────────────
+// ── The record — the dated achievement log, under the shelf ──────────────────
+//
+// Headed "The record" and not "History": Config already has an *Audit History*
+// section and the Changes page is the audit history, so a third history on the
+// page that is partly *built* from the audit log (`history_from_runs`) would be
+// a coin flip for what a reader expects to find inside. "Record" is the word
+// every other part of this feature already uses — down to the header icon.
 //
 // The shelf answers "what do I have". It cannot answer "what did I actually do,
 // and when" — a medallion reading *Sisyphus* says nothing about the evening it
@@ -656,13 +662,13 @@ function Timeline({ data }) {
           the scale, same shape of header row. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ color: 'var(--accent)', display: 'flex' }}><Icon name="record" size={17} /></span>
-        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>How you got here</span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>The record</span>
         {/* The points figure is what makes the right-hand column legible: it is
             the same number the rank readout shows at the top of the page, and
             the newest row's running total equals it, so the column explains
             itself without a table header. */}
         <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-          {entries.length} recorded · {((rank && rank.points) || 0).toLocaleString()} pts
+          {entries.length} entries · {((rank && rank.points) || 0).toLocaleString()} pts
         </span>
       </div>
 

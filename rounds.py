@@ -1164,7 +1164,7 @@ def _stat(row):
 #   * `group` — the shelf is themed rather than a wall of thirty, mirroring the
 #     feat groups exactly so the two sections read as one system.
 #
-# `terms` is the same job done at length, for "How you got here", where there is
+# `terms` is the same job done at length, for "The record", where there is
 # no ladder name, no blurb and no tooltip beside the number. `measures` is tile
 # shorthand and leans on its medallion for context: under *Unblemished* the word
 # "unbroken" is enough, but in a list of a hundred dated rows "3 days unbroken"

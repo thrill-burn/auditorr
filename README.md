@@ -20,18 +20,10 @@ tells you what's wrong with your library. Five automated workflows fix it.
 
 ## What's new in 1.7.3
 
-- **[How you got here](#rounds)** - a dated record of every prize you've earned, at the foot of Rounds. Upgrading doesn't start it empty: auditorr replays your audit log and dates everything that log can prove.
-- **Prizes for a library that's already tidy** - the shelf used to go quiet for exactly the people who'd done the work. Eleven new ladders aim at that, including the largest library you've ever held with nothing wrong with it, and everything you seed multiplied by how long you've held it.
-- **[File Explorer can say "not"](docs/configuration.md#excluded-files--folders)** - *Duplicates* and *Excluded* are their own `+` / `-` toggles now, so **orphaned but not excluded** is finally a question you can ask.
-- **Multiple Sonarr / Radarr instances actually work (#22)** - adding one to the additional-instances list used to switch your primary off. Upgrading is the whole fix.
-- **Every workflow's prize is now the work you did**, not the size of your drives - and acting on a row updates the sidebar, the dashboard and the other pages straight away.
-
-## What's new in 1.7.2
-
-- **[Rounds](#rounds)** - a new page that tells you which workflows your library needs right now, which to do first, and keeps score with useless prizes.
-- **Force import** - [Triage](#triage) can now replace a same-quality file Sonarr / Radarr refuses to upgrade, using their own *Import Anyway*.
-- **Health score weighting** - split the 100 points however you like, or stop scoring a category entirely. For setups that delete torrents once seeding is done.
-- **External URLs** - a separate browser-facing address per service, for reverse proxies. Blank means "same as before".
+- **Every Sonarr / Radarr instance is read now ([#22](https://github.com/thrill-burn/auditorr/issues/22))** - your primary pair and the *Additional instances* list are merged rather than either/or. Upgrading is the whole fix.
+- **File Explorer can say "not" ([#23](https://github.com/thrill-burn/auditorr/issues/23))** - *Duplicates* and *Excluded* get their own `+` / `-` [toggles](docs/configuration.md#excluded-files--folders), so **orphaned but not excluded** is one click.
+- **Workflow pages keep up** - act on a row and the sidebar, dashboard and other pages follow straight away, instead of waiting for the next audit.
+- **[Rounds](#rounds) keeps score for a tidy library too** - a dated record of every prize you've earned, eleven new ladders, and workflow prizes rebased onto work done rather than bytes held.
 
 Upgrading from 1.7.0 or earlier? 1.7.1 [closed off-LAN API access by default](docs/remote-access.md) - LAN is unaffected.
 
