@@ -41,7 +41,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
@@ -1550,6 +1550,27 @@ def workflows_trump_resolve_group():
     candidates = [r for r in rows if r['size'] in sizes]
     paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
 
+    # An empty file list means "could not ask", not "holds no files" — both
+    # backends catch every failure and return []. `_cross_seed_group` tests each
+    # sibling against the seed's own paths, so an empty seed list short-circuits
+    # every test and collapses the group to the seed alone. `execute` then
+    # deletes that one torrent's files while its cross-seed siblings stay
+    # registered and keep seeding on top of the hole — silently, in the default
+    # configuration, reported to the user as a successful one-torrent group.
+    # There is no honest degraded answer for a *seed*, only a smaller one.
+    # (A *candidate* whose list is unknown is a different case and still only
+    # narrows the group; reporting that is Phase 2's job.)
+    unknown = [s for s in seeds if not paths_map.get(s['hash'])]
+    if unknown:
+        log.warning("Trump: refusing to resolve — no file listing for %d of %d seed(s): %s",
+                    len(unknown), len(seeds), ', '.join(s['hash'][:8] for s in unknown))
+        return jsonify({
+            "status": "error",
+            "message": f"Could not read the file list for {len(unknown)} of the {len(seeds)} "
+                       "selected torrent(s), so their cross-seed groups cannot be resolved. "
+                       "Check that the torrent client is reachable and try again.",
+        }), 502
+
     group_by_hash, total_size = {}, 0
     for seed in seeds:
         # A seed already pulled into an earlier seed's group shares that payload —
@@ -1854,16 +1875,24 @@ def workflows_triage():
                 return True
             return abs(int(entry['year']) - parsed['year']) <= 1
 
-        # Library rows with files, preferring the service that fits the content type
+        # Library rows with files, gated to the service that fits the content
+        # type. A *gate*, not a tiebreak: this used to end `... or lib_rows`,
+        # which fell back to the wrong-type rows whenever the right type had
+        # none, so a TV episode of a same-titled series absent from Sonarr
+        # matched the film in Radarr (Fargo, Hannibal, Dune, Shōgun — the
+        # collisions are not exotic). That produced quality_cmp 'same', which is
+        # exactly what renders the Force import button, and force_import_files
+        # then posts replaceExistingFiles against the movie's id: one episode
+        # deliberately written over a library film, past every rejection spec.
+        # With no row of the right type the item correctly falls through to
+        # import_pending / not_in_library.
+        preferred = 'sonarr' if is_episode else 'radarr'
         lib_rows = next((lib_by_title[k] for k in parsed_keys if k in lib_by_title), [])
-        lib_rows = [r for r in lib_rows if _year_ok(r)]
-        if lib_rows:
-            preferred = 'sonarr' if is_episode else 'radarr'
-            lib_rows = [r for r in lib_rows if r.get('service') == preferred] or lib_rows
+        lib_rows = [r for r in lib_rows if _year_ok(r) and r.get('service') == preferred]
 
         library_match = None
         if lib_rows:
-            if is_episode and lib_rows[0].get('service') == 'sonarr':
+            if is_episode:
                 # Same episode, or any episode of the same season for season packs
                 if parsed['episode'] is not None:
                     se_tag = f"s{parsed['season']:02d}e{parsed['episode']:02d}"
@@ -2348,11 +2377,22 @@ def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, sou
         if target_resolutions:
             filtered = [r for r in filtered if r.get('resolution') in target_resolutions]
     if source_filter:
+        # Match on the *quality name*, never the raw `source` field. That field
+        # is a serialized C# enum and the two services do not spell it the same
+        # way: Sonarr says 'web' where Radarr says 'webdl', 'webRip' where
+        # Radarr says 'webrip', and HDTV is 'television' on Sonarr against 'tv'
+        # on Radarr — so the HDTV chip matched nothing on either service and
+        # WEB-DL/WEBRip matched nothing on any Sonarr candidate. The failure was
+        # silent: the candidate came back `not_found`, indistinguishable from
+        # "no release exists". `parse_quality_name` maps the display string both
+        # services do agree on ('WEBDL-1080p', 'HDTV-720p', 'Bluray-1080p
+        # Remux') onto the chips' own vocabulary, and it is what the rest of
+        # auditorr already uses — this was the last consumer of the raw enum.
+        # It also subsumes the old Remux special case, since 'remux' is matched
+        # ahead of 'bluray' in _SOURCE_NAME_PATTERNS.
         def _source_match(r):
-            # Sonarr uses source="bluray" for both Remux and Bluray encodes.
-            # Distinguish them by quality name so the two chips are independent.
-            is_remux = 'remux' in (r.get('quality_name') or '').lower()
-            return ('remux' if is_remux else r.get('source', '')) in source_filter
+            _, src = parse_quality_name(r.get('quality_name'))
+            return src in source_filter
         filtered = [r for r in filtered if _source_match(r)]
     if hdr_filter:
         # 'SDR' maps to empty string (no HDR detected); other values match hdr field directly

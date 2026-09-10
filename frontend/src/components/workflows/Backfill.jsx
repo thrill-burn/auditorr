@@ -5,6 +5,7 @@ import {
   Chip, LabeledChips, IndexerChips, FolderChips, SortPicker, CountPicker,
   SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError, WorkflowWarning,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
+  useAuditComplete,
 } from './shared'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -528,7 +529,9 @@ export default function Backfill({ onNavigate }) {
     } catch {}
   }, [sort, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders])
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true)
+    setLoadError(null)
     Promise.all([api.acquireCandidates(), api.workflowIndexers(), api.getConfig()])
       .then(([cdata, idata, cfg]) => {
         const grouped  = groupCandidates(cdata.candidates || [])
@@ -544,6 +547,16 @@ export default function Backfill({ onNavigate }) {
       .catch(e => setLoadError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => { load() }, [load])
+  // Built from the last audit, like every other workflow page. Without this the
+  // candidate list, the folder chips, the Search Depth readout and the Generate
+  // count all stay pre-scan for as long as the page is open — including across
+  // the scan the user's own backfill just caused, so a file that has been
+  // successfully backfilled is still offered and grabbing it again is a plain
+  // duplicate download. The config phase is the only thing this re-renders; a
+  // running job lives in a different phase and is untouched.
+  useAuditComplete(load)
 
   const saveFilters = useCallback(async (df, so) => {
     setSaving(true)

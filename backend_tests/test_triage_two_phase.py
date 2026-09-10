@@ -209,6 +209,92 @@ class TriageCountTests(unittest.TestCase):
         self.assertEqual(self._rows(records), 1)
 
 
+def _phase1_library(records, media_index):
+    """Phase 1 with a real arr media index behind it.
+
+    Every other test here passes the arr fetches as [], so the library-matching
+    block — the part that decides whether the Force import button renders — is
+    never exercised by them.
+    """
+    with patch.object(app, 'db_load_config', return_value={}), \
+         patch.object(app, 'db_has_file_results', return_value=True), \
+         patch.object(app, 'db_load_file_results', return_value=records), \
+         patch.object(app, 'fetch_arr_media_index', return_value=media_index), \
+         patch.object(app, 'fetch_arr_all_titles', return_value=[]), \
+         patch.object(app, 'normalize_arr_connections', return_value=[]), \
+         patch.object(app.sources, 'fetch_torrent_details',
+                      side_effect=AssertionError('phase 1 must not call the client')):
+        return app.app.test_client().get('/api/workflows/triage').get_json()['items']
+
+
+def _media(**over):
+    base = {'connection_id': 'c1', 'connection_name': 'main', 'service': 'radarr',
+            'title': '', 'year': None, 'path': '', 'relative_path': '',
+            'arr_id': 1, 'file_id': 1, 'title_slug': 'slug',
+            'file_quality_name': 'WEBDL-1080p', 'file_hdr': ''}
+    base.update(over)
+    return base
+
+
+class TriageLibraryTypeGateTests(unittest.TestCase):
+    """The service preference is a gate, not a tiebreak.
+
+    It used to end `... or lib_rows`, falling back to the wrong-type rows
+    whenever the right type had none. A TV episode of a series absent from
+    Sonarr then matched the same-titled film in Radarr and came back
+    `superseded` with quality_cmp 'same' — which is exactly the condition that
+    renders Force import, and force_import_files posts replaceExistingFiles
+    against the movie's id. One episode written over a library film, past every
+    rejection spec. Fargo, Hannibal, Dune, Shogun: the collisions are ordinary.
+    """
+
+    def test_an_episode_never_matches_a_same_titled_movie(self):
+        items = _phase1_library(
+            [_rec(hash='EP', path='tv/Fargo/Fargo.S05E01.1080p.WEB-DL.mkv')],
+            [_media(service='radarr', title='Fargo', year=1996, arr_id=42,
+                    path='/media/movies/Fargo (1996)/Fargo.1996.1080p.WEB-DL.mkv',
+                    relative_path='Fargo.1996.1080p.WEB-DL.mkv')])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['verdict'], 'not_in_library')
+        # No library payload means no arr_id, so nothing can be force-imported
+        # over: canForceImport is quality_cmp === 'same' && arr_id && conn.
+        self.assertIsNone(items[0]['library'])
+
+    def test_a_movie_never_matches_a_same_titled_series(self):
+        """The reverse direction — milder, but it points the arr link and the
+        'upgrade your library copy' copy at the wrong title."""
+        items = _phase1_library(
+            [_rec(hash='MV', path='radarr/Dune (2021)/Dune.2021.2160p.Remux.mkv')],
+            [_media(service='sonarr', title='Dune', year=2021, arr_id=9,
+                    path='/media/tv/Dune/Season 01/Dune.S01E01.mkv',
+                    relative_path='Dune.S01E01.mkv')])
+        self.assertEqual(items[0]['verdict'], 'not_in_library')
+        self.assertIsNone(items[0]['library'])
+
+    def test_the_right_type_still_matches(self):
+        """The gate must not cost the working path: a movie still finds its
+        Radarr file and still reports a quality comparison."""
+        items = _phase1_library(
+            [_rec(hash='MV', path='radarr/Movie (2020)/Movie.2020.1080p.WEB-DL.mkv')],
+            [_media(service='radarr', title='Movie', year=2020, arr_id=7,
+                    path='/media/movies/Movie (2020)/Movie.2020.1080p.WEB-DL.mkv',
+                    relative_path='Movie.2020.1080p.WEB-DL.mkv')])
+        self.assertEqual(items[0]['verdict'], 'superseded')
+        self.assertEqual(items[0]['library']['service'], 'radarr')
+        self.assertEqual(items[0]['library']['arr_id'], 7)
+        self.assertEqual(items[0]['library']['quality_cmp'], 'same')
+
+    def test_an_episode_still_matches_its_own_series(self):
+        items = _phase1_library(
+            [_rec(hash='EP', path='tv/Show/Show.S01E02.1080p.WEB-DL.mkv')],
+            [_media(service='sonarr', title='Show', year=2019, arr_id=5,
+                    path='/media/tv/Show/Season 01/Show.S01E02.1080p.WEB-DL.mkv',
+                    relative_path='Season 01/Show.S01E02.1080p.WEB-DL.mkv')])
+        self.assertEqual(items[0]['verdict'], 'superseded')
+        self.assertEqual(items[0]['library']['service'], 'sonarr')
+        self.assertEqual(items[0]['library']['arr_id'], 5)
+
+
 class TriageVerifyEndpointTests(unittest.TestCase):
     def _post(self, payload, details=None, error=None):
         def _fetch(cfg, items):

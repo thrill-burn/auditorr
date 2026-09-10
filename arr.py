@@ -309,14 +309,26 @@ def _release_group_tag(name):
     """Release-group tag (lowercased, the token after the final hyphen), or '' —
     'A.Movie.2020-GRP' → 'grp'. The encode identity that distinguishes two
     same-episode releases; rejects sentence fragments so a hyphen inside a title
-    can't be mistaken for a group."""
+    can't be mistaken for a group.
+
+    A trailing hyphen is not proof of a group: the two commonest source tokens
+    carry one. 'Show.S01E01.1080p.AMZN.WEB-DL' yielded 'dl' and
+    'Movie 2020 2160p Blu-Ray' yielded 'ray', which is why quality tokens are
+    rejected here. In `match_trumped_torrent`'s overlap tier a mismatched group
+    is a hard `continue`, so a PM that named its group disqualified the client's
+    copy of the same payload outright whenever that copy was named without one.
+    The inverse was quieter and worse: two groupless names both reduced to 'dl',
+    which `score_release_match` then scored as a group *agreement* they never
+    had.
+    """
     s = re.sub(r'\.(mkv|mp4|avi|ts|m2ts|iso)$', '', str(name or '').strip(), flags=re.I)
     if '-' not in s:
         return ''
     tag = s.rsplit('-', 1)[-1].strip()
     if not tag or ' ' in tag or len(tag) > 20:
         return ''
-    return re.sub(r'[^a-z0-9]', '', tag.lower())
+    tag = re.sub(r'[^a-z0-9]', '', tag.lower())
+    return '' if tag in _QUALITY_NOISE else tag
 
 
 def match_trumped_torrent(rows, title):
@@ -910,6 +922,14 @@ def get_arr_file_id(cfg, service, connection_id, arr_id):
     Used to detect whether a ManualImport command actually replaced the file,
     since the command endpoint may report status='failed' even on success.
     Returns None if unavailable.
+
+    Sonarr's answer is a *sorted list*, not a set: every consumer only ever
+    compares two readings with `!=`, and sorting makes that comparison as exact
+    as a set's while staying JSON-serializable. It used to be a `frozenset`,
+    which `/api/workflows/import_check` put straight into `jsonify` — so that
+    endpoint 500'd on every Sonarr item, silently taking any Radarr items in the
+    same request down with it and leaving the rescan follow-through watching
+    nothing.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
@@ -920,10 +940,10 @@ def get_arr_file_id(cfg, service, connection_id, arr_id):
             info = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}', timeout=10)
             return info.get('movieFileId')
         else:
-            # For Sonarr track the set of episode file IDs as a frozen snapshot
+            # For Sonarr track the episode file IDs as a sorted snapshot
             eps = _arr_get(conn['base_url'], conn['api_key'],
                            f'/api/v3/episodefile?seriesId={arr_id}', timeout=10)
-            return frozenset(e['id'] for e in eps if e.get('id'))
+            return sorted({e['id'] for e in eps if e.get('id')})
     except Exception:
         return None
 

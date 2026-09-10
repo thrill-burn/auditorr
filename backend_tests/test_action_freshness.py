@@ -129,6 +129,29 @@ class ImportCheckTests(unittest.TestCase):
         resp = self._post([])
         self.assertEqual(resp.status_code, 400)
 
+    def test_a_sonarr_item_actually_serializes(self):
+        """The real `get_arr_file_id`, not a mocked int — every other test here
+        patches it away, which is exactly why this shipped broken.
+
+        Sonarr's answer used to be a `frozenset`, which is not JSON-serializable,
+        so `jsonify` raised and the *whole* request 500'd. The rescan
+        follow-through has never worked for Sonarr, and a mixed selection lost
+        its Radarr answers too."""
+        conns = [{'id': 'c1', 'base_url': 'http://sonarr:8989', 'api_key': 'k'}]
+        eps   = [{'id': 30}, {'id': 10}, {'id': 20}]
+        with patch('app.db_load_config', return_value={}), \
+             patch('app._is_local_client', return_value=True), \
+             patch('arr.normalize_arr_connections', return_value=conns), \
+             patch('arr._arr_get', return_value=eps):
+            resp = self.client.post('/api/workflows/import_check', json={'items': [
+                {'key': 'a', 'service': 'sonarr', 'connection_id': 'c1', 'arr_id': 7}]})
+        self.assertEqual(resp.status_code, 200)
+        row = resp.get_json()['results'][0]
+        self.assertTrue(row['checked'])
+        # Sorted, not just listed: the caller detects an import by comparing two
+        # readings with `!=`, so a reordered response would read as a change.
+        self.assertEqual(row['file_id'], [10, 20, 30])
+
 
 if __name__ == '__main__':
     unittest.main()

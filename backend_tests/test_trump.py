@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 
+import app
 from arr import (
     parse_trump_pm, match_trump_release, match_trumped_torrent, _norm_release_name,
     rank_release_matches, score_release_match, _audio_codec, title_soft_match,
-    indexer_key, tracker_matches_indexer,
+    indexer_key, tracker_matches_indexer, _release_group_tag,
 )
 
 
@@ -117,6 +119,37 @@ class TrumpedTorrentMatchTests(unittest.TestCase):
         rows = self._rows("Snow.White.1937.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265-GRP")
         self.assertIsNotNone(match_trumped_torrent(
             rows, "Snow White 1938 2160p UHD BluRay TrueHD 7.1 Atmos x265-GRP"))
+
+    def test_a_named_group_does_not_disqualify_a_groupless_copy(self):
+        # The PM names its group; the client's copy of the same payload is named
+        # without one and ends in WEB-DL. That used to parse as group 'dl', and
+        # a mismatched group is a hard `continue` in the overlap tier — so the
+        # correct torrent was disqualified outright and the pre-selection lost.
+        rows = self._rows("FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL")
+        m = match_trumped_torrent(
+            rows, "FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        self.assertIsNotNone(m)
+
+    def test_two_groupless_names_are_not_a_group_agreement(self):
+        # The quieter inverse: both sides reduce to 'ray', which scores as a
+        # group *match* neither release ever declared. Different titles, so the
+        # title gate must still be what decides — not a manufactured agreement.
+        rows = self._rows("Weapons 2025 2160p Blu-Ray")
+        self.assertIsNone(match_trumped_torrent(rows, "The Drama 2026 2160p Blu-Ray"))
+
+
+class ReleaseGroupTagTests(unittest.TestCase):
+    """A trailing hyphen is not proof of a release group."""
+
+    def test_quality_tokens_are_not_groups(self):
+        self.assertEqual(_release_group_tag("Show.S01E01.1080p.AMZN.WEB-DL"), "")
+        self.assertEqual(_release_group_tag("Movie 2020 2160p Blu-Ray"), "")
+
+    def test_real_groups_survive(self):
+        self.assertEqual(_release_group_tag("A.Movie.2020-GRP"), "grp")
+        self.assertEqual(
+            _release_group_tag("FROM.S04E01.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune"),
+            "kitsune")
 
 
 class TrumpReleaseMatchTests(unittest.TestCase):
@@ -342,6 +375,57 @@ class NormalizeReleaseNameTests(unittest.TestCase):
     def test_normalization(self):
         self.assertEqual(_norm_release_name("Show.S01E01.WEB-DL"), "show s01e01 web-dl")
         self.assertEqual(_norm_release_name("A__B  C"), "a b c")
+
+
+class TrumpSeedFileListRuleTests(unittest.TestCase):
+    """Phase 2 must refuse a seed whose file list could not be read.
+
+    Both source backends catch every failure in `fetch_torrent_file_paths` and
+    return [] — the docstrings say so deliberately — so an empty list is "could
+    not ask", not "holds no files". `_cross_seed_group` tests siblings against
+    the seed's paths, so an empty one short-circuits every test and the group
+    collapses to the seed alone. `execute` then deletes that torrent's files
+    while its cross-seed siblings stay registered and keep seeding on top of
+    the hole. A smaller group is not a degraded answer here, it is a wrong one.
+    """
+
+    ROWS = [
+        {'hash': 'aaa', 'name': 'Rel.1080p.WEB-DL-GRP', 'size': 100,
+         'tracker': 't1', 'instance_id': 1, 'instance_name': 'main'},
+        {'hash': 'bbb', 'name': 'Rel.1080p.WEB-DL-GRP', 'size': 100,
+         'tracker': 't2', 'instance_id': 1, 'instance_name': 'main'},
+        {'hash': 'ccc', 'name': 'Rel.1080p.WEB-DL-GRP', 'size': 100,
+         'tracker': 't3', 'instance_id': 1, 'instance_name': 'main'},
+    ]
+
+    def _resolve(self, paths_map):
+        with patch.object(app, 'db_load_config', return_value={}), \
+             patch.object(app.sources, 'list_torrents', return_value=list(self.ROWS)), \
+             patch.object(app.sources, 'fetch_torrent_file_paths', return_value=paths_map), \
+             patch.object(app.sources, 'fetch_torrent_details', return_value={}):
+            return app.app.test_client().post('/api/workflows/trump/resolve_group', json={
+                'old_titles': ['Rel.1080p.WEB-DL-GRP'], 'seed_hashes': ['aaa']})
+
+    def test_healthy_lookup_resolves_the_whole_group(self):
+        resp = self._resolve({'aaa': ['j.mkv'], 'bbb': ['j.mkv'], 'ccc': ['j.mkv']})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertEqual(body['status'], 'success')
+        self.assertEqual(sorted(t['hash'] for t in body['torrents']), ['aaa', 'bbb', 'ccc'])
+
+    def test_an_unreadable_seed_refuses_instead_of_returning_one_torrent(self):
+        resp = self._resolve({'aaa': [], 'bbb': ['j.mkv'], 'ccc': ['j.mkv']})
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.get_json()['status'], 'error')
+
+    def test_an_unreadable_candidate_does_not_refuse(self):
+        """Only the *seed* rule lands in this pass. A candidate whose list is
+        unknown still only narrows the group, and reporting that is Phase 2 of
+        the roadmap — it must not start failing the request here."""
+        resp = self._resolve({'aaa': ['j.mkv'], 'bbb': ['j.mkv'], 'ccc': []})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(sorted(t['hash'] for t in resp.get_json()['torrents']),
+                         ['aaa', 'bbb'])
 
 
 if __name__ == "__main__":
