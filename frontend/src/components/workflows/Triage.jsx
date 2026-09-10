@@ -32,7 +32,7 @@ const VERDICTS = [
   },
   {
     key: 'not_in_library', label: 'Not in Library', color: 'var(--text-dim)',
-    desc: 'No matching title in any Sonarr/Radarr instance. Manual downloads belong in your exclusions; junk can be deleted.',
+    desc: 'No matching title in any Sonarr/Radarr instance, alternate titles included. Nothing in your library holds this, so these files are the only copy — deleting loses them. Manual downloads belong in your exclusions.',
   },
 ]
 

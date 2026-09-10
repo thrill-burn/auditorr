@@ -1365,7 +1365,12 @@ def fetch_arr_all_titles(cfg, force=False):
     The media index only contains items that HAVE files — this list is what lets
     Triage distinguish "in the library but never imported" from "not in the
     library at all". Returns [{service, connection_id, arr_id, title,
-    title_slug, year, has_file}].
+    title_slug, year, has_file, alt_titles}].
+
+    `alt_titles` is the arr's own `alternateTitles` — see `title_alias_keys`.
+    It rides the listing both services already return, so it costs no extra
+    call; it is capped per item because Radarr can carry a translation for
+    every region it knows about.
     """
     now = time.monotonic()
     if not force and _arr_titles_cache['data'] is not None and (now - _arr_titles_cache['ts']) < _ARR_TITLES_TTL:
@@ -1383,6 +1388,7 @@ def fetch_arr_all_titles(cfg, force=False):
                         'title_slug':    m.get('titleSlug') or '',
                         'year':          m.get('year'),
                         'has_file':      bool(m.get('hasFile')),
+                        'alt_titles':    _alt_titles(m),
                     })
             else:
                 for s in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT):
@@ -1395,6 +1401,7 @@ def fetch_arr_all_titles(cfg, force=False):
                         'title_slug':    s.get('titleSlug') or '',
                         'year':          s.get('year'),
                         'has_file':      (stats.get('episodeFileCount') or 0) > 0,
+                        'alt_titles':    _alt_titles(s),
                     })
         except Exception as e:
             log.warning("Could not fetch %s titles from %s: %s", conn['service'], conn['id'], e)
@@ -1514,6 +1521,76 @@ def title_match_keys(title):
     keys = {_normalize_title(v) for v in variants}
     keys.discard('')
     return keys
+
+
+# Radarr carries a translation for nearly every region it knows about, and this
+# list is held in memory for the whole cache TTL, so it is bounded per item.
+_MAX_ALT_TITLES = 25
+
+
+def _alt_titles(item):
+    """The `alternateTitles` strings on a Sonarr series or Radarr movie."""
+    out, seen = [], set()
+    for a in (item.get('alternateTitles') or ()):
+        t = (a.get('title') or '').strip() if isinstance(a, dict) else str(a or '').strip()
+        low = t.lower()
+        if t and low not in seen:
+            seen.add(low)
+            out.append(t)
+            if len(out) >= _MAX_ALT_TITLES:
+                break
+    return out
+
+
+def title_alias_keys(all_titles):
+    """Map each alternate-title key an arr knows onto that item's canonical keys.
+
+    Sonarr and Radarr both carry `alternateTitles` — the AKA and translated
+    names TheTVDB/TMDB hold for an item — and for non-English content the scene
+    release is named in the **original language** while the arr stores the
+    English title. `No.tengo.miedo.S01E01…` against a series Sonarr calls
+    "I'm Not Afraid" matches on nothing, so Triage returned `not_in_library`
+    ("no arr has ever heard of this — junk can be deleted") for a series Sonarr
+    was actively managing and had already grabbed. That copy invited a delete
+    on the only copy of the data.
+
+    This is authoritative metadata auditorr simply never asked for, not a fuzzy
+    guess: the arr could only have matched the grab in the first place *because*
+    it consults this same field. It rides a listing both services already
+    return, so reading it costs no extra API call.
+
+    Returns {alias_key: {canonical_key, ...}}. Callers append the results
+    **after** their canonical keys (`with_title_aliases`), so an exact title
+    match always wins and an alias can only ever add a candidate that would
+    otherwise have been "nothing". A key that is already canonical for the same
+    item is skipped, so nothing aliases to itself.
+    """
+    alias = {}
+    for t in all_titles or ():
+        canon = title_match_keys(t.get('title') or '')
+        if not canon:
+            continue
+        for a in (t.get('alt_titles') or ()):
+            for k in title_match_keys(a):
+                if k not in canon:
+                    alias.setdefault(k, set()).update(canon)
+    return alias
+
+
+def with_title_aliases(keys, aliases):
+    """Canonical keys first, then any the arrs' alternate titles point to.
+
+    Order is the whole point: every consumer resolves with `next(...)` over
+    these keys, so putting aliases last keeps an exact title match strictly
+    ahead of a translated one.
+    """
+    keys = set(keys)
+    if not aliases:
+        return list(keys)
+    extra = set()
+    for k in keys:
+        extra |= aliases.get(k) or set()
+    return list(keys) + sorted(extra - keys)
 
 
 def _test_arr_connection(url, api_key):

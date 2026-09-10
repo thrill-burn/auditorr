@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from audit import _is_triage_relevant, count_triage_items
 import app
+import arr
 
 
 def _rec(**over):
@@ -293,6 +294,107 @@ class TriageLibraryTypeGateTests(unittest.TestCase):
         self.assertEqual(items[0]['verdict'], 'superseded')
         self.assertEqual(items[0]['library']['service'], 'sonarr')
         self.assertEqual(items[0]['library']['arr_id'], 5)
+
+
+def _phase1_titles(records, all_titles):
+    """Phase 1 with managed arr titles but no library files — the
+    import_pending / not_in_library boundary."""
+    with patch.object(app, 'db_load_config', return_value={}), \
+         patch.object(app, 'db_has_file_results', return_value=True), \
+         patch.object(app, 'db_load_file_results', return_value=records), \
+         patch.object(app, 'fetch_arr_media_index', return_value=[]), \
+         patch.object(app, 'fetch_arr_all_titles', return_value=all_titles), \
+         patch.object(app, 'normalize_arr_connections', return_value=[]), \
+         patch.object(app.sources, 'fetch_torrent_details',
+                      side_effect=AssertionError('phase 1 must not call the client')):
+        return app.app.test_client().get('/api/workflows/triage').get_json()['items']
+
+
+class TriageAlternateTitleTests(unittest.TestCase):
+    """A release named in its original language must find the arr's item.
+
+    Field report: a Spanish-language series released as
+    `No.tengo.miedo.S01…` against a Sonarr that stores it as "I'm Not Afraid".
+    The titles match on nothing, so the verdict was `not_in_library` — whose
+    copy read "junk can be deleted" — for a series Sonarr was actively managing
+    and had already grabbed. The torrent held the only copy of 33 GB, and it
+    was deleted on the strength of that verdict.
+
+    Sonarr and Radarr both carry the mapping in `alternateTitles`; they have to,
+    since it is how they matched the grab. auditorr just never read it.
+    """
+
+    SONARR = [{'service': 'sonarr', 'connection_id': 'c1', 'arr_id': 12,
+               'title': "I'm Not Afraid", 'title_slug': 'im-not-afraid',
+               'year': 2025, 'has_file': False,
+               'alt_titles': ['No tengo miedo']}]
+
+    def _verdict(self, path, titles=None):
+        items = _phase1_titles([_rec(hash='ES', path=path)],
+                              self.SONARR if titles is None else titles)
+        return items[0]['verdict'], items[0]
+
+    def test_original_language_release_is_import_pending_not_unknown(self):
+        verdict, item = self._verdict(
+            'tv/No.tengo.miedo.S01.2160p.NF.WEB-DL/'
+            'No.tengo.miedo.S01E01.The.Witch.2160p.NF.WEB-DL.mkv')
+        self.assertEqual(verdict, 'import_pending')
+        # And it resolves to the arr's own item, so Rescan has somewhere to go.
+        self.assertEqual(item['library']['service'], 'sonarr')
+        self.assertEqual(item['library']['arr_id'], 12)
+
+    def test_the_english_title_still_matches(self):
+        verdict, _ = self._verdict(
+            'tv/Im.Not.Afraid.S01E01.2160p.WEB-DL.mkv')
+        self.assertEqual(verdict, 'import_pending')
+
+    def test_without_the_alternate_title_it_is_still_unknown(self):
+        """The alias is what does the work — with no alternateTitles the arr
+        genuinely has never heard of this name."""
+        bare = [{**self.SONARR[0], 'alt_titles': []}]
+        verdict, item = self._verdict(
+            'tv/No.tengo.miedo.S01E01.2160p.WEB-DL.mkv', titles=bare)
+        self.assertEqual(verdict, 'not_in_library')
+        self.assertIsNone(item['library'])
+
+    def test_an_unrelated_release_is_not_dragged_in_by_an_alias(self):
+        verdict, _ = self._verdict('tv/Some.Other.Show.S01E01.1080p.WEB-DL.mkv')
+        self.assertEqual(verdict, 'not_in_library')
+
+
+class TitleAliasKeyTests(unittest.TestCase):
+    def test_alias_maps_to_the_canonical_keys(self):
+        alias = arr.title_alias_keys([
+            {'title': "I'm Not Afraid", 'alt_titles': ['No tengo miedo']}])
+        self.assertIn('no tengo miedo', alias)
+        self.assertTrue(alias['no tengo miedo'] & arr.title_match_keys("I'm Not Afraid"))
+
+    def test_a_title_never_aliases_to_itself(self):
+        alias = arr.title_alias_keys([
+            {'title': 'The Office', 'alt_titles': ['The Office']}])
+        self.assertEqual(alias, {})
+
+    def test_canonical_keys_come_first(self):
+        """Order is load-bearing: every consumer resolves with next(), so an
+        exact title match must outrank a translated one."""
+        alias = {'b': {'z'}}
+        out = arr.with_title_aliases({'b'}, alias)
+        self.assertEqual(out, ['b', 'z'])
+
+    def test_no_aliases_is_a_passthrough(self):
+        self.assertEqual(sorted(arr.with_title_aliases({'a', 'b'}, {})), ['a', 'b'])
+
+    def test_alt_titles_are_deduped_and_capped(self):
+        item = {'alternateTitles': [{'title': 'A'}, {'title': 'a'}, {'title': 'B'}]}
+        self.assertEqual(arr._alt_titles(item), ['A', 'B'])
+        many = {'alternateTitles': [{'title': f'T{i}'} for i in range(200)]}
+        self.assertEqual(len(arr._alt_titles(many)), arr._MAX_ALT_TITLES)
+
+    def test_missing_or_odd_shapes_are_safe(self):
+        self.assertEqual(arr._alt_titles({}), [])
+        self.assertEqual(arr._alt_titles({'alternateTitles': None}), [])
+        self.assertEqual(arr.title_alias_keys(None), {})
+        self.assertEqual(arr.title_alias_keys([{'title': '', 'alt_titles': ['x']}]), {})
 
 
 class TriageVerifyEndpointTests(unittest.TestCase):

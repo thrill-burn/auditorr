@@ -41,7 +41,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
@@ -1843,6 +1843,15 @@ def workflows_triage():
         for key in title_match_keys(t.get('title') or ''):
             titles_by_norm.setdefault(key, []).append(t)
 
+    # Non-English content is released under its original-language name while the
+    # arr stores the English one, so matching on the release title alone answers
+    # "no arr has ever heard of this" for a series the arr is actively managing.
+    # The arrs' own `alternateTitles` carry the mapping — and they must, because
+    # it is how the arr matched the grab in the first place. Built once per
+    # request from `all_titles` (one row per series/movie, already cached), so
+    # the per-file media index pays no memory for it.
+    title_aliases = title_alias_keys(all_titles)
+
     conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
 
     def _arr_url(entry):
@@ -1861,7 +1870,9 @@ def workflows_triage():
         parsed = parse_release_info_for_path(rep['path'])
 
         tracker_health = g.get('stored_health') or 'unknown'
-        parsed_keys    = title_match_keys(parsed['title'])
+        # Canonical keys first, then the arrs' alternate titles — an exact match
+        # always wins, an alias only rescues what would otherwise match nothing.
+        parsed_keys    = with_title_aliases(title_match_keys(parsed['title']), title_aliases)
         is_episode     = parsed['season'] is not None
 
         # Same-title remakes ("The Smashing Machine" 2002 vs 2025) must not

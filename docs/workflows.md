@@ -177,7 +177,14 @@ they need six different responses.
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
 | **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). |
 | **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Trigger a rescan. |
-| **Not in library** | Neither arr knows about it. | Import it, exclude it, or remove it. |
+| **Not in library** | Neither arr knows about it, under its own title or any alternate title they hold. | Import it, exclude it, or remove it — but note these files are the only copy. |
+
+Titles are matched against the **alternate titles** Sonarr and Radarr already
+store, not just the one they display. That matters for non-English content,
+which is almost always released under its original-language name: a season
+released as `No.tengo.miedo.S01…` resolves to the series Sonarr calls *I'm Not
+Afraid*, and reads as *Import pending* rather than *Not in library*. An exact
+title match always takes priority.
 
 ### How Triage loads
 

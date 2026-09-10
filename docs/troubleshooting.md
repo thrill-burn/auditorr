@@ -206,6 +206,25 @@ silently present it as current.
 
 ---
 
+## Triage says "Not in Library" for something Sonarr/Radarr definitely has
+
+Almost always a **title in another language**. Non-English content is released
+under its original-language name while your arr stores the English one, so
+`No.tengo.miedo.S01E01…` and *I'm Not Afraid* look like two unrelated titles.
+
+auditorr matches against the **alternate titles** Sonarr and Radarr already hold
+for every item, which is where translated and AKA names live, so this should
+resolve on its own and show as *Import pending* instead. If it still reads *Not
+in Library*, open the series or movie in your arr and check its alternate titles
+— if the release name isn't among them, the arr can't match it either, which is
+usually why it never imported.
+
+> Treat *Not in Library* as "nothing in your library holds this", not as "this is
+> junk". A torrent that was never imported has no hardlink anywhere else, so its
+> files are the only copy and deleting them loses the data.
+
+---
+
 ## Trigger Rescan doesn't import anything
 
 Read the toast — it now carries Sonarr/Radarr's actual answer rather than a
