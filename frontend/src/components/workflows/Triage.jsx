@@ -5,8 +5,8 @@ import { formatBytes, copyText } from '../../utils'
 import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
-  Checkbox, ActionBar, ActionButton, Spinner, SpinKeyframes, HDR_STYLE,
-  useAuditComplete,
+  ArrErrorsWarning, Checkbox, ActionBar, ActionButton, Spinner, SpinKeyframes,
+  HDR_STYLE, useAuditComplete,
 } from './shared'
 
 const VERDICTS = [
@@ -29,6 +29,10 @@ const VERDICTS = [
   {
     key: 'import_pending', label: 'Import Pending', color: 'var(--blue)',
     desc: 'Managed by Sonarr/Radarr but missing from the library — the import likely failed or was skipped. Trigger a rescan to retry.',
+  },
+  {
+    key: 'library_unknown', label: 'Could Not Check', color: 'var(--yellow)',
+    desc: 'A Sonarr/Radarr instance did not answer, so auditorr could not establish whether your library holds these. They are NOT “not in library” — that verdict means no arr has ever heard of a title, and no arr answered. Fix the connection above and reload before acting on anything here.',
   },
   {
     key: 'not_in_library', label: 'Not in Library', color: 'var(--text-dim)',
@@ -874,6 +878,12 @@ export default function Triage({ onNavigate, cleanupCount }) {
               No Sonarr/Radarr connection configured — library matching is disabled, so most items fall into “Not in Library”.
             </div>
           )}
+
+          <ArrErrorsWarning
+            errors={report?.arr_errors}
+            extra={'Library matching is incomplete, so “Could Not Check” replaces “Not in Library” for anything that matched nothing, '
+                 + 'and some rows below may read “Import Pending” for files that are in fact imported.'}
+          />
 
           {report?.suggestions?.length > 0 && (
             <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -84,6 +84,8 @@ def _phase1(records, has_subset=True):
          patch.object(app, 'fetch_arr_media_index', return_value=[]), \
          patch.object(app, 'fetch_arr_all_titles', return_value=[]), \
          patch.object(app, 'normalize_arr_connections', return_value=[]), \
+         patch.object(app, 'arr_media_index_errors', return_value=[]), \
+         patch.object(app, 'arr_titles_errors', return_value=[]), \
          patch.object(app.sources, 'fetch_torrent_details', side_effect=_boom):
         client = app.app.test_client()
         resp = client.get('/api/workflows/triage')
@@ -223,6 +225,8 @@ def _phase1_library(records, media_index):
          patch.object(app, 'fetch_arr_media_index', return_value=media_index), \
          patch.object(app, 'fetch_arr_all_titles', return_value=[]), \
          patch.object(app, 'normalize_arr_connections', return_value=[]), \
+         patch.object(app, 'arr_media_index_errors', return_value=[]), \
+         patch.object(app, 'arr_titles_errors', return_value=[]), \
          patch.object(app.sources, 'fetch_torrent_details',
                       side_effect=AssertionError('phase 1 must not call the client')):
         return app.app.test_client().get('/api/workflows/triage').get_json()['items']
@@ -305,6 +309,8 @@ def _phase1_titles(records, all_titles):
          patch.object(app, 'fetch_arr_media_index', return_value=[]), \
          patch.object(app, 'fetch_arr_all_titles', return_value=all_titles), \
          patch.object(app, 'normalize_arr_connections', return_value=[]), \
+         patch.object(app, 'arr_media_index_errors', return_value=[]), \
+         patch.object(app, 'arr_titles_errors', return_value=[]), \
          patch.object(app.sources, 'fetch_torrent_details',
                       side_effect=AssertionError('phase 1 must not call the client')):
         return app.app.test_client().get('/api/workflows/triage').get_json()['items']

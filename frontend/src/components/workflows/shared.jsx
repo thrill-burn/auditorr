@@ -353,6 +353,30 @@ export function WorkflowWarning({ children }) {
   )
 }
 
+// Sonarr/Radarr instances that did not answer, or answered with only part of
+// their library. Shared because the consequence is the same on every page that
+// resolves anything against an arr: the rows that instance manages are simply
+// absent, which is indistinguishable from an instance that manages nothing.
+// `extra` is the per-page sentence about what that absence does *here*.
+export function ArrErrorsWarning({ errors, extra }) {
+  if (!errors?.length) return null
+  const nPartial = errors.filter(e => e.partial).length
+  const nDown    = errors.length - nPartial
+  const clauses = []
+  if (nDown)    clauses.push(`${nDown} Sonarr/Radarr instance${nDown !== 1 ? 's' : ''} could not be read`)
+  if (nPartial) clauses.push(`${nPartial} ${nDown ? '' : `Sonarr/Radarr instance${nPartial !== 1 ? 's' : ''} `}`
+                           + `answered with only part of ${nPartial !== 1 ? 'their libraries' : 'its library'}`)
+  return (
+    <WorkflowWarning>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{clauses.join(', ')}</div>
+      <div>
+        {extra}{extra ? ' ' : ''}
+        {errors.map(e => `${e.name || e.connection_id || 'unnamed'}: ${e.message}`).join(' · ')}
+      </div>
+    </WorkflowWarning>
+  )
+}
+
 // ── Checkbox ──────────────────────────────────────────────────────────────────
 export function Checkbox({ checked, indeterminate, onChange }) {
   return (

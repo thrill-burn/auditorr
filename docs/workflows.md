@@ -177,7 +177,15 @@ they need six different responses.
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
 | **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). |
 | **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Trigger a rescan. |
+| **Could not check** | A Sonarr/Radarr instance didn't answer, so whether your library holds these is unknown. Only appears while something is unreachable. | Fix the connection and reload. Don't act on these meanwhile. |
 | **Not in library** | Neither arr knows about it, under its own title or any alternate title they hold. | Import it, exclude it, or remove it — but note these files are the only copy. |
+
+*Not in library* means "no arr has ever heard of this", so it is deliberately
+**unreachable while any arr is unreachable** — those rows go to *Could not
+check* instead, under a banner naming the instance. The distinction matters
+because that bucket's files are the only copy you have, and "we couldn't ask" is
+not an answer. Positive matches are unaffected: a title that *did* resolve still
+reads *Superseded* or *Import pending* as normal.
 
 Titles are matched against the **alternate titles** Sonarr and Radarr already
 store, not just the one they display. That matters for non-English content,

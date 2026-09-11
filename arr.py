@@ -148,14 +148,25 @@ def fetch_arr_media_index(cfg, force=False):
     for conn in normalize_arr_connections(cfg):
         try:
             if conn['service'] == 'radarr':
-                rows = _fetch_radarr_media(conn)
+                rows, partial = _fetch_radarr_media(conn)
             else:
-                rows = _fetch_sonarr_media(conn)
+                rows, partial = _fetch_sonarr_media(conn)
             media.extend(_apply_arr_media_path_mapping(rows, conn, cfg))
+            if partial:
+                # Some of the library came back. Reported on the same channel as
+                # a total failure because the consequence is the same shape — an
+                # unexplained gap the caller would otherwise read as "manages
+                # nothing" — and `partial` lets the UI say which it was.
+                errors.append({'connection_id': conn['id'], 'name': conn['name'],
+                               'service': conn['service'], 'partial': True,
+                               'failed': partial['failed'], 'total': partial['total'],
+                               'message': f"{partial['failed']} of {partial['total']} "
+                                          f"series could not be read"})
         except Exception as e:
             log.warning("Could not fetch %s media from %s: %s", conn['service'], conn['id'], e)
             errors.append({'connection_id': conn['id'], 'name': conn['name'],
-                           'service': conn['service'], 'message': str(e)})
+                           'service': conn['service'], 'partial': False,
+                           'message': str(e)})
     _arr_media_index_cache['data'] = media
     _arr_media_index_cache['errors'] = errors
     _arr_media_index_cache['ts'] = now
@@ -163,14 +174,22 @@ def fetch_arr_media_index(cfg, force=False):
 
 
 def arr_media_index_errors():
-    """Connections whose media index failed on the most recent fetch.
+    """Connections whose media index failed or came back partial, most recent fetch.
 
     The index is a flat list of rows, so an instance that errored is
     indistinguishable from one that manages nothing — its files just stop
     resolving. Anything that presents resolution results to the user reads this
     so a failure is reported rather than left to be inferred from an
     unexplained gap. Cached alongside the data, so it describes the list the
-    caller just received.
+    caller just received — which is why a consumer must call
+    `fetch_arr_media_index` and then this, in that order, in the same request:
+    the index cache is 120s, so reading this against an older fetch describes a
+    list nobody received.
+
+    Entries carry `partial`: False is "this instance answered with nothing",
+    True is "this instance answered with some of its library" (`failed`/`total`
+    series). Both leave the same hole; only the second is recoverable by
+    retrying a moment later.
     """
     return list(_arr_media_index_cache.get('errors') or [])
 
@@ -190,20 +209,53 @@ def fetch_arr_indexers(cfg):
     return names
 
 
+def season_episodes_from_name(name):
+    """(season, [episode numbers]) parsed from a release basename, or (None, []).
+
+    Two things the old two-digit pattern got wrong, both silently:
+
+    * **Three-digit episodes.** `[Ee](\\d{1,2})` against `S01E120` matched `E12`
+      and returned episode **12** — a confident wrong answer rather than no
+      answer, which then resolved to a real but unrelated episode id.
+      `(?!\\d)` makes the match refuse a truncation instead.
+    * **Multi-episode files.** `S01E01E02` / `S01E01-E02` is one file holding
+      two episodes; only the first was ever seen, so a lookup that failed on it
+      failed outright.
+
+    The bare `S01E01-02` form is deliberately **not** parsed: without a literal
+    `E` the trailing number is indistinguishable from a quality token
+    (`S01E01-720p`), and inventing episode 720 is worse than missing one.
+    """
+    base = os.path.basename(str(name or '').replace('\\', '/').rstrip('/'))
+    m = re.search(r'[Ss](\d{1,2})[Ee](\d{1,3})(?!\d)', base)
+    if not m:
+        return None, []
+    nums = [int(m.group(2))]
+    tail = base[m.end():]
+    while True:
+        more = re.match(r'[-._ ]*[Ee](\d{1,3})(?!\d)', tail)
+        if not more:
+            break
+        nums.append(int(more.group(1)))
+        tail = tail[more.end():]
+    return int(m.group(1)), nums
+
+
 def _episode_id_from_path(conn, arr_id, file_path):
     """Derive a Sonarr episode ID by parsing SxxExx from file_path and matching against the series."""
-    m = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', os.path.basename(file_path))
-    if not m:
+    season, ep_nums = season_episodes_from_name(file_path)
+    if season is None:
         return None
-    season, ep_num = int(m.group(1)), int(m.group(2))
     try:
         episodes = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/episode?seriesId={arr_id}')
-        for ep in episodes:
-            if ep.get('seasonNumber') == season and ep.get('episodeNumber') == ep_num:
-                return ep.get('id')
     except Exception as e:
         log.warning("Could not look up episode from path %s: %s", file_path, e)
-    return None
+        return None
+    # First episode of the file that the series actually knows about — a
+    # multi-episode file searches on whichever of its episodes resolves.
+    by_num = {ep.get('episodeNumber'): ep.get('id') for ep in episodes
+              if ep.get('seasonNumber') == season}
+    return next((by_num[n] for n in ep_nums if by_num.get(n) is not None), None)
 
 
 def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None, file_path=None):
@@ -305,6 +357,23 @@ def _season_ep_anchor(norm_name):
     return m.group(0) if m else ''
 
 
+# A real file extension, for stripping one off a release name.
+#
+# Deliberately an explicit list rather than `os.path.splitext`, which takes
+# everything after the final dot: `splitext('Some.Movie.2020')` returns
+# ('Some.Movie', '.2020'), so a dot-separated release name loses its **year** to
+# an extension that does not exist. Release names are dot-separated by
+# convention, so this is the normal case, not an edge one.
+_FILE_EXT_RE = re.compile(
+    r'\.(mkv|mp4|m4v|avi|mov|wmv|webm|ts|m2ts|mpg|mpeg|iso'
+    r'|srt|sub|idx|ass|ssa|vtt|nfo)$', re.I)
+
+
+def _strip_file_ext(name):
+    """Drop a trailing real file extension from a release file or folder name."""
+    return _FILE_EXT_RE.sub('', str(name or '').strip())
+
+
 def _release_group_tag(name):
     """Release-group tag (lowercased, the token after the final hyphen), or '' —
     'A.Movie.2020-GRP' → 'grp'. The encode identity that distinguishes two
@@ -321,7 +390,7 @@ def _release_group_tag(name):
     which `score_release_match` then scored as a group *agreement* they never
     had.
     """
-    s = re.sub(r'\.(mkv|mp4|avi|ts|m2ts|iso)$', '', str(name or '').strip(), flags=re.I)
+    s = _strip_file_ext(name)
     if '-' not in s:
         return ''
     tag = s.rsplit('-', 1)[-1].strip()
@@ -569,7 +638,10 @@ def score_release_match(query, cand_name):
     # wide-release year renders one movie under either ("Snow White and the
     # Seven Dwarfs" is 1937 or 1938 depending on who typed it), so PMs, torrent
     # names, and indexer records routinely disagree by one. Same ±1 tolerance
-    # as _trump_year_ok; flagged 'partial' so the user sees the drift.
+    # `arr_year_ok` applies to Radarr; flagged 'partial' so the user sees the
+    # drift. (Both sides here are *release names*, so this is symmetric — unlike
+    # `arr_year_ok`, whose Sonarr half compares a release against a series' first
+    # air year and can only be one-sided.)
     if q['year'] and c['year']:
         if abs(q['year'] - c['year']) > 1:
             return 0.0, b
@@ -1052,11 +1124,19 @@ def test_arr_connections(cfg):
             continue
 
         try:
-            media = _fetch_radarr_media(conn) if conn['service'] == 'radarr' else _fetch_sonarr_media(conn)
+            fetch = _fetch_radarr_media if conn['service'] == 'radarr' else _fetch_sonarr_media
+            media, partial = fetch(conn)
             media = _apply_arr_media_path_mapping(media, conn, cfg)
             item['ok'] = True
             item['managed_file_count'] = len(media)
             item['sample_paths'] = [m['path'] for m in media if m.get('path')][:5]
+            if partial:
+                # Still `ok` — the connection works — but a file count that
+                # silently omits a tenth of the library is the same misreport
+                # the index errors channel exists to stop.
+                item['partial'] = True
+                item['message'] = (f"Connected, but {partial['failed']} of {partial['total']} "
+                                   f"series could not be read — the file count below is incomplete")
         except Exception as e:
             item['message'] = f'Connected, but media file metadata could not be read: {e}'
         results.append(item)
@@ -1129,6 +1209,12 @@ def _path_norm(path):
 
 
 def _fetch_radarr_media(conn):
+    """(rows, partial) — Radarr needs one call, so `partial` is always None.
+
+    The tuple exists for symmetry with `_fetch_sonarr_media`, which needs one
+    call per series and therefore has a third outcome between "worked" and
+    "raised": some of the library came back.
+    """
     rows = []
     for movie in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie', timeout=_ARR_LIST_TIMEOUT):
         movie_file = movie.get('movieFile') or {}
@@ -1149,16 +1235,30 @@ def _fetch_radarr_media(conn):
             'file_id': movie_file.get('id'),
             'title_slug': movie.get('titleSlug') or '',
             'file_quality_name': q_inner.get('name', ''),
-            'file_hdr': _detect_hdr(path),
+            # Basename, not the full path: a library root or category directory
+            # containing DV, HDR or HLG as a segment ("/data/media/HDR/…")
+            # otherwise labels every file beneath it.
+            'file_hdr': _detect_hdr(os.path.basename(path)),
         })
-    return rows
+    return rows, None
 
 
 def _fetch_sonarr_media(conn):
+    """(rows, partial) — episode-file records for one Sonarr instance.
+
+    `partial` is None when every series was read, else
+    `{'failed': n, 'total': m}`. One unreachable series must not discard the
+    instance (one timeout in a library of hundreds used to read to every caller
+    as "this Sonarr manages nothing"), but the survivors are a flat list, so
+    without this count a 40-of-400 gap is indistinguishable from a library that
+    simply has no files there — and every missing episode then reads as
+    `import_pending` or `not_in_library` in Triage. Partial failure is both
+    likelier than total failure and, until this was returned, completely silent.
+    """
     series_list = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT)
     valid_series = [(s, s['id']) for s in series_list if s.get('id') is not None]
     if not valid_series:
-        return []
+        return [], None
 
     base_url = conn['base_url']
     api_key = conn['api_key']
@@ -1183,9 +1283,19 @@ def _fetch_sonarr_media(conn):
                 'arr_id': series_id,
                 'file_id': episode_file.get('id'),
                 'episode_ids': episode_file.get('episodeIds') or [],
+                # Sonarr's own season/episode numbers, off the same response.
+                # Regex-parsing them back out of the filename misses daily
+                # series ("Show - 2024-01-05"), anime absolute numbering
+                # ("Show - 087"), "S01.E02" and any non-standard renamer — and
+                # an unparseable episode does not merely lose its season, it
+                # merges with every other unparseable episode of the series
+                # into one candidate keyed `..._SNone`. Zero extra API cost.
+                'season_number': episode_file.get('seasonNumber'),
+                'episode_numbers': episode_file.get('episodeNumbers') or [],
                 'title_slug': series.get('titleSlug') or '',
                 'file_quality_name': q_inner.get('name', ''),
-                'file_hdr': _detect_hdr(path),
+                # Basename, not the full path — see _fetch_radarr_media.
+                'file_hdr': _detect_hdr(os.path.basename(path)),
             })
         return rows
 
@@ -1209,7 +1319,8 @@ def _fetch_sonarr_media(conn):
     if failed:
         log.error("%s: %d of %d series could not be read — their episodes will not "
                   "resolve to library items", conn['id'], len(failed), len(valid_series))
-    return all_rows
+        return all_rows, {'failed': len(failed), 'total': len(valid_series)}
+    return all_rows, None
 
 
 # Release-name quality detection — order matters (remux outranks bluray; the
@@ -1302,7 +1413,12 @@ def parse_release_info(path):
     'hdr', 'quality_label'} — empty strings / None for anything not detected.
     """
     base = os.path.basename(str(path or '').replace('\\', '/').rstrip('/'))
-    stem = os.path.splitext(base)[0]
+    # Not splitext: it takes everything after the final dot, so the dot-separated
+    # release name 'Some.Movie.2020' parsed its own year off as an extension and
+    # `_parse_year_from_name` below then found none. Release names are
+    # dot-separated by convention, and this function is also handed *folder*
+    # names, which have no extension at all to take.
+    stem = _strip_file_ext(base)
     name = re.sub(r'[._]', ' ', stem)
 
     se = re.search(r'[Ss](\d{1,2})[Ee](\d{1,3})', base)
@@ -1355,7 +1471,7 @@ def parse_release_info_for_path(rel_path):
     return parsed
 
 
-_arr_titles_cache = {'data': None, 'ts': 0}
+_arr_titles_cache = {'data': None, 'ts': 0, 'errors': []}
 _ARR_TITLES_TTL = 120
 
 
@@ -1376,6 +1492,7 @@ def fetch_arr_all_titles(cfg, force=False):
     if not force and _arr_titles_cache['data'] is not None and (now - _arr_titles_cache['ts']) < _ARR_TITLES_TTL:
         return _arr_titles_cache['data']
     rows = []
+    errors = []
     for conn in normalize_arr_connections(cfg):
         try:
             if conn['service'] == 'radarr':
@@ -1405,9 +1522,25 @@ def fetch_arr_all_titles(cfg, force=False):
                     })
         except Exception as e:
             log.warning("Could not fetch %s titles from %s: %s", conn['service'], conn['id'], e)
+            errors.append({'connection_id': conn['id'], 'name': conn['name'],
+                           'service': conn['service'], 'partial': False,
+                           'message': str(e)})
     _arr_titles_cache['data'] = rows
+    _arr_titles_cache['errors'] = errors
     _arr_titles_cache['ts'] = now
     return rows
+
+
+def arr_titles_errors():
+    """Connections whose title list failed on the most recent fetch.
+
+    The mirror of `arr_media_index_errors`, and it matters for the same reason:
+    this list is what answers "does any arr know this title at all", so an
+    instance that is merely unreachable would otherwise be indistinguishable
+    from one that has never heard of the release. Same ordering contract —
+    call `fetch_arr_all_titles` and then this, in the same request.
+    """
+    return list(_arr_titles_cache.get('errors') or [])
 
 
 def _detect_hdr(title):
@@ -1591,6 +1724,93 @@ def with_title_aliases(keys, aliases):
     for k in keys:
         extra |= aliases.get(k) or set()
     return list(keys) + sorted(extra - keys)
+
+
+def arr_year_ok(parsed, row):
+    """Year gate for matching a parsed release name against an arr item.
+
+    Three rules, and each of the three is load-bearing:
+
+    * **A title that *is* a year is not a release year.** "1923", "1883",
+      "1899", "2012" parse their own name as the year, while the arr stores the
+      year the show or film actually came out (1923 → 2022). Skipping the check
+      when the token sits inside the parsed title is what stops the gate
+      disqualifying the one title it was handed.
+    * **Radarr: ±1.** A premiere-vs-wide-release year renders one film either
+      way (Snow White 1937/1938) — the same tolerance `rank_release_matches`
+      already applies.
+    * **Sonarr: one-sided, and deliberately not ±1.** The arr stores a series'
+      *first air* year while a TV release name usually carries the episode's
+      **air date**, so a legitimate match differs by the length of the show's
+      run — ±1 would disqualify every daily series and everything past season
+      two. What is still sound is the one direction: nothing can air more than a
+      year before the series began, which is exactly the same-title-remake case
+      this gate exists for (a release labelled 1990 against a 2019 reboot).
+
+    Unknown on either side passes. A missing year is not evidence of a mismatch.
+    """
+    p_year = parsed.get('year')
+    r_year = row.get('year')
+    if not p_year or not r_year:
+        return True
+    if str(p_year) in str(parsed.get('title') or ''):
+        return True
+    if row.get('service') == 'radarr':
+        return abs(int(r_year) - p_year) <= 1
+    return p_year >= int(r_year) - 1
+
+
+def _arr_candidate_score(row, parsed):
+    """How well one arr row answers a parsed release. Higher is better."""
+    score = 0
+    season = parsed.get('season')
+    if season is not None:
+        row_season = row.get('season_number')
+        row_eps    = row.get('episode_numbers') or []
+        if row_season is None:
+            # Title-list rows have no per-file season, and media-index rows
+            # written before Sonarr's own numbers were carried have none either
+            # — fall back to the filename the way the rest of the app does.
+            rel = os.path.basename(row.get('relative_path') or row.get('path') or '')
+            row_season, row_eps = season_episodes_from_name(rel)
+        if row_season is not None:
+            score += 4 if row_season == season else -4
+            episode = parsed.get('episode')
+            if episode is not None and row_eps:
+                score += 4 if episode in row_eps else -2
+    p_year, r_year = parsed.get('year'), row.get('year')
+    if p_year and r_year:
+        delta = abs(int(r_year) - p_year)
+        score += 3 if delta == 0 else (1 if delta <= 1 else 0)
+    if row.get('has_file'):
+        score += 1
+    return score
+
+
+def rank_arr_candidates(rows, parsed, service=None):
+    """Gate and rank arr rows for a parsed release — best first, `[]` for none.
+
+    The replacement for `rows[0]`, which is what auditorr took everywhere a
+    title lookup returned more than one row. Rows from every connection are
+    pooled under one title key, so `[0]` meant "whichever instance
+    `normalize_arr_connections` emitted first" — an answer with no relationship
+    to the release being matched. Two Sonarrs holding the same series at 1080p
+    and 4K is a legitimate configuration, and the wrong one produces the wrong
+    quality comparison, the wrong pre-selected delete scope, and commands
+    dispatched to an instance that cannot confirm them.
+
+    Gates first: `service` when given (a *gate*, never a sort key — see
+    TRIAGE T1) and `arr_year_ok`. Then ranks on the season/episode anchor, year
+    agreement, and whether the item holds a file. **The sort is stable**, so
+    rows that nothing distinguishes keep their input order and the answer is
+    byte-identical to the old `[0]` on a single-instance install.
+
+    Pure: rows in, rows out, no I/O — which is what makes it testable on an
+    install that has only one instance of each service to offer it.
+    """
+    gated = [r for r in rows
+             if (service is None or r.get('service') == service) and arr_year_ok(parsed, r)]
+    return sorted(gated, key=lambda r: -_arr_candidate_score(r, parsed))
 
 
 def _test_arr_connection(url, api_key):

@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import {
   Chip, LabeledChips, IndexerChips, FolderChips, SortPicker, CountPicker,
-  SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError, WorkflowWarning,
+  SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError, ArrErrorsWarning,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
 } from './shared'
@@ -12,6 +12,20 @@ import {
 function parseSeason(path) {
   const m = (path || '').match(/[Ss](\d{1,2})[Ee]/i)
   return m ? parseInt(m[1], 10) : null
+}
+
+// Sonarr's own season number, off the episode-file record the server ships on
+// every resolved candidate; `parseSeason` is only the fallback for rows it did
+// not supply one on.
+//
+// This must key on the same thing the server's `_build_generate_candidates`
+// does or the two disagree — and they would disagree on exactly the library
+// this exists for, one whose filenames the regex cannot parse (daily series,
+// anime absolute numbering, "S01.E02"). `??` and not `||`: season 0 is
+// Specials, and a real answer. B7/B7b deletes this copy outright in Phase 6;
+// until then it tracks the server.
+function seasonOf(c) {
+  return c.season_number ?? parseSeason(c.path)
 }
 
 function getRootFolder(path) {
@@ -26,7 +40,7 @@ function groupCandidates(candidates) {
   const sonarrMap = {}
   for (const c of candidates) {
     if (c.resolved && c.arr_service === 'sonarr') {
-      const season = parseSeason(c.path)
+      const season = seasonOf(c)
       // Series ids are per-instance — two Sonarrs both number from 1, so a bare
       // id merges unrelated shows into one candidate (mirrors the server key).
       const key = `${c.arr_connection_id}_${c.arr_id}_S${season ?? 'x'}`
@@ -621,6 +635,10 @@ export default function Backfill({ onNavigate }) {
         download_from: downloadFrom,
         seeding_on:    seedingOn,
       })
+      // The run re-fetched the library (the index cache is 120s, and setting
+      // filters takes longer than that), so this is the authoritative answer
+      // about which instances answered — not the one the page loaded with.
+      setArrErrors(resp.arr_errors || [])
       setJobId(resp.job_id)
       startPoll(resp.job_id)
     } catch (e) {
@@ -653,19 +671,10 @@ export default function Backfill({ onNavigate }) {
 
         <WorkflowError message={loadError} />
 
-        <WorkflowWarning>
-          {arrErrors.length > 0 && (
-            <>
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                {arrErrors.length} Sonarr/Radarr instance{arrErrors.length !== 1 ? 's' : ''} could not be read
-              </div>
-              <div>
-                Everything {arrErrors.length !== 1 ? 'they manage' : 'it manages'} is missing from the
-                candidates and folders below. {arrErrors.map(e => `${e.name || e.connection_id}: ${e.message}`).join(' · ')}
-              </div>
-            </>
-          )}
-        </WorkflowWarning>
+        <ArrErrorsWarning
+          errors={arrErrors}
+          extra="Everything affected is missing from the candidates and folders below."
+        />
 
         {loading ? (
           <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
@@ -833,6 +842,13 @@ export default function Backfill({ onNavigate }) {
           width: `${progress}%`,
         }} />
       </div>
+
+      {/* The run's own answer about which instances were readable — the page
+          may have been configured minutes ago, against a different one. */}
+      <ArrErrorsWarning
+        errors={arrErrors}
+        extra="Candidates from those instances are missing from this run."
+      />
 
       {/* Results list */}
       {results.length > 0 && (

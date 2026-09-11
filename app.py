@@ -41,7 +41,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
@@ -1371,41 +1371,69 @@ def workflows_triage_resolve_groups():
 # Sonarr/Radarr.
 # ---------------------------------------------------------------------------
 
-def _trump_year_ok(parsed, t):
-    """Radarr year guard (±1) so same-title remakes can't cross-match."""
-    return not (parsed['year'] is not None and t.get('service') == 'radarr'
-                and t.get('year') and abs(int(t['year']) - parsed['year']) > 1)
+# A daily series names its episodes by air date rather than SxxExx, so the
+# season token that normally identifies TV is absent and the release looks like
+# a film. The service below is a *gate*, so guessing radarr for "Show.2024.01.05"
+# would send the lookup to the wrong service and 404 rather than merely
+# mis-rank — this recovers that one case at the cost of four lines.
+_DAILY_DATE_RE = re.compile(r'\b(19|20)\d{2}[.\-_ ]\d{2}[.\-_ ]\d{2}\b')
 
 
-def _trump_find_arr_item(cfg, parsed):
+def _trump_service_for(parsed, name=''):
+    """Which arr service a parsed trump release belongs to."""
+    if parsed.get('season') is not None:
+        return 'sonarr'
+    return 'sonarr' if _DAILY_DATE_RE.search(str(name or '')) else 'radarr'
+
+
+def _trump_find_arr_item(cfg, parsed, titles=None, name=''):
     """Match a parsed release against managed arr titles (title + year aware).
 
-    Exact first (diacritic/apostrophe-folded title keys, same as Triage), then a
-    **soft fallback** ranked by shared title core — a trump's new-release name
-    often carries a stray season token or extra scene tokens the exact key match
-    can't fold ('… Rides Again S01' vs the series 'The Magic School Bus Rides
-    Again'), so a graded title match beats a hard 404. Content-type service
-    preference (season/episode → sonarr, otherwise radarr) breaks ties.
-    """
-    titles    = fetch_arr_all_titles(cfg)
-    preferred = 'sonarr' if parsed['season'] is not None else 'radarr'
+    Exact first (diacritic/apostrophe-folded title keys, same as Triage), then
+    the arrs' own **alternate titles** — non-English content is released under
+    its original-language name while the arr stores the English one, and that
+    field is authoritative precisely because it is how the arr matched the grab
+    in the first place (TRIAGE T15, same primitives) — then a **soft fallback**
+    ranked by shared title core, because a trump's new-release name often
+    carries a stray season token or extra scene tokens the exact key match can't
+    fold ('… Rides Again S01' vs the series 'The Magic School Bus Rides Again')
+    and a graded title match beats a hard 404.
 
-    keys = title_match_keys(parsed['title'])
-    exact = [t for t in titles
-             if (title_match_keys(t.get('title') or '') & keys) and _trump_year_ok(parsed, t)]
+    **Content type is a gate, not a sort key**, at every tier — TRIAGE T1's fix
+    at its second call site. It used to be `sort(key=preferred first)` followed
+    by `[0]`, which silently falls back to the wrong type whenever the right one
+    has no rows: a same-titled film answering for a series, searched and grabbed
+    on the wrong instance. Within the surviving rows, `rank_arr_candidates`
+    replaces `[0]` so ties stop being broken by `normalize_arr_connections`
+    emission order.
+    """
+    if titles is None:
+        titles = fetch_arr_all_titles(cfg)
+    service = _trump_service_for(parsed, name)
+
+    keys  = title_match_keys(parsed['title'])
+    exact = rank_arr_candidates(
+        [t for t in titles if title_match_keys(t.get('title') or '') & keys],
+        parsed, service=service)
     if exact:
-        exact.sort(key=lambda t: 0 if t.get('service') == preferred else 1)
         return exact[0]
+
+    # Alias pass — kept strictly behind the canonical one, so an alias can only
+    # ever rescue a release that would otherwise have matched nothing.
+    alias_keys = set(with_title_aliases(keys, title_alias_keys(titles))) - keys
+    if alias_keys:
+        aliased = rank_arr_candidates(
+            [t for t in titles if title_match_keys(t.get('title') or '') & alias_keys],
+            parsed, service=service)
+        if aliased:
+            return aliased[0]
 
     # Soft fallback — best title-core overlap above a real floor.
     best, best_sim = None, 0.0
     for t in titles:
-        if not _trump_year_ok(parsed, t):
+        if t.get('service') != service or not arr_year_ok(parsed, t):
             continue
         sim = title_soft_match(parsed['title'], t.get('title') or '')
-        # Nudge the preferred service so a movie/series tie goes the right way.
-        if t.get('service') == preferred:
-            sim += 0.001
         if sim > best_sim:
             best, best_sim = t, sim
     return best if best_sim >= 0.5 else None
@@ -1631,10 +1659,29 @@ def workflows_trump_search_release():
         return jsonify({"status": "error", "message": "new_title is required"}), 400
     cfg    = db_load_config()
     parsed = parse_release_info_for_path(new_title)
-    item   = _trump_find_arr_item(cfg, parsed)
+    # Fetch, then read the errors accessor, in that order and in this request:
+    # the title cache is 120s, so the accessor describes the list just handed
+    # back and nothing else.
+    titles     = fetch_arr_all_titles(cfg)
+    arr_errors = arr_titles_errors()
+    item       = _trump_find_arr_item(cfg, parsed, titles=titles, name=new_title)
     if item is None:
+        # "No arr knows this title" and "an arr could not be asked" are the same
+        # empty list, and they are not the same answer — telling a user to add a
+        # title their arr is already managing is how a trump ends in the wrong
+        # grab (TR7). Say which one happened.
+        if arr_errors:
+            names = ', '.join(e.get('name') or e.get('connection_id') or '?' for e in arr_errors)
+            return jsonify({
+                "status": "error",
+                "arr_errors": arr_errors,
+                "message": f"Could not check whether “{parsed['title'] or new_title}” is managed — "
+                           f"{names} did not answer. Fix the connection and retry rather than "
+                           f"adding the title again.",
+            }), 502
         return jsonify({
             "status": "error",
+            "arr_errors": [],
             "message": f"No Sonarr/Radarr entry matches “{parsed['title'] or new_title}” — add the title to an arr first, then retry.",
         }), 404
 
@@ -1694,6 +1741,9 @@ def workflows_trump_search_release():
         "arr_title":       item.get('title') or '',
         "arr_year":        item.get('year'),
         "fallback_url":    fallback_url,
+        # A match found *despite* an unreachable instance is still worth
+        # flagging: the instance that did not answer may hold a better one.
+        "arr_errors":      arr_errors,
     })
 
 
@@ -1835,16 +1885,36 @@ def workflows_triage():
     truncated  = len(group_list) > _TRIAGE_GROUP_CAP
     group_list = group_list[:_TRIAGE_GROUP_CAP]
 
+    # Both fetches are followed *immediately* by their errors accessor, in the
+    # same request: each accessor is cached alongside its data (120s TTL) and
+    # its contract is that it describes the list the caller just received.
+    #
+    # An arr that did not answer contributes no rows, which is the same empty
+    # list as an arr that manages nothing — and Triage turns that silence into a
+    # verdict with a delete button under it. `arr_configured` is derived from
+    # the config rather than from the fetch, so it stays true and the existing
+    # banner never fires.
+    arr_errors = []
     try:
         media_index = fetch_arr_media_index(cfg)
+        arr_errors.extend(arr_media_index_errors())
     except Exception as e:
         log.warning("Triage: media index fetch failed: %s", e)
         media_index = []
+        # The per-connection loop inside has its own try, so reaching here means
+        # the whole call failed and the cache was never written — the accessor
+        # would describe a previous fetch. Synthesize instead.
+        arr_errors.append({'connection_id': '', 'name': 'Sonarr/Radarr library',
+                           'service': '', 'partial': False, 'message': str(e)})
     try:
         all_titles = fetch_arr_all_titles(cfg)
+        arr_errors.extend(arr_titles_errors())
     except Exception as e:
         log.warning("Triage: title list fetch failed: %s", e)
         all_titles = []
+        arr_errors.append({'connection_id': '', 'name': 'Sonarr/Radarr titles',
+                           'service': '', 'partial': False, 'message': str(e)})
+    arr_degraded = bool(arr_errors)
 
     # Index arr titles under every match variant (apostrophes spaced/dropped)
     lib_by_title = {}
@@ -1943,6 +2013,16 @@ def workflows_triage():
             fallback = 'superseded'
         elif in_arr or lib_rows:
             fallback = 'import_pending'
+        elif arr_degraded:
+            # `not_in_library` means "no arr has ever heard of this", and its
+            # copy ends "junk can be deleted" — a not-imported torrent has no
+            # hardlink anywhere by definition, so those files are the only copy.
+            # That verdict must not be reachable when no arr answered: absence
+            # of evidence is not evidence of absence (the same rule Phase 2's
+            # source guard applies to the torrent client). `superseded` and
+            # `import_pending` are positive matches and stand on their own; only
+            # the verdict derived purely from silence is suppressed.
+            fallback = 'library_unknown'
         else:
             fallback = 'not_in_library'
 
@@ -2078,7 +2158,8 @@ def workflows_triage():
         })
 
     verdict_order = {'dead_seed': 0, 'dead_registration': 1, 'unregistered': 2,
-                     'superseded': 3, 'import_pending': 4, 'not_in_library': 5}
+                     'superseded': 3, 'import_pending': 4, 'library_unknown': 5,
+                     'not_in_library': 6}
     items.sort(key=lambda i: (verdict_order.get(i['verdict'], 9), -i['total_size']))
     counts = {}
     for i in items:
@@ -2092,6 +2173,7 @@ def workflows_triage():
         "counts":         counts,
         "truncated":      truncated,
         "arr_configured": bool(conn_by_id),
+        "arr_errors":     arr_errors,
         "suggestions":    suggestions,
     })
 
@@ -2341,6 +2423,12 @@ def workflows_acquire_candidates():
                 'arr_title': title,
                 'episode_id': episode_id,
                 'arr_url': arr_url,
+                # Shipped so the client's copy of the season grouping key keys on
+                # the same thing the server's does. The two must agree, and the
+                # library where they would not is exactly the library this
+                # exists for — one whose filenames the regex cannot parse (B7b
+                # deletes the client copy outright in Phase 6).
+                'season_number': _gen_season_of(arr_item, rel_path) if service == 'sonarr' else None,
             })
             resolved_count += 1
         else:
@@ -2522,6 +2610,22 @@ def _gen_parse_season(path):
     return int(m.group(1)) if m else None
 
 
+def _gen_season_of(arr_item, path):
+    """The season an unseeded episode belongs to — Sonarr's own number first.
+
+    The filename regex is kept only as a fallback. It misses daily series
+    ("Show - 2024-01-05"), anime absolute numbering ("Show - 087"), "S01.E02"
+    and any non-standard renamer, and the failure is not a missing season but a
+    **merge**: every unparseable episode of a series collapses into one
+    `{conn}_{id}_SNone` candidate, which then falls to the episode_id branch and
+    searches for one episode while the row reads "N ep". Sonarr reports
+    `seasonNumber` on the very episode-file record the media index is built
+    from, at zero extra API cost (B8).
+    """
+    season = (arr_item or {}).get('season_number')
+    return _gen_parse_season(path) if season is None else season
+
+
 def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
     """Resolved, season-grouped candidates for the generate workflow."""
     media_files = db_load_file_results('media')
@@ -2569,6 +2673,8 @@ def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
             'arr_url': arr_url,
             'file_quality': arr_item.get('file_quality_name', ''),
             'file_hdr':     arr_item.get('file_hdr', ''),
+            # Sonarr's own season number, off the episode-file record (B8)
+            'season_number': _gen_season_of(arr_item, rel_path) if service == 'sonarr' else None,
         })
 
     # Group Sonarr episodes by (arr_id, season)
@@ -2576,7 +2682,7 @@ def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
     sonarr_map = {}
     for c in flat:
         if c['arr_service'] == 'sonarr':
-            season = _gen_parse_season(c['path'])
+            season = c.get('season_number')
             # Series ids are per-instance, so two Sonarrs both number from 1 and
             # a bare id merges unrelated shows — the winner keeps its own
             # connection and the loser's episodes are searched against it.
@@ -2642,6 +2748,13 @@ def workflows_generate():
         )[:count]
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
+    # Read immediately after the build, which is what fetched the index. The
+    # cache is 120s, so a user who spends longer than that setting filters
+    # starts the run against a *re-fetched* library — one that may have lost an
+    # instance since the page described it. The accessor's contract is "the list
+    # the caller just received", and the caller that just received one is this
+    # request, not the one that painted the page (B13).
+    arr_errors = arr_media_index_errors()
 
     job_id = secrets.token_hex(8)
     job = {'id': job_id, 'status': 'running', 'total': len(candidates),
@@ -2692,7 +2805,7 @@ def workflows_generate():
         job['status'] = 'done'
 
     threading.Thread(target=do_generate, daemon=True).start()
-    return jsonify({'job_id': job_id, 'total': len(candidates)})
+    return jsonify({'job_id': job_id, 'total': len(candidates), 'arr_errors': arr_errors})
 
 
 @app.route('/api/workflows/generate/status')

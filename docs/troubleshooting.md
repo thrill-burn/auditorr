@@ -225,6 +225,33 @@ usually why it never imported.
 
 ---
 
+## Triage shows a "Could Not Check" section
+
+One of your Sonarr/Radarr instances didn't answer when the page was built, so
+auditorr could not establish whether your library holds these. They are **not**
+*Not in Library* — that verdict means no arr has ever heard of the title, and no
+arr was able to say.
+
+A yellow banner at the top of the page names the instance and the error. Two
+shapes:
+
+- **Could not be read** — the instance was unreachable outright.
+- **Answered with only part of its library** — Sonarr needs one request per
+  series, and some of them timed out. The episodes of those series are exactly
+  the ones that would otherwise read as "no arr has heard of this".
+
+Fix the connection (Config → Sonarr/Radarr → Test) and reload. Don't act on rows
+in this section meanwhile: nothing there has been checked, and a not-imported
+torrent's files are the only copy you have.
+
+Other rows are unaffected — a title that *did* match still reports *Superseded*
+or *Import Pending* normally. One thing to know while a banner is showing:
+*Import Pending* can be over-reported, because a file that really did import
+looks unimported when the library list couldn't be read. Rescanning it is
+harmless either way.
+
+---
+
 ## Trigger Rescan doesn't import anything
 
 Read the toast — it now carries Sonarr/Radarr's actual answer rather than a
