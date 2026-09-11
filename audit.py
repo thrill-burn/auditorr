@@ -959,6 +959,114 @@ def _save_error_status(message):
     db_save_results(curr)
 
 
+# ---------------------------------------------------------------------------
+# Source plausibility guard
+# ---------------------------------------------------------------------------
+
+# "Orphaned" is not a property of a file. It is the *absence of evidence* in one
+# torrent-client API snapshot, joined to the filesystem by string equality of
+# absolute paths, and acted on later by a bash script with no access to the
+# client. Everything below exists because absence of evidence arrives by several
+# routes that look identical from here — a client still loading its session, a
+# rebuilt container with an empty session directory, a qui instance that did not
+# answer, a WebUI that timed out on half the library — and every one of them
+# ends with the whole torrent tree rendered in Cleanup, in green, under one
+# `Select all`. Nothing else in auditorr stands between that and `rm`.
+
+# Below this many torrents the proportional rules are noise: a four-torrent
+# client dropping to one is a 75% collapse and also a completely ordinary
+# Tuesday.
+_GUARD_MIN_BASELINE = 25
+# A scan that lost more than half of either count against the last scan that
+# persisted. Deliberately blunt — the rule has to be explicable in the sentence
+# the user is shown.
+_GUARD_DROP_FRACTION = 0.5
+# Torrents whose file listing failed *and* whose payload could not be found on
+# disk. These are the ones with no evidence either way.
+_GUARD_UNRESOLVED_FRACTION = 0.25
+
+
+def _pct(part, whole):
+    return int(round(part * 100.0 / whole)) if whole else 0
+
+
+def source_plausibility(report, baseline, disk_file_count=None):
+    """Is this scan's view of the client trustworthy enough to act on?
+
+    Returns None when it is, or {'code', 'message', 'detail'} when it is not.
+    `disk_file_count` is the number of files the torrent-tree walk found, and is
+    only needed for the blackout rule; pass None to run the rules that do not
+    need the walk (so a hopeless scan can bail before paying for it).
+
+    The three rules, in the order they are cheapest to evaluate:
+
+      collapse   the client answered, but with far fewer torrents or files than
+                 the last scan that persisted
+      blind      too much of the client could not be asked at all
+      blackout   the client claims nothing while the disk holds files
+
+    `blackout` deliberately needs **no baseline**, because the worst case has
+    none: a first-ever scan that lands while qBittorrent is still loading its
+    session has nothing to compare against, and "compare against the previous
+    scan" would wave it straight through.
+    """
+    torrents = int(report.get('torrent_count') or 0)
+    mapped   = int(report.get('file_map_size') or 0)
+    failed_instances = report.get('instances_failed') or []
+
+    prev_torrents = int((baseline or {}).get('torrent_count') or 0)
+    prev_mapped   = int((baseline or {}).get('file_map_size') or 0)
+
+    if failed_instances:
+        names = ', '.join(f.get('name', '?') for f in failed_instances[:3])
+        return {
+            'code': 'instances_unavailable',
+            'message': (f"{len(failed_instances)} of {report.get('instances_total', '?')} "
+                        f"torrent-client instance(s) did not answer ({names}). Every torrent "
+                        f"they manage would have been classified as orphaned."),
+            'detail': {'instances_failed': failed_instances},
+        }
+
+    if prev_torrents >= _GUARD_MIN_BASELINE and \
+            torrents < prev_torrents * (1 - _GUARD_DROP_FRACTION):
+        return {
+            'code': 'torrent_count_collapse',
+            'message': (f"The torrent client reported {torrents} torrent(s), down from "
+                        f"{prev_torrents} on the last scan — a {_pct(prev_torrents - torrents, prev_torrents)}% drop."),
+            'detail': {'torrent_count': torrents, 'previous': prev_torrents},
+        }
+
+    if prev_mapped >= _GUARD_MIN_BASELINE and \
+            mapped < prev_mapped * (1 - _GUARD_DROP_FRACTION):
+        return {
+            'code': 'file_map_collapse',
+            'message': (f"The torrent client accounted for {mapped} file(s), down from "
+                        f"{prev_mapped} on the last scan — a {_pct(prev_mapped - mapped, prev_mapped)}% drop."),
+            'detail': {'file_map_size': mapped, 'previous': prev_mapped},
+        }
+
+    unresolved = int(report.get('listing_unresolved') or 0)
+    if torrents and unresolved > torrents * _GUARD_UNRESOLVED_FRACTION:
+        return {
+            'code': 'listings_unavailable',
+            'message': (f"{unresolved} of {torrents} torrent(s) ({_pct(unresolved, torrents)}%) "
+                        f"would not report their files, and their payload could not be found on "
+                        f"disk either. There is no evidence either way about those files."),
+            'detail': {'listing_unresolved': unresolved, 'torrent_count': torrents},
+        }
+
+    if disk_file_count and mapped == 0:
+        return {
+            'code': 'client_blackout',
+            'message': (f"The torrent client accounted for no files at all, while the torrent "
+                        f"directory holds {disk_file_count}. Every one of them would have been "
+                        f"classified as orphaned."),
+            'detail': {'disk_file_count': disk_file_count, 'torrent_count': torrents},
+        }
+
+    return None
+
+
 # Serializes read-modify-write of the scan marker between the audit thread
 # (phase transitions) and the memory sampler thread (periodic RSS updates).
 _marker_lock = threading.Lock()
@@ -1036,6 +1144,72 @@ def _scan_peak_rss():
         return None
 
 
+class _SourceAnomaly(Exception):
+    """The client's answer is not trustworthy enough to classify orphans from.
+
+    Carried as an exception purely so the happy path stays linear — it is not an
+    error in the sense the other handlers mean. The scan exits *normally*, which
+    matters: `run_audit_process`'s `finally` clears `scan_marker`, and a marker
+    left behind is read at the next boot as a process killed mid-scan and counts
+    toward `consecutive_aborted_scans`. At two, automatic scanning stops. A
+    safety guard that disabled scanning would be a worse bug than the one it
+    guards against.
+    """
+
+    def __init__(self, anomaly):
+        super().__init__(anomaly['message'])
+        self.anomaly = anomaly
+
+
+def _guard_scan(report, baseline, trigger, disk_file_count=None):
+    """Raise `_SourceAnomaly` if this scan must not persist. Manual overrides.
+
+    A manual scan is the override, on the watchdog's own precedent: explicit
+    intent wins. Startup deliberately is **not** — a startup scan following a
+    container rebuild is exactly the case the guard exists for (fresh session
+    directory, client answers zero), so treating it as intent would wave through
+    the very scenario it was written against.
+    """
+    anomaly = source_plausibility(report, baseline, disk_file_count)
+    if anomaly and trigger != 'manual':
+        raise _SourceAnomaly(anomaly)
+    if anomaly:
+        log.warning("Source anomaly on a manual scan — persisting anyway "
+                    "(explicit intent): %s", anomaly['message'])
+    return anomaly
+
+
+def _record_source_anomaly(anomaly, trigger, cfg, scan_start, persist=True):
+    """Report a refused scan and leave every stored figure as it was."""
+    msg = (f"Source anomaly: {anomaly['message']} Nothing from this scan was saved — "
+           f"the file lists, health score and change log still describe the last "
+           f"scan that completed. If this is expected, run a scan manually to accept it.")
+    log.warning(msg)
+    try:
+        db_set_meta('last_source_anomaly', {
+            'at':      datetime.now().isoformat(timespec='seconds'),
+            'trigger': trigger,
+            'code':    anomaly['code'],
+            'message': anomaly['message'],
+            'detail':  anomaly.get('detail') or {},
+        })
+    except Exception as e:
+        log.warning(f"Could not record source anomaly: {e}")
+    if persist:
+        _save_error_status(msg)
+        db_save_audit(trigger, None, 'anomaly', msg, {},
+                      source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                      duration_seconds=round(time.time() - scan_start, 1),
+                      peak_rss_mb=_scan_peak_rss())
+    # The process is healthy — it declined to write, it did not die. Leaving the
+    # crash-loop streak standing would let a run of anomalies trip the breaker.
+    try:
+        db_set_meta('consecutive_aborted_scans', 0)
+    except Exception:
+        pass
+    set_state(status_message=msg, last_scan_status="error")
+
+
 def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
@@ -1059,8 +1233,14 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     threading.Thread(target=_memory_sampler, args=(sampler_stop,), daemon=True,
                      name="audit-memory-sampler").start()
     try:
-        qbit_file_map, trackers, tracker_snapshot = sources.fetch_file_map(cfg)
+        qbit_file_map, trackers, tracker_snapshot, source_report = sources.fetch_file_map(cfg)
         set_state(source_file_count=len(qbit_file_map))
+        # Everything downstream treats "no client entry for this path" as proof
+        # of orphanhood. Check the client's answer against the last one that was
+        # believed *before* paying for two full filesystem walks — the collapse
+        # and blind rules need neither.
+        source_baseline = db_get_meta('source_baseline')
+        _guard_scan(source_report, source_baseline, trigger)
         total_ref = [0]
         set_state(total_files=0)
         _enter_phase("disk", "Scanning torrent directory...")
@@ -1071,6 +1251,13 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl)
+        # The blackout rule needs the disk side — "the client claims nothing
+        # while LOCAL_PATH holds files" — so it runs at the first point that
+        # number exists, and before the media walk, the assemble phase and every
+        # write. On a manual scan this re-reports the same anomaly the pre-walk
+        # call already waved through; the second line carries the disk count.
+        _guard_scan(source_report, source_baseline, trigger,
+                    disk_file_count=len(torrent_key_order))
         _enter_phase("disk", "Scanning media directory...")
         media_key_order, _, media_errors, oldest_media_mtime = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
@@ -1239,6 +1426,23 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                            lambda latest: rounds.merge_event_counters(_ns_next, latest))
         except Exception as e:
             log.warning(f"Could not update Next steps progress: {e}")
+        # This scan's view of the client is now the one every stored figure is
+        # built from, so it becomes what the next scan is measured against.
+        # Advanced **only** here, on a scan that actually persisted: an anomalous
+        # scan must not move the mark, or two 40% declines in a row would each
+        # stay under the threshold and the collapse would arrive in instalments.
+        try:
+            db_set_meta('source_baseline', {
+                'at':            ran_at,
+                'source':        source_report.get('source'),
+                'torrent_count': source_report.get('torrent_count', 0),
+                'file_map_size': source_report.get('file_map_size', 0),
+            })
+            db_set_meta('last_source_report', source_report)
+            if not source_report.get('partial'):
+                db_delete_meta('last_source_anomaly')
+        except Exception as e:
+            log.warning(f"Could not record the source baseline: {e}")
         # Scan finished — clear the crash-loop streak so future startups scan normally
         try:
             db_set_meta('consecutive_aborted_scans', 0)
@@ -1253,6 +1457,12 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")
         status_msg = f"Audit complete. {stat_errors} file(s) could not be read — check logs." if stat_errors else "Audit complete."
         set_state(status_message=status_msg, last_scan_status="ok")
+    except _SourceAnomaly as e:
+        # Not an error path: the scan ran, decided its own inputs were not
+        # trustworthy, and declined to overwrite good data with them. Nothing is
+        # written except the reason — see `_record_source_anomaly`.
+        _record_source_anomaly(e.anomaly, trigger, cfg, scan_start,
+                               persist=persist_source_errors)
     except sources.SourceConnectionError as e:
         msg = str(e)
         log.error(msg)

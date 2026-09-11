@@ -3,19 +3,117 @@ Torrent source dispatcher. Reads TORRENT_SOURCE from cfg and delegates
 to the appropriate backend (_qbit or _qui).
 
 Each backend implements:
-  fetch_file_map(cfg)          -> (file_map, sorted_trackers, tracker_snapshot)
+  fetch_file_map(cfg)          -> (file_map, sorted_trackers, tracker_snapshot, report)
   test_connection(payload)     -> {'ok': bool, 'version': str|None, 'error': str|None, 'instances': [...]}
   connection_info(cfg)         -> {'version': str|None, 'instance_summary': str, 'instances': [...]}
   fetch_save_path_hint(payload)-> {'save_path': str|None, 'version': str|None, 'torrent_count': int, 'seeding_size': int, 'instances': [...]}
   fetch_torrent_details(cfg, items) -> {hash: {'uploaded', 'ratio', 'added_on', 'tracker_health', 'tracker_msg'}}
   remove_torrents(cfg, items, delete_files=True) -> int (count submitted for deletion)
-  list_torrents(cfg) -> [{'hash', 'name', 'size', 'save_path', 'tracker', 'instance_id', 'instance_name'}]
-  fetch_torrent_file_paths(cfg, items) -> {hash: [absolute client-side file paths]}
+  list_torrents(cfg) -> ([rows], report)
+  fetch_torrent_file_paths(cfg, items) -> {hash: [paths] | None}   # None = could not ask
+
+**Absence is reportable.** Every primitive here answers two different questions
+and must never collapse them: "the client says there is nothing" and "the client
+could not be asked". An empty collection means the former only. The latter is
+carried by an explicit `None` (per torrent) or by the `report` dict (per scan).
 """
+
+import os
 
 
 class SourceConnectionError(Exception):
     """Raised by backends when they cannot connect or authenticate."""
+
+
+# ---------------------------------------------------------------------------
+# Source report — the per-scan "how completely could we ask" channel
+# ---------------------------------------------------------------------------
+
+# Notes are diagnostic strings for the debug report and the UI. Bounded because
+# the natural thing to write is one per torrent, and a 15k-torrent client with a
+# flaky WebUI would otherwise put 15k strings into an app_meta row.
+_MAX_REPORT_NOTES = 10
+
+
+def new_source_report(source):
+    """A fresh per-scan completeness report.
+
+    `fetch_file_map` and `list_torrents` fill this in as they go, and the audit
+    persists it. Every field answers some form of "what could we not see":
+
+      torrent_count       torrents the client listed (0 is a real answer)
+      file_map_size       paths the map ended up claiming
+      listing_failures    torrents whose per-file listing could not be fetched
+      listing_recovered   of those, how many were claimed from disk instead
+      listing_unresolved  of those, how many are still unaccounted for — these
+                          are the files that will read as orphaned without ever
+                          having been asked about
+      instances_*         qui only; qbit reports a single instance
+      partial             the scan is known-incomplete for any reason at all
+    """
+    return {
+        'source':             source,
+        'torrent_count':      0,
+        'file_map_size':      0,
+        'listing_failures':   0,
+        'listing_recovered':  0,
+        'listing_unresolved': 0,
+        'instances_total':    0,
+        'instances_ok':       0,
+        'instances_failed':   [],
+        'partial':            False,
+        'notes':              [],
+    }
+
+
+def report_note(report, message):
+    """Record a diagnostic note on a source report (bounded, de-duplicated)."""
+    if report is None:
+        return
+    notes = report.setdefault('notes', [])
+    if message not in notes and len(notes) < _MAX_REPORT_NOTES:
+        notes.append(message)
+
+
+def report_instance_failure(report, name, reason):
+    """Record an instance that could not be listed, and mark the scan partial."""
+    if report is None:
+        return
+    report.setdefault('instances_failed', []).append(
+        {'name': str(name), 'reason': str(reason)[:300]})
+    report['partial'] = True
+
+
+def disk_fallback_paths(save_path, torrent_name):
+    """On-disk file paths for a torrent whose client file listing failed.
+
+    Walks `save_path/name`, which is where both clients put a torrent's payload.
+    A failed listing is an *unknown*, and an unknown left alone becomes a
+    positive claim of orphanhood by default — every file of that torrent turns
+    up in the walk with no client entry against it. Enumerating the payload from
+    disk converts the unknown into a conservative *claimed* instead, which is
+    the fail-safe direction and the only thing that lets a failure be attributed
+    to specific paths at all: the paths are precisely what the listing failed to
+    return.
+
+    Returns [] when nothing is found there — which is itself information, and is
+    counted as `listing_unresolved` rather than passed off as "no files".
+    """
+    if not (save_path and torrent_name):
+        return []
+    root = os.path.join(save_path, torrent_name)
+    try:
+        if os.path.isfile(root):
+            return [root]
+        if not os.path.isdir(root):
+            return []
+        found = []
+        for dir_root, _, dir_files in os.walk(root):
+            for fname in dir_files:
+                found.append(os.path.join(dir_root, fname))
+        return found
+    except OSError:
+        return []
 
 
 # Substrings (lowercased) of tracker status messages that mean the torrent is
@@ -100,6 +198,12 @@ def _source(cfg):
 
 
 def fetch_file_map(cfg):
+    """(file_map, sorted_trackers, tracker_snapshot, report).
+
+    `report` is a `new_source_report` dict describing how completely the client
+    could be asked — see the module docstring. The audit reads it to decide
+    whether this scan's orphan classification is trustworthy enough to persist.
+    """
     if _source(cfg) == 'qui':
         return _qui_fetch_file_map(cfg)
     return _qbit_fetch_file_map(cfg)
@@ -147,15 +251,47 @@ def remove_torrents(cfg, items, delete_files=True):
     return _qbit_remove_torrents(cfg, items, delete_files)
 
 
-def list_torrents(cfg):
-    """Live, light listing of every torrent (Trumped workflow group resolution)."""
+def list_torrents_detailed(cfg):
+    """(rows, report) — the listing plus which instances actually answered.
+
+    Callers that can act on a partial answer (report it, narrow a group, refuse
+    a delete) use this. Everything else uses `list_torrents`, which refuses a
+    partial answer outright rather than handing over a short list that looks
+    complete.
+    """
     if _source(cfg) == 'qui':
         return _qui_list_torrents(cfg)
     return _qbit_list_torrents(cfg)
 
 
+def list_torrents(cfg):
+    """Live, light listing of every torrent (Trumped workflow group resolution).
+
+    Raises `SourceConnectionError` if any instance failed to answer. A short
+    listing is not a smaller answer here, it is a wrong one: a cross-seed group
+    resolved against it loses the members that lived on the instance that did
+    not reply, and `execute` then deletes their payload out from under them.
+    """
+    rows, report = list_torrents_detailed(cfg)
+    failed = report.get('instances_failed') or []
+    if failed:
+        names = ', '.join(f.get('name', '?') for f in failed[:3])
+        raise SourceConnectionError(
+            f"{len(failed)} of {report.get('instances_total', '?')} torrent-client "
+            f"instance(s) could not be listed ({names}). The listing would be "
+            f"incomplete, so it is not being used.")
+    return rows
+
+
 def fetch_torrent_file_paths(cfg, items):
-    """Absolute client-side file paths per torrent — {hash: [paths]}."""
+    """Client-side file paths per torrent — {hash: [paths] | None}.
+
+    **`None` means the listing could not be fetched; `[]` means the client
+    answered that there are none.** Callers must not conflate them: an empty
+    list tests as "shares no paths with anything", which silently shrinks every
+    set membership built from it — a cross-seed group down to its seed, a
+    removal partition down to "nothing else claims these files".
+    """
     if _source(cfg) == 'qui':
         return _qui_fetch_torrent_file_paths(cfg, items)
     return _qbit_fetch_torrent_file_paths(cfg, items)

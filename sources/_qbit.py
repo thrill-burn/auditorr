@@ -2,12 +2,13 @@
 qBittorrent backend — lifted verbatim from audit.py / app.py.
 
 Public interface:
-  fetch_file_map(cfg)          -> (file_map, sorted_trackers, tracker_snapshot)
+  fetch_file_map(cfg)          -> (file_map, sorted_trackers, tracker_snapshot, report)
   test_connection(payload)     -> {'ok': bool, 'version': str|None, 'error': str|None, 'instances': []}
   connection_info(cfg)         -> {'version': str|None, 'instance_summary': str, 'instances': []}
   fetch_save_path_hint(payload)-> {'save_path': str|None, 'version': str|None, 'torrent_count': int, 'seeding_size': int, 'instances': []}
 """
 
+import logging
 import os
 import socket
 import threading
@@ -15,7 +16,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import qbittorrentapi
 
-from sources import SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK
+from sources import (
+    SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
+    disk_fallback_paths, new_source_report, report_note,
+)
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +46,10 @@ def _fetch_inner(cfg):
     )
     qbt.auth_log_in()
     torrents = list(qbt.torrents_info())
+    report = new_source_report('qbit')
+    report['torrent_count']   = len(torrents)
+    report['instances_total'] = 1
+    report['instances_ok']    = 1
 
     # Fetch all tracker lists in parallel — eliminates N sequential API calls.
     # 16 workers gives significant speedup without overwhelming qBittorrent.
@@ -62,25 +72,40 @@ def _fetch_inner(cfg):
     # two API calls per worker instead of two separate executor pools. The
     # tracker entries are also classified here (dead-seed detection): the
     # status/msg fields come along for free with the same API call.
+    #
+    # The two calls are caught separately, and the file listing reports failure
+    # as a value rather than as an empty list. One bare `except` used to cover
+    # both, so a tracker timeout discarded a perfectly good file list as well —
+    # and either way the torrent's files never entered `file_map`, turned up in
+    # the walk with nothing claiming them, and were presented in Cleanup as
+    # orphans with a green "frees X" beside them. Sixteen workers making two
+    # WebUI calls each for the whole library on every scan; a timeout or a 5xx
+    # during a client restart is an ordinary event, and it hit whichever
+    # torrents lost the race, differently every scan.
     def _fetch_torrent_data(torrent):
         try:
-            thread_qbt = _get_thread_client()
             entries = [{'url': t.url, 'status': t.status, 'msg': t.msg}
-                       for t in thread_qbt.torrents_trackers(torrent_hash=torrent.hash)]
+                       for t in _get_thread_client().torrents_trackers(torrent_hash=torrent.hash)]
             raw   = [e['url'] for e in entries
                      if e['url'].startswith('http') or e['url'].startswith('udp')]
             hosts = [u.split('/')[2] for u in raw if len(u.split('/')) > 2] or ['Unknown']
             health, msg = classify_tracker_entries(entries)
-            files = list(thread_qbt.torrents_files(torrent_hash=torrent.hash))
-        except Exception:
+        except Exception as e:
+            log.debug('qbit: tracker listing failed for %s: %s', torrent.hash, e)
             hosts = ['Unknown']
             health, msg = 'unknown', ''
-            files = []
-        return torrent.hash, hosts, (health, msg), files
+        try:
+            files = list(_get_thread_client().torrents_files(torrent_hash=torrent.hash))
+            files_ok = True
+        except Exception as e:
+            log.debug('qbit: file listing failed for %s: %s', torrent.hash, e)
+            files, files_ok = [], False
+        return torrent.hash, hosts, (health, msg), files, files_ok
 
     tracker_map = {}
     health_map  = {}
     files_map   = {}
+    failed_listings = set()
     # Seeding-time aggregates for the Next steps prize layer. Both ride the
     # torrents list this loop already holds — `seeding_time` comes back on
     # `torrents_info`, so neither costs an API call or a per-torrent fan-out.
@@ -91,10 +116,12 @@ def _fetch_inner(cfg):
     with ThreadPoolExecutor(max_workers=16) as executor:
         futures = {executor.submit(_fetch_torrent_data, t): t for t in torrents}
         for future in as_completed(futures):
-            torrent_hash, hosts, health, files = future.result()
+            torrent_hash, hosts, health, files, files_ok = future.result()
             tracker_map[torrent_hash] = hosts
             health_map[torrent_hash]  = health
             files_map[torrent_hash]   = files
+            if not files_ok:
+                failed_listings.add(torrent_hash)
 
     # Build file map using pre-fetched tracker and file data
     file_map             = {}
@@ -126,8 +153,29 @@ def _fetch_inner(cfg):
         else:
             status = 'Paused'
         health, health_msg = health_map.get(torrent.hash, ('unknown', ''))
-        for f in files_map.get(torrent.hash, []):
-            full_path = os.path.join(save_path, f.name)
+        if torrent.hash in failed_listings:
+            # Disk fallback (ported from the qui backend). The listing failed, so
+            # the paths are exactly what we do not have — but the payload lives
+            # at save_path/name, and enumerating it there claims the files
+            # instead of leaving them to default to 'Orphaned'. What it cannot
+            # find stays unresolved and is counted, not swallowed.
+            recovered = disk_fallback_paths(save_path, getattr(torrent, 'name', '') or '')
+            full_paths = recovered
+            if recovered:
+                report['listing_recovered'] += 1
+            else:
+                report['listing_unresolved'] += 1
+                # Deliberately no infohash: these notes reach the debug report,
+                # which is meant to be safe to paste in public, and an infohash
+                # names a specific release on a private tracker. A short prefix
+                # would also sit under the 24-char threshold the report's token
+                # redactor fires at. The save path goes through its sanitizer.
+                report_note(report,
+                            f"file listing failed and nothing was found at {save_path}")
+        else:
+            full_paths = [os.path.join(save_path, f.name)
+                          for f in files_map.get(torrent.hash, [])]
+        for full_path in full_paths:
             entry = file_map.setdefault(full_path, {
                 "status": status,
                 "trackers": set(),
@@ -173,7 +221,17 @@ def _fetch_inner(cfg):
     tracker_snapshot['_seed_byte_secs'] = seed_byte_secs
     tracker_snapshot['_max_seed_secs']  = max_seed_secs
 
-    return file_map, sorted(trackers_set), tracker_snapshot
+    report['file_map_size']    = len(file_map)
+    report['listing_failures'] = len(failed_listings)
+    if failed_listings:
+        report['partial'] = True
+        log.warning(
+            'qbit: %d of %d torrent file listing(s) failed — %d recovered from disk, '
+            '%d unaccounted for. Files of unaccounted torrents would otherwise read '
+            'as orphaned.',
+            len(failed_listings), len(torrents),
+            report['listing_recovered'], report['listing_unresolved'])
+    return file_map, sorted(trackers_set), tracker_snapshot, report
 
 
 # ---------------------------------------------------------------------------
@@ -250,10 +308,14 @@ def fetch_torrent_details(cfg, items):
 def list_torrents(cfg):
     """Light live listing of every torrent in the client.
 
-    Returns [{'hash', 'name', 'size', 'save_path', 'tracker', 'instance_id',
-    'instance_name'}] — size is the torrent's payload size, so cross-seeds of
-    the same content report identical values (the Trumped workflow's sibling
-    pre-filter).
+    Returns ([rows], report) where a row is {'hash', 'name', 'size',
+    'save_path', 'tracker', 'instance_id', 'instance_name'} — size is the
+    torrent's payload size, so cross-seeds of the same content report identical
+    values (the Trumped workflow's sibling pre-filter).
+
+    A single instance, so the listing is all-or-nothing: it either returns every
+    torrent or raises. `report` exists to match the qui backend's shape, where
+    one instance can fail while the others answer.
     """
     socket.setdefaulttimeout(30)
     try:
@@ -276,7 +338,11 @@ def list_torrents(cfg):
                 'instance_id':   None,
                 'instance_name': None,
             })
-        return rows
+        report = new_source_report('qbit')
+        report['torrent_count']   = len(rows)
+        report['instances_total'] = 1
+        report['instances_ok']    = 1
+        return rows, report
     except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
         raise SourceConnectionError(f"qBittorrent error: {e}") from e
     finally:
@@ -288,7 +354,14 @@ def fetch_torrent_file_paths(cfg, items):
 
     items: [{'hash', 'save_path'?, ...}] — save_path is used when provided
     (saves an API round-trip), looked up live otherwise.
-    Returns {hash: [paths]}; failures yield empty lists, never exceptions.
+
+    Returns {hash: [paths] | None}. **`None` means the listing could not be
+    fetched; `[]` means the client answered that this torrent has no files.**
+    This used to be `[]` for both, documented as deliberate ("failures yield
+    empty lists, never exceptions") — and every consumer is a set-membership
+    test, where an empty list reads as "shares nothing with anything" and
+    quietly collapses whatever it was building. Still never raises per torrent:
+    the failure is in the value now, not in control flow.
     """
     wanted = {}
     for i in items:
@@ -314,8 +387,9 @@ def fetch_torrent_file_paths(cfg, items):
             try:
                 files = qbt.torrents_files(torrent_hash=h)
                 result[h] = [os.path.join(sp, f.name).replace('\\', '/') for f in files]
-            except Exception:
-                result[h] = []
+            except Exception as e:
+                log.debug('qbit: file paths unavailable for %s: %s', h, e)
+                result[h] = None
         return result
     except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
         raise SourceConnectionError(f"qBittorrent error: {e}") from e

@@ -380,13 +380,15 @@ class NormalizeReleaseNameTests(unittest.TestCase):
 class TrumpSeedFileListRuleTests(unittest.TestCase):
     """Phase 2 must refuse a seed whose file list could not be read.
 
-    Both source backends catch every failure in `fetch_torrent_file_paths` and
-    return [] — the docstrings say so deliberately — so an empty list is "could
-    not ask", not "holds no files". `_cross_seed_group` tests siblings against
-    the seed's paths, so an empty one short-circuits every test and the group
-    collapses to the seed alone. `execute` then deletes that torrent's files
-    while its cross-seed siblings stay registered and keep seeding on top of
-    the hole. A smaller group is not a degraded answer here, it is a wrong one.
+    `fetch_torrent_file_paths` now answers `None` for "could not ask" and `[]`
+    for "the client says there are none" (it returned `[]` for both until the
+    R1 pass, documented as deliberate). Either way the seed has no usable paths,
+    and `_cross_seed_group` tests siblings against the seed's paths — so an
+    unusable one short-circuits every test and the group collapses to the seed
+    alone. `execute` then deletes that torrent's files while its cross-seed
+    siblings stay registered and keep seeding on top of the hole. A smaller
+    group is not a degraded answer here, it is a wrong one. Both spellings are
+    exercised below.
     """
 
     ROWS = [
@@ -418,11 +420,23 @@ class TrumpSeedFileListRuleTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 502)
         self.assertEqual(resp.get_json()['status'], 'error')
 
+    def test_a_seed_whose_listing_failed_refuses(self):
+        """The `None` spelling — the source layer could not ask at all."""
+        resp = self._resolve({'aaa': None, 'bbb': ['j.mkv'], 'ccc': ['j.mkv']})
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.get_json()['status'], 'error')
+
     def test_an_unreadable_candidate_does_not_refuse(self):
         """Only the *seed* rule lands in this pass. A candidate whose list is
-        unknown still only narrows the group, and reporting that is Phase 2 of
-        the roadmap — it must not start failing the request here."""
+        unknown still only narrows the group, and reporting that is TR1's
+        remaining half (roadmap Phase 7) — it must not start failing the request
+        here, and it must not raise on the `None` the source layer now sends."""
         resp = self._resolve({'aaa': ['j.mkv'], 'bbb': ['j.mkv'], 'ccc': []})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(sorted(t['hash'] for t in resp.get_json()['torrents']),
+                         ['aaa', 'bbb'])
+
+        resp = self._resolve({'aaa': ['j.mkv'], 'bbb': ['j.mkv'], 'ccc': None})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(sorted(t['hash'] for t in resp.get_json()['torrents']),
                          ['aaa', 'bbb'])

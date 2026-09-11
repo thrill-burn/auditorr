@@ -613,6 +613,29 @@ def build_debug_report(version):
                 for h in (state.get('phase_history') or [])
             ],
         },
+        # How completely the torrent client could be asked on the last scan, and
+        # why a scan was refused if one was. Notes carry hashes and save paths,
+        # so they go through the same sanitizer as every other path in here.
+        'source_health': {
+            '_readme': (
+                'baseline: the client figures the next scan is measured against — '
+                'advanced only by a scan that persisted. last_report: completeness '
+                'of the last scan that persisted. last_anomaly: why a scan refused '
+                'to persist its orphan classification (cleared by a clean scan).'
+            ),
+            'baseline':    db_get_meta('source_baseline'),
+            'last_report': (lambda r: {
+                **r, 'notes': [sanitize_text(n) for n in (r.get('notes') or [])],
+                'instances_failed': [
+                    {'name': sanitize_text(f.get('name')),
+                     'reason': sanitize_text(f.get('reason'))}
+                    for f in (r.get('instances_failed') or [])
+                ],
+            } if r else None)(db_get_meta('last_source_report')),
+            'last_anomaly': (lambda a: {
+                **a, 'message': sanitize_text(a.get('message')),
+            } if a else None)(db_get_meta('last_source_anomaly')),
+        },
         'crash_evidence': {
             'consecutive_aborted_scans': db_get_meta('consecutive_aborted_scans', 0),
             'last_aborted_scan': (lambda m: {

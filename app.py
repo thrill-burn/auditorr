@@ -186,6 +186,11 @@ def _is_source_error_status(status):
         'qui error',
         'qui connection error',
         'qui HTTP error',
+        # A refused scan (the source plausibility guard). Listed here for the
+        # startup retry above all: a client still loading its session answers
+        # with few or no torrents, which is precisely what the guard refuses,
+        # and 60 seconds later it answers properly.
+        'Source anomaly',
     ))
 
 # ---------------------------------------------------------------------------
@@ -1106,9 +1111,13 @@ def _partition_removal_by_file_sharing(cfg, items):
     candidates = [r for r in rows if r['size'] in sizes]
     paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
 
+    # `fetch_torrent_file_paths` returns None for a torrent it could not ask
+    # about (vs [] for one the client says holds no files). Treated as "no known
+    # paths" here, which is what it has always been — reporting the difference
+    # to the user is the Cleanup/Trumped re-verify work, not this function's.
     owners = {}  # path -> set(hashes referencing it)
     for h, paths in paths_map.items():
-        for p in paths:
+        for p in (paths or []):
             owners.setdefault(p, set()).add(h)
 
     delete_items, keep_items = [], []
@@ -1116,7 +1125,7 @@ def _partition_removal_by_file_sharing(cfg, items):
         h = it.get('hash')
         if not h:
             continue
-        my_paths = paths_map.get(h, [])
+        my_paths = paths_map.get(h) or []
         shared = any(any(o not in remove_hashes for o in owners.get(p, ()))
                      for p in my_paths)
         (keep_items if shared else delete_items).append(it)
@@ -1425,15 +1434,19 @@ def _cross_seed_group(rows, paths_map, seed):
 
     A sibling is any torrent with the same payload size that shares at least one
     content file path with the seed (hardlinked cross-seeds point at the same
-    files). The seed itself is always included. `paths_map` is {hash: [paths]}.
+    files). The seed itself is always included. `paths_map` is
+    {hash: [paths] | None}, where None is "could not ask" — treated here as no
+    known paths, which only ever narrows a group. The caller refuses outright
+    when a *seed's* paths are unknown; flagging a narrowed group when a
+    *candidate's* are is TR1's remaining half.
     Each returned row gains a sorted 'paths' list.
     """
-    seed_paths = set(paths_map.get(seed['hash'], []))
+    seed_paths = set(paths_map.get(seed['hash']) or [])
     group = []
     for r in rows:
         if r['size'] != seed['size']:
             continue
-        ps = set(paths_map.get(r['hash'], []))
+        ps = set(paths_map.get(r['hash']) or [])
         if r['hash'] == seed['hash'] or (seed_paths and ps & seed_paths):
             group.append({**r, 'paths': sorted(ps)})
     return group

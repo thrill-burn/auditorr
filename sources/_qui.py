@@ -43,7 +43,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as
 
 import requests
 
-from sources import SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK
+from sources import (
+    SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
+    disk_fallback_paths, new_source_report, report_instance_failure, report_note,
+)
 
 log = logging.getLogger(__name__)
 
@@ -215,8 +218,10 @@ def _fetch_all_torrents(session, base, inst_id):
 def _fetch_torrent_data(session, base, inst_id, torrent_hash):
     """Fetch files + trackers for a single torrent.
 
-    Returns (hosts, (health, msg), files) — the tracker entries are classified
-    here (dead-seed detection) since status/msg ride along with the same call.
+    Returns (hosts, (health, msg), files, files_ok) — the tracker entries are
+    classified here (dead-seed detection) since status/msg ride along with the
+    same call. `files_ok` is False when the file listing could not be fetched,
+    which is a different thing from a torrent that reports no files.
     """
     try:
         tr_resp = session.get(
@@ -246,33 +251,37 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
         fi_resp.raise_for_status()
         raw_files = _unwrap(fi_resp.json())
         files = [_norm_file(f) for f in raw_files]
+        files_ok = True
         if not files and raw_files is not None:
             log.debug('qui: files endpoint returned empty list for %s', torrent_hash)
     except Exception as e:
         log.debug('qui: files endpoint failed for %s: %s', torrent_hash, e)
-        files = []
+        files, files_ok = [], False
 
-    return hosts, health, files
+    return hosts, health, files, files_ok
 
 
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                      seen_hashes, seed_totals=None):
+                      seen_hashes, seed_totals=None, report=None):
     inst_id   = inst['id']
     inst_name = inst.get('name', str(inst_id))
 
     torrents = _fetch_all_torrents(session, base, inst_id)
+    if report is not None:
+        report['torrent_count'] += len(torrents)
 
     tracker_map = {}
     health_map  = {}
     files_map   = {}
+    failed_listings = set()
 
     def _fetch(t):
         th = _norm_torrent(t)['hash']
         if not th:
-            return th, ['Unknown'], ('unknown', ''), []
-        hosts, health, files = _fetch_torrent_data(session, base, inst_id, th)
-        return th, hosts, health, files
+            return th, ['Unknown'], ('unknown', ''), [], True
+        hosts, health, files, files_ok = _fetch_torrent_data(session, base, inst_id, th)
+        return th, hosts, health, files, files_ok
 
     # Per-torrent file/tracker fetch — bounded total timeout so a single
     # hung request can't stall the whole scan indefinitely.
@@ -282,17 +291,24 @@ def _process_instance(session, base, inst, remote_path, local_path,
         try:
             for future in as_completed(futures, timeout=_PER_INSTANCE_TIMEOUT):
                 try:
-                    th, hosts, health, files = future.result()
+                    th, hosts, health, files, files_ok = future.result()
                 except Exception:
                     th    = _norm_torrent(futures[future])['hash']
-                    hosts, health, files = ['Unknown'], ('unknown', ''), []
+                    hosts, health, files, files_ok = ['Unknown'], ('unknown', ''), [], False
                 if th:
                     tracker_map[th] = hosts
                     health_map[th]  = health
                     files_map[th]   = files
+                    if not files_ok:
+                        failed_listings.add(th)
         except FuturesTimeout:
-            log.warning('qui: timed out fetching per-torrent data for instance %s — '
-                        'using partial results', inst_name)
+            # The partial-results path. It used to be a log line and nothing
+            # else, so a scan that reached this ceiling persisted its partial
+            # answer as truth with nothing anywhere saying so. The un-answered
+            # torrents are now marked as failed listings — which both routes
+            # them through the disk fallback below and makes the scan's
+            # incompleteness a value the audit can refuse to act on.
+            timed_out = 0
             for f, t in futures.items():
                 if not f.done():
                     th = _norm_torrent(t)['hash']
@@ -300,6 +316,16 @@ def _process_instance(session, base, inst, remote_path, local_path,
                         tracker_map.setdefault(th, ['Unknown'])
                         health_map.setdefault(th, ('unknown', ''))
                         files_map.setdefault(th, [])
+                        failed_listings.add(th)
+                        timed_out += 1
+            log.warning('qui: timed out after %ds fetching per-torrent data for instance '
+                        '%s — %d of %d torrents unanswered',
+                        _PER_INSTANCE_TIMEOUT, inst_name, timed_out, len(torrents))
+            if report is not None:
+                report['partial'] = True
+                report_note(report,
+                            f"{inst_name}: per-torrent fetch hit the {_PER_INSTANCE_TIMEOUT}s "
+                            f"ceiling with {timed_out} of {len(torrents)} torrents unanswered")
 
     empty_file_count    = 0
     nonempty_file_count = 0
@@ -379,6 +405,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
 
         torrent_files = files_map.get(th, [])
 
+        listing_failed = th in failed_listings
+
         if torrent_files:
             nonempty_file_count += 1
             for f in torrent_files:
@@ -394,38 +422,32 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 _add_entry(full_path, status, hosts, nt.get('category', ''))
         else:
             empty_file_count += 1
-            # Fallback: qui may not expose per-torrent file lists.
-            # Use torrent name to locate files on local filesystem.
-            torrent_name = nt['name']
-            if torrent_name and save_path:
-                torrent_root = os.path.join(save_path, torrent_name)
-                if os.path.isfile(torrent_root):
-                    # Single-file torrent
-                    disk_fallback_count += 1
-                    if len(sample_paths) < 3:
-                        sample_paths.append({
-                            'source': 'disk_fallback_file',
-                            'raw_save_path': raw_save_path,
-                            'mapped_save_path': save_path,
-                            'file_name': torrent_name,
-                            'full_path': torrent_root,
-                        })
-                    _add_entry(torrent_root, status, hosts, nt.get('category', ''))
-                elif os.path.isdir(torrent_root):
-                    # Multi-file torrent — walk only the torrent's own subtree
-                    for dir_root, _, dir_files in os.walk(torrent_root):
-                        for fname in dir_files:
-                            full_path = os.path.join(dir_root, fname)
-                            disk_fallback_count += 1
-                            if len(sample_paths) < 3:
-                                sample_paths.append({
-                                    'source': 'disk_fallback_dir',
-                                    'raw_save_path': raw_save_path,
-                                    'mapped_save_path': save_path,
-                                    'file_name': os.path.relpath(full_path, save_path),
-                                    'full_path': full_path,
-                                })
-                            _add_entry(full_path, status, hosts, nt.get('category', ''))
+            # Fallback: qui may not expose per-torrent file lists, and a listing
+            # can fail outright. Either way the payload is at save_path/name, so
+            # enumerate it there rather than letting the files default to
+            # 'Orphaned' in the walk.
+            recovered = disk_fallback_paths(save_path, nt['name'])
+            for full_path in recovered:
+                disk_fallback_count += 1
+                if len(sample_paths) < 3:
+                    sample_paths.append({
+                        'source': 'disk_fallback',
+                        'raw_save_path': raw_save_path,
+                        'mapped_save_path': save_path,
+                        'file_name': os.path.relpath(full_path, save_path),
+                        'full_path': full_path,
+                    })
+                _add_entry(full_path, status, hosts, nt.get('category', ''))
+            if report is not None and listing_failed:
+                report['listing_failures'] += 1
+                if recovered:
+                    report['listing_recovered'] += 1
+                else:
+                    report['listing_unresolved'] += 1
+                    # No infohash — see the matching note in _qbit.py.
+                    report_note(report,
+                                f"{inst_name}: file listing failed and nothing "
+                                f"was found at {save_path}")
 
     if disk_fallback_count:
         log.warning(
@@ -437,9 +459,11 @@ def _process_instance(session, base, inst, remote_path, local_path,
 
     log.info(
         'qui[%s]: %d torrents — %d with file lists, %d empty '
-        '(%d disk-fallback entries). file_map total: %d. remote_path=%r local_path=%r',
+        '(%d failed outright, %d disk-fallback entries). file_map total: %d. '
+        'remote_path=%r local_path=%r',
         inst_name, len(torrents), nonempty_file_count, empty_file_count,
-        disk_fallback_count, len(file_map), remote_path, local_path,
+        len(failed_listings), disk_fallback_count, len(file_map),
+        remote_path, local_path,
     )
     for sp in sample_paths:
         log.info(
@@ -505,14 +529,23 @@ def _fetch_inner(cfg):
     tracker_seeding_size = {}
     seen_hashes          = set()  # deduplicate stats across all instances
     seed_totals          = {'byte_secs': 0, 'max_secs': 0}
+    report               = new_source_report('qui')
+    report['instances_total'] = len(eligible)
 
     for inst in eligible:
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                               seen_hashes, seed_totals)
+                               seen_hashes, seed_totals, report=report)
+            report['instances_ok'] += 1
         except Exception as e:
+            # Skipping an instance is still the right call — the others have
+            # real answers and one unreachable box should not fail the scan —
+            # but it is recorded rather than logged and forgotten. Every torrent
+            # this instance manages is now absent from the map, so every file of
+            # theirs is about to read as orphaned.
             log.warning(f"qui: skipping instance {inst.get('name','?')} due to error: {e}")
+            report_instance_failure(report, inst.get('name', '?'), e)
 
     all_hosts        = set(tracker_upload) | set(tracker_seeding_size)
     tracker_snapshot = {
@@ -527,6 +560,10 @@ def _fetch_inner(cfg):
     tracker_snapshot['_seed_byte_secs'] = seed_totals['byte_secs']
     tracker_snapshot['_max_seed_secs']  = seed_totals['max_secs']
 
+    report['file_map_size'] = len(file_map)
+    if report['listing_failures']:
+        report['partial'] = True
+
     if not file_map:
         log.warning(
             'qui: file_map is EMPTY after processing all instances — all torrent '
@@ -537,7 +574,7 @@ def _fetch_inner(cfg):
     else:
         log.info('qui: total file_map entries across all instances: %d', len(file_map))
 
-    return file_map, sorted(trackers_set), tracker_snapshot
+    return file_map, sorted(trackers_set), tracker_snapshot, report
 
 
 # ---------------------------------------------------------------------------
@@ -648,9 +685,17 @@ def _eligible_instances(sess, base):
 def list_torrents(cfg):
     """Light live listing of every torrent across all eligible qui instances.
 
-    Returns [{'hash', 'name', 'size', 'save_path', 'tracker', 'instance_id',
-    'instance_name'}], deduplicated by hash (qui per-instance endpoints can
-    return all managed torrents regardless of which instance is queried).
+    Returns ([rows], report); a row is {'hash', 'name', 'size', 'save_path',
+    'tracker', 'instance_id', 'instance_name'}, deduplicated by hash (qui
+    per-instance endpoints can return all managed torrents regardless of which
+    instance is queried).
+
+    An instance that fails to list is **recorded on the report**, which is what
+    the `sources.list_torrents` wrapper refuses on. This used to log and carry
+    on, handing back a short list indistinguishable from a complete one — the
+    reverse polarity to the qbit backend, which raises. Neither backend was
+    consistently fail-safe: each was careful in one function and careless in the
+    other.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
@@ -662,6 +707,8 @@ def list_torrents(cfg):
         eligible = _eligible_instances(sess, base)
         if not eligible:
             raise SourceConnectionError("No eligible qui instances")
+        report = new_source_report('qui')
+        report['instances_total'] = len(eligible)
         rows = []
         seen = set()
         for inst in eligible:
@@ -682,9 +729,12 @@ def list_torrents(cfg):
                         'instance_id':   inst['id'],
                         'instance_name': inst.get('name', str(inst['id'])),
                     })
+                report['instances_ok'] += 1
             except Exception as e:
                 log.warning('qui: list_torrents failed for instance %s: %s', inst.get('name', '?'), e)
-        return rows
+                report_instance_failure(report, inst.get('name', '?'), e)
+        report['torrent_count'] = len(rows)
+        return rows, report
     except SourceConnectionError:
         raise
     except requests.exceptions.ConnectionError as e:
@@ -699,25 +749,36 @@ def fetch_torrent_file_paths(cfg, items):
     """Absolute client-side file paths for specific torrents.
 
     items: [{'hash', 'instance_id'?, 'save_path'?, ...}]. Unknown instance ids
-    are tried against every eligible instance. Returns {hash: [paths]};
-    failures yield empty lists, never exceptions.
+    are tried against every eligible instance.
+
+    Returns {hash: [paths] | None}. **`None` means the listing could not be
+    fetched; `[]` means the client answered that this torrent has no files.**
+    This used to be `[]` for both, documented as deliberate ("failures yield
+    empty lists, never exceptions") — and every consumer is a set-membership
+    test, where an empty list reads as "shares nothing with anything" and
+    quietly collapses whatever it was building. Still never raises per torrent:
+    the failure is in the value now, not in control flow. A total failure
+    (unreachable host, no eligible instances) leaves every requested hash at
+    `None` rather than returning a map of empty lists.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
+    hashes  = list(dict.fromkeys(i.get('hash') for i in items if i.get('hash')))
     if not base:
-        return {}
-    result = {}
+        return {h: None for h in hashes}
+    result = {h: None for h in hashes}
     try:
         sess = _session(api_key)
         eligible_ids = [i['id'] for i in _eligible_instances(sess, base)]
+        seen = set()
         for i in items:
             h = i.get('hash')
-            if not h or h in result:
+            if not h or h in seen:
                 continue
+            seen.add(h)
             sp = (i.get('save_path') or '').rstrip('/')
             inst = i.get('instance_id')
             try_ids = [inst] if inst in eligible_ids else eligible_ids
-            result[h] = []
             for iid in try_ids:
                 try:
                     resp = sess.get(
@@ -729,6 +790,9 @@ def fetch_torrent_file_paths(cfg, items):
                 if files:
                     result[h] = [f"{sp}/{f['name']}" for f in files]
                     break
+                # The instance answered and knows of no files for this hash.
+                # Distinct from "no instance answered", which leaves None.
+                result[h] = []
     except Exception as e:
         log.warning('qui: fetch_torrent_file_paths failed: %s', e)
     return result
