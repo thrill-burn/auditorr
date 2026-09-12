@@ -126,6 +126,17 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         # inode so a dead cross-seed sibling survives the merge.
                         for h, c in (qbit_info.get('unreg_claimants') or {}).items():
                             info['unreg_claimants'][h] = c
+                        # Completion (R2). Sparse — absent means complete, which
+                        # is almost every record, and an extra key on every
+                        # inode_map entry is the RAM hotspot this walk is
+                        # careful about. Sticky across an inode's paths for the
+                        # same reason it is sticky in the source layer: a
+                        # cross-seed still writing to these bytes must not have
+                        # them hardlinked out from under it.
+                        if qbit_info.get('incomplete'):
+                            info['incomplete'] = True
+                        if qbit_info.get('completion_unknown'):
+                            info['completion_unknown'] = True
                         cur = info['status']
                         if qbit_info['status'] == 'Seeding' or cur == 'Seeding':
                             info['status'] = 'Seeding'
@@ -172,11 +183,31 @@ def _info_excluded(info):
     return info['media_excluded']
 
 
+def _info_incomplete(info):
+    """Whether this inode might not hold a whole file yet (DEDUPE F6).
+
+    Both spellings disqualify it, and the asymmetry is the whole argument.
+    qBittorrent does not preallocate by default — it writes **sparse** files,
+    which report the final `st_size` while unwritten regions read as zeros. Two
+    unfinished files of equal size whose written regions do not overlap land in
+    the same size group, produce the same head+tail fast hash, and **pass the
+    `cmp` in the generated script**, because at that moment both really are
+    zeros there. `cmp` is the last line of defence for every other failure mode
+    in Dedupe and it cannot help here, so the guard has to be upstream: two
+    torrents hardlinked onto one inode both write to it, both are corrupt, and
+    there is no recovery.
+
+    So a missed reclaim is the cost of being wrong one way, and two destroyed
+    torrents the cost of being wrong the other. "Could not determine" excludes.
+    """
+    return bool(info.get('incomplete') or info.get('completion_unknown'))
+
+
 def _build_duplicate_map(inode_map):
     """O(n) duplicate detection: group by size, then file identity, then hash representatives only."""
     size_groups = {}
     for file_key, info in inode_map.items():
-        if info['size'] > 0 and not _info_excluded(info):
+        if info['size'] > 0 and not _info_excluded(info) and not _info_incomplete(info):
             size_groups.setdefault(info['size'], []).append(file_key)
 
     duplicate_map = {}
@@ -257,6 +288,18 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         }
         if dead_siblings:
             record["dead_siblings"] = dead_siblings
+        # Completion, written only when it is not "complete" — the same sparse
+        # shape as dead_siblings above, and for the reason `seeding_time`
+        # established: a field on every file record multiplies across every file
+        # of every torrent and grows files_json, the known RAM hotspot. This is
+        # deliberately NOT a fourth value of `status`, which is read by
+        # _is_not_imported_torrent, _is_triage_relevant, count_triage_items, the
+        # File Explorer filters and Cleanup — widening that vocabulary would
+        # touch all of them.
+        if info.get('incomplete'):
+            record["incomplete"] = True
+        elif info.get('completion_unknown'):
+            record["completion_unknown"] = True
         torrent_files_data.append(record)
     media_files_data = []
     seen_media_keys = set()
@@ -841,10 +884,27 @@ def _compute_tracker_file_stats(torrent_files):
 
 
 def _is_not_imported_torrent(f):
+    """A torrent file that ought to be in the library and is not (TRIAGE T4).
+
+    An **unfinished download is not one of these**, and used to be. A torrent at
+    0% is not-imported by definition — the arr cannot import what does not exist
+    yet — so a brand-new grab was the newest thing in the client and also a
+    Triage row at its full final size, verdict `not_in_library`, with a delete
+    button under copy reading "junk can be deleted". `status` could not rescue
+    it either: a **paused** incomplete reads 'Paused', exactly like a paused
+    complete one, which is why this tests the completion flag and not the state
+    string.
+
+    `completion_unknown` is deliberately *not* excluded here. Where the client
+    exposed no usable completion field the row stays visible carrying its
+    status, because auditorr never hides anything silently (T3/T15's rule) — the
+    honest failure is a row you can see and judge, not a row that vanished.
+    """
     return (
         not f.get('excluded')
         and not f.get('imported')
         and f.get('status') != 'Orphaned'
+        and not f.get('incomplete')
     )
 
 
@@ -855,7 +915,10 @@ def _is_triage_relevant(f):
     Persisted as the compact 'triage' file_results row at save time so the
     Triage page never deserializes the full torrent list (a few hundred MB of
     object graph on large libraries) for the ~2% of records it acts on.
-    Must stay in lockstep with the filters in app.workflows_triage.
+    Must stay in lockstep with the filters in app.workflows_triage — the rule
+    exists in three places (here, `_is_not_imported_torrent` above and
+    `count_triage_items` below) and when they disagree the page, the stored
+    subset and the sidebar badge each report a different number.
     """
     if f.get('excluded'):
         return False
@@ -864,7 +927,7 @@ def _is_triage_relevant(f):
     if f.get('status') == 'Orphaned':
         return False
     if not f.get('imported'):
-        return True
+        return not f.get('incomplete')
     return f.get('tracker_health') == 'unregistered'
 
 

@@ -1820,6 +1820,12 @@ def workflows_triage():
       import_pending  — title is managed by Sonarr/Radarr but has no library file
       not_in_library  — title matches nothing in any Arr instance
 
+    Torrents the client says are still downloading are **not** candidates: an
+    unfinished payload is not-imported by definition and was being reported as
+    junk (T4). The filter lives in `_is_not_imported_torrent`, so this endpoint,
+    the compact `triage` row's predicate and the sidebar badge's count all move
+    together.
+
     Two-phase contract: this endpoint answers from audit-time data only — no
     torrent-client calls — so the page renders immediately. Each item carries
     `verdict_alternatives` (its verdict under live health working/unregistered/
@@ -2089,6 +2095,13 @@ def workflows_triage():
             'library':        lib_payload,
             'tracker_health': tracker_health,
             'tracker_msg':    g['stored_msg'],
+            # What the client is doing, and whether the payload is whole. The
+            # item carried neither, so the UI could not have told an in-flight
+            # download from junk even if it wanted to (T4). Known-incomplete
+            # torrents no longer reach this list at all; `completion_unknown`
+            # ones do, and say so rather than vanishing.
+            'status':             rep.get('status') or '',
+            'completion_unknown': bool(rep.get('completion_unknown')),
             # Live-only fields — filled in by /triage/verify
             'uploaded':       None,
             'ratio':          None,
@@ -2149,6 +2162,8 @@ def workflows_triage():
             'library':        None,
             'tracker_health': 'unregistered',
             'tracker_msg':    g['stored_msg'],
+            'status':             rep.get('status') or '',
+            'completion_unknown': bool(rep.get('completion_unknown')),
             'uploaded':       None,
             'ratio':          None,
             'seeding_time':   None,

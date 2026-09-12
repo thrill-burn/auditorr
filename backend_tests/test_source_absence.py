@@ -21,7 +21,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import sources
 from sources import _qbit, _qui
-from audit import source_plausibility, _guard_scan, _SourceAnomaly
+import audit
+from audit import (
+    source_plausibility, _guard_scan, _SourceAnomaly,
+    _build_duplicate_map, _is_not_imported_torrent, _is_triage_relevant,
+    count_triage_items, _walk_directory,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,10 +76,20 @@ def _qbit_cfg():
             'LOCAL_PATH': '/data/torrents', 'REMOTE_PATH': '/data/torrents'}
 
 
-def _torrent(h, name, save_path='/data/torrents/movies', size=100):
-    return _FakeTorrent(hash=h, name=name, save_path=save_path, size=size,
-                        state='uploading', uploaded=10, category='movies',
-                        seeding_time=3600)
+def _torrent(h, name, save_path='/data/torrents/movies', size=100, **kw):
+    """A finished, seeding torrent as qBittorrent actually reports one.
+
+    `progress` and `completion_on` are part of that — the fake used to omit
+    them, which made every fixture torrent read `completion_unknown` once the
+    completion flag existed. Override either to build an unfinished or a
+    rechecked torrent.
+    """
+    fields = dict(hash=h, name=name, save_path=save_path, size=size,
+                  state='uploading', uploaded=10, category='movies',
+                  seeding_time=3600, progress=1.0, completion_on=1789000000,
+                  content_path=os.path.join(save_path, name))
+    fields.update(kw)
+    return _FakeTorrent(**fields)
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +382,426 @@ class GuardOverrideTests(unittest.TestCase):
     def test_a_manual_scan_is_the_override(self):
         anomaly = _guard_scan(_report(**self.BAD), self.PREV, 'manual', disk_file_count=5000)
         self.assertIsNotNone(anomaly)
+
+
+# ---------------------------------------------------------------------------
+# R2 — the completion flag. One primitive, three consumers.
+#
+# `status` is derived from the client's state string, where a paused incomplete
+# torrent and a paused complete one are the same word. That one blind spot is
+# DEDUPE F6 (unfinished sparse files enter a duplicate group and pass `cmp`),
+# TRIAGE T4 (in-flight downloads are reported as junk) and CLEANUP C4a/C4b
+# (live downloads read as orphans) simultaneously.
+# ---------------------------------------------------------------------------
+
+class CompletionRuleTests(unittest.TestCase):
+    """`torrent_complete` is a fallback chain, and the chain is the finding.
+
+    The first draft of this phase proposed the union
+    `progress >= 1.0 or completion_on > 0`, justified entirely by `progress`
+    sitting below 1.0 forever on a torrent with deprioritized files. That premise
+    was measured false (ROADMAP §0.4), and with it gone the `or` is not merely
+    redundant — it is unsafe in the one direction F6 says must not fail.
+    """
+
+    def test_a_rechecked_torrent_reads_incomplete(self):
+        """The case the chain exists for, and the one no live install will show
+        you: a torrent that finished and was later rechecked (files deleted, a
+        partial re-download) has `progress` correctly below 1.0 while
+        `completion_on` still holds its original timestamp. Under the superseded
+        union this reads *complete*, its half-written sparse file enters a
+        duplicate group, and hardlinking it corrupts both torrents."""
+        self.assertIs(sources.torrent_complete(0.4, 1789000000), False)
+
+    def test_completion_on_answers_only_when_progress_is_absent(self):
+        self.assertIs(sources.torrent_complete(None, 1789000000), True)
+        self.assertIs(sources.torrent_complete(None, 0), False)
+        self.assertIs(sources.torrent_complete(None, -1), False)
+
+    def test_a_deprioritized_torrent_reads_complete(self):
+        """Measured shape, 2026-09-11: a season pack with five files set to *Do
+        not download* — 32% of its payload wanted — reports `progress == 1.0`
+        and `amount_left == 0`, because libtorrent computes
+        `total_wanted_done / total_wanted` while the UI's 42.5% is
+        `completed / total_size`.
+
+        This passes under a plain `progress >= 1.0`. The test exists to pin the
+        *reason*, so a later change to the rule has to confront the measurement
+        rather than rediscover it — and so that nobody rebuilds the per-file
+        fan-out to answer a question `progress` already answers."""
+        self.assertIs(sources.torrent_complete(1.0, 1789162167), True)
+
+    def test_no_usable_completion_field_reads_unknown(self):
+        self.assertIsNone(sources.torrent_complete(None, None))
+        self.assertIsNone(sources.torrent_complete('nonsense', None))
+
+    def test_a_percentage_scale_is_inferred_rather_than_assumed(self):
+        """Measured 0-1 on both backends across 1316 torrents. Reading a
+        hypothetical percent-scale 42.5 as 'complete' is the corrupting
+        direction, so a value above 1.0 is treated as the scale it can only be."""
+        self.assertIs(sources.torrent_complete(42.5, 0), False)
+        self.assertIs(sources.torrent_complete(100.0, 0), True)
+
+
+class CompletionFlagInSourceTests(unittest.TestCase):
+    """The primitive, driven through the real qbit backend."""
+
+    def _map(self, torrents, files):
+        client = _FakeQbtClient(torrents=torrents, files=files)
+        with patch.object(_qbit.qbittorrentapi, 'Client', return_value=client):
+            return _qbit.fetch_file_map(_qbit_cfg())
+
+    def test_a_paused_incomplete_is_distinguishable_from_a_paused_complete(self):
+        """The root cause in one assertion. Both torrents are 'Paused', so no
+        rule reading the state string can separate them — which is how an
+        unfinished payload reached the duplicate map and the Triage pile."""
+        file_map, _, _, report = self._map(
+            [_torrent('aaa', 'Alpha', state='pausedUP', progress=1.0),
+             _torrent('bbb', 'Bravo', state='pausedDL', progress=0.31)],
+            {'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']})
+        done = file_map[os.path.join('/data/torrents/movies', 'Alpha/a.mkv')]
+        part = file_map[os.path.join('/data/torrents/movies', 'Bravo/b.mkv')]
+        self.assertEqual(done['status'], part['status'])   # both 'Paused'
+        self.assertNotIn('incomplete', done)
+        self.assertTrue(part['incomplete'])
+        self.assertEqual(report['incomplete_torrents'], 1)
+        self.assertEqual(report['completion_unknown'], 0)
+
+    def test_a_client_exposing_no_completion_field_is_reported_as_unknown(self):
+        file_map, _, _, report = self._map(
+            [_torrent('aaa', 'Alpha', progress=None, completion_on=None)],
+            {'aaa': ['Alpha/a.mkv']})
+        entry = file_map[os.path.join('/data/torrents/movies', 'Alpha/a.mkv')]
+        self.assertTrue(entry['completion_unknown'])
+        self.assertNotIn('incomplete', entry)
+        self.assertEqual(report['completion_unknown'], 1)
+
+    def test_a_healthy_library_carries_no_completion_keys_at_all(self):
+        """Sparse, like `dead_siblings`: absence means complete. A field on
+        every file record multiplies across every file of every torrent and
+        grows files_json, the known RAM hotspot."""
+        file_map, _, _, report = self._map(
+            [_torrent('aaa', 'Alpha')], {'aaa': ['Alpha/a.mkv']})
+        entry = file_map[os.path.join('/data/torrents/movies', 'Alpha/a.mkv')]
+        self.assertNotIn('incomplete', entry)
+        self.assertNotIn('completion_unknown', entry)
+        self.assertEqual(report['incomplete_torrents'], 0)
+        self.assertEqual(report['completion_unknown'], 0)
+
+    def test_an_unfinished_torrent_is_still_claimed_c4a(self):
+        """C4a's resolution of 'unknown': claim the payload either way. An
+        unknown-state torrent's files are still a payload, and the thing that
+        must never happen is the walk finding them with nothing against them."""
+        file_map, _, _, _ = self._map(
+            [_torrent('bbb', 'Bravo', state='downloading', progress=0.1)],
+            {'bbb': ['Bravo/b.mkv']})
+        self.assertIn(os.path.join('/data/torrents/movies', 'Bravo/b.mkv'), file_map)
+
+    def test_the_incomplete_suffix_is_claimed_for_an_unfinished_torrent(self):
+        """CLEANUP C4a. With *Append .!qB extension to incomplete files* on, the
+        on-disk name is `Foo.mkv.!qB` while the listing reports `Foo.mkv`, so
+        path equality fails and a file being actively written is offered for
+        `rm`. The option is off on the reference box and cannot be measured
+        there, so both spellings are claimed defensively."""
+        file_map, _, _, _ = self._map(
+            [_torrent('bbb', 'Bravo', state='downloading', progress=0.1)],
+            {'bbb': ['Bravo/b.mkv']})
+        self.assertIn(os.path.join('/data/torrents/movies', 'Bravo/b.mkv') + '.!qB',
+                      file_map)
+
+    def test_a_finished_torrent_claims_no_extra_spellings(self):
+        """So a healthy library's file_map is byte-identical to before — which
+        also keeps the plausibility guard's `file_map_size` baseline unmoved."""
+        file_map, _, _, _ = self._map(
+            [_torrent('aaa', 'Alpha')], {'aaa': ['Alpha/a.mkv']})
+        self.assertEqual(len(file_map), 1)
+
+    def test_an_incomplete_directory_is_claimed_c4b(self):
+        """CLEANUP C4b. `save_path` is the *final* location; while downloading,
+        the bytes are under the client's temp path, which `content_path`
+        follows. On the reference box that temp path is outside LOCAL_PATH so
+        nothing is walked — but TRaSH's layout is a recommendation, not a
+        guarantee, and where it sits inside LOCAL_PATH the walk sees files the
+        map does not have."""
+        file_map, _, _, _ = self._map(
+            [_torrent('bbb', 'Bravo', state='downloading', progress=0.1,
+                      content_path='/data/torrents/incomplete/Bravo')],
+            {'bbb': ['Bravo/b.mkv']})
+        self.assertIn('/data/torrents/incomplete/Bravo/b.mkv', file_map)
+
+
+class ContentPathShapeTests(unittest.TestCase):
+    """`content_path` is sometimes a file and sometimes a directory (§0.4)."""
+
+    def test_a_multi_file_torrent_roots_at_the_folder(self):
+        """Posix joins, not `os.path.join` — the container is posix and a client
+        file name already carries `/`, so a native join would mix separators on
+        Windows and make these tests exercise a different branch than the
+        container does (CLAUDE.md's `_local_to_abs` lesson)."""
+        self.assertEqual(
+            sources.content_rooted_paths('/dl/Bravo', 'Bravo',
+                                         ['Bravo/b.mkv', 'Bravo/subs/b.srt']),
+            ['/dl/Bravo/b.mkv', '/dl/Bravo/subs/b.srt'])
+
+    def test_a_single_file_torrent_inside_a_release_folder_is_the_file(self):
+        """All 8 of 200 completed torrents on the reference box where
+        `content_path != save_path/name` are this shape: qBittorrent resolves
+        `content_path` to the file while `save_path/name` is the folder. Treating
+        it as a directory to walk returns nothing for every one of them."""
+        self.assertEqual(
+            sources.content_rooted_paths('/dl/Bravo (2021)/bravo.mkv', 'Bravo (2021)',
+                                         ['Bravo (2021)/bravo.mkv']),
+            ['/dl/Bravo (2021)/bravo.mkv'])
+
+    def test_no_content_path_claims_nothing(self):
+        self.assertEqual(sources.content_rooted_paths('', 'Bravo', ['Bravo/b.mkv']), [])
+
+    def test_claims_are_deduplicated_against_the_final_paths(self):
+        final = [os.path.join('/data/torrents/movies', 'Bravo/b.mkv')]
+        claims = sources.incomplete_claims(
+            '/data/torrents/movies/Bravo', 'Bravo', ['Bravo/b.mkv'], final)
+        self.assertEqual(claims, [final[0] + '.!qB'])
+
+
+class DiskFallbackContentPathTests(unittest.TestCase):
+    """ROADMAP §0.3 item 1: Phase 2's fallback walked `save_path`, which for an
+    in-flight torrent holds nothing at all — so it counted a `listing_unresolved`
+    and inflated the guard's `listings_unavailable` input with the one case that
+    carries no risk."""
+
+    def test_an_in_flight_torrent_is_found_at_its_content_path(self):
+        """The case the argument was added for: nothing whatsoever is at
+        `save_path/name` yet."""
+        root = '/downloads/Bravo'
+        with patch.object(sources.os.path, 'isfile', lambda p: False), \
+             patch.object(sources.os.path, 'isdir', lambda p: p == root), \
+             patch.object(sources.os, 'walk',
+                          lambda r: [(root, [], ['b.mkv'])] if r == root else []):
+            found = sources.disk_fallback_paths('/data/torrents/movies', 'Bravo', root)
+        self.assertEqual(found, [os.path.join(root, 'b.mkv')])
+
+    def test_save_path_still_answers_when_content_path_holds_nothing(self):
+        root = os.path.join('/data/torrents/movies', 'Bravo')
+        with patch.object(sources.os.path, 'isfile', lambda p: False), \
+             patch.object(sources.os.path, 'isdir', lambda p: p == root), \
+             patch.object(sources.os, 'walk',
+                          lambda r: [(root, [], ['b.mkv'])] if r == root else []):
+            found = sources.disk_fallback_paths(
+                '/data/torrents/movies', 'Bravo', '/downloads/Bravo')
+        self.assertEqual(found, [os.path.join(root, 'b.mkv')])
+
+    def test_both_roots_are_unioned_rather_than_the_first_one_winning(self):
+        """Preferring `content_path` would *narrow* the answer for the commonest
+        shape the two differ on — a single-file torrent inside a release folder,
+        where `content_path` is the file and `save_path/name` is the folder
+        holding it plus sidecars. For a failed listing, over-claiming is the
+        fail-safe direction (this function's whole argument), and the union also
+        leaves a completed torrent claiming exactly what it claimed before the
+        argument existed."""
+        folder = os.path.join('/data/torrents/movies', 'Bravo')
+        cp     = os.path.join(folder, 'b.mkv')
+        with patch.object(sources.os.path, 'isfile', lambda p: p == cp), \
+             patch.object(sources.os.path, 'isdir', lambda p: p == folder), \
+             patch.object(sources.os, 'walk',
+                          lambda r: [(folder, [], ['b.mkv', 'b.nfo'])] if r == folder else []):
+            found = sources.disk_fallback_paths('/data/torrents/movies', 'Bravo', cp)
+        self.assertEqual(found, [cp, os.path.join(folder, 'b.nfo')])
+
+    def test_a_single_file_content_path_is_returned_not_walked(self):
+        cp = '/downloads/Bravo (2021)/bravo.mkv'
+        with patch.object(sources.os.path, 'isfile', lambda p: p == cp), \
+             patch.object(sources.os.path, 'isdir', lambda p: False), \
+             patch.object(sources.os, 'walk', lambda r: []):
+            self.assertEqual(
+                sources.disk_fallback_paths('/data/torrents/movies', 'Bravo (2021)', cp),
+                [cp])
+
+
+class QuiCompletionParityTests(unittest.TestCase):
+    """Neither normalizer mentioned `progress`, `content_path` or `completion_on`
+    anywhere. M7 answered 'does the client expose these' — yes, on both — which
+    is a different question from 'does auditorr read them'. It did not, so
+    `_qui.py` is as much of this phase as `_qbit.py`."""
+
+    def test_the_normalizer_carries_the_completion_fields(self):
+        nt = _qui._norm_torrent({
+            'hash': 'aaa', 'name': 'Alpha', 'save_path': '/d',
+            'progress': 0.42, 'completion_on': 0, 'content_path': '/dl/Alpha/'})
+        self.assertEqual(nt['progress'], 0.42)
+        self.assertEqual(nt['completion_on'], 0)
+        self.assertEqual(nt['content_path'], '/dl/Alpha')
+
+    def test_a_zero_completion_stamp_is_an_answer_not_an_absence(self):
+        """`a or b or 0` would collapse `completion_on: 0` ("never finished")
+        into the same falsy hole as "the field is absent", which is the R1
+        mistake one layer down: the chain needs None to mean *could not ask*."""
+        nt = _qui._norm_torrent({'hash': 'aaa', 'completion_on': 0})
+        self.assertIs(sources.torrent_complete(nt['progress'], nt['completion_on']), False)
+        nt2 = _qui._norm_torrent({'hash': 'aaa'})
+        self.assertIsNone(sources.torrent_complete(nt2['progress'], nt2['completion_on']))
+
+    def test_an_unfinished_qui_torrent_flags_its_entry_and_the_report(self):
+        torrents = [
+            {'hash': 'aaa', 'name': 'Alpha', 'save_path': '/data/torrents/movies',
+             'size': 100, 'state': 'uploading', 'uploaded': 5, 'progress': 1.0,
+             'completion_on': 1789000000,
+             'content_path': '/data/torrents/movies/Alpha'},
+            {'hash': 'bbb', 'name': 'Bravo', 'save_path': '/data/torrents/movies',
+             'size': 100, 'state': 'pausedDL', 'uploaded': 0, 'progress': 0.2,
+             'completion_on': 0,
+             'content_path': '/data/torrents/movies/Bravo'},
+        ]
+        files = {'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']}
+
+        class _Resp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        class _Sess:
+            headers = {}
+
+            def get(_self, url, **kw):
+                if url.endswith('/api/instances'):
+                    return _Resp([{'id': 1, 'name': 'main', 'connected': True,
+                                   'hasLocalFilesystemAccess': True}])
+                if url.endswith('/torrents'):
+                    page = (kw.get('params') or {}).get('page', 0)
+                    return _Resp({'torrents': torrents if page == 0 else [],
+                                  'total': len(torrents)})
+                if url.endswith('/trackers'):
+                    return _Resp([{'url': 'http://tracker.example/announce',
+                                   'status': 2, 'msg': ''}])
+                h = url.split('/torrents/')[1].split('/')[0]
+                return _Resp([{'name': n} for n in files.get(h, [])])
+
+        with patch.object(_qui, '_session', return_value=_Sess()):
+            file_map, _, _, report = _qui.fetch_file_map(
+                {'QUI_HOST': 'http://qui:7476', 'QUI_API_KEY': 'k',
+                 'LOCAL_PATH': '/data/torrents', 'REMOTE_PATH': '/data/torrents'})
+        done = file_map[os.path.join('/data/torrents/movies', 'Alpha/a.mkv')]
+        part = file_map[os.path.join('/data/torrents/movies', 'Bravo/b.mkv')]
+        self.assertNotIn('incomplete', done)
+        self.assertTrue(part['incomplete'])
+        self.assertEqual(report['incomplete_torrents'], 1)
+        self.assertEqual(report['completion_unknown'], 0)
+
+
+# ---------------------------------------------------------------------------
+# The three consumers, and the three directions `None` resolves in
+# ---------------------------------------------------------------------------
+
+def _inode(size=100, **kw):
+    info = {
+        'trackers': set(), 'status': 'Seeding', 'torrent_paths': [], 'media_paths': [],
+        'hash': 'aaa', 'instance_id': None, 'instance_name': None,
+        'tracker_health': 'working', 'tracker_msg': '', 'unreg_claimants': {},
+        'size': size, 'torrent_rel_path': None, 'torrent_excluded': False,
+        'media_rel_path': None, 'media_excluded': False,
+    }
+    info.update(kw)
+    return info
+
+
+class DuplicateMapCompletionTests(unittest.TestCase):
+    """DEDUPE F6 — the only one of the consumers that can destroy data.
+
+    qBittorrent writes **sparse** files by default: the final `st_size` is
+    reported while unwritten regions read as zeros. Two unfinished files of
+    equal size whose written regions do not overlap land in the same size group,
+    produce the same head+tail fast hash, and pass the script's `cmp`, because
+    at that moment both really are zeros there.
+    """
+
+    def _groups(self, inode_map):
+        with patch.object(audit, 'get_fast_hash', lambda p, s: 'samehash'):
+            return _build_duplicate_map(inode_map)
+
+    def test_two_complete_files_still_group(self):
+        m = {(1, 1): _inode(torrent_paths=['/t/a.mkv'], torrent_rel_path='a.mkv'),
+             (1, 2): _inode(torrent_paths=['/t/b.mkv'], torrent_rel_path='b.mkv')}
+        self.assertEqual(len(self._groups(m)), 2)
+
+    def test_an_incomplete_file_is_never_grouped(self):
+        m = {(1, 1): _inode(torrent_paths=['/t/a.mkv'], torrent_rel_path='a.mkv'),
+             (1, 2): _inode(torrent_paths=['/t/b.mkv'], torrent_rel_path='b.mkv',
+                            incomplete=True)}
+        self.assertEqual(self._groups(m), {})
+
+    def test_unknown_completion_excludes_too(self):
+        """F6's resolution of `None`. The cost of excluding is a missed reclaim;
+        the cost of including is two corrupt torrents. Not symmetric."""
+        m = {(1, 1): _inode(torrent_paths=['/t/a.mkv'], torrent_rel_path='a.mkv'),
+             (1, 2): _inode(torrent_paths=['/t/b.mkv'], torrent_rel_path='b.mkv',
+                            completion_unknown=True)}
+        self.assertEqual(self._groups(m), {})
+
+
+class WalkCarriesCompletionTests(unittest.TestCase):
+    """`_build_duplicate_map` reads `inode_map`, which the walk builds from the
+    file map — so the flag has to arrive there, not only on the persisted
+    record."""
+
+    def test_the_walk_folds_the_flag_onto_the_inode(self):
+        base = '/data/torrents'
+        full = os.path.join(base, 'movies', 'b.mkv')
+        file_map = {full: {'status': 'Downloading', 'trackers': {'t'}, 'hash': 'bbb',
+                           'category': 'movies', 'tracker_health': 'working',
+                           'tracker_msg': '', 'incomplete': True}}
+        inode_map = {}
+        st = os.stat_result((0o100644, 42, 1, 1, 0, 0, 100, 0, 0, 0))
+        with patch.object(audit.os.path, 'exists', lambda p: True), \
+             patch.object(audit.os, 'walk',
+                          lambda p: [(os.path.join(base, 'movies'), [], ['b.mkv'])]), \
+             patch.object(audit.os, 'stat', lambda p: st):
+            _walk_directory(base, 'Torrent', inode_map, file_map, 0, 0,
+                            exclusion_patterns=[], total_ref=[0])
+        self.assertTrue(inode_map[(st.st_dev, st.st_ino)]['incomplete'])
+
+
+class TriageCompletionTests(unittest.TestCase):
+    """TRIAGE T4 — a torrent at 0% is not-imported by definition, so the newest
+    thing in the client was a full-size Triage row with a delete button under
+    copy reading "junk can be deleted"."""
+
+    @staticmethod
+    def _rec(**kw):
+        r = {'path': 'movies/Bravo/b.mkv', 'size': 100, 'hash': 'bbb',
+             'status': 'Paused', 'imported': False, 'excluded': False,
+             'tracker_health': 'working', 'trackers': ['t']}
+        r.update(kw)
+        return r
+
+    def test_an_incomplete_torrent_is_not_a_not_imported_problem(self):
+        self.assertFalse(_is_not_imported_torrent(self._rec(incomplete=True)))
+        self.assertFalse(_is_triage_relevant(self._rec(incomplete=True)))
+
+    def test_unknown_completion_keeps_the_row(self):
+        """T4's resolution of `None`: show it, with its status. auditorr never
+        hides anything silently — that is T3 and T15's rule and it holds here."""
+        self.assertTrue(_is_not_imported_torrent(self._rec(completion_unknown=True)))
+        self.assertTrue(_is_triage_relevant(self._rec(completion_unknown=True)))
+
+    def test_a_finished_not_imported_torrent_is_unaffected(self):
+        self.assertTrue(_is_not_imported_torrent(self._rec()))
+        self.assertTrue(_is_triage_relevant(self._rec()))
+
+    def test_the_badge_and_the_page_agree(self):
+        """The filter exists in three places — `_is_not_imported_torrent`,
+        `_is_triage_relevant` and `count_triage_items` — and when they disagree
+        the badge reads 4 against a page of 10. Same shape as Phase 4d's three
+        grouping keys."""
+        records = [self._rec(hash='bbb', incomplete=True),
+                   self._rec(hash='ccc', path='movies/Charlie/c.mkv')]
+        counts = count_triage_items(records)
+        self.assertEqual(counts['not_imported'], 1)
+        self.assertEqual(counts['total'], 1)
+        self.assertEqual(len([f for f in records if _is_triage_relevant(f)]), 1)
 
 
 if __name__ == '__main__':

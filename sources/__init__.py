@@ -16,6 +16,13 @@ Each backend implements:
 and must never collapse them: "the client says there is nothing" and "the client
 could not be asked". An empty collection means the former only. The latter is
 carried by an explicit `None` (per torrent) or by the `report` dict (per scan).
+
+**Completion is a third answer, not a second vocabulary.** `status` says what
+the client is *doing* ('Seeding' / 'Downloading' / 'Paused'); it has never said
+whether the payload is *whole*, and a paused incomplete torrent is
+indistinguishable from a paused complete one by state string alone. `torrent_complete`
+answers that separately, tri-state, and its "could not determine" is the same
+`None` the primitives above use.
 """
 
 import os
@@ -50,19 +57,30 @@ def new_source_report(source):
                           having been asked about
       instances_*         qui only; qbit reports a single instance
       partial             the scan is known-incomplete for any reason at all
+
+    Two more answer a different question — not "what could we not see" but
+    "which of these torrents is not finished". They live here rather than in a
+    parallel channel because an unfinished download is a third answer alongside
+    "could not ask" and "no files", and every consumer that reads one reads the
+    other:
+
+      incomplete_torrents  the client says the payload is not whole yet
+      completion_unknown   the client exposed no usable completion field
     """
     return {
-        'source':             source,
-        'torrent_count':      0,
-        'file_map_size':      0,
-        'listing_failures':   0,
-        'listing_recovered':  0,
-        'listing_unresolved': 0,
-        'instances_total':    0,
-        'instances_ok':       0,
-        'instances_failed':   [],
-        'partial':            False,
-        'notes':              [],
+        'source':              source,
+        'torrent_count':       0,
+        'file_map_size':       0,
+        'listing_failures':    0,
+        'listing_recovered':   0,
+        'listing_unresolved':  0,
+        'incomplete_torrents': 0,
+        'completion_unknown':  0,
+        'instances_total':     0,
+        'instances_ok':        0,
+        'instances_failed':    [],
+        'partial':             False,
+        'notes':               [],
     }
 
 
@@ -84,24 +102,160 @@ def report_instance_failure(report, name, reason):
     report['partial'] = True
 
 
-def disk_fallback_paths(save_path, torrent_name):
-    """On-disk file paths for a torrent whose client file listing failed.
+# ---------------------------------------------------------------------------
+# Completion — is this torrent's payload whole?
+# ---------------------------------------------------------------------------
 
-    Walks `save_path/name`, which is where both clients put a torrent's payload.
-    A failed listing is an *unknown*, and an unknown left alone becomes a
-    positive claim of orphanhood by default — every file of that torrent turns
-    up in the walk with no client entry against it. Enumerating the payload from
-    disk converts the unknown into a conservative *claimed* instead, which is
-    the fail-safe direction and the only thing that lets a failure be attributed
-    to specific paths at all: the paths are precisely what the listing failed to
-    return.
+# qBittorrent's "Append .!qB extension to incomplete files" option. Off by
+# default and absent from TRaSH's layout, so most installs never see it; where
+# it is on, the on-disk name carries the suffix while the file listing reports
+# the final name, path equality fails, and a file being actively written reads
+# as an orphan with a green "frees X" beside it (CLEANUP C4a).
+INCOMPLETE_SUFFIX = '.!qB'
 
-    Returns [] when nothing is found there — which is itself information, and is
-    counted as `listing_unresolved` rather than passed off as "no files".
+
+def _posix(path):
+    return (path or '').replace('\\', '/')
+
+
+def torrent_complete(progress, completion_on):
+    """True | False | None — is this torrent's payload whole?
+
+    A **fallback chain, deliberately not a union.** Measured 2026-09-11 against
+    a live client (ROADMAP §0.4):
+
+    * `progress` is already computed over the **wanted** files. A season pack
+      with five files set to *Do not download* — 32% of its payload wanted —
+      reports `progress == 1.0` and `amount_left == 0`, because libtorrent
+      computes `total_wanted_done / total_wanted` while the UI's 42.5% is
+      `completed / total_size`. So `progress` alone is correct for the
+      deprioritized case, and the per-file fan-out once held in reserve as "the
+      fully correct rule" is exactly what `progress` already does.
+    * `completion_on` is therefore the answer only when `progress` is missing,
+      and **must not be OR'd with it**. A torrent that completed and was later
+      rechecked (files deleted, a partial re-download) has `progress < 1.0`
+      while `completion_on` retains its original timestamp; the union reads that
+      as complete, which fails in the one direction DEDUPE F6 says must not —
+      including an unfinished file in a duplicate group is how two torrents get
+      hardlinked onto one inode and both end up corrupt. An `or` over a reliable
+      signal can only ever add false completes.
+    * `None` means the client exposed neither field. It is the same "could not
+      ask" this module's other primitives carry, and each consumer resolves it
+      in its own fail-safe direction: dedupe excludes the file, Triage shows the
+      row with its status, orphan classification claims the payload either way.
     """
-    if not (save_path and torrent_name):
+    if progress is not None:
+        try:
+            p = float(progress)
+        except (TypeError, ValueError):
+            p = None
+        if p is not None:
+            # A value above 1.0 can only be a 0-100 scale. Measured 0-1 on both
+            # backends, but reading 42.5 as "complete" is the corrupting
+            # direction, so the scale is inferred rather than assumed.
+            return p >= 100.0 if p > 1.0 else p >= 1.0
+    if completion_on is not None:
+        try:
+            return int(completion_on) > 0
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def content_rooted_paths(content_path, torrent_name, file_names):
+    """Where a torrent's files sit right now, rooted at the client's `content_path`.
+
+    `save_path` is the payload's *final* location. `content_path` is where the
+    client says it is at this moment, which is the one that survives an
+    incomplete directory (CLEANUP C4b): with a temp path configured, an
+    in-flight torrent's bytes are under it and `save_path/name` holds nothing.
+
+    **`content_path` is sometimes a file and sometimes a directory** — qBittorrent
+    defines it as the absolute file path for a single-file torrent and the root
+    folder for a multi-file one. On the reference box 192 of 200 completed
+    torrents have `content_path == save_path/name`; all 8 that differ are
+    single-file torrents inside a release folder, where it descends one level
+    past it (ROADMAP §0.4). Treating it as a directory unconditionally returns
+    nothing for every one of them.
+
+    Joined posix-style, not with `os.path.join`. A client file name already
+    contains `/` separators, so joining one onto a root with the native
+    separator yields a path that mixes both on Windows and can no longer be
+    compared with the path built from `save_path` — which would make the
+    de-duplication in `incomplete_claims` platform-dependent and, per CLAUDE.md's
+    `_local_to_abs` note, make the checked-in tests exercise a different branch
+    than the container.
+    """
+    if not content_path:
         return []
-    root = os.path.join(save_path, torrent_name)
+    names = [n for n in file_names if n]
+    if not names:
+        return []
+    root = _posix(content_path).rstrip('/')
+    if len(names) == 1 and \
+            root.rsplit('/', 1)[-1] == _posix(names[0]).rstrip('/').rsplit('/', 1)[-1]:
+        return [root]
+    prefix = (_posix(torrent_name).rstrip('/') + '/') if torrent_name else ''
+    out = []
+    for n in names:
+        rel = _posix(n)
+        rel = rel[len(prefix):] if prefix and rel.startswith(prefix) else rel
+        out.append(f"{root}/{rel.lstrip('/')}")
+    return out
+
+
+def incomplete_claims(content_path, torrent_name, file_names, final_paths):
+    """Extra on-disk paths an unfinished torrent's payload may occupy.
+
+    Two client options move the bytes away from where the file listing says they
+    will end up, and both make a live download read as an orphan: a separate
+    incomplete directory (`content_path` follows it) and the `.!qB` suffix. Both
+    are opt-in and neither is in TRaSH's layout, which is why CLEANUP C4 is a
+    per-install question rather than a critical — but where they are on, nothing
+    downstream can tell the difference between "being written right now" and
+    "nothing claims this".
+
+    Claiming the extra spellings is free where the options are off: the derived
+    paths are then identical to `final_paths` and dedupe to nothing. Only
+    computed for torrents that are not known-complete, so a healthy library's
+    `file_map` is byte-identical to before — which also keeps the plausibility
+    guard's `file_map_size` baseline unmoved.
+
+    The `.!qB` variants keep the caller's own spelling of each final path, since
+    those have to match the keys the walk builds; only the equality test is
+    separator-agnostic.
+    """
+    claims = []
+    seen   = {_posix(p) for p in final_paths}
+
+    def _claim(p):
+        key = _posix(p)
+        if key not in seen:
+            seen.add(key)
+            claims.append(p)
+
+    for p in content_rooted_paths(content_path, torrent_name, file_names):
+        _claim(p)
+    for p in list(final_paths) + list(claims):
+        _claim(p + INCOMPLETE_SUFFIX)
+    return claims
+
+
+def remap_path(path, remote_path, local_path):
+    """Translate a client-side absolute path into auditorr's view of it.
+
+    Both backends did this inline for `save_path` only. `content_path` needs the
+    identical treatment or claiming it claims a path the walk can never match.
+    """
+    if not (path and remote_path):
+        return path
+    if path.startswith(remote_path) and path[len(remote_path):][:1] in ('/', ''):
+        return local_path + path[len(remote_path):]
+    return path
+
+
+def _walk_payload(root):
+    """Every file at or under `root`; [] if it is neither a file nor a directory."""
     try:
         if os.path.isfile(root):
             return [root]
@@ -114,6 +268,49 @@ def disk_fallback_paths(save_path, torrent_name):
         return found
     except OSError:
         return []
+
+
+def disk_fallback_paths(save_path, torrent_name, content_path=''):
+    """On-disk file paths for a torrent whose client file listing failed.
+
+    A failed listing is an *unknown*, and an unknown left alone becomes a
+    positive claim of orphanhood by default — every file of that torrent turns
+    up in the walk with no client entry against it. Enumerating the payload from
+    disk converts the unknown into a conservative *claimed* instead, which is
+    the fail-safe direction and the only thing that lets a failure be attributed
+    to specific paths at all: the paths are precisely what the listing failed to
+    return.
+
+    Both `content_path` and `save_path/name` are walked and the results
+    **unioned**, rather than taking whichever answers first. `content_path` is
+    what this argument was added for — a torrent downloading into a temp
+    directory has no bytes at `save_path/name` at all, so the fallback was
+    looking in the right place only for torrents that had already finished
+    (ROADMAP §0.3) — but preferring it would *narrow* the answer for the
+    commonest shape it differs on: a single-file torrent inside a release
+    folder, where `content_path` is the file and `save_path/name` is the folder
+    holding it plus any sidecars. Over-claiming is the fail-safe direction for a
+    failed listing, by this function's own argument, and the union also leaves
+    completed torrents claiming exactly what they claimed before this argument
+    existed. `content_path` is branched on rather than walked blindly, per
+    `content_rooted_paths`.
+
+    Returns [] when nothing is found at either — which is itself information,
+    and is counted as `listing_unresolved` rather than passed off as "no files".
+    """
+    roots = []
+    if content_path:
+        roots.append(content_path)
+    if save_path and torrent_name:
+        roots.append(os.path.join(save_path, torrent_name))
+    found, seen = [], set()
+    for root in roots:
+        for p in _walk_payload(root):
+            key = _posix(p)
+            if key not in seen:
+                seen.add(key)
+                found.append(p)
+    return found
 
 
 # Substrings (lowercased) of tracker status messages that mean the torrent is

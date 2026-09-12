@@ -160,6 +160,18 @@ it stops being counted against you.
 > exists, it belongs to [Triage](#triage) — deleting files under a live torrent
 > just makes it recheck and download them again.
 
+**Files still being downloaded are not orphans, even when their path says
+otherwise.** Two optional qBittorrent settings move a file away from where the
+client's file list says it will end up: *Append .!qB extension to incomplete
+files* renames it while it's in flight, and a separate incomplete directory puts
+it somewhere else entirely until it finishes. Either one breaks the path match
+auditorr uses, so a file being actively written could appear here at whatever
+partial size it had reached — and deleting that makes your client error the
+torrent and start over. auditorr now accounts for both spellings and follows the
+client's own answer for where a torrent's data currently lives. Neither setting
+is part of the [TRaSH](https://trash-guides.info/) layout, so a by-the-guide
+install was never affected.
+
 ---
 
 ## Triage
@@ -186,6 +198,17 @@ check* instead, under a banner naming the instance. The distinction matters
 because that bucket's files are the only copy you have, and "we couldn't ask" is
 not an answer. Positive matches are unaffected: a title that *did* resolve still
 reads *Superseded* or *Import pending* as normal.
+
+**Downloads that haven't finished are not listed.** A torrent at 0% has no
+library file, which is the literal definition of the Not Imported pile, so the
+newest thing in your client used to arrive here at its full final size with a
+delete button under it. auditorr now asks your client whether the payload is
+actually complete — a separate question from whether the torrent is paused,
+seeding or downloading, since a *paused* half-finished torrent looks exactly
+like a paused finished one — and leaves unfinished ones alone until they're
+done. If your client gives no usable completion figure at all, the row is still
+shown, tagged **completion unknown**: a row you can see and judge beats one that
+quietly vanished.
 
 Titles are matched against the **alternate titles** Sonarr and Radarr already
 store, not just the one they display. That matters for non-English content,
@@ -270,6 +293,17 @@ Disc rips generate enormous numbers of identically-sized structural files, so
 detection skips excluded files, skips size groups above 200 files, and records
 at most 10 siblings per file. If you rip discs, turn on the disc-rip exclusion
 preset and this page gets dramatically more useful.
+
+**Unfinished downloads are never offered**, and this is the one case where the
+script's `cmp` check cannot protect you. qBittorrent doesn't pad a file out as
+it downloads — it writes a **sparse** file, which reports its full final size
+while the parts not yet written read as zeros. Two unfinished files of the same
+size whose written parts don't overlap therefore genuinely *are* identical at
+that moment: same size, same fingerprint, and `cmp` agrees. Hardlink them and
+both torrents write into one file and both are ruined. So detection now requires
+your client to confirm a torrent is finished, and anything it can't confirm is
+left out — that costs you some disk space you might have reclaimed, which is
+the cheaper mistake by a wide margin.
 
 ---
 

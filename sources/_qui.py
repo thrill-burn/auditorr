@@ -46,6 +46,7 @@ import requests
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     disk_fallback_paths, new_source_report, report_instance_failure, report_note,
+    torrent_complete, incomplete_claims, remap_path,
 )
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,21 @@ def _skip_reason(instance):
     return 'no local filesystem access'
 
 
+def _pick(t, *keys):
+    """First key present with a non-None value, or None.
+
+    Not `a or b or 0` like the fields below it: `progress` of 0.0 and
+    `completion_on` of 0 are real answers, and collapsing them into the same
+    falsy hole as "the field is absent" is precisely the R1 mistake one layer
+    down — `torrent_complete` needs None to mean *could not determine*.
+    """
+    for k in keys:
+        v = t.get(k)
+        if v is not None:
+            return v
+    return None
+
+
 def _norm_torrent(t):
     """Normalise a torrent dict — handles both snake_case and camelCase field names."""
     return {
@@ -95,6 +111,14 @@ def _norm_torrent(t):
         # same field fetch_torrent_details reads), so the Next steps seeding-time
         # ladders cost no extra call.
         'seeding_time': t.get('seeding_time') or t.get('seedingTime') or 0,
+        # Completion. M7 confirmed the client *exposes* all three on both
+        # backends; it did not say auditorr read them, and until now this
+        # normalizer carried none of them — so a paused incomplete torrent was
+        # indistinguishable from a paused complete one for every consumer
+        # downstream. All three ride the listing this already parses.
+        'progress':      _pick(t, 'progress', 'percentDone'),
+        'completion_on': _pick(t, 'completion_on', 'completionOn', 'completedOn'),
+        'content_path':  (t.get('content_path') or t.get('contentPath') or '').rstrip('/'),
     }
 
 
@@ -332,7 +356,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
     disk_fallback_count = 0
     sample_paths        = []
 
-    def _add_entry(full_path, status, hosts, category=''):
+    # `complete` has no default on purpose: the safe-looking one (True) is the
+    # unsafe one, so a call site that forgets it must fail loudly rather than
+    # quietly declare an unfinished payload whole.
+    def _add_entry(full_path, status, hosts, category, complete):
         health, health_msg = health_map.get(th, ('unknown', ''))
         entry = file_map.setdefault(full_path, {
             'status':        status,
@@ -345,6 +372,14 @@ def _process_instance(session, base, inst, remote_path, local_path,
             'tracker_msg':    health_msg,
         })
         entry['trackers'].update(hosts)
+        # Sparse and sticky in the cautious direction — see the matching note
+        # in _qbit.py. Absence means complete, so the flag costs memory only
+        # where it is true; sticky because a cross-seed sharing this path whose
+        # bytes are not whole makes hardlinking the inode a corruption risk.
+        if complete is False:
+            entry['incomplete'] = True
+        elif complete is None:
+            entry['completion_unknown'] = True
         # Cross-seeded paths: the record must reflect the HEALTHIEST claimant
         # — a path with any live torrent is not a dead seed, and deleting its
         # files would break that live torrent. Hash follows the health.
@@ -373,6 +408,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
             continue
         hosts  = tracker_map.get(th, ['Unknown'])
         status = _torrent_status(nt['state'])
+        # Completion is its own question: `_torrent_status` reads the state
+        # string, where a paused incomplete and a paused complete are the same
+        # word (R2, the root cause behind DEDUPE F6, TRIAGE T4 and CLEANUP C4).
+        complete = torrent_complete(nt['progress'], nt['completion_on'])
 
         for h in hosts:
             trackers_set.add(h)
@@ -384,6 +423,14 @@ def _process_instance(session, base, inst, remote_path, local_path,
         # seen_hashes is shared across all _process_instance calls to prevent this.
         if th not in seen_hashes:
             seen_hashes.add(th)
+            # Inside the dedup block for the same reason the upload totals are:
+            # qui's per-instance endpoint can return every managed torrent, so a
+            # hash seen on three instances must be counted once.
+            if report is not None:
+                if complete is False:
+                    report['incomplete_torrents'] += 1
+                elif complete is None:
+                    report['completion_unknown'] += 1
             for h in hosts:
                 tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
                 if status == 'Seeding':
@@ -397,11 +444,11 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     seed_totals['byte_secs'] += (nt['size'] or 0) * seed_secs
                     seed_totals['max_secs']   = max(seed_totals['max_secs'], seed_secs)
 
-        save_path = nt['save_path']
-        raw_save_path = save_path
-        if remote_path and save_path.startswith(remote_path) and \
-                save_path[len(remote_path):][:1] in ('/', ''):
-            save_path = local_path + save_path[len(remote_path):]
+        raw_save_path = nt['save_path']
+        save_path     = remap_path(raw_save_path, remote_path, local_path)
+        # content_path needs the identical remapping or claiming it claims a
+        # path the walk can never match.
+        content_path  = remap_path(nt['content_path'], remote_path, local_path)
 
         torrent_files = files_map.get(th, [])
 
@@ -409,24 +456,34 @@ def _process_instance(session, base, inst, remote_path, local_path,
 
         if torrent_files:
             nonempty_file_count += 1
-            for f in torrent_files:
-                full_path = os.path.join(save_path, f['name'])
+            file_names = [f['name'] for f in torrent_files]
+            full_paths = [os.path.join(save_path, n) for n in file_names]
+            if complete is not True:
+                # An unfinished payload may not be where the listing says it
+                # will end up. Adds nothing on a client with neither the temp
+                # directory nor the `.!qB` suffix enabled.
+                full_paths = full_paths + incomplete_claims(
+                    content_path, nt['name'], file_names, full_paths)
+            for i, full_path in enumerate(full_paths):
                 if len(sample_paths) < 3:
                     sample_paths.append({
-                        'source': 'api',
+                        # Anything past the file list is a claim on where an
+                        # unfinished payload may actually be sitting.
+                        'source': 'api' if i < len(file_names) else 'in_flight',
                         'raw_save_path': raw_save_path,
                         'mapped_save_path': save_path,
-                        'file_name': f['name'],
+                        'file_name': file_names[i] if i < len(file_names) else '',
                         'full_path': full_path,
                     })
-                _add_entry(full_path, status, hosts, nt.get('category', ''))
+                _add_entry(full_path, status, hosts, nt.get('category', ''), complete)
         else:
             empty_file_count += 1
             # Fallback: qui may not expose per-torrent file lists, and a listing
-            # can fail outright. Either way the payload is at save_path/name, so
-            # enumerate it there rather than letting the files default to
-            # 'Orphaned' in the walk.
-            recovered = disk_fallback_paths(save_path, nt['name'])
+            # can fail outright. Either way the payload is on disk — at
+            # content_path while it is still downloading, at save_path/name once
+            # it has finished — so enumerate it there rather than letting the
+            # files default to 'Orphaned' in the walk.
+            recovered = disk_fallback_paths(save_path, nt['name'], content_path)
             for full_path in recovered:
                 disk_fallback_count += 1
                 if len(sample_paths) < 3:
@@ -434,10 +491,14 @@ def _process_instance(session, base, inst, remote_path, local_path,
                         'source': 'disk_fallback',
                         'raw_save_path': raw_save_path,
                         'mapped_save_path': save_path,
-                        'file_name': os.path.relpath(full_path, save_path),
+                        # A content_path recovery can sit outside save_path
+                        # entirely (a temp directory), where relpath is either
+                        # a wall of '..' or, on Windows, a ValueError.
+                        'file_name': (full_path[len(save_path):].lstrip('/\\')
+                                      if full_path.startswith(save_path) else full_path),
                         'full_path': full_path,
                     })
-                _add_entry(full_path, status, hosts, nt.get('category', ''))
+                _add_entry(full_path, status, hosts, nt.get('category', ''), complete)
             if report is not None and listing_failed:
                 report['listing_failures'] += 1
                 if recovered:
@@ -563,6 +624,12 @@ def _fetch_inner(cfg):
     report['file_map_size'] = len(file_map)
     if report['listing_failures']:
         report['partial'] = True
+    if report['incomplete_torrents'] or report['completion_unknown']:
+        log.info(
+            'qui: %d torrent(s) not finished downloading, %d with no usable '
+            'completion field. Their files are still claimed (so they do not read '
+            'as orphans) but are kept out of duplicate groups and the Triage pile.',
+            report['incomplete_torrents'], report['completion_unknown'])
 
     if not file_map:
         log.warning(

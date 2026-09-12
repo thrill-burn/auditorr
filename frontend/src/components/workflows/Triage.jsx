@@ -268,6 +268,26 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {item.tracker_health === 'not_working' && !item.tracker_msg && (
             <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.8 }}>tracker not responding</span>
           )}
+          {/* An unfinished download is not-imported by definition, so it used
+              to sit here as junk. Known-incomplete torrents are filtered out
+              server-side; these two cases are the ones that still reach the
+              page, and they say why rather than being hidden. */}
+          {item.completion_unknown && (
+            <span
+              title="The torrent client exposed no completion field for this torrent, so auditorr cannot tell whether the payload is finished. Check it in the client before deleting anything."
+              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
+            >
+              completion unknown
+            </span>
+          )}
+          {item.status === 'Downloading' && !item.completion_unknown && (
+            <span
+              title="Still downloading — the files are incomplete and will grow. Nothing here needs a verdict yet."
+              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--blue)', opacity: 0.9 }}
+            >
+              downloading
+            </span>
+          )}
           {item.is_duplicate && (
             <button
               onClick={e => { e.stopPropagation(); onNavigate && onNavigate({ tab: 'dedupe' }) }}

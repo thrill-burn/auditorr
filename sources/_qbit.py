@@ -19,6 +19,7 @@ import qbittorrentapi
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     disk_fallback_paths, new_source_report, report_note,
+    torrent_complete, incomplete_claims, remap_path,
 )
 
 log = logging.getLogger(__name__)
@@ -142,16 +143,25 @@ def _fetch_inner(cfg):
             tracker_upload[h] = tracker_upload.get(h, 0) + torrent.uploaded
             if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
                 tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + torrent.size
-        save_path = torrent.save_path
-        if remote_path and save_path.startswith(remote_path) and \
-                save_path[len(remote_path):][:1] in ('/', ''):
-            save_path = local_path + save_path[len(remote_path):]
+        save_path    = remap_path(torrent.save_path, remote_path, local_path)
+        content_path = remap_path(
+            getattr(torrent, 'content_path', '') or '', remote_path, local_path)
         if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
             status = 'Seeding'
         elif torrent.state in ('downloading', 'stalledDL'):
             status = 'Downloading'
         else:
             status = 'Paused'
+        # Completion is its own question. `status` above is derived from the
+        # state string, where a paused incomplete and a paused complete are the
+        # same word — which is the root cause behind DEDUPE F6, TRIAGE T4 and
+        # CLEANUP C4 all at once.
+        complete = torrent_complete(getattr(torrent, 'progress', None),
+                                    getattr(torrent, 'completion_on', None))
+        if complete is False:
+            report['incomplete_torrents'] += 1
+        elif complete is None:
+            report['completion_unknown'] += 1
         health, health_msg = health_map.get(torrent.hash, ('unknown', ''))
         if torrent.hash in failed_listings:
             # Disk fallback (ported from the qui backend). The listing failed, so
@@ -159,7 +169,8 @@ def _fetch_inner(cfg):
             # at save_path/name, and enumerating it there claims the files
             # instead of leaving them to default to 'Orphaned'. What it cannot
             # find stays unresolved and is counted, not swallowed.
-            recovered = disk_fallback_paths(save_path, getattr(torrent, 'name', '') or '')
+            recovered = disk_fallback_paths(
+                save_path, getattr(torrent, 'name', '') or '', content_path)
             full_paths = recovered
             if recovered:
                 report['listing_recovered'] += 1
@@ -173,8 +184,15 @@ def _fetch_inner(cfg):
                 report_note(report,
                             f"file listing failed and nothing was found at {save_path}")
         else:
-            full_paths = [os.path.join(save_path, f.name)
-                          for f in files_map.get(torrent.hash, [])]
+            file_names = [f.name for f in files_map.get(torrent.hash, [])]
+            full_paths = [os.path.join(save_path, n) for n in file_names]
+            if complete is not True:
+                # An unfinished payload may not be where the listing says it
+                # will end up. Adds nothing on a client with neither the temp
+                # directory nor the `.!qB` suffix enabled.
+                full_paths = full_paths + incomplete_claims(
+                    content_path, getattr(torrent, 'name', '') or '',
+                    file_names, full_paths)
         for full_path in full_paths:
             entry = file_map.setdefault(full_path, {
                 "status": status,
@@ -185,6 +203,21 @@ def _fetch_inner(cfg):
                 "tracker_msg": health_msg,
             })
             entry["trackers"].update(hosts)
+            # Sparse, and sticky in the cautious direction. Absence means
+            # complete (the overwhelming majority), so the flag costs memory
+            # only where it is true — the `dead_siblings` pattern, and the rule
+            # `seeding_time` established: a field on every file record
+            # multiplies across every file of every torrent and grows
+            # files_json, the known RAM hotspot.
+            #
+            # Sticky because cross-seeds share a path: if any claimant says the
+            # bytes are not whole, hardlinking that inode can corrupt whatever
+            # is still writing to it. The cost of being wrong here is one missed
+            # reclaim; the cost the other way is two broken torrents.
+            if complete is False:
+                entry["incomplete"] = True
+            elif complete is None:
+                entry["completion_unknown"] = True
             # Cross-seeded paths: several torrents can claim the same file.
             # The record must reflect the HEALTHIEST claimant — a path with
             # any live torrent is not a dead seed, and deleting its files
@@ -231,6 +264,12 @@ def _fetch_inner(cfg):
             'as orphaned.',
             len(failed_listings), len(torrents),
             report['listing_recovered'], report['listing_unresolved'])
+    if report['incomplete_torrents'] or report['completion_unknown']:
+        log.info(
+            'qbit: %d torrent(s) not finished downloading, %d with no usable '
+            'completion field. Their files are still claimed (so they do not read '
+            'as orphans) but are kept out of duplicate groups and the Triage pile.',
+            report['incomplete_torrents'], report['completion_unknown'])
     return file_map, sorted(trackers_set), tracker_snapshot, report
 
 
