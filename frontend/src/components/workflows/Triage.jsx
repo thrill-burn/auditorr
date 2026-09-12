@@ -6,7 +6,7 @@ import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
   ArrErrorsWarning, Checkbox, ActionBar, ActionButton, Spinner, SpinKeyframes,
-  HDR_STYLE, useAuditComplete,
+  HDR_STYLE, useAuditComplete, ConfirmExcludeModal,
 } from './shared'
 
 const VERDICTS = [
@@ -155,25 +155,21 @@ function rejectionSummary(rejected) {
   return reasons.slice(0, 2).join(' · ') + (reasons.length > 2 ? ` (+${reasons.length - 2} more)` : '')
 }
 
-// Exclusion rules for a torrent. Single-file torrents always get an exact
-// file-path rule — their parent is often a shared category dir (tv-sonarr)
-// that must never be excluded wholesale. Multi-file torrents get their
-// common folder only when it sits at least two segments deep
-// (category/release-folder); a flatter layout means the common folder IS the
-// category dir, so those fall back to per-file rules too.
-function exclusionPatterns(item) {
-  const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
-  if (paths.length <= 1) return paths
-  const segLists = paths.map(p => p.split('/').slice(0, -1))
-  if (segLists.some(s => s.length === 0)) return paths
-  let common = segLists[0]
-  for (const segs of segLists.slice(1)) {
-    let i = 0
-    while (i < common.length && i < segs.length && common[i] === segs[i]) i++
-    common = common.slice(0, i)
-  }
-  return common.length >= 2 ? [common.join('/') + '/'] : paths
-}
+// Exclusion rules come from the server (`item.exclusion_patterns`), not from
+// here. Deriving them client-side was wrong twice (T6): the rules were built
+// from raw paths, so a release name containing `[`, `*` or `?` became a glob
+// that matched nothing — or matched more than was selected (C8) — and the
+// common folder was derived from `item.paths`, which for a **partially
+// imported** torrent holds only the not-imported files while their common
+// folder is the release folder that also holds the imported ones. Only the
+// audit can see that, so only the server can answer it.
+//
+// `dead_registration` rows carry an empty list and render no Exclude action at
+// all: those paths belong to the *healthy carrier* — a file a working
+// cross-seed is seeding right now — so excluding one hides a live file while
+// the dead registration it was meant to address stays in the client. Absent
+// rather than disabled, because the row already carries its reason.
+const canExclude = item => (item.exclusion_patterns || []).length > 0
 
 function QualityChip({ label, hdr, dim }) {
   if (!label && !hdr) return <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.5 }}>unknown</span>
@@ -402,6 +398,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
   // the row stays and says so, rather than looking like the click did nothing.
   const [rescanned, setRescanned] = useState(() => new Set())
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmExclude, setConfirmExclude] = useState(false)
   // Cross-seed groups resolved live when the delete modal opens, keyed by the
   // item's recorded hash → [{hash, instance_id, name, tracker, seeding_time…}].
   const [groups,    setGroups]    = useState({})
@@ -589,6 +586,24 @@ export default function Triage({ onNavigate, cleanupCount }) {
   // the action is absent rather than disabled for the others, because the rows
   // already sit under a "lower than library" heading that says why.
   const forceImportItems = selectedItems.filter(i => i.verdict === 'superseded' && canForceImport(i))
+
+  // Same shape as forceImportItems: the action applies to the rows it makes
+  // sense for, and is absent when the selection holds none of them.
+  const excludableItems = selectedItems.filter(canExclude)
+  const excludePatterns = useMemo(
+    () => [...new Set(excludableItems.flatMap(i => i.exclusion_patterns))],
+    [excludableItems])
+
+  // A mixed selection says what it left out and why — a row that silently
+  // drops out of an action is the thing this page is built not to do.
+  const excludeSkippedNote = useMemo(() => {
+    const skipped = selectedItems.filter(i => !canExclude(i))
+    if (skipped.length === 0) return null
+    const lead = `${skipped.length} selected row${skipped.length !== 1 ? 's are' : ' is'} not included`
+    return skipped.every(i => i.verdict === 'dead_registration')
+      ? `${lead}: a dead registration is one your tracker dropped, but the files under it belong to a cross-seed that is still seeding. Hiding the file would not retire the registration — removing it from your client is what does.`
+      : `${lead}.`
+  }, [selectedItems])
 
   // Open the confirm modal and resolve each selected torrent's live cross-seed
   // group so the user can choose per-item: delete just this torrent, or the
@@ -784,14 +799,17 @@ export default function Triage({ onNavigate, cleanupCount }) {
 
   const handleExclude = async () => {
     setBusy('exclude')
-    const patterns = [...new Set(selectedItems.flatMap(exclusionPatterns))]
     try {
-      const resp = await api.excludePatterns(patterns)
-      toast(`Added ${resp.added} exclusion rule${resp.added !== 1 ? 's' : ''} — applies from the next audit`, 'success')
-      const keys = new Set(selectedItems.map(itemKey))
+      const resp = await api.excludePatterns(excludePatterns)
+      toast(resp.message || `Added ${resp.added} exclusion rules`,
+            resp.refused ? 'warning' : 'success')
+      // Only the rows an exclusion actually covers leave; a dead registration
+      // in the same selection was never part of this action.
+      const keys = new Set(excludableItems.map(itemKey))
       keys.forEach(k => DISMISSED.add(k))
       setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
-      setSelected(new Set())
+      setSelected(prev => new Set([...prev].filter(k => !keys.has(k))))
+      setConfirmExclude(false)
     } catch (e) {
       toast(e.message, 'error')
     }
@@ -801,11 +819,20 @@ export default function Triage({ onNavigate, cleanupCount }) {
   // One-click exclude for a suggested junk category. The real exclusion
   // applies on the next audit, so drop the matching rows now (by the
   // suggestion's lowercase match substrings) to clear the reminder.
+  //
+  // No confirm step here, deliberately: the chip *is* the pattern — it shows
+  // `ext:sfv` / `contains:sample` on its face before you click it, which is
+  // what the confirm dialog exists to do for a constructed path. These are
+  // typed rules, never raw paths, so no metacharacter can break them
+  // (measured — ROADMAP §0.5); the caps still apply, hence the refusal path.
   const handleSuggestionExclude = async (sugg) => {
     setBusy('suggest')
     try {
       const resp = await api.excludePatterns(sugg.patterns)
-      toast(`Excluding ${sugg.patterns.join(', ')} — added ${resp.added} rule${resp.added !== 1 ? 's' : ''}, visible in Config → Excluded Files`, 'success')
+      toast(resp.refused
+        ? resp.message
+        : `Excluding ${sugg.patterns.join(', ')} — added ${resp.added} rule${resp.added !== 1 ? 's' : ''}, visible in Config → Excluded Files`,
+        resp.refused ? 'warning' : 'success')
       const hit = p => { const lp = p.toLowerCase(); return (sugg.match || []).some(m => lp.includes(m)) }
       for (const i of (report?.items || [])) if (hit(i.rep_path)) DISMISSED.add(itemKey(i))
       setReport(r => ({
@@ -1014,9 +1041,11 @@ export default function Triage({ onNavigate, cleanupCount }) {
                   {busy === 'force' ? 'Importing…' : `Force import (${forceImportItems.length})`}
                 </ActionButton>
               )}
-              <ActionButton onClick={handleExclude} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
-                {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
-              </ActionButton>
+              {excludableItems.length > 0 && (
+                <ActionButton onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
+                  {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
+                </ActionButton>
+              )}
               {client && (clientDeleteAllowed ? (
                 <ActionButton danger onClick={openConfirm} disabled={busy != null || deletableItems.length === 0}
                   title={deletableItems.length === 0
@@ -1040,6 +1069,17 @@ export default function Triage({ onNavigate, cleanupCount }) {
                 </>
               ))}
             </ActionBar>
+          )}
+
+          {confirmExclude && excludePatterns.length > 0 && (
+            <ConfirmExcludeModal
+              patterns={excludePatterns}
+              subtitle={`Built from ${excludableItems.length} selected torrent${excludableItems.length !== 1 ? 's' : ''}.`}
+              note={excludeSkippedNote}
+              busy={busy === 'exclude'}
+              onCancel={() => setConfirmExclude(false)}
+              onConfirm={handleExclude}
+            />
           )}
 
           {confirmOpen && (

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 // ── Staying current ───────────────────────────────────────────────────────────
 //
@@ -414,6 +415,102 @@ export function ActionBar({ children, summary }) {
       <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>{summary}</div>
       <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>{children}</div>
     </div>
+  )
+}
+
+// ── Exclude confirmation ──────────────────────────────────────────────────────
+//
+// No exclusion is written without the user seeing the exact string first.
+// Cleanup and Triage both build patterns from real paths, and a construction
+// bug there is invisible by nature: the toast says "added" whether the rule
+// matches the file, matches nothing, or matches half the folder. This is the
+// one part of that fix that generalises — it also covers the residual the
+// ≥2-segment folder rule leaves behind (an install whose library folders carry
+// the release name gets both trees from a release-folder pattern too).
+//
+// Shared because the two pages need the same dialog, following the
+// ConfirmDeleteModal idiom next door rather than inventing a second one.
+
+// Mirrors db.EXCLUSION_PATTERN_MAX_CHARS. The server is authoritative and
+// refuses over-long patterns with a count; this only warns before the round trip.
+const MAX_PATTERN_CHARS = 200
+
+export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, onConfirm }) {
+  const tooLong = patterns.filter(p => p.length > MAX_PATTERN_CHARS)
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onCancel() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
+  // Portal to <body> for the same reason ConfirmDeleteModal does: the page's
+  // fade-in leaves a transform, which makes position:fixed resolve against the
+  // page instead of the viewport.
+  return createPortal(
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 200, display: 'flex',
+        alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.55)',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 'min(620px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 96px)',
+          display: 'flex', flexDirection: 'column',
+          background: 'var(--surface)', border: '1px solid var(--border2)',
+          borderRadius: 12, boxShadow: '0 16px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{ padding: '18px 20px 0' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+            Add {patterns.length} exclusion rule{patterns.length !== 1 ? 's' : ''}
+          </div>
+          <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
+            {subtitle} Excluded files are left out of scoring, workflows and duplicate
+            detection from the next audit on — nothing is deleted. These land in
+            <b> Config → Excluded Files &amp; Folders</b>, where you can edit or remove them.
+          </p>
+          {note && (
+            <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0', lineHeight: 1.5 }}>
+              {note}
+            </p>
+          )}
+          {tooLong.length > 0 && (
+            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
+              {tooLong.length} rule{tooLong.length !== 1 ? 's are' : ' is'} longer than {MAX_PATTERN_CHARS} characters
+              and will be refused — select the whole release folder instead, so the rule
+              covers the folder rather than each long filename.
+            </p>
+          )}
+        </div>
+        <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
+          {patterns.map((p, i) => {
+            const over = p.length > MAX_PATTERN_CHARS
+            return (
+              <div key={`${p}-${i}`} title={p} style={{
+                padding: '6px 12px', borderBottom: i < patterns.length - 1 ? '1px solid var(--border)' : 'none',
+                fontSize: 11, fontFamily: 'var(--mono)', wordBreak: 'break-all',
+                color: over ? 'var(--yellow)' : 'var(--text)',
+              }}>
+                {p}
+                {over && <span style={{ opacity: 0.8 }}> · {p.length} chars</span>}
+              </div>
+            )
+          })}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
+          <span style={{ flex: 1 }} />
+          <ActionButton onClick={onCancel} disabled={busy}>Cancel</ActionButton>
+          <ActionButton primary onClick={onConfirm} disabled={busy}>
+            {busy ? 'Excluding…' : `Add ${patterns.length} rule${patterns.length !== 1 ? 's' : ''}`}
+          </ActionButton>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }
 

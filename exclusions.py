@@ -1,6 +1,41 @@
 import fnmatch
 import os
 
+_LITERAL_PREFIX = "literal:"
+
+_LITERAL_DOC = """literal:<path> — a path that is a path, not a glob (CLEANUP C8).
+
+Every other path rule here runs through fnmatch, which reads `*`, `?`, `[` and
+`]` as syntax. Real release names contain all four, and the two halves fail in
+opposite directions:
+
+    anime/[SubsPlease] Show - 01 [1080p].mkv   -> a character class; matches NOTHING
+    movies/Film (2020)/Film*.mkv               -> matches itself AND Film2.mkv
+
+Both are silent: the Exclude button reports success either way, and the second
+hides files the user never selected. `literal:` is what the Cleanup and Triage
+Exclude actions write, so a path built from a real file is matched as that file.
+
+Two sub-forms:
+    literal:movies/Some Release/Some.Release.mkv   exact file
+    literal:movies/Some Release/                   subtree (trailing slash)
+
+Both keep the container-path tolerance every other rule has (`_variants`), so a
+pattern written from a relative path still matches the absolute one — without
+that, every exclusion written from a workflow page would silently stop working.
+
+Escaping at construction was the alternative and was rejected: fnmatch's escape
+for a literal `[` is `[[]`, so it would write
+`anime/[[]SubsPlease[]] Show - 01 [[]1080p[]].mkv` into a textarea the user is
+meant to read and edit — which defeats the "show the pattern before writing it"
+confirm step that ships alongside this. It also cannot express the `*`/`?`
+over-match any more legibly.
+
+Pre-existing broken patterns are deliberately NOT migrated: rewriting somebody's
+exclusion list without being asked is worse than leaving a rule that matches
+nothing, and the rewrite would be invisible.
+"""
+
 
 class CompiledExclusions:
     """Pre-compiled exclusion rule set — do per-pattern work once, not per file.
@@ -18,6 +53,8 @@ class CompiledExclusions:
         "_subtree_prefixes",
         "_path_glob_variants",
         "_plain_path_variants",
+        "_literal_files",
+        "_literal_prefixes",
     )
 
     def __init__(self, patterns):
@@ -28,6 +65,8 @@ class CompiledExclusions:
         self._subtree_prefixes = []     # precomputed prefix tuples (/** and trailing /)
         self._path_glob_variants = []   # precomputed variant tuples for path globs
         self._plain_path_variants = []  # precomputed variant tuples for plain path+prefix
+        self._literal_files = set()     # from literal:<path>   — exact, never a glob
+        self._literal_prefixes = []     # from literal:<path>/  — subtree, never a glob
 
         for raw in patterns:
             pat = _norm(str(raw).strip())
@@ -53,6 +92,21 @@ class CompiledExclusions:
                 needle = pat_lower[9:]
                 if needle:
                     self._contains_needles.append(needle)
+                continue
+
+            # literal: — a path that is a path, not a glob. See _LITERAL_DOC.
+            # The value is taken off `pat`, not `pat_lower`: everything else in
+            # this loop is case-folded, but a filesystem path is not.
+            if pat_lower.startswith(_LITERAL_PREFIX):
+                value = pat[len(_LITERAL_PREFIX):].strip()
+                if not value:
+                    continue
+                variants = _variants([value])
+                if value.endswith("/"):
+                    self._literal_prefixes.append(
+                        tuple(dict.fromkeys(p.rstrip("/") for p in variants)))
+                else:
+                    self._literal_files.update(variants)
                 continue
 
             # No "/" and no glob → bareword, exact segment match O(1)
@@ -118,6 +172,8 @@ class CompiledExclusions:
             or self._subtree_prefixes
             or self._path_glob_variants
             or self._plain_path_variants
+            or self._literal_files
+            or self._literal_prefixes
         ):
             return False
 
@@ -126,6 +182,14 @@ class CompiledExclusions:
         for needle in self._contains_needles:
             if any(needle in c.lower() for c in candidates):
                 return True
+
+        if self._literal_files and any(c in self._literal_files for c in candidates):
+            return True
+
+        for prefixes in self._literal_prefixes:
+            for prefix in prefixes:
+                if _matches_prefix(prefix, candidates):
+                    return True
 
         for pat in self._seg_globs:
             if fnmatch.fnmatch(filename_norm, pat) or any(
@@ -176,6 +240,13 @@ def is_excluded(full_path, rel_path, filename, patterns):
       - ext:.nfo excludes by extension
       - name:@eaDir excludes an exact file/folder name
       - contains:sample excludes when text appears anywhere in the normalized path
+      - literal:movies/Film [2020].mkv excludes that exact path, glob chars and all
+
+    NOTE: this is the second of **two** implementations of these rules —
+    CompiledExclusions.match above is the one the audit uses. They are held in
+    agreement by
+    test_exclusions_and_relink.py::test_compiled_matcher_agrees_with_is_excluded_across_all_pattern_types,
+    so a new rule type goes in both and in that test's corpus.
     """
     if not patterns:
         return False
@@ -211,6 +282,19 @@ def is_excluded(full_path, rel_path, filename, patterns):
         if pat_lower.startswith("contains:"):
             needle = pat_lower[9:]
             if needle and any(needle in c.lower() for c in candidates):
+                return True
+            continue
+
+        # literal: — never reaches fnmatch. See _LITERAL_DOC.
+        if pat_lower.startswith(_LITERAL_PREFIX):
+            value = pat[len(_LITERAL_PREFIX):].strip()
+            if not value:
+                continue
+            lit_variants = _variants([value])
+            if value.endswith("/"):
+                if any(_matches_prefix(p.rstrip("/"), candidates) for p in lit_variants):
+                    return True
+            elif any(c in set(lit_variants) for c in candidates):
                 return True
             continue
 

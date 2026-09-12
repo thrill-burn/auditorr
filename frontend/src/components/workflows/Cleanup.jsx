@@ -5,7 +5,16 @@ import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
   Checkbox, ActionBar, ActionButton, SpinKeyframes, useAuditComplete,
+  ConfirmExcludeModal,
 } from './shared'
+
+// Exclusion rules are built from real paths, so they are written as `literal:`
+// — release names contain `[`, `]`, `*` and `?`, and every other path rule in
+// exclusions.py runs through fnmatch. A bracketed path became a character class
+// that matched nothing; one containing `*` matched itself *and its neighbours*.
+// Both were silent (C8).
+const literal = (path, subtree = false) =>
+  `literal:${String(path).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')}${subtree ? '/' : ''}`
 
 function ageLabel(mtime) {
   if (!mtime) return null
@@ -51,9 +60,20 @@ function FolderGroup({ group, selected, onToggleFile, onToggleGroup }) {
           style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, flexShrink: 0, color: 'var(--text-dim)' }}>
           <polyline points="9 18 15 12 9 6" />
         </svg>
-        <span title={group.folder} style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span title={group.folder} style={{ minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {group.folder}
         </span>
+        {/* Not a release folder — these files sit loose in a category dir (or at
+            the root), so they are unrelated to each other and only ever produce
+            per-file exclusion rules. Saying so is what stops the header
+            checkbox reading as "this whole folder". */}
+        {group.loose && (
+          <span title="Loose files, not one release — excluding these writes one rule per file, never a folder rule"
+            style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+            loose files
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
         {oldest && (
           <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{ageLabel(oldest)}</span>
         )}
@@ -119,6 +139,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
   const [error,    setError]    = useState(null)
   const [selected, setSelected] = useState(() => new Set())   // file rel paths
   const [busy,     setBusy]     = useState(null)
+  const [confirmExclude, setConfirmExclude] = useState(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -187,24 +208,37 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     })
   }
 
-  const handleExclude = async () => {
-    setBusy('exclude')
-    // Fully-selected release folders become one subtree rule; loose files
-    // get exact-path rules.
+  // Fully-selected release folders become one literal subtree rule; everything
+  // else gets an exact literal file rule.
+  //
+  // `g.loose` is the server's answer, not a depth check repeated here: a group
+  // whose files sit directly in a category dir (`movies/`) — qBittorrent's
+  // default for single-file torrents — has no folder that can safely be
+  // excluded, because the category dir is shared with the media library by
+  // construction and one click used to drop the whole library out of scoring
+  // (C7). The rule is computed once, server-side, for the reason Phase 3 and 4d
+  // both record: a rule implemented on both sides of the wire will disagree.
+  const excludePatterns = useMemo(() => {
     const patterns = []
     const covered = new Set()
     for (const g of groups) {
-      if (g.folder !== '(root)' && g.files.length > 0 && g.files.every(f => selected.has(f.path))) {
-        patterns.push(g.folder + '/')
+      if (!g.loose && g.files.length > 0 && g.files.every(f => selected.has(f.path))) {
+        patterns.push(literal(g.folder, true))
         g.files.forEach(f => covered.add(f.path))
       }
     }
     for (const p of selected) {
-      if (!covered.has(p)) patterns.push(p.replace(/\\/g, '/'))
+      if (!covered.has(p)) patterns.push(literal(p))
     }
+    return patterns
+  }, [groups, selected])
+
+  const handleExclude = async () => {
+    setBusy('exclude')
     try {
-      const resp = await api.excludePatterns(patterns)
-      toast(`Added ${resp.added} exclusion rule${resp.added !== 1 ? 's' : ''} — applies from the next audit`, 'success')
+      const resp = await api.excludePatterns(excludePatterns)
+      toast(resp.message || `Added ${resp.added} exclusion rules`,
+            resp.refused ? 'warning' : 'success')
       selected.forEach(p => DISMISSED.add(p))
       setReport(r => ({
         ...r,
@@ -213,6 +247,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
           .filter(g => g.files.length > 0),
       }))
       setSelected(new Set())
+      setConfirmExclude(false)
     } catch (e) {
       toast(e.message, 'error')
     }
@@ -287,13 +322,23 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
 
           {selected.size > 0 && (
             <ActionBar summary={`${selected.size} file${selected.size !== 1 ? 's' : ''} selected · ${formatBytes(selectedSize)} (${formatBytes(selectedFreeable)} freed now)`}>
-              <ActionButton onClick={handleExclude} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
+              <ActionButton onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
                 {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
               </ActionButton>
               <ActionButton danger onClick={handleDeleteScript} disabled={busy != null}>
                 Generate Delete Script
               </ActionButton>
             </ActionBar>
+          )}
+
+          {confirmExclude && excludePatterns.length > 0 && (
+            <ConfirmExcludeModal
+              patterns={excludePatterns}
+              subtitle={`Built from the ${selected.size} file${selected.size !== 1 ? 's' : ''} you selected.`}
+              busy={busy === 'exclude'}
+              onCancel={() => setConfirmExclude(false)}
+              onConfirm={handleExclude}
+            />
           )}
         </>
       )}

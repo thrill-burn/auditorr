@@ -269,10 +269,21 @@ Maximum 100 patterns, 200 characters each. Lines starting with `#` are comments.
 | `ext:.nfo` | By file extension. The leading dot is optional. |
 | `name:@eaDir` | An exact file or folder name — stricter than a bare word only in that it never partially matches. |
 | `contains:sample` | The text appears anywhere in the normalized path. |
+| `literal:movies/Film [2020].mkv` | That exact file, with no glob interpretation at all. |
+| `literal:movies/Some Release/` | That exact folder and everything under it. Same rule, subtree form. |
 
 Bare words are the friendly default: `Extras` excludes every `Extras` folder
 without you needing glob syntax. Use `contains:` when you need to match
 mid-segment text like `Sample` inside a filename.
+
+**`literal:` is for paths that contain glob characters**, which release names
+routinely do. Without it, `anime/[SubsPlease] Show - 01 [1080p].mkv` is read as a
+character class and matches nothing at all, and `movies/Film*.mkv` matches
+`Film2.mkv` and `FilmXYZ.mkv` as well as itself. This is what the **Exclude**
+buttons on Cleanup and Triage write, so you will mostly see it rather than type
+it. It is case-sensitive on the path, and — like every other path rule — it
+matches whether you write the path relative (`movies/…`) or absolute
+(`/data/torrents/movies/…`).
 
 ### Presets
 
@@ -300,6 +311,21 @@ the page.
 Besides typing them here, exclusions are written by the **Exclude** buttons on
 the Cleanup and Triage pages, and by Triage's one-click suggestions. Everything
 those buttons add lands in this list, visible and editable.
+
+Both Exclude buttons show you the exact rules before writing them. What they
+build depends on what you selected:
+
+- A **whole release folder** becomes one `literal:` subtree rule.
+- **Loose files** — anything sitting directly in a category directory such as
+  `movies/`, which is where qBittorrent saves single-file torrents by default —
+  get one rule each. A category directory is never excluded as a folder: it is
+  shared with your media library, so one such rule would take the whole
+  category out of scoring.
+- A **partly-imported torrent** in Triage also gets one rule per file, because
+  its release folder holds the files that imported successfully too.
+
+They enforce the 100-pattern / 200-character limits above and tell you what they
+refused, rather than writing a list this page would then refuse to save.
 
 ---
 

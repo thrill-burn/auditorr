@@ -151,10 +151,17 @@ individual files. Select what you want gone and generate a delete script — pla
 bash, using paths relative to your torrent directory, with a working-directory
 guard at the top. Read it, then run it wherever you like.
 
+A group marked **loose files** isn't a release — those files sit directly in a
+category directory such as `movies/`, which is where qBittorrent saves
+single-file torrents by default. They're grouped for convenience only, and
+excluding them writes one rule per file rather than a folder rule, because a
+category directory is shared with your media library.
+
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
 
 If a group is something you put there deliberately, **Exclude** it instead and
-it stops being counted against you.
+it stops being counted against you. You're shown the exact rules first; they
+land in [Config → Excluded Files](configuration.md#excluded-files--folders).
 
 > Cleanup deals only with files your client doesn't know about. If a torrent
 > exists, it belongs to [Triage](#triage) — deleting files under a live torrent
@@ -265,6 +272,19 @@ handles one deliberate file at a time.
 > Force import replaces a file you already have. It's the one Triage action that
 > changes your library rather than your torrent client, so it's deliberately
 > narrow.
+
+### Exclude
+
+**Exclude** hides a torrent's files from future audits — it's "stop telling me
+about this", not "fix this", and it deletes nothing. You're shown the exact
+rules before they're written. A torrent whose files are *all* unimported is
+excluded by its release folder; one where some files imported and some didn't
+gets a rule per file, since its release folder holds both.
+
+It isn't offered on **Dead Registration** rows at all. Those rows are about a
+registration your tracker dropped, but the files under them belong to a
+cross-seed that is alive and still seeding — hiding the file wouldn't retire the
+registration, and the registration is what needs removing.
 
 ### Exclusion suggestions
 

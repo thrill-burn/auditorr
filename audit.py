@@ -301,6 +301,7 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         elif info.get('completion_unknown'):
             record["completion_unknown"] = True
         torrent_files_data.append(record)
+    _mark_whole_torrents(torrent_files_data)
     media_files_data = []
     seen_media_keys = set()
     for file_key in media_key_order:
@@ -319,6 +320,44 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "excluded": info['media_excluded'],
         })
     return torrent_files_data, media_files_data
+
+
+def _mark_whole_torrents(torrent_files_data):
+    """Flag records whose torrent is *homogeneous* — every file in the same state.
+
+    Triage derives its folder-granular exclusion from a torrent's common folder,
+    and it has to know one thing it cannot see to do that safely (T6): whether
+    the torrent has files the row is **not** about. A partially-imported torrent
+    contributes only its not-imported files to Triage, so from there it looks
+    whole — while its common folder is the release folder, which also holds the
+    imported ones. Excluding that folder drops files from the walk that were
+    never the problem, and they leave the health score with them.
+
+    The Triage endpoint cannot compute this itself: it reads the compact
+    `triage` file_results row (~2% of records, by design — deserializing the
+    full torrent list is the known RAM hotspot v1.7.0 removed from that page),
+    and a torrent's imported files are not in it.
+
+    Two deliberate choices:
+
+    - **Positive evidence, not a "partial" flag.** An absent flag means "not
+      established" and falls back to per-file exact rules. Absence must never
+      read as "safe" — that is R1 one layer up, and a database whose last audit
+      predates this field has exactly that absence.
+    - **Written only on records Triage can act on** (`_is_triage_relevant`, the
+      same subset the compact row keeps). A field on every torrent-file record
+      multiplies across every file of every torrent and grows `files_json` —
+      the rule `seeding_time`, `dead_siblings` and `incomplete` all follow.
+    """
+    imported_states = {}
+    for r in torrent_files_data:
+        h = r.get('hash')
+        if h:
+            imported_states.setdefault(h, set()).add(bool(r.get('imported')))
+    for r in torrent_files_data:
+        h = r.get('hash')
+        if h and len(imported_states[h]) == 1 and _is_triage_relevant(r):
+            r["whole_torrent"] = True
 
 
 # ---------------------------------------------------------------------------

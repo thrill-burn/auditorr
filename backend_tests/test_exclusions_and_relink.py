@@ -168,6 +168,127 @@ class ExclusionRuleTests(unittest.TestCase):
             self.assertFalse(compiled.match(full_path, rel_path, filename), filename)
 
 
+class LiteralExclusionRuleTests(unittest.TestCase):
+    """`literal:` — the rule the Exclude buttons write (CLEANUP C8).
+
+    Both matchers are driven in every case: `is_excluded` is still live for
+    older callers and drifting the two apart is how this rule would rot.
+    """
+
+    def both(self, patterns, full_path, rel_path, filename):
+        legacy   = is_excluded(full_path, rel_path, filename, patterns)
+        compiled = compile_exclusions(patterns).match(full_path, rel_path, filename)
+        self.assertEqual(legacy, compiled,
+                         f"matchers disagreed on {patterns!r} vs {rel_path!r}")
+        return compiled
+
+    def test_a_bracketed_path_matches_itself(self):
+        """The documented half of C8: `[` made a literal path match nothing."""
+        rel  = "anime/[SubsPlease] Show - 01 [1080p].mkv"
+        full = f"/data/torrents/{rel}"
+        name = "[SubsPlease] Show - 01 [1080p].mkv"
+
+        # The bug, still reproducible with a raw path pattern.
+        self.assertFalse(self.both([rel], full, rel, name))
+        # The fix.
+        self.assertTrue(self.both([f"literal:{rel}"], full, rel, name))
+
+    def test_a_star_in_a_literal_path_does_not_match_its_neighbours(self):
+        """The half no review states: `*` and `?` silently OVER-exclude.
+
+        A literal path containing `*` became a glob that matched itself *and*
+        every sibling — files the user never selected, removed from scoring
+        with the same success toast.
+        """
+        patterns = ["literal:movies/Film (2020)/Film*.mkv"]
+        self.assertTrue(self.both(
+            patterns,
+            "/data/torrents/movies/Film (2020)/Film*.mkv",
+            "movies/Film (2020)/Film*.mkv", "Film*.mkv"))
+        for neighbour in ("Film2.mkv", "FilmXYZ.mkv"):
+            self.assertFalse(self.both(
+                patterns,
+                f"/data/torrents/movies/Film (2020)/{neighbour}",
+                f"movies/Film (2020)/{neighbour}", neighbour),
+                f"literal pattern over-matched {neighbour}")
+
+        # ...and the raw path still over-matches, which is what is being fixed.
+        self.assertTrue(self.both(
+            ["movies/Film (2020)/Film*.mkv"],
+            "/data/torrents/movies/Film (2020)/Film2.mkv",
+            "movies/Film (2020)/Film2.mkv", "Film2.mkv"))
+
+    def test_a_question_mark_in_a_literal_path_does_not_match_its_neighbours(self):
+        patterns = ["literal:tv/Show (2020)/ep?.mkv"]
+        self.assertTrue(self.both(
+            patterns, "/data/torrents/tv/Show (2020)/ep?.mkv",
+            "tv/Show (2020)/ep?.mkv", "ep?.mkv"))
+        self.assertFalse(self.both(
+            patterns, "/data/torrents/tv/Show (2020)/ep1.mkv",
+            "tv/Show (2020)/ep1.mkv", "ep1.mkv"))
+
+    def test_a_literal_file_does_not_match_its_siblings(self):
+        patterns = ["literal:movies/Some Release/Some.Release.mkv"]
+        self.assertTrue(self.both(
+            patterns, "/data/torrents/movies/Some Release/Some.Release.mkv",
+            "movies/Some Release/Some.Release.mkv", "Some.Release.mkv"))
+        self.assertFalse(self.both(
+            patterns, "/data/torrents/movies/Some Release/Other.Release.mkv",
+            "movies/Some Release/Other.Release.mkv", "Other.Release.mkv"))
+
+    def test_literal_subtree_matches_container_and_relative_paths(self):
+        """`_variants` tolerance — without it every workflow-written rule dies.
+
+        The Exclude buttons build patterns from the *relative* path the audit
+        stored; the walk matches against absolute container paths and host-style
+        ones. A literal rule has to cross that boundary like every other rule.
+        """
+        patterns = ["literal:movies/Sicario.2015.1080p.BluRay.x264-GRP/"]
+        for full_path, rel_path, filename in [
+            ("/data/torrents/movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.mkv",
+             "movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.mkv", "Sicario.mkv"),
+            ("/mnt/user/data/torrents/movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.nfo",
+             "movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.nfo", "Sicario.nfo"),
+        ]:
+            self.assertTrue(self.both(patterns, full_path, rel_path, filename), full_path)
+
+        # An absolute pattern must reach the relative spelling too.
+        self.assertTrue(self.both(
+            ["literal:/data/torrents/movies/Sicario.2015.1080p.BluRay.x264-GRP/"],
+            "/data/torrents/movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.mkv",
+            "movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.mkv", "Sicario.mkv"))
+
+        # A neighbouring release folder is untouched.
+        self.assertFalse(self.both(
+            patterns,
+            "/data/torrents/movies/Sicario.Day.of.the.Soldado.2018/Sicario2.mkv",
+            "movies/Sicario.Day.of.the.Soldado.2018/Sicario2.mkv", "Sicario2.mkv"))
+
+    def test_literal_subtree_with_glob_characters_in_the_folder_name(self):
+        patterns = ["literal:anime/[Group] Show (2020)/"]
+        self.assertTrue(self.both(
+            patterns, "/data/torrents/anime/[Group] Show (2020)/ep01.mkv",
+            "anime/[Group] Show (2020)/ep01.mkv", "ep01.mkv"))
+        self.assertFalse(self.both(
+            patterns, "/data/torrents/anime/xGroupy Show (2020)/ep01.mkv",
+            "anime/xGroupy Show (2020)/ep01.mkv", "ep01.mkv"))
+
+    def test_the_literal_prefix_is_case_insensitive_but_the_path_is_not(self):
+        self.assertTrue(self.both(
+            ["LITERAL:movies/Film.mkv"], "/data/torrents/movies/Film.mkv",
+            "movies/Film.mkv", "Film.mkv"))
+        self.assertFalse(self.both(
+            ["literal:movies/FILM.mkv"], "/data/torrents/movies/Film.mkv",
+            "movies/Film.mkv", "Film.mkv"))
+
+    def test_expand_exclusion_patterns_passes_literal_rules_through(self):
+        patterns = expand_exclusion_patterns({
+            "EXCLUSION_PATTERNS": ["literal:movies/Film [2020].mkv"],
+            "MEDIA_SERVER_EXCLUSION_PRESETS": ["plex"],
+        })
+        self.assertIn("literal:movies/Film [2020].mkv", patterns)
+
+
 class CompiledExclusionMatcherTests(unittest.TestCase):
     def test_compiled_matcher_agrees_with_is_excluded_across_all_pattern_types(self):
         """compile_exclusions().match() must produce identical results to is_excluded()."""
@@ -197,6 +318,14 @@ class CompiledExclusionMatcherTests(unittest.TestCase):
             "*.srt",
             # Pure ext glob (should route to ext bucket, not fnmatch)
             "*.nfo",
+            # literal: rules — both sub-forms, both carrying glob metacharacters,
+            # which is the whole reason the rule exists. The corpus below has a
+            # row for each: a hand-written corpus can agree on a type it never
+            # exercises, so breaking either implementation on purpose must fail
+            # this test.
+            "literal:anime/[SubsPlease] Literal Show - 01 [1080p].mkv",
+            "literal:movies/Literal Star*.mkv",
+            "literal:torrents/literal-subtree [RAW]/",
         ]
         cfg = {
             "EXCLUSION_PATTERNS": custom_patterns,
@@ -243,6 +372,18 @@ class CompiledExclusionMatcherTests(unittest.TestCase):
             ("/mnt/user/data/torrents/books/Book.epub", "books/Book.epub", "Book.epub"),
             # ext: rule (srt)
             ("/data/media/Movies/Movie/Movie.en.srt", "Movies/Movie/Movie.en.srt", "Movie.en.srt"),
+            # literal: exact file, brackets — excluded
+            ("/data/torrents/anime/[SubsPlease] Literal Show - 01 [1080p].mkv",
+             "anime/[SubsPlease] Literal Show - 01 [1080p].mkv",
+             "[SubsPlease] Literal Show - 01 [1080p].mkv"),
+            # literal: exact file, star — excluded; its neighbour is NOT
+            ("/data/torrents/movies/Literal Star*.mkv", "movies/Literal Star*.mkv", "Literal Star*.mkv"),
+            ("/data/torrents/movies/Literal Star2.mkv", "movies/Literal Star2.mkv", "Literal Star2.mkv"),
+            # literal: subtree — excluded; a near-miss sibling folder is NOT
+            ("/data/torrents/torrents/literal-subtree [RAW]/payload.mkv",
+             "torrents/literal-subtree [RAW]/payload.mkv", "payload.mkv"),
+            ("/data/torrents/torrents/literal-subtree-other/payload.mkv",
+             "torrents/literal-subtree-other/payload.mkv", "payload.mkv"),
             # Media files — must NOT be excluded
             ("/data/media/Movies/Movie (2024)/Movie (2024).mkv", "Movies/Movie (2024)/Movie (2024).mkv", "Movie (2024).mkv"),
             ("/data/media/Movies/Movie (2024)/Movie (2024).mp4", "Movies/Movie (2024)/Movie (2024).mp4", "Movie (2024).mp4"),

@@ -21,6 +21,7 @@ import sources
 from db import (
     DATA_DIR,
     DEFAULT_CONFIG, SCORE_WEIGHT_KEYS, API_URL_KEYS, url_problem,
+    EXCLUSION_PATTERNS_MAX, EXCLUSION_PATTERN_MAX_CHARS,
     init_db,
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
@@ -1049,6 +1050,52 @@ _TRIAGE_VERIFY_BATCH_MAX = 200
 _IMPORT_CHECK_MAX = 60
 
 
+def _literal_pattern(path, subtree=False):
+    """One exclusion rule built from a real path — never a glob (C8).
+
+    `literal:` exists because release names contain `[`, `]`, `*` and `?`, and
+    every other path rule runs through fnmatch. See `exclusions._LITERAL_DOC`.
+    """
+    p = str(path).replace('\\', '/').strip('/')
+    return f"literal:{p}/" if subtree else f"literal:{p}"
+
+
+def _triage_exclusion_patterns(paths, whole_torrent):
+    """Exclusion rules for one Triage row, derived server-side (T6).
+
+    Single-file torrents always get an exact file rule — their parent is often a
+    shared category dir (`tv-sonarr`) that must never be excluded wholesale.
+    Multi-file torrents get their common folder as a literal subtree, and only
+    when two conditions hold:
+
+      - it sits at least two segments deep (category/release-folder), the same
+        rule `arr._scan_target` and Cleanup's grouping follow; and
+      - the audit established that the row covers the **whole torrent**
+        (`whole_torrent`). Without that the release folder also holds files this
+        row is not about — the partially-imported case — and only per-file rules
+        are safe.
+
+    Derived here rather than in `Triage.jsx` so the safe-folder rule has one
+    implementation, matching the `loose` flag Cleanup ships for the same reason.
+    """
+    norm = [str(p).replace('\\', '/') for p in paths if p]
+    per_file = [_literal_pattern(p) for p in norm]
+    if len(norm) <= 1 or not whole_torrent:
+        return per_file
+    seg_lists = [p.split('/')[:-1] for p in norm]
+    if any(not s for s in seg_lists):   # a file at the torrent-tree root
+        return per_file
+    common = seg_lists[0]
+    for segs in seg_lists[1:]:
+        i = 0
+        while i < len(common) and i < len(segs) and common[i] == segs[i]:
+            i += 1
+        common = common[:i]
+    if len(common) >= 2:
+        return [_literal_pattern('/'.join(common), subtree=True)]
+    return per_file   # the common folder IS the category dir
+
+
 def _triage_verdict_under(alternatives, health):
     """Select a verdict from its live-health alternatives (None → drop row)."""
     if health == 'working':
@@ -1061,7 +1108,21 @@ def _triage_verdict_under(alternatives, health):
 @app.route('/api/workflows/exclude', methods=['POST'])
 @require_auth
 def workflows_exclude():
-    """Append patterns to the Excluded Files & Folders config list."""
+    """Append patterns to the Excluded Files & Folders config list.
+
+    This writes `EXCLUSION_PATTERNS` through `db_save_config`, which is a bare
+    INSERT OR REPLACE and validates nothing — `validate_config` runs only on the
+    config POST. So the caps it enforces on this exact key have to be enforced
+    *here* too, or a click-through session writes a list the Config page then
+    refuses to save, and the error ("EXCLUSION_PATTERNS[47] must not exceed 200
+    characters") blocks every unrelated setting on that page until the user
+    finds and hand-trims the list. Both limits are reachable in one sitting: a
+    200-character relative path on a nested season pack with a long scene name,
+    and 100 patterns in an afternoon of clicking Exclude on a messy library.
+
+    Refusal is reported rather than swallowed — "3 of 5 added; 2 were too long"
+    beats a green toast over a list that is now unsaveable.
+    """
     data = request.json or {}
     patterns = [str(p).strip() for p in (data.get('patterns') or []) if str(p).strip()]
     if not patterns:
@@ -1069,20 +1130,50 @@ def workflows_exclude():
     cfg = db_load_config()
     existing = [p for p in cfg.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)]
     seen = {p.strip().lower() for p in existing}
-    added = 0
+    added = duplicates = too_long = no_room = 0
     for p in patterns:
-        if p.lower() not in seen:
-            existing.append(p)
-            seen.add(p.lower())
-            added += 1
+        if p.lower() in seen:
+            duplicates += 1
+            continue
+        if len(p) > EXCLUSION_PATTERN_MAX_CHARS:
+            too_long += 1
+            continue
+        if len(existing) >= EXCLUSION_PATTERNS_MAX:
+            no_room += 1
+            continue
+        existing.append(p)
+        seen.add(p.lower())
+        added += 1
     cfg['EXCLUSION_PATTERNS'] = existing
-    db_save_config(cfg)
-    # No file changed, so the watcher will never notice this on its own — but
-    # every count auditorr reports just moved. Debounced, so clicking through a
-    # page of suggestion chips still costs one scan.
     if added:
+        db_save_config(cfg)
+        # No file changed, so the watcher will never notice this on its own — but
+        # every count auditorr reports just moved. Debounced, so clicking through a
+        # page of suggestion chips still costs one scan.
         nudge_watchdog('exclusion patterns added')
-    return jsonify({"status": "success", "added": added, "total": len(existing)})
+
+    refusals = []
+    if too_long:
+        refusals.append(f"{too_long} too long (over {EXCLUSION_PATTERN_MAX_CHARS} characters)")
+    if no_room:
+        refusals.append(f"{no_room} would pass the {EXCLUSION_PATTERNS_MAX}-pattern limit")
+    if refusals:
+        message = (f"Added {added} of {len(patterns)} — "
+                   + ", ".join(refusals)
+                   + ". Trim the list in Config → Excluded Files & Folders.")
+        log.warning("Exclude refused %d pattern(s): %s", too_long + no_room, "; ".join(refusals))
+    else:
+        message = f"Added {added} exclusion rule{'' if added == 1 else 's'}"
+    return jsonify({
+        "status":     "success",
+        "added":      added,
+        "duplicates": duplicates,
+        "refused":    too_long + no_room,
+        "too_long":   too_long,
+        "no_room":    no_room,
+        "total":      len(existing),
+        "message":    message,
+    })
 
 
 def _partition_removal_by_file_sharing(cfg, items):
@@ -2090,6 +2181,11 @@ def workflows_triage():
             'trackers':       sorted(g['trackers']),
             'verdict':        verdict,
             'verdict_alternatives': alternatives,
+            # Built here, not in the browser: the folder form is only safe when
+            # this row covers the whole torrent, and only the audit can say so.
+            'exclusion_patterns': _triage_exclusion_patterns(
+                [f['path'] for f in g['files']],
+                all(f.get('whole_torrent') for f in g['files'])),
             'is_duplicate':   is_duplicate,
             'parsed':         parsed,
             'library':        lib_payload,
@@ -2157,6 +2253,13 @@ def workflows_triage():
             'verdict_alternatives': {'working': None,
                                      'unregistered': 'dead_registration',
                                      'other': 'dead_registration'},
+            # Deliberately empty, and the UI renders no Exclude action for these
+            # rows (T6). These `paths` are the **healthy carrier's** — a file a
+            # working cross-seed is seeding right now. Excluding one hides a live
+            # file from the walk while the dead registration it was meant to
+            # address is still sitting in the client. Exclusion is not a
+            # meaningful answer to this row at all; removing the registration is.
+            'exclusion_patterns': [],
             'is_duplicate':   False,
             'parsed':         parse_release_info_for_path(rep['path']),
             'library':        None,
@@ -2307,8 +2410,29 @@ def workflows_cleanup():
         # folder — cap at two segments so groups map to abandoned payloads.
         dir_segs = rel.split('/')[:-1]
         top = '/'.join(dir_segs[:2]) if dir_segs else '(root)'
+        # A folder pattern needs ≥2 segments, and a group that has fewer must
+        # say so *here* rather than leaving the client to re-derive the depth —
+        # a rule reimplemented on both sides of the wire is a rule that will
+        # disagree (Phase 3's and 4d's lesson). Single-file torrents saved
+        # straight into the category dir — qBittorrent's default — land at one
+        # segment, so every such orphan in `movies/` collapsed into one group
+        # whose header checkbox emitted `movies/`: a subtree prefix that matches
+        # the **media library** as well as the torrent tree, silently dropping
+        # the whole category out of scoring (C7).
+        #
+        # The ≥2-segment rule is the one `arr._scan_target` ("the release
+        # folder, the second segment below LOCAL_PATH") and Triage's exclusion
+        # granularity already follow; Cleanup was the one place it was not
+        # applied. **Measured 2026-09-11, and it is not a depth property:** the
+        # category dir is shared between the two trees by construction, while
+        # the release folder is not, because the arr renames on import. So there
+        # is a residual — an install whose library folders carry the release
+        # name (no arr rename, or a hand-built library) gets both trees from a
+        # 2-segment pattern too. That is not engineered around; it is what the
+        # confirm step showing the pattern before writing it is for.
+        loose = len(dir_segs) < 2
         g = folders.setdefault(top, {
-            'folder': top, 'files': [],
+            'folder': top, 'files': [], 'loose': loose,
             'total_size': 0, 'freeable_size': 0, 'hardlinked_size': 0,
         })
         # Hardlinked elsewhere — deleting frees nothing until the last link goes

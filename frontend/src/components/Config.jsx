@@ -1167,6 +1167,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
           Folder paths can be written however you recognize them: <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/data/torrents/books</span>, or <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/mnt/user/data/torrents/books</span>. File names, directory names, extensions, and glob patterns work too.
         </span>
+        {/* The Exclude buttons on Cleanup and Triage write literal: rules, so a
+            user meets them here first — unexplained, a prefix on their own paths
+            reads like a bug rather than the thing that makes those paths work. */}
+        <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
+          A rule starting <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>literal:</span> means exactly that path, with no glob interpretation — which is what a name containing <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>[</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>*</span> or <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>?</span> needs. End it with <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>/</span> for a whole folder. The <b>Exclude</b> buttons on Cleanup and Triage write these for you.
+        </span>
         <textarea
           value={exclusionPatterns}
           onChange={e => { setExclusionPatterns(e.target.value); setIsDirty(true) }}

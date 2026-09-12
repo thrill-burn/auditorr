@@ -618,6 +618,19 @@ def db_save_config(conf):
 # Config validation
 # ---------------------------------------------------------------------------
 
+# Caps on the exclusion list. These are enforced here, on the config POST — and
+# they must also be enforced by /api/workflows/exclude, which writes the same key
+# through db_save_config (a bare INSERT OR REPLACE that validates nothing). A
+# click-through session on Cleanup or Triage could otherwise write a list the
+# Config page then refuses to save, and the resulting error blocks *every
+# unrelated setting on that page* until the user finds and hand-trims the list.
+# Same call as #21's schemeless-URL warning: an install must not be locked out of
+# its own settings by a value it did not type. Exported so the endpoint enforces
+# these numbers rather than a second copy of them.
+EXCLUSION_PATTERNS_MAX = 100
+EXCLUSION_PATTERN_MAX_CHARS = 200
+
+
 def validate_config(data):
     """Validate config POST data. Returns a list of error strings (empty = valid)."""
     errors = []
@@ -684,13 +697,15 @@ def validate_config(data):
         if not isinstance(patterns, list):
             errors.append("EXCLUSION_PATTERNS must be a list")
         else:
-            if len(patterns) > 100:
-                errors.append("EXCLUSION_PATTERNS must not exceed 100 patterns")
+            if len(patterns) > EXCLUSION_PATTERNS_MAX:
+                errors.append(
+                    f"EXCLUSION_PATTERNS must not exceed {EXCLUSION_PATTERNS_MAX} patterns")
             for i, p in enumerate(patterns):
                 if not isinstance(p, str):
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must be a string")
-                elif len(p) > 200:
-                    errors.append(f"EXCLUSION_PATTERNS[{i}] must not exceed 200 characters")
+                elif len(p) > EXCLUSION_PATTERN_MAX_CHARS:
+                    errors.append(f"EXCLUSION_PATTERNS[{i}] must not exceed "
+                                  f"{EXCLUSION_PATTERN_MAX_CHARS} characters")
 
     presets = data.get('MEDIA_SERVER_EXCLUSION_PRESETS')
     if presets is not None:
