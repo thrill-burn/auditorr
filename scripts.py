@@ -4,6 +4,8 @@ import shlex
 import logging
 from datetime import datetime
 
+from media_server_exclusions import is_tombstone_path
+
 log = logging.getLogger(__name__)
 
 
@@ -53,9 +55,22 @@ def _build_dup_groups(all_files, local_path, media_path=''):
     # Absolute paths of every excluded file, so excluded *partners* can be
     # dropped from other files' duplicate lists (duplicate_paths entries are
     # absolute paths with no excluded flag of their own).
+    #
+    # Filesystem tombstones (`.fuse_hidden*`, `.nfs*`) are dropped the same way,
+    # and here as well as at the walk on purpose: the walk's exclusion only takes
+    # effect on the next scan, while these records are read from the *last* one.
+    # A tombstone is the discarded side of a delete or a move the filesystem has
+    # not finished, so hardlinking to it is meaningless — and because a group's
+    # canonical is its smallest path and `.` sorts first, an unfiltered tombstone
+    # becomes the copy every other file in the group is replaced with. This is
+    # the last thing between a stale record and `ln`.
     excluded_abs   = set()
     excluded_count = 0
     for f in all_files:
+        if is_tombstone_path(f.get('path')):
+            file_root = f.get('_file_root', local_path)
+            excluded_abs.add(posixpath.join(file_root, f['path']) if file_root else f['path'])
+            continue
         if f.get('excluded'):
             file_root = f.get('_file_root', local_path)
             excluded_abs.add(posixpath.join(file_root, f['path']) if file_root else f['path'])
@@ -65,6 +80,8 @@ def _build_dup_groups(all_files, local_path, media_path=''):
     for f in all_files:
         if not f.get('duplicate_paths') or f.get('excluded'):
             continue
+        if is_tombstone_path(f.get('path')):
+            continue        # never a canonical; see excluded_abs above
         inode   = f['inode']
         file_id = f.get('file_id', inode)
         if file_id in seen_file_ids:

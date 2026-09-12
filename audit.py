@@ -413,7 +413,15 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
 
     # Pass 3 — exclusivity. One walk of every record, dict lookups only: any
     # candidate folder with a file from another torrent under it is disqualified.
+    #
+    # An already-excluded file does not disqualify anything: a folder rule cannot
+    # hide what is hidden. That matters more than it sounds — a filesystem
+    # tombstone left in a release folder by an interrupted move is excluded (see
+    # media_server_exclusions.TOMBSTONE_PATTERNS) and would otherwise block the
+    # real torrent's folder-level exclusion for as long as the handle stayed open.
     for r in torrent_files_data:
+        if r.get('excluded'):
+            continue
         h = r.get('hash')
         segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
         for i in range(1, len(segs) + 1):

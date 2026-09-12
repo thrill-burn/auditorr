@@ -285,6 +285,21 @@ it. It is case-sensitive on the path, and — like every other path rule — it
 matches whether you write the path relative (`movies/…`) or absolute
 (`/data/torrents/movies/…`).
 
+### Always ignored
+
+Two patterns apply on every install and are not configurable: `.fuse_hidden*`
+and `.nfs*`. These are **filesystem tombstones** — when a file is deleted while
+a process still has it open, the filesystem can't free it, so it renames it out
+of the way and drops that name when the last handle closes. FUSE (Unraid user
+shares) and NFS both do this.
+
+The file has already been deleted; what's left is bookkeeping for a delete that
+hasn't finished, and it disappears on its own. Treating one as media meant
+offering to deduplicate a file against itself, or to delete something already
+deleted. They still appear in File Explorer marked as excluded, so you can see
+them if one is sticking around — which usually means a process is holding a
+handle open and needs restarting.
+
 ### Presets
 
 Two preset groups save you from writing common rules by hand:

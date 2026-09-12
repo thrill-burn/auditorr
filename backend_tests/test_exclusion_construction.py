@@ -18,6 +18,9 @@ from audit import _assemble_records, _mark_whole_torrents
 from db import (EXCLUSION_PATTERNS_MAX, EXCLUSION_PATTERN_MAX_CHARS,
                 validate_config)
 from exclusions import compile_exclusions, is_excluded
+from media_server_exclusions import (TOMBSTONE_PATTERNS, expand_exclusion_patterns,
+                                     is_tombstone_path)
+from scripts import _build_dup_groups, dup_group_inputs
 
 
 # ── C7 — a category dir must never become a folder pattern ────────────────────
@@ -417,6 +420,113 @@ class ConstructedPatternsAreAlwaysSaveableTests(unittest.TestCase):
         for pattern in constructed:
             self.assertTrue(pattern.startswith('literal:'), pattern)
             self.assertLessEqual(len(pattern), EXCLUSION_PATTERN_MAX_CHARS, pattern)
+
+
+# ── Filesystem tombstones ─────────────────────────────────────────────────────
+
+_TOMB = ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/'
+         '.fuse_hidden00314807000c8ea2')
+_LIVE = ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/'
+         'Dark Matter (2024) S01E01 Are You Happy (2160p WEBRip)[cTurtle].mkv')
+
+
+class TombstoneTests(unittest.TestCase):
+    """`.fuse_hidden*` / `.nfs*` — a delete the filesystem has not finished.
+
+    Reproduced from the reference box, where Unraid's mover copied a 3.5 GB
+    episode cache→array and could not unlink the source because qBittorrent held
+    it open. One file mid-move showed up as two, and reached every workflow that
+    offers an action.
+    """
+
+    def test_the_predicate_matches_both_families(self):
+        self.assertTrue(is_tombstone_path(_TOMB))
+        self.assertTrue(is_tombstone_path('x/y/.nfs0000000004a1b2c300000001'))
+        self.assertFalse(is_tombstone_path(_LIVE))
+        # Not over-eager: a real file merely starting with a dot is untouched.
+        self.assertFalse(is_tombstone_path('movies/Film/.plexmatch'))
+        self.assertFalse(is_tombstone_path('movies/Film/film.nfo'))
+
+    def test_they_are_excluded_on_every_install_without_being_configured(self):
+        patterns = expand_exclusion_patterns({'EXCLUSION_PATTERNS': []})
+        for p in TOMBSTONE_PATTERNS:
+            self.assertIn(p, patterns)
+        matcher = compile_exclusions(patterns)
+        self.assertTrue(matcher.match(f'/data/torrents/{_TOMB}', _TOMB,
+                                      _TOMB.rsplit('/', 1)[-1]))
+        self.assertTrue(is_excluded(f'/data/torrents/{_TOMB}', _TOMB,
+                                    _TOMB.rsplit('/', 1)[-1], patterns))
+        # The live file beside it is untouched.
+        self.assertFalse(matcher.match(f'/data/torrents/{_LIVE}', _LIVE,
+                                       _LIVE.rsplit('/', 1)[-1]))
+
+    def test_an_excluded_tombstone_no_longer_blocks_a_folder_exclusion(self):
+        """T6's interaction: an unclaimed file in a live torrent's folder.
+
+        The exclusivity walk is right to refuse a folder holding someone else's
+        file — but a tombstone is excluded, and a folder rule cannot hide what
+        is already hidden. Without this the real torrent loses its one-rule
+        exclusion for as long as the handle stays open.
+        """
+        recs = [
+            {'path': _LIVE, 'size': 1, 'status': 'Seeding', 'excluded': False,
+             'imported': False, 'hash': 'AAA', 'tracker_health': 'unknown'},
+            {'path': _LIVE.replace('S01E01 Are You Happy', 'S01E02 Trip'),
+             'size': 1, 'status': 'Seeding', 'excluded': False,
+             'imported': False, 'hash': 'AAA', 'tracker_health': 'unknown'},
+            {'path': _TOMB, 'size': 1, 'status': 'Orphaned', 'excluded': True,
+             'imported': False, 'hash': '', 'tracker_health': 'unknown'},
+        ]
+        _mark_whole_torrents(recs, [])
+        self.assertEqual(recs[0]['excl_folder'],
+                         'Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]')
+
+        # An unclaimed file that is NOT a tombstone still blocks it.
+        recs[2]['excluded'] = False
+        recs[2]['path'] = _TOMB.replace('.fuse_hidden00314807000c8ea2', 'stray.mkv')
+        for r in recs:
+            r.pop('excl_folder', None)
+            r.pop('whole_torrent', None)
+        _mark_whole_torrents(recs, [])
+        self.assertTrue(all('excl_folder' not in r for r in recs))
+
+    def test_a_tombstone_is_never_a_dedupe_canonical_even_from_stale_records(self):
+        """The destructive one, and the walk's exclusion cannot reach it.
+
+        These records come from the *last* scan, so on the run right after an
+        upgrade the tombstone is still `excluded: False`. A group's canonical is
+        its smallest path and `.` sorts ahead of every release name, so left
+        alone the tombstone becomes the copy every other file is replaced with.
+        """
+        stale = [
+            {'path': _TOMB, 'size': 3778088771, 'inode': 12384898988599979,
+             'file_id': '46:12384898988599979', 'excluded': False,
+             'duplicate_paths': [f'/data/torrents/{_LIVE}']},
+            {'path': _LIVE, 'size': 3778088771, 'inode': 649081298442256540,
+             'file_id': '46:649081298442256540', 'excluded': False,
+             'duplicate_paths': [f'/data/torrents/{_TOMB}']},
+        ]
+        out = _build_dup_groups(
+            dup_group_inputs(stale, [], '/data/torrents', '/data/media'),
+            '/data/torrents', '/data/media')
+        self.assertEqual(out['groups'], [],
+                         'a tombstone pair is not a duplicate group at all')
+
+    def test_a_real_duplicate_pair_is_still_grouped(self):
+        """The guard must not eat genuine duplicates."""
+        real = [
+            {'path': 'movies/A/Film.mkv', 'size': 100, 'inode': 1,
+             'file_id': '46:1', 'excluded': False,
+             'duplicate_paths': ['/data/torrents/movies/B/Film.mkv']},
+            {'path': 'movies/B/Film.mkv', 'size': 100, 'inode': 2,
+             'file_id': '46:2', 'excluded': False,
+             'duplicate_paths': ['/data/torrents/movies/A/Film.mkv']},
+        ]
+        out = _build_dup_groups(
+            dup_group_inputs(real, [], '/data/torrents', '/data/media'),
+            '/data/torrents', '/data/media')
+        self.assertEqual(len(out['groups']), 1)
+        self.assertEqual(len(out['groups'][0]['files']), 2)
 
 
 if __name__ == '__main__':
