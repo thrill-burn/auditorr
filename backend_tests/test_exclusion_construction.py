@@ -86,13 +86,13 @@ class CategoryDirGroupingTests(unittest.TestCase):
 # ── T6 — folder granularity, derived from the whole torrent ───────────────────
 
 class WholeTorrentMarkingTests(unittest.TestCase):
-    """The audit's positive evidence that a Triage row covers its whole torrent."""
+    """The audit's positive evidence about what a Triage row may exclude."""
 
-    def _records(self, *specs):
+    def _records(self, *specs, media=()):
         recs = [{'path': p, 'size': 1, 'status': 'Seeding', 'excluded': False,
                  'imported': imported, 'hash': h, 'tracker_health': 'unknown'}
                 for p, h, imported in specs]
-        _mark_whole_torrents(recs)
+        _mark_whole_torrents(recs, [{'path': p} for p in media])
         return recs
 
     def test_a_wholly_unimported_torrent_is_marked(self):
@@ -100,12 +100,14 @@ class WholeTorrentMarkingTests(unittest.TestCase):
             ('tv/Show.S01/e01.mkv', 'AAA', False),
             ('tv/Show.S01/e02.mkv', 'AAA', False))
         self.assertTrue(all(r.get('whole_torrent') for r in recs))
+        self.assertTrue(all(r.get('excl_folder') == 'tv/Show.S01' for r in recs))
 
     def test_a_partially_imported_torrent_is_not_marked(self):
         recs = self._records(
             ('tv/Show.S01/e01.mkv', 'AAA', False),
             ('tv/Show.S01/e02.mkv', 'AAA', True))
         self.assertIsNone(recs[0].get('whole_torrent'))
+        self.assertIsNone(recs[0].get('excl_folder'))
 
     def test_the_flag_stays_off_records_triage_never_reads(self):
         """Sparse by design — a field on every record grows files_json."""
@@ -113,8 +115,89 @@ class WholeTorrentMarkingTests(unittest.TestCase):
             ('tv/Show.S01/e01.mkv', 'AAA', True),      # imported, healthy
             ('tv/Show.S01/e02.mkv', 'AAA', True))
         self.assertTrue(all('whole_torrent' not in r for r in recs))
+        self.assertTrue(all('excl_folder' not in r for r in recs))
 
-    def test_assemble_records_stamps_it(self):
+    # -- what replaced the "at least two segments" rule --------------------
+
+    def test_a_release_folder_one_segment_deep_is_offered(self):
+        """The regression the probe found on the reference box.
+
+        A torrent saved with no category directory has its release folder one
+        segment down. The old depth rule refused it and emitted a per-file rule
+        for every episode — each long enough for the 200-character config cap to
+        refuse it in turn, while the dialog advised selecting the release folder
+        the rule had just declined to use.
+        """
+        recs = self._records(
+            ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/S01E03.mkv', 'AAA', False),
+            ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/S01E06.mkv', 'AAA', False),
+            media=['tv/Dark Matter (2024)/Season 01/ep.mkv'])
+        self.assertEqual(recs[0]['excl_folder'],
+                         'Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]')
+
+    def test_a_folder_holding_another_torrent_is_refused(self):
+        """Exclusivity — what actually stopped `movies/` being offered."""
+        recs = self._records(
+            ('movies/Film.2020.mkv',  'AAA', False),
+            ('movies/Other.2019.mkv', 'BBB', False))
+        self.assertTrue(all(r.get('whole_torrent') for r in recs))
+        self.assertTrue(all('excl_folder' not in r for r in recs))
+
+    def test_a_folder_holding_a_file_triage_never_sees_is_refused(self):
+        """The case only the exclusivity *walk* can catch.
+
+        The other torrent here is imported and healthy, so it is not on the
+        Triage pile and never becomes a candidate folder of its own — nothing
+        but a pass over every record notices that its file sits inside the
+        folder about to be excluded. Excluding it would hide a library file.
+        """
+        recs = self._records(
+            ('movies/Rel.2020/a.mkv',         'AAA', False),
+            ('movies/Rel.2020/b.mkv',         'AAA', False),
+            ('movies/Rel.2020/extra/c.mkv',   'BBB', True),
+            media=['movies/Rel (2020)/Rel.mkv'])
+        self.assertTrue(recs[0].get('whole_torrent'))
+        self.assertTrue(all('excl_folder' not in r for r in recs))
+
+    def test_an_orphan_in_the_folder_also_refuses_it(self):
+        """A record with no hash is a file no torrent claims — still a file."""
+        recs = self._records(
+            ('movies/Rel.2020/a.mkv',     'AAA', False),
+            ('movies/Rel.2020/b.mkv',     'AAA', False),
+            ('movies/Rel.2020/stray.nfo', '',    False))
+        self.assertTrue(all('excl_folder' not in r for r in recs))
+
+    def test_a_category_dir_shared_with_the_media_tree_is_refused(self):
+        """C7 — a one-segment folder naming a media root matches both walks."""
+        recs = self._records(
+            ('movies/Film.2020/a.mkv', 'AAA', False),
+            ('movies/Film.2020/b.mkv', 'AAA', False),
+            media=['movies/Film (2020)/Film.mkv'])
+        self.assertEqual(recs[0]['excl_folder'], 'movies/Film.2020')
+
+        # ...but the same torrent saved loose IN that category dir gets nothing,
+        # even though it is the only torrent there.
+        loose = self._records(
+            ('movies/a.mkv', 'AAA', False),
+            ('movies/b.mkv', 'AAA', False),
+            media=['movies/Film (2020)/Film.mkv'])
+        self.assertTrue(all(r.get('whole_torrent') for r in loose))
+        self.assertTrue(all('excl_folder' not in r for r in loose))
+
+    def test_the_media_root_test_only_applies_at_one_segment(self):
+        """A deeper folder cannot collide, so `movies/X` is fine under `movies`."""
+        recs = self._records(
+            ('movies/Rel.2020/a.mkv', 'AAA', False),
+            ('movies/Rel.2020/b.mkv', 'AAA', False),
+            media=['movies/Rel (2020)/Rel.mkv'])
+        self.assertEqual(recs[0]['excl_folder'], 'movies/Rel.2020')
+
+    def test_a_file_at_the_torrent_root_gets_no_folder(self):
+        recs = self._records(('stray.mkv', 'AAA', False),
+                             ('other.mkv', 'AAA', False))
+        self.assertTrue(all('excl_folder' not in r for r in recs))
+
+    def test_assemble_records_stamps_both(self):
         """It has to survive the real record builder, not just the helper."""
         inode_map = {
             (1, 10): {'torrent_rel_path': 'tv/Show.S01/e01.mkv', 'size': 5,
@@ -128,46 +211,63 @@ class WholeTorrentMarkingTests(unittest.TestCase):
         }
         torrent_files, _ = _assemble_records([(1, 10), (1, 11)], [], inode_map, {})
         self.assertTrue(all(r.get('whole_torrent') for r in torrent_files))
+        self.assertTrue(all(r.get('excl_folder') == 'tv/Show.S01' for r in torrent_files))
 
 
 class TriageExclusionPatternTests(unittest.TestCase):
     def test_a_single_file_torrent_gets_an_exact_literal_rule(self):
         self.assertEqual(
-            app._triage_exclusion_patterns(['movies/Film [2020].mkv'], True),
+            app._triage_exclusion_patterns(['movies/Film [2020].mkv'], 'movies'),
             ['literal:movies/Film [2020].mkv'])
 
-    def test_a_whole_multi_file_torrent_gets_its_release_folder(self):
+    def test_a_stamped_folder_becomes_one_subtree_rule(self):
         self.assertEqual(
             app._triage_exclusion_patterns(
-                ['tv/Show.S01.1080p/e01.mkv', 'tv/Show.S01.1080p/e02.mkv'], True),
+                ['tv/Show.S01.1080p/e01.mkv', 'tv/Show.S01.1080p/e02.mkv'],
+                'tv/Show.S01.1080p'),
             ['literal:tv/Show.S01.1080p/'])
 
-    def test_a_partially_imported_torrent_falls_back_to_per_file_rules(self):
-        """T6's first half: the common folder also holds the imported files."""
+    def test_no_stamp_falls_back_to_per_file_rules(self):
+        """The audit declined to name a safe folder — so the endpoint may not
+        invent one. This is also what a pre-upgrade database looks like."""
         self.assertEqual(
             app._triage_exclusion_patterns(
-                ['tv/Show.S01.1080p/e01.mkv', 'tv/Show.S01.1080p/e02.mkv'], False),
+                ['tv/Show.S01.1080p/e01.mkv', 'tv/Show.S01.1080p/e02.mkv'], ''),
             ['literal:tv/Show.S01.1080p/e01.mkv', 'literal:tv/Show.S01.1080p/e02.mkv'])
 
-    def test_a_common_folder_one_segment_deep_is_refused(self):
-        """A category dir is never a folder pattern — the C7 rule, here too."""
-        self.assertEqual(
-            app._triage_exclusion_patterns(['tv/a.mkv', 'tv/b.mkv'], True),
-            ['literal:tv/a.mkv', 'literal:tv/b.mkv'])
-
-    def test_a_nested_pack_uses_its_deepest_common_folder(self):
-        self.assertEqual(
-            app._triage_exclusion_patterns(
-                ['tv/Show.S01/Season 1/e01.mkv', 'tv/Show.S01/Season 1/e02.mkv'], True),
-            ['literal:tv/Show.S01/Season 1/'])
+    def test_records_disagreeing_on_the_stamp_resolve_to_nothing(self):
+        self.assertEqual(app._excl_folder([{'excl_folder': 'a/b'},
+                                           {'excl_folder': 'a/c'}]), '')
+        self.assertEqual(app._excl_folder([{'excl_folder': 'a/b'}, {}]), '')
+        self.assertEqual(app._excl_folder([{'excl_folder': 'a/b'},
+                                           {'excl_folder': 'a/b'}]), 'a/b')
 
     def test_the_folder_rule_it_emits_actually_matches_the_files(self):
         paths = ['tv/[Group] Show (2020)/e01.mkv', 'tv/[Group] Show (2020)/e02.mkv']
-        pattern = app._triage_exclusion_patterns(paths, True)
+        pattern = app._triage_exclusion_patterns(paths, 'tv/[Group] Show (2020)')
         matcher = compile_exclusions(pattern)
         for p in paths:
             self.assertTrue(matcher.match(f'/data/torrents/{p}', p, p.split('/')[-1]))
             self.assertTrue(is_excluded(f'/data/torrents/{p}', p, p.split('/')[-1], pattern))
+
+    def test_a_one_segment_release_folder_stays_under_the_cap(self):
+        """The arithmetic behind the fix, as a test rather than a claim.
+
+        The reference box's row: a ~95-character release folder holding episodes
+        with ~95-character names. Per file that is ~205 characters and the config
+        cap refuses it; as one folder rule it is ~104 and fits.
+        """
+        folder = ('Dark Matter (2024) S01 Season 1 '
+                  '(2160p WEBRip DV+HDR10P HYB x265 q14 12M V94 DDPA 5.1)[cTurtle]')
+        paths = [f'{folder}/Dark Matter (2024) S01E0{n} The Box '
+                 f'(2160p WEBRip DV+HDR10P HYB x265 q14 12M V94 DDPA 5.1)[cTurtle].mkv'
+                 for n in (3, 6)]
+        self.assertTrue(all(len(f'literal:{p}') > EXCLUSION_PATTERN_MAX_CHARS
+                            for p in paths), 'fixture no longer exceeds the cap')
+        folder_rule = app._triage_exclusion_patterns(paths, folder)
+        self.assertEqual(len(folder_rule), 1)
+        self.assertLessEqual(len(folder_rule[0]), EXCLUSION_PATTERN_MAX_CHARS)
+        self.assertEqual(validate_config({'EXCLUSION_PATTERNS': folder_rule}), [])
 
 
 def _rec(**over):
@@ -194,8 +294,10 @@ def _triage(records):
 class TriageEndpointExclusionTests(unittest.TestCase):
     def test_the_endpoint_ships_the_patterns(self):
         report = _triage([
-            _rec(path='tv/Show.S01/e01.mkv', whole_torrent=True),
-            _rec(path='tv/Show.S01/e02.mkv', whole_torrent=True),
+            _rec(path='tv/Show.S01/e01.mkv', whole_torrent=True,
+                 excl_folder='tv/Show.S01'),
+            _rec(path='tv/Show.S01/e02.mkv', whole_torrent=True,
+                 excl_folder='tv/Show.S01'),
         ])
         self.assertEqual(report['items'][0]['exclusion_patterns'],
                          ['literal:tv/Show.S01/'])
@@ -303,9 +405,9 @@ class ConstructedPatternsAreAlwaysSaveableTests(unittest.TestCase):
         ]
         constructed = []
         # Triage's server-side builder, both branches.
-        constructed += app._triage_exclusion_patterns(paths, True)
-        constructed += app._triage_exclusion_patterns(paths, False)
-        constructed += app._triage_exclusion_patterns(paths[:1], True)
+        constructed += app._triage_exclusion_patterns(paths, 'movies/Some Release')
+        constructed += app._triage_exclusion_patterns(paths, '')
+        constructed += app._triage_exclusion_patterns(paths[:1], '')
         # Cleanup's two shapes, spelled the way Cleanup.jsx spells them.
         constructed.append(app._literal_pattern(
             'movies/Sicario.2015.1080p.BluRay.x264-GRP', subtree=True))

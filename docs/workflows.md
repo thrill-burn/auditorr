@@ -277,9 +277,14 @@ handles one deliberate file at a time.
 
 **Exclude** hides a torrent's files from future audits — it's "stop telling me
 about this", not "fix this", and it deletes nothing. You're shown the exact
-rules before they're written. A torrent whose files are *all* unimported is
-excluded by its release folder; one where some files imported and some didn't
-gets a rule per file, since its release folder holds both.
+rules before they're written.
+
+Where auditorr can establish that a folder holds nothing but this torrent's
+files, you get **one rule for the folder**. Otherwise you get one rule per file.
+Two things stop the folder form being used: the torrent is **partly imported**,
+so its release folder also holds the files that imported fine; or the folder
+holds something else as well — another torrent, an orphan, or it's a category
+directory shared with your media library.
 
 It isn't offered on **Dead Registration** rows at all. Those rows are about a
 registration your tracker dropped, but the files under them belong to a

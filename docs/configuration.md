@@ -315,14 +315,19 @@ those buttons add lands in this list, visible and editable.
 Both Exclude buttons show you the exact rules before writing them. What they
 build depends on what you selected:
 
-- A **whole release folder** becomes one `literal:` subtree rule.
+- A folder that holds **nothing but what you selected** becomes one `literal:`
+  subtree rule.
 - **Loose files** — anything sitting directly in a category directory such as
   `movies/`, which is where qBittorrent saves single-file torrents by default —
   get one rule each. A category directory is never excluded as a folder: it is
-  shared with your media library, so one such rule would take the whole
-  category out of scoring.
+  shared with your media library and with every other torrent under it, so one
+  such rule would take the whole category out of scoring.
 - A **partly-imported torrent** in Triage also gets one rule per file, because
   its release folder holds the files that imported successfully too.
+
+Depth is not what decides this. A release folder sitting directly under your
+torrent directory — no category directory in between — still gets the folder
+form, provided nothing else lives in it.
 
 They enforce the 100-pattern / 200-character limits above and tell you what they
 refused, rather than writing a list this page would then refuse to save.

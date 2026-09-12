@@ -478,11 +478,19 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
               {note}
             </p>
           )}
+          {/* Says what will happen and offers a route that exists. It used to
+              read "select the whole release folder instead" — which is wrong
+              whenever auditorr has already declined to use that folder, and
+              those are exactly the rows that end up here. A refusal message
+              that recommends an impossible action is worse than none. */}
           {tooLong.length > 0 && (
             <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
               {tooLong.length} rule{tooLong.length !== 1 ? 's are' : ' is'} longer than {MAX_PATTERN_CHARS} characters
-              and will be refused — select the whole release folder instead, so the rule
-              covers the folder rather than each long filename.
+              and will be refused. auditorr uses one rule for the whole release folder
+              wherever that is safe; these are the files where it is not, so they need a
+              rule per file and the path itself is too long. Add a shorter rule by hand in
+              Config → Excluded Files &amp; Folders — a <span style={{ fontFamily: 'var(--mono)' }}>contains:</span> rule
+              on a distinctive part of the name is usually enough.
             </p>
           )}
         </div>

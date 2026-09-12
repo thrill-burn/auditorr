@@ -301,7 +301,6 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         elif info.get('completion_unknown'):
             record["completion_unknown"] = True
         torrent_files_data.append(record)
-    _mark_whole_torrents(torrent_files_data)
     media_files_data = []
     seen_media_keys = set()
     for file_key in media_key_order:
@@ -319,45 +318,129 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "duplicate_paths": duplicate_map.get(file_key, []),
             "excluded": info['media_excluded'],
         })
+    _mark_whole_torrents(torrent_files_data, media_files_data)
     return torrent_files_data, media_files_data
 
 
-def _mark_whole_torrents(torrent_files_data):
-    """Flag records whose torrent is *homogeneous* — every file in the same state.
+def _mark_whole_torrents(torrent_files_data, media_files_data):
+    """Stamp the two facts Triage needs to build a folder exclusion safely (T6).
 
-    Triage derives its folder-granular exclusion from a torrent's common folder,
-    and it has to know one thing it cannot see to do that safely (T6): whether
-    the torrent has files the row is **not** about. A partially-imported torrent
-    contributes only its not-imported files to Triage, so from there it looks
-    whole — while its common folder is the release folder, which also holds the
-    imported ones. Excluding that folder drops files from the walk that were
+    `whole_torrent` — the torrent is *homogeneous*, every file in the same
+    imported state, so the Triage row covers all of it. A partially-imported
+    torrent contributes only its not-imported files to Triage, so from there it
+    looks whole, while its common folder is the release folder that also holds
+    the imported ones. Excluding that folder drops files from the walk that were
     never the problem, and they leave the health score with them.
 
-    The Triage endpoint cannot compute this itself: it reads the compact
-    `triage` file_results row (~2% of records, by design — deserializing the
-    full torrent list is the known RAM hotspot v1.7.0 removed from that page),
-    and a torrent's imported files are not in it.
+    `excl_folder` — the folder that is actually safe to exclude as a subtree, or
+    absent. **This replaced a "≥2 path segments" rule, which was a proxy for the
+    real question and measurably the wrong one.** The reference install has
+    torrents saved with no category directory at all, so their release folder
+    sits one segment deep; the depth rule refused it and fell back to nine
+    per-file rules of ~205 characters each — which the 200-character config cap
+    then refused, while the confirm dialog told the user to select the release
+    folder, the very thing the rule had just declined to do. A dead end, found
+    by `.internal/probe_m_remaining.py --only phase5` on real data.
 
-    Two deliberate choices:
+    The two properties the depth rule was standing in for, now tested directly:
 
-    - **Positive evidence, not a "partial" flag.** An absent flag means "not
+    1. **Exclusivity** — nothing outside this torrent lives under the folder.
+       That is what stops `movies/` (a category dir holding many unrelated
+       torrents) being offered, and it holds whatever the depth is.
+    2. **Not a media-tree root name** — the C7 half. A one-segment folder that
+       shares its name with a directory at the top of the media library matches
+       *both* walks, because `_matches_prefix` matches a prefix anywhere in the
+       path. Deeper folders cannot collide that way, so the test only applies at
+       one segment. The residual §0.5 records stays as recorded and accepted: an
+       install whose library folders carry the release name (no arr rename) can
+       still be matched by a release-folder pattern.
+
+    Three deliberate choices:
+
+    - **Positive evidence, not a "partial" flag.** An absent stamp means "not
       established" and falls back to per-file exact rules. Absence must never
       read as "safe" — that is R1 one layer up, and a database whose last audit
-      predates this field has exactly that absence.
+      predates these fields has exactly that absence.
     - **Written only on records Triage can act on** (`_is_triage_relevant`, the
       same subset the compact row keeps). A field on every torrent-file record
       multiplies across every file of every torrent and grows `files_json` —
       the rule `seeding_time`, `dead_siblings` and `incomplete` all follow.
+    - **Path collection is bounded by the Triage pile, not by the library.**
+      Pass 1 accumulates only booleans; only hashes that survive it collect
+      their paths. The exclusivity walk that follows is dict lookups with no
+      accumulation, so this stays O(files x depth) in time and O(pile) in space
+      on a library where the pile is a fraction of a percent of the records.
     """
-    imported_states = {}
+    # Pass 1 — homogeneity, and which hashes Triage can act on at all.
+    imported_states, relevant = {}, set()
     for r in torrent_files_data:
         h = r.get('hash')
-        if h:
-            imported_states.setdefault(h, set()).add(bool(r.get('imported')))
+        if not h:
+            continue
+        imported_states.setdefault(h, set()).add(bool(r.get('imported')))
+        if _is_triage_relevant(r):
+            relevant.add(h)
+    whole = {h for h in relevant if len(imported_states[h]) == 1}
+    if not whole:
+        return
+
+    # Pass 2 — the candidate folder per whole hash: its files' deepest common
+    # directory. Only these hashes' paths are held, which is what bounds this.
+    segs_by_hash = {}
     for r in torrent_files_data:
         h = r.get('hash')
-        if h and len(imported_states[h]) == 1 and _is_triage_relevant(r):
+        if h in whole:
+            segs_by_hash.setdefault(h, []).append(
+                str(r.get('path') or '').replace('\\', '/').split('/')[:-1])
+    candidates = {}                       # folder -> owning hash, or None if shared
+    for h, seg_lists in segs_by_hash.items():
+        if any(not s for s in seg_lists):     # a file at the torrent-tree root
+            continue
+        common = seg_lists[0]
+        for segs in seg_lists[1:]:
+            i = 0
+            while i < len(common) and i < len(segs) and common[i] == segs[i]:
+                i += 1
+            common = common[:i]
+        if not common:
+            continue
+        folder = '/'.join(common)
+        if folder in candidates and candidates[folder] != h:
+            candidates[folder] = None
+        else:
+            candidates.setdefault(folder, h)
+    del segs_by_hash
+
+    # Pass 3 — exclusivity. One walk of every record, dict lookups only: any
+    # candidate folder with a file from another torrent under it is disqualified.
+    for r in torrent_files_data:
+        h = r.get('hash')
+        segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
+        for i in range(1, len(segs) + 1):
+            folder = '/'.join(segs[:i])
+            owner = candidates.get(folder)
+            if owner is not None and owner != h:
+                candidates[folder] = None
+
+    # Pass 4 — the C7 half, which only bites at one segment.
+    media_roots = {p.split('/', 1)[0].lower()
+                   for p in (str(m.get('path') or '').replace('\\', '/')
+                             for m in media_files_data)
+                   if '/' in p}
+    safe = {}
+    for folder, owner in candidates.items():
+        if owner is None:
+            continue
+        if '/' not in folder and folder.lower() in media_roots:
+            continue
+        safe[owner] = folder
+
+    for r in torrent_files_data:
+        h = r.get('hash')
+        if h in whole and _is_triage_relevant(r):
             r["whole_torrent"] = True
+            if h in safe:
+                r["excl_folder"] = safe[h]
 
 
 # ---------------------------------------------------------------------------

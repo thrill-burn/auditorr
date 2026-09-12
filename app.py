@@ -1060,40 +1060,40 @@ def _literal_pattern(path, subtree=False):
     return f"literal:{p}/" if subtree else f"literal:{p}"
 
 
-def _triage_exclusion_patterns(paths, whole_torrent):
-    """Exclusion rules for one Triage row, derived server-side (T6).
+def _excl_folder(records):
+    """The audit's agreed `excl_folder` for a torrent's records, or ''.
 
-    Single-file torrents always get an exact file rule — their parent is often a
-    shared category dir (`tv-sonarr`) that must never be excluded wholesale.
-    Multi-file torrents get their common folder as a literal subtree, and only
-    when two conditions hold:
+    Every record of a hash carries the same stamp, so disagreement means the
+    group spans hashes or a record predates the field — either way the honest
+    answer is "not established", which falls back to per-file rules.
+    """
+    folders = {str(f.get('excl_folder') or '') for f in records}
+    return folders.pop() if len(folders) == 1 else ''
 
-      - it sits at least two segments deep (category/release-folder), the same
-        rule `arr._scan_target` and Cleanup's grouping follow; and
-      - the audit established that the row covers the **whole torrent**
-        (`whole_torrent`). Without that the release folder also holds files this
-        row is not about — the partially-imported case — and only per-file rules
-        are safe.
 
-    Derived here rather than in `Triage.jsx` so the safe-folder rule has one
-    implementation, matching the `loose` flag Cleanup ships for the same reason.
+def _triage_exclusion_patterns(paths, folder):
+    """Exclusion rules for one Triage row (T6).
+
+    `folder` is the audit's `excl_folder` stamp — the directory it established is
+    safe to exclude wholesale, or empty. When there is one, the row is a single
+    literal subtree rule; otherwise every file gets its own exact rule.
+
+    **The endpoint deliberately makes no judgement of its own here.** It used to
+    re-derive the common folder from `paths` and accept it at two segments or
+    deeper, which was a proxy for "is this a category dir" and measurably wrong:
+    a torrent saved with no category directory has its release folder one
+    segment down, and the rule refused it in favour of nine per-file rules long
+    enough for the config cap to refuse those in turn. Only the audit can see
+    the whole torrent, every other torrent's paths, and the media tree, which is
+    what the real test needs — see `audit._mark_whole_torrents`.
+
+    A single-file torrent gets an exact rule regardless: the audit will not stamp
+    a folder it does not own, and a lone file's parent is usually shared.
     """
     norm = [str(p).replace('\\', '/') for p in paths if p]
-    per_file = [_literal_pattern(p) for p in norm]
-    if len(norm) <= 1 or not whole_torrent:
-        return per_file
-    seg_lists = [p.split('/')[:-1] for p in norm]
-    if any(not s for s in seg_lists):   # a file at the torrent-tree root
-        return per_file
-    common = seg_lists[0]
-    for segs in seg_lists[1:]:
-        i = 0
-        while i < len(common) and i < len(segs) and common[i] == segs[i]:
-            i += 1
-        common = common[:i]
-    if len(common) >= 2:
-        return [_literal_pattern('/'.join(common), subtree=True)]
-    return per_file   # the common folder IS the category dir
+    if folder and len(norm) > 1:
+        return [_literal_pattern(folder, subtree=True)]
+    return [_literal_pattern(p) for p in norm]
 
 
 def _triage_verdict_under(alternatives, health):
@@ -1152,15 +1152,20 @@ def workflows_exclude():
         # page of suggestion chips still costs one scan.
         nudge_watchdog('exclusion patterns added')
 
-    refusals = []
+    # Each refusal names its own remedy: trimming the list fixes the count cap
+    # and does nothing for an over-long path, so one shared "trim the list"
+    # sent half of these users somewhere useless.
+    refusals, remedies = [], []
     if too_long:
         refusals.append(f"{too_long} too long (over {EXCLUSION_PATTERN_MAX_CHARS} characters)")
+        remedies.append("write a shorter rule for those by hand")
     if no_room:
         refusals.append(f"{no_room} would pass the {EXCLUSION_PATTERNS_MAX}-pattern limit")
+        remedies.append("remove rules you no longer need")
     if refusals:
         message = (f"Added {added} of {len(patterns)} — "
                    + ", ".join(refusals)
-                   + ". Trim the list in Config → Excluded Files & Folders.")
+                   + f". In Config → Excluded Files & Folders, {' and '.join(remedies)}.")
         log.warning("Exclude refused %d pattern(s): %s", too_long + no_room, "; ".join(refusals))
     else:
         message = f"Added {added} exclusion rule{'' if added == 1 else 's'}"
@@ -2181,11 +2186,11 @@ def workflows_triage():
             'trackers':       sorted(g['trackers']),
             'verdict':        verdict,
             'verdict_alternatives': alternatives,
-            # Built here, not in the browser: the folder form is only safe when
-            # this row covers the whole torrent, and only the audit can say so.
+            # Built here, not in the browser — and the safe folder comes off the
+            # audit's own stamp, because deciding it needs the whole torrent,
+            # every other torrent's paths and the media tree.
             'exclusion_patterns': _triage_exclusion_patterns(
-                [f['path'] for f in g['files']],
-                all(f.get('whole_torrent') for f in g['files'])),
+                [f['path'] for f in g['files']], _excl_folder(g['files'])),
             'is_duplicate':   is_duplicate,
             'parsed':         parsed,
             'library':        lib_payload,
