@@ -400,17 +400,56 @@ by hand.
 Paste the PM. auditorr parses the old and new release names and walks you
 through it:
 
-1. **Confirm the group.** auditorr queries your client live for torrents
+1. **Pick the tracker that sent the PM** (optional). Its torrents and its copy
+   of the replacement come first.
+2. **Confirm the group.** auditorr queries your client live for torrents
    matching the old release, and shows you a ranked list of candidates. You
    confirm which are really yours before anything is touched.
-2. **Expand to cross-seeds.** Each confirmed torrent is expanded into every
-   torrent sharing the same payload — the whole group that has to go together.
-3. **Pick the replacement.** The new title is matched against your Sonarr/Radarr
-   library and searched. auditorr shows the exact match it found *and* a ranked
-   list of alternatives, with per-field agree/disagree chips so you can see
-   what matched.
-4. **Execute.** The old group is removed via the client, the replacement is
-   grabbed through Sonarr/Radarr, and a re-audit runs.
+3. **Expand to cross-seeds.** Each confirmed torrent is expanded into every
+   torrent sharing its files, followed all the way through — a torrent sharing
+   files with a cross-seed is in the group too. That is the whole set that has
+   to go together.
+4. **Pick the replacement.** auditorr finds the Sonarr/Radarr entry from the
+   files the group is hardlinked to, falling back to the new release's name,
+   and searches it. The exact replacement on the PM's tracker is shown as
+   **Grab this one**; the rest are folded under *Other releases*.
+5. **Execute.** The old group is removed via the client, the replacement is
+   grabbed through Sonarr/Radarr, and auditorr follows the download into your
+   library — it shows up in the **Import Jobs** panel at the bottom right, like
+   a Backfill grab — then re-audits once it imports.
+
+### What the confirm step tells you
+
+- **Library link.** For each torrent: **✓ linked** — a link to its files exists
+  outside the group, normally your library copy, so it survives the removal;
+  **✗ only copy** — nothing outside the group holds at least one file, and
+  removing it destroys it; **? unchecked** — auditorr couldn't see the file
+  (check your torrent path mapping). An *only copy* asks you again, naming how
+  much data would be destroyed. This is what makes "delete with files" safe, so
+  auditorr checks it rather than assuming it.
+- **Incomplete group.** If a torrent that might share these files didn't return
+  a file list, the group is marked incomplete and removing it needs your
+  acknowledgement. If a torrent-client instance doesn't answer at all, the swap
+  stops instead.
+- **The tracker's own verdict.** A torrent your tracker already reports as
+  unregistered is the tracker confirming the trump.
+- **Rows can't be deselected.** Cross-seeds sharing a path point at the same
+  files, so removing one with its files breaks the rest. To keep a registration
+  on a tracker that hasn't trumped the release, remove the others in your client
+  and use **Grab only**.
+
+Right before deleting, auditorr resolves the group **again**. If a torrent has
+gone, stopped sharing the files, or joined the group since you confirmed it,
+nothing is removed and you're sent back to confirm it.
+
+**Grab only** works without
+[Workflow torrent deletion](configuration.md#workflow-torrent-deletion-allow_client_delete)
+turned on: it grabs the replacement and leaves the old torrents to you. A
+replacement already in the arr's queue isn't grabbed twice unless you say so.
+
+Dead seeds in [Triage](#triage) carry a **Trumped? ↗** button that opens this
+page with the release filled in — a dead seed is often a trump whose PM you
+missed.
 
 <p><img src="workflow-trumped.png" alt="Trumped workflow" width="100%" /></p>
 

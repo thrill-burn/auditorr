@@ -147,6 +147,13 @@ function triageRowCount(details) {
   return (details.not_imported_count || 0) + (details.dead_seed_count || 0)
 }
 
+// Triage's dead seeds, per torrent — the rows a missed trump PM ends up as.
+function deadSeedCount(details) {
+  if (!details) return 0
+  if (details.triage_counts) return details.triage_counts.dead_seeds || 0
+  return details.dead_seed_count || 0
+}
+
 function AppInner() {
   const [tab,        setTab]        = useState(getHashTab)
   const [results,      setResults]      = useState(null)
@@ -360,6 +367,8 @@ function AppInner() {
       importFilter: action.importFilter || null,
       tracker: action.tracker || null,
       seedCount: action.seedCount != null ? action.seedCount : null,
+      // Triage's "Trumped?" chip pre-fills the trumped release name.
+      oldTitle: action.oldTitle || null,
     }
     setPendingNav(nav)
     setHashTab(action.tab)
@@ -373,7 +382,8 @@ function AppInner() {
     (pendingNav?.status || '') +
     (pendingNav?.importFilter || '') +
     (pendingNav?.tracker || '') +
-    (pendingNav?.seedCount != null ? String(pendingNav.seedCount) : '')
+    (pendingNav?.seedCount != null ? String(pendingNav.seedCount) : '') +
+    (pendingNav?.oldTitle || '')
 
   // Server is fail-closed: AUDITORR_REQUIRE_AUTH is set but no AUDITORR_SECRET
   // is configured. Nothing in the app can work, so take over the page with
@@ -506,7 +516,8 @@ function AppInner() {
           )}
           {tab === 'triage' && (
             <Triage onNavigate={handleNavigate}
-              cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0} />
+              cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0}
+              trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
           )}
           {tab === 'cleanup' && (
             <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
@@ -516,7 +527,9 @@ function AppInner() {
             <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />
           )}
           {tab === 'trumped' && (
-            <Trumped onNavigate={handleNavigate} />
+            <Trumped key={navKey} onNavigate={handleNavigate}
+              initialOldTitle={pendingNav?.oldTitle}
+              triageDeadSeeds={deadSeedCount(results?.dashboard?.current?.details)} />
           )}
         </div>
       </div>

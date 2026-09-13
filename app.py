@@ -42,7 +42,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
@@ -1538,6 +1538,84 @@ def _trump_find_arr_item(cfg, parsed, titles=None, name=''):
     return best if best_sim >= 0.5 else None
 
 
+# Client paths `search_release` will stat for one group. A season pack is a few
+# dozen; this only bounds what a request can make the container stat.
+_TRUMP_GROUP_PATHS_MAX = 2000
+
+
+def _trump_same_item(a, b):
+    """True when two arr rows or summaries name the same item on the same instance."""
+    return bool(a and b) and ((a.get('service'), a.get('connection_id'), a.get('arr_id'))
+                              == (b.get('service'), b.get('connection_id'), b.get('arr_id')))
+
+
+def _trump_item_summary(row):
+    return {k: row.get(k) for k in ('service', 'connection_id', 'connection_name', 'arr_id',
+                                    'title', 'year', 'title_slug')}
+
+
+def _trump_item_label(row):
+    year = row.get('year')
+    return f"{row.get('title') or '?'}{f' ({year})' if year else ''}"
+
+
+def _trump_items_from_paths(cfg, group_paths, parsed):
+    """The arr items holding a trump group's bytes, joined by inode (TR7).
+
+    Group paths are torrent-tree paths and media-index rows are library paths;
+    the arr renames on import, so the two share **inodes, not names**. The
+    join, chosen over the two alternatives ROADMAP Phase 7 lists:
+
+    * reading the audit's `linked_paths` would deserialize the full `torrents`
+      `file_results` row — the known RAM hotspot — on a wizard step;
+    * a compact persisted row would describe the last audit rather than the live
+      group, and add a write path for one endpoint;
+    * so: stat the group, then stat index rows — **only those whose recorded
+      `size` matches a group file**, because a hardlink shares its size. That
+      turns ~3,600 stats on `fuse.shfs` into a handful. A row whose size is
+      stale (a file edited in place) is missed and the title match answers
+      instead, which is the degraded direction, never a wrong hit.
+
+    Returns `{status, items, errors}`. `status` is `matched`, `no_match`,
+    `group_unreadable` (no group path could be stat'ed) or `index_unavailable`.
+    Each item is a summary plus the `file_ids` of its hit rows, ranked by
+    `_arr_candidate_score` against the parsed release — stable, and **not
+    gated**: the files are authoritative, and a year or service guess from a
+    release name must not overrule them.
+    """
+    inodes = {(st.st_dev, st.st_ino): st.st_size
+              for st in _trump_stat_paths(cfg, group_paths).values()
+              if st is not None and st.st_ino}
+    if not inodes:
+        return {'status': 'group_unreadable', 'items': [], 'errors': []}
+    try:
+        index  = fetch_arr_media_index(cfg)
+        errors = arr_media_index_errors()
+    except Exception as e:
+        log.warning("Trump: media index unavailable for the path lookup: %s", e)
+        return {'status': 'index_unavailable', 'items': [], 'errors': []}
+    sizes = set(inodes.values())
+    hits = {}
+    for row in index:
+        size = row.get('size')
+        if size is not None and size not in sizes:
+            continue
+        try:
+            st = os.stat(row.get('path') or '')
+        except (OSError, ValueError):
+            continue
+        if st.st_ino and (st.st_dev, st.st_ino) in inodes:
+            hits.setdefault((row.get('service'), row.get('connection_id'), row.get('arr_id')), []).append(row)
+    ranked = sorted(hits.values(),
+                    key=lambda rows: -max(_arr_candidate_score(r, parsed) for r in rows))
+    items = [{**_trump_item_summary(rows[0]),
+              'file_ids': sorted({r['file_id'] for r in rows
+                                  if isinstance(r.get('file_id'), int)}),
+              'files': len(rows)}
+             for rows in ranked]
+    return {'status': 'matched' if items else 'no_match', 'items': items, 'errors': errors}
+
+
 @app.route('/api/workflows/trump/parse', methods=['POST'])
 @require_auth
 def workflows_trump_parse():
@@ -1556,27 +1634,244 @@ def workflows_trump_parse():
     return jsonify({"status": "success", "old_titles": old_titles, "new_title": new_title})
 
 
-def _cross_seed_group(rows, paths_map, seed):
-    """The cross-seed group of `seed`, drawn from `rows`.
+# Phase 2's pre-filter bounds how many torrents get a per-torrent file listing —
+# a sequential round trip each, in both backends. It is a *cost* bound and never
+# a membership rule (TR2). Past the bound it falls back to size-exact and marks
+# the group partial rather than narrowing silently.
+_TRUMP_CANDIDATE_BOUND = 150
+# A shared-path sibling carrying one extra file (a tracker-required .nfo, a
+# different sample) differs in total size by a sliver of its payload.
+_TRUMP_SIZE_TOLERANCE  = 0.01
 
-    A sibling is any torrent with the same payload size that shares at least one
-    content file path with the seed (hardlinked cross-seeds point at the same
-    files). The seed itself is always included. `paths_map` is
-    {hash: [paths] | None}, where None is "could not ask" — treated here as no
-    known paths, which only ever narrows a group. The caller refuses outright
-    when a *seed's* paths are unknown; flagging a narrowed group when a
-    *candidate's* are is TR1's remaining half.
-    Each returned row gains a sorted 'paths' list.
+
+def _trump_content_root(row):
+    """`save_path/name` in posix form, or None — where a torrent's files live."""
+    sp = str(row.get('save_path') or '').replace('\\', '/').rstrip('/')
+    name = str(row.get('name') or '')
+    return f'{sp}/{name}' if sp and name else None
+
+
+def _trump_candidates(rows, seeds):
+    """(candidates, prefilter) — the torrents whose file lists phase 2 fetches.
+
+    A torrent is a near neighbour of a seed when their **content roots overlap**
+    (equal, or one inside the other) or their sizes are within
+    `_TRUMP_SIZE_TOLERANCE`. The first rule is what "same save_path" stands in
+    for, and it is deliberately not that: in a category layout every film
+    shares `/data/torrents/movies`, so save_path equality admits the whole
+    category and trips the bound on every trump. Two torrents can only share a
+    file path if one's files sit under the other's root. The size rule catches
+    a sibling whose root was renamed or laid out without a subfolder.
+
+    Past `_TRUMP_CANDIDATE_BOUND` this falls back to size-exact — the old rule —
+    and reports `bounded`, which makes the group partial: a narrower search is
+    a smaller answer, and it has to say so.
     """
-    seed_paths = set(paths_map.get(seed['hash']) or [])
-    group = []
+    bound = _TRUMP_CANDIDATE_BOUND
+    seed_hashes = {s['hash'] for s in seeds}
+    roots = [r for r in (_trump_content_root(s) for s in seeds) if r]
+
+    def _near(r):
+        if r['hash'] in seed_hashes:
+            return True
+        root = _trump_content_root(r)
+        if root and any(root == sr or root.startswith(sr + '/') or sr.startswith(root + '/')
+                        for sr in roots):
+            return True
+        size = r.get('size') or 0
+        return any(abs(size - (s.get('size') or 0)) <= _TRUMP_SIZE_TOLERANCE * (s.get('size') or 0)
+                   for s in seeds)
+
+    widened = [r for r in rows if _near(r)]
+    if len(widened) <= bound:
+        return widened, {'candidates': len(widened), 'bound': bound, 'bounded': False}
+    sizes = {s['size'] for s in seeds}
+    exact = [r for r in rows if r['hash'] in seed_hashes or r['size'] in sizes]
+    return exact, {'candidates': len(exact), 'widened': len(widened), 'bound': bound, 'bounded': True}
+
+
+def _cross_seed_group(rows, paths_map, seeds):
+    """(group, components, unknown) — everything a delete of `seeds` touches.
+
+    **Membership is the transitive closure over shared file paths**, not "shares
+    a path with the seed", and payload size plays no part (TR2). Every member is
+    deleted *with its files*, so a torrent sharing a path with any member is
+    harmed whether or not it shares one with the seed; and a sibling carrying
+    one extra `.nfo` shares every file that matters while differing in size.
+
+    `paths_map` is {hash: [paths] | None}. **`None` is "could not ask"** and a
+    candidate in that state cannot be placed, so it is counted in `unknown` —
+    the group may be missing it, which is TR1c. **`[]` is an answer**: the
+    client says the torrent holds no files, so it has nothing on disk to share
+    or to lose, and it is not counted. The caller refuses outright when a
+    *seed's* own listing is unusable either way.
+
+    `components` lists member hashes per connected payload, in seed order, so a
+    caller can count each payload once. Each group row gains a sorted `paths`.
+    """
+    if isinstance(seeds, dict):
+        seeds = [seeds]
+    by_hash = {r['hash']: r for r in rows}
+    holders = {}
     for r in rows:
-        if r['size'] != seed['size']:
+        for p in paths_map.get(r['hash']) or []:
+            holders.setdefault(p, []).append(r['hash'])
+    seen, components = set(), []
+    for s in seeds:
+        if s['hash'] in seen or s['hash'] not in by_hash:
             continue
-        ps = set(paths_map.get(r['hash']) or [])
-        if r['hash'] == seed['hash'] or (seed_paths and ps & seed_paths):
-            group.append({**r, 'paths': sorted(ps)})
-    return group
+        seen.add(s['hash'])
+        comp, stack = [], [s['hash']]
+        while stack:
+            h = stack.pop()
+            comp.append(h)
+            for p in paths_map.get(h) or []:
+                for other in holders.get(p, ()):
+                    if other not in seen:
+                        seen.add(other)
+                        stack.append(other)
+        components.append(comp)
+    group = [{**by_hash[h], 'paths': sorted(paths_map.get(h) or [])}
+             for comp in components for h in comp]
+    unknown = sum(1 for r in rows if r['hash'] not in seen and paths_map.get(r['hash']) is None)
+    return group, components, unknown
+
+
+def _trump_resolve_group(cfg, rows, seed_hashes):
+    """Phase 2's expansion — shared by `resolve_group` and `execute`'s re-verify.
+
+    Returns a dict whose `status` is `ok`, `no_seeds` (none of the seeds is in
+    the client) or `seed_unknown` (a seed's own listing could not be used).
+
+    A seed whose listing is `None` *or* `[]` refuses the whole request: there is
+    no honest degraded answer for a seed, only a smaller one. Its group would
+    collapse to the seed alone, and deleting that torrent's files leaves every
+    cross-seed sibling registered and seeding on top of the hole — silently, in
+    the default configuration, reported as a successful one-torrent group.
+
+    Logs counts only, never names or hashes: the log ring reaches
+    `/api/debug/report`.
+    """
+    by_hash = {r['hash']: r for r in rows}
+    wanted = list(dict.fromkeys(seed_hashes))
+    seeds = [by_hash[h] for h in wanted if h in by_hash]
+    if not seeds:
+        return {'status': 'no_seeds'}
+    candidates, prefilter = _trump_candidates(rows, seeds)
+    paths_map = sources.fetch_torrent_file_paths(cfg, candidates)
+    unusable = [s for s in seeds if not paths_map.get(s['hash'])]
+    if unusable:
+        log.warning("Trump: refusing to resolve — no file listing for %d of %d seed(s)",
+                    len(unusable), len(seeds))
+        return {'status': 'seed_unknown', 'unknown_seeds': len(unusable), 'seeds': len(seeds)}
+
+    group, components, unknown = _cross_seed_group(candidates, paths_map, seeds)
+    by_member = {g['hash']: g for g in group}
+    # One payload per connected component, however many registrations stand
+    # on it; the largest member is the payload plus any extra sidecar.
+    total_size = sum(max((by_member[h].get('size') or 0) for h in comp) for comp in components)
+    partial = bool(unknown) or prefilter['bounded']
+    if partial:
+        log.warning("Trump: group resolved partial — %d of %d candidate listing(s) unknown, "
+                    "pre-filter bounded: %s", unknown, len(candidates), prefilter['bounded'])
+    link_check = _trump_link_state(cfg, group)
+    return {
+        'status':           'ok',
+        'seeds':            seeds,
+        'missing_seeds':    len(wanted) - len(seeds),
+        'group':            group,
+        'total_size':       total_size,
+        'partial':          partial,
+        'unknown_listings': unknown,
+        'prefilter':        prefilter,
+        'link_check':       link_check,
+    }
+
+
+def _trump_stat_paths(cfg, client_paths):
+    """`{client path: os.stat_result | None}` for torrent-client file paths.
+
+    The client names files in its own filesystem, and **neither source backend
+    remaps a per-torrent file listing** — `_qbit` joins the client's raw
+    `save_path`, `_qui` joins `_norm_torrent`'s, and only `fetch_file_map`
+    applies `REMOTE_PATH` → `LOCAL_PATH`. So the swap happens here, exactly once:
+    twice and every `stat` misses, never and every `stat` misses too. A path
+    that cannot be stat'ed — not visible to the container, a mapping the user
+    has not configured — is `None`, which is an unknown and never a safe answer.
+    Read-only: `/data` is never written.
+    """
+    remote, local = cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', '')
+    out = {}
+    for p in client_paths:
+        if p in out:
+            continue
+        try:
+            out[p] = os.stat(sources.remap_path(p, remote, local))
+        except (OSError, ValueError):
+            out[p] = None
+    return out
+
+
+def _trump_link_state(cfg, group):
+    """Does anything outside this group still hold each member's bytes? (TR3)
+
+    The confirm screen's whole safety argument for `delete_files=True` was
+    "your library hardlinks survive", and nothing checked it; M1 measured 3.5%
+    of the reference box's torrent-tree files at `st_nlink == 1`. Every distinct
+    path in the **whole group** is stat'ed and grouped by `(st_dev, st_ino)`:
+    *own* is how many distinct group paths sit on an inode, *outside* is
+    `st_nlink − own`. A file is True when outside > 0, False when it is 0 — this
+    group holds the only links — and None when its `stat` failed or came back
+    odd (no inode number, fewer links than the group's own paths).
+
+    A member is False if any file is False; otherwise None if any is None or it
+    has no paths; otherwise True. **False outranks None outranks True**: a known
+    destruction beats an unknown, and an unknown never renders as safe.
+
+    True means *a link outside this group exists*, not "the library copy
+    exists" — a distinct-hardlink cross-seed counts, and correctly survives. It
+    is also only as good as the group: a shared-path sibling the resolution
+    missed adds no link, but a distinct-hardlink one it missed reads as outside.
+    The inode grouping is sound on `fuse.shfs` because shfs synthesizes inodes
+    consistently (M1, F8 dead); anywhere it is not, the odd `stat` degrades.
+
+    Sets `hardlinked` and `only_copy_bytes` on each member in place and returns
+    the group-wide summary, each inode counted once.
+    """
+    stats = _trump_stat_paths(cfg, [p for m in group for p in (m.get('paths') or [])])
+    own = {}
+    for st in stats.values():
+        if st is not None and st.st_ino:
+            key = (st.st_dev, st.st_ino)
+            own[key] = own.get(key, 0) + 1
+
+    def _file_state(st):
+        if st is None or not st.st_ino:
+            return None
+        outside = st.st_nlink - own[(st.st_dev, st.st_ino)]
+        return None if outside < 0 else outside > 0
+
+    verdict = {p: _file_state(st) for p, st in stats.items()}
+    only_copy = {}
+    for p, v in verdict.items():
+        if v is False:
+            only_copy[(stats[p].st_dev, stats[p].st_ino)] = stats[p].st_size
+    for m in group:
+        states = [verdict[p] for p in (m.get('paths') or [])]
+        if any(s is False for s in states):
+            m['hardlinked'] = False
+        elif not states or any(s is None for s in states):
+            m['hardlinked'] = None
+        else:
+            m['hardlinked'] = True
+        mine = {(stats[p].st_dev, stats[p].st_ino): stats[p].st_size
+                for p in (m.get('paths') or []) if verdict[p] is False}
+        m['only_copy_bytes'] = sum(mine.values())
+    return {
+        'only_copy_files': len(only_copy),
+        'only_copy_bytes': sum(only_copy.values()),
+        'unchecked_files': sum(1 for v in verdict.values() if v is None),
+    }
 
 
 def _trump_pick_row(row):
@@ -1659,68 +1954,46 @@ def workflows_trump_resolve_group():
     # Phase 1 — rank candidates per title; the user confirms the seed set.
     if not seed_hashes:
         picks = []
-        for title in old_titles:
-            ranked = rank_release_matches(rows, title, name_key='name', limit=8)
-            auto   = match_trumped_torrent(rows, title)
-            # The conservative exact/subset matcher is the trusted pre-selection;
-            # make sure it's present in (and at the head of) the ranked list.
-            if auto is not None and all(c['hash'] != auto['hash'] for c in ranked):
-                s, brk = score_release_match(title, auto['name'])
-                ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
-            auto_hash = auto['hash'] if auto is not None else (ranked[0]['hash'] if ranked else None)
-            auto_hash = _trump_prefer_pm_tracker(ranked, auto_hash, indexer)
-            picks.append({
-                'title':      title,
-                'auto':       auto_hash,
-                'candidates': [_trump_pick_row(c) for c in ranked],
-            })
+        try:
+            for title in old_titles:
+                ranked = rank_release_matches(rows, title, name_key='name', limit=8)
+                auto   = match_trumped_torrent(rows, title)
+                # The conservative exact/subset matcher is the trusted pre-selection;
+                # make sure it's present in (and at the head of) the ranked list.
+                if auto is not None and all(c['hash'] != auto['hash'] for c in ranked):
+                    s, brk = score_release_match(title, auto['name'])
+                    ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
+                auto_hash = auto['hash'] if auto is not None else (ranked[0]['hash'] if ranked else None)
+                auto_hash = _trump_prefer_pm_tracker(ranked, auto_hash, indexer)
+                picks.append({
+                    'title':      title,
+                    'auto':       auto_hash,
+                    'candidates': [_trump_pick_row(c) for c in ranked],
+                })
+        finally:
+            # Every title after the first re-reads the same names from the cache
+            # (TR11); nothing needs them once the request is answered.
+            release_match_cache_clear()
         return jsonify({"status": "needs_pick", "picks": picks})
 
     # Phase 2 — expand the confirmed seeds into their full cross-seed groups.
-    by_hash = {r['hash']: r for r in rows}
-    seeds   = [by_hash[h] for h in dict.fromkeys(seed_hashes) if h in by_hash]
-    if not seeds:
+    # A failed instance has already refused above, deliberately *not* as
+    # `partial`: a sibling living on an instance that did not answer is
+    # invisible rather than narrowed, and no acknowledgement makes that safe.
+    res = _trump_resolve_group(cfg, rows, seed_hashes)
+    if res['status'] == 'no_seeds':
         return jsonify({
             "status": "error",
             "message": "None of the selected torrents are still in the client — re-run the search.",
         }), 404
-
-    # Cross-seed siblings share a payload size; only those rows can join a group.
-    sizes      = {s['size'] for s in seeds}
-    candidates = [r for r in rows if r['size'] in sizes]
-    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
-
-    # An empty file list means "could not ask", not "holds no files" — both
-    # backends catch every failure and return []. `_cross_seed_group` tests each
-    # sibling against the seed's own paths, so an empty seed list short-circuits
-    # every test and collapses the group to the seed alone. `execute` then
-    # deletes that one torrent's files while its cross-seed siblings stay
-    # registered and keep seeding on top of the hole — silently, in the default
-    # configuration, reported to the user as a successful one-torrent group.
-    # There is no honest degraded answer for a *seed*, only a smaller one.
-    # (A *candidate* whose list is unknown is a different case and still only
-    # narrows the group; reporting that is Phase 2's job.)
-    unknown = [s for s in seeds if not paths_map.get(s['hash'])]
-    if unknown:
-        log.warning("Trump: refusing to resolve — no file listing for %d of %d seed(s): %s",
-                    len(unknown), len(seeds), ', '.join(s['hash'][:8] for s in unknown))
+    if res['status'] == 'seed_unknown':
         return jsonify({
             "status": "error",
-            "message": f"Could not read the file list for {len(unknown)} of the {len(seeds)} "
+            "message": f"Could not read the file list for {res['unknown_seeds']} of the {res['seeds']} "
                        "selected torrent(s), so their cross-seed groups cannot be resolved. "
                        "Check that the torrent client is reachable and try again.",
         }), 502
-
-    group_by_hash, total_size = {}, 0
-    for seed in seeds:
-        # A seed already pulled into an earlier seed's group shares that payload —
-        # its torrents are present and its size is already counted.
-        if seed['hash'] in group_by_hash:
-            continue
-        total_size += seed['size']
-        for g in _cross_seed_group(candidates, paths_map, seed):
-            group_by_hash.setdefault(g['hash'], g)
-    group = list(group_by_hash.values())
+    group = res['group']
 
     try:
         details = sources.fetch_torrent_details(cfg, group)
@@ -1735,10 +2008,13 @@ def workflows_trump_resolve_group():
         g['tracker_msg']    = det.get('tracker_msg', '')
     group.sort(key=lambda g: g['name'])
     return jsonify({
-        "status":       "success",
-        "torrents":     group,
-        "total_size":   total_size,
-        "matched_name": seeds[0]['name'],
+        "status":           "success",
+        "torrents":         group,
+        "total_size":       res['total_size'],
+        "partial":          res['partial'],
+        "unknown_listings": res['unknown_listings'],
+        "prefilter":        res['prefilter'],
+        "link_check":       res['link_check'],
     })
 
 
@@ -1747,9 +2023,17 @@ def workflows_trump_resolve_group():
 def workflows_trump_search_release():
     """Find the replacement release in Sonarr/Radarr's release search.
 
-    Exact normalized title match (release names are effectively unique ids),
-    optionally restricted to the indexer the PM came from. Always returns the
-    arr deep link as a manual fallback.
+    **Which arr item** is decided from the confirmed group's own files first
+    (TR7, what `TRUMP.md` step 4 specified): `group_paths` are the client paths
+    phase 2 returned, joined to the arrs' media index by inode. The title match
+    is the fallback for a group that resolves to nothing. Where a path hit and a
+    title hit disagree the endpoint says so (409 `arr_item_conflict`) rather
+    than picking, and the wizard re-asks with the user's `arr_item`. A path hit
+    also yields the library file ids a trump's import watch is scoped to (TR9).
+
+    Then exact normalized title match (release names are effectively unique
+    ids), optionally prioritising the indexer the PM came from. Always returns
+    the arr deep link as a manual fallback.
     """
     data      = request.json or {}
     new_title = str(data.get('new_title') or '').strip()
@@ -1763,7 +2047,50 @@ def workflows_trump_search_release():
     # back and nothing else.
     titles     = fetch_arr_all_titles(cfg)
     arr_errors = arr_titles_errors()
-    item       = _trump_find_arr_item(cfg, parsed, titles=titles, name=new_title)
+    title_item = _trump_find_arr_item(cfg, parsed, titles=titles, name=new_title)
+
+    group_paths = [p for p in (data.get('group_paths') or []) if isinstance(p, str) and p]
+    lookup = (_trump_items_from_paths(cfg, group_paths[:_TRUMP_GROUP_PATHS_MAX], parsed)
+              if group_paths else {'status': 'no_group', 'items': [], 'errors': []})
+    for e in lookup['errors']:
+        if not any((e.get('connection_id'), e.get('partial')) == (a.get('connection_id'), a.get('partial'))
+                   for a in arr_errors):
+            arr_errors.append(e)
+    path_items = lookup['items']
+    title_path = next((p for p in path_items if _trump_same_item(p, title_item)), None)
+    choice     = data.get('arr_item') if isinstance(data.get('arr_item'), dict) else None
+
+    item, resolved_by, library_file_ids = None, None, []
+    if choice:
+        chosen = next((p for p in path_items if _trump_same_item(p, choice)), None)
+        if chosen is not None:
+            item, library_file_ids = chosen, chosen['file_ids']
+        elif _trump_same_item(title_item, choice):
+            item = title_item
+        else:
+            return jsonify({"status": "error",
+                            "message": "That Sonarr/Radarr item is not one of the matches for this group — "
+                                       "search again."}), 400
+        resolved_by = 'choice'
+    elif path_items and title_item is not None and title_path is None:
+        # Two independent answers to "which item is this", and they differ. The
+        # files say one thing and the new release's name another — a renamed
+        # title, a remake, a second instance. Picking either silently is how a
+        # trump ends in the wrong grab, so the user decides.
+        return jsonify({
+            "status": "error", "code": "arr_item_conflict",
+            "path_item":  path_items[0], "path_items": path_items,
+            "title_item": _trump_item_summary(title_item),
+            "arr_errors": arr_errors,
+            "message": f"Your library files for this group belong to “{_trump_item_label(path_items[0])}”, "
+                       f"but the new release's name matches “{_trump_item_label(title_item)}”. "
+                       "Choose which one to search.",
+        }), 409
+    elif path_items:
+        item = title_path or path_items[0]
+        library_file_ids, resolved_by = item['file_ids'], 'path'
+    elif title_item is not None:
+        item, resolved_by = title_item, 'title'
     if item is None:
         # "No arr knows this title" and "an arr could not be asked" are the same
         # empty list, and they are not the same answer — telling a user to add a
@@ -1811,24 +2138,13 @@ def workflows_trump_search_release():
         return jsonify({"status": "error", "message": f"Release search failed: {e}",
                         "fallback_url": fallback_url}), 502
 
-    # The exact match is the trusted auto-pick; the ranked list is the fallback
-    # when the PM's rendering of the new title doesn't match any release name
-    # exactly, and an "other matches" affordance when it does.
-    #
-    # The PM's indexer is a *priority*, not a filter. Its copy is the one that
-    # was trumped (and the one carrying the PM's freeleech), so it wins every
-    # tie — but the release is often listed on several trackers, and hiding
-    # those turned "not up on this one yet" into a dead end. Ranked wide, then
-    # reordered, then cut, so a lower-scoring copy on the PM's tracker can't be
-    # truncated away before the tie-break runs.
-    release = (match_trump_release(releases, new_title, indexer)
-               or match_trump_release(releases, new_title))
-    candidates = rank_release_matches(releases, new_title, name_key='title', limit=40)
-    if indexer:
-        candidates.sort(key=lambda r: ((r.get('match_score') or 0),
-                                       tracker_matches_indexer(r.get('indexer'), indexer)),
-                        reverse=True)
-    candidates = candidates[:8]
+    # The exact release on the PM's tracker leads and is pre-selected; the same
+    # release elsewhere follows (grab there and cross-seed — an edge case, not
+    # the default); then everything else. The PM's indexer is still a priority
+    # and never a filter: a release not yet listed on that tracker is not a dead
+    # end. Exactness gates the top, because the fuzzy score cannot tell a
+    # REPACK from the release it trumped — see `rank_trump_replacements`.
+    release, candidates = rank_trump_replacements(releases, new_title, indexer, limit=8)
     return jsonify({
         "status":          "success",
         "release":         release,
@@ -1843,37 +2159,158 @@ def workflows_trump_search_release():
         # A match found *despite* an unreachable instance is still worth
         # flagging: the instance that did not answer may hold a better one.
         "arr_errors":      arr_errors,
+        "resolved_by":     resolved_by,
+        # The library files the trumped release was imported as — the scope a
+        # trump's import watch may force-import over (TR9). Only ever from the
+        # path join: a title match knows the item, not which of its files.
+        "library_file_ids": library_file_ids,
+        "path_lookup":     lookup['status'],
+        "path_items":      path_items,
+        # 4b's UI half, as a payload flag: more than one instance holds this
+        # payload. Unreachable on the reference install (M4), so it is tested by
+        # fixture rather than rendered blind.
+        "arr_item_ambiguous": len(path_items) > 1,
     })
+
+
+def _trump_reverify(cfg, items, data):
+    """Re-resolve the posted group and compare. None to proceed, else a response.
+
+    * **Identical** — proceed.
+    * **Shrunk, or a hash the client no longer holds** — 409 `group_changed`.
+    * **Grown** — also 409 `group_changed`. Decided by the user (2026-09-13):
+      deleting only the posted hashes leaves the newcomer registered on top of
+      deleted files (TR1's harm, recreated), and deleting it too removes a
+      torrent nobody was shown. A grown group is new information about what
+      will be touched, and TRUMPED §1 says that is seen before acting;
+      re-resolving costs one click.
+    * **Partial** — 409 `partial` unless `acknowledge_partial`.
+    * **Any member holds the only copy** — 409 `only_copy` unless
+      `acknowledge_only_copy`.
+
+    A failed instance or an unusable seed listing is a 502, never a partial:
+    those are not narrowed answers but missing ones. Seeds are the posted
+    `seed_hashes` (the torrents the user confirmed in step 3) when they are part
+    of the posted set, else every posted hash — with the confirmed seeds, a
+    member that stopped sharing the payload drops out and is caught as shrunk.
+    """
+    posted = {i['hash'] for i in items}
+    seeds = [h for h in (str(s) for s in (data.get('seed_hashes') or [])) if h in posted]
+    try:
+        rows = sources.list_torrents(cfg)
+    except sources.SourceConnectionError as e:
+        return jsonify({"status": "error", "message": str(e)}), 502
+    res = _trump_resolve_group(cfg, rows, seeds or sorted(posted))
+    if res['status'] == 'seed_unknown':
+        return jsonify({
+            "status": "error",
+            "message": "Could not re-read the file list of the selected torrent(s) just before "
+                       "removing them, so nothing was removed. Check that the torrent client is "
+                       "reachable and try again.",
+        }), 502
+
+    group = {g['hash'] for g in res.get('group') or []}
+    added, missing = len(group - posted), len(posted - group)
+    if added or missing:
+        log.warning("Trump: refusing execute — the group changed since it was confirmed "
+                    "(%d added, %d gone)", added, missing)
+        parts = ([f"{added} torrent{'s' if added != 1 else ''} joined it"] if added else []) + \
+                ([f"{missing} {'are' if missing != 1 else 'is'} no longer part of it"] if missing else [])
+        return jsonify({
+            "status": "error", "code": "group_changed", "added": added, "missing": missing,
+            "message": f"The cross-seed group changed since you confirmed it — {' and '.join(parts)}. "
+                       "Nothing was removed. Go back to step 3 and confirm the group again.",
+        }), 409
+
+    if res['partial'] and not data.get('acknowledge_partial'):
+        return jsonify({
+            "status": "error", "code": "partial",
+            "unknown_listings": res['unknown_listings'], "prefilter": res['prefilter'],
+            "message": "The group could not be fully checked just now, so a cross-seed sharing "
+                       "these files may be missing from it. Nothing was removed.",
+        }), 409
+
+    only = [g for g in res['group'] if g.get('hardlinked') is False]
+    if only and not data.get('acknowledge_only_copy'):
+        return jsonify({
+            "status": "error", "code": "only_copy",
+            "only_copy_bytes": res['link_check']['only_copy_bytes'],
+            "only_copy_files": res['link_check']['only_copy_files'],
+            "torrents": [{'hash': g['hash'], 'name': g.get('name') or '',
+                          'only_copy_bytes': g.get('only_copy_bytes') or 0} for g in only],
+            "message": "Nothing outside this group holds some of these files — removing it "
+                       "destroys the only copy. Nothing was removed.",
+        }), 409
+    return None
 
 
 @app.route('/api/workflows/trump/execute', methods=['POST'])
 @require_auth
 def workflows_trump_execute():
-    """Nuke the confirmed group via the client, grab the replacement, re-audit.
+    """Remove the confirmed group via the client, and grab the replacement.
 
-    Gated by ALLOW_CLIENT_DELETE like every destructive client action. The
-    grab half is optional — when no release matched, the user grabs manually
-    via the arr deep link and this only deletes.
+    Either half may be absent. With no release, this only removes and the user
+    grabs through the arr deep link. **With no `hashes`, this is a grab** (TR4),
+    and needs no ALLOW_CLIENT_DELETE: the flag gates the *removal*, not the
+    request. It used to gate everything, so in the default configuration a user
+    could run all four steps, watch the wizard find the exact release, and get
+    a 403 — while Backfill grabs freely, because grabbing is not destructive.
     """
-    cfg = db_load_config()
-    if not cfg.get('ALLOW_CLIENT_DELETE'):
+    cfg   = db_load_config()
+    data  = request.json or {}
+    items = [{'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
+             for i in (data.get('hashes') or []) if i.get('hash')]
+    release  = data.get('release') or {}
+    grabbing = bool(release.get('guid') and data.get('service'))
+    if not items and not grabbing:
+        return jsonify({"status": "error",
+                        "message": "Nothing to do — no torrents to remove and no release to grab."}), 400
+    if items and not cfg.get('ALLOW_CLIENT_DELETE'):
         return jsonify({
             "status": "error",
             "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
         }), 403
-    data  = request.json or {}
-    items = [{'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
-             for i in (data.get('hashes') or []) if i.get('hash')]
-    if not items:
-        return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
-    try:
-        removed = sources.remove_torrents(cfg, items, delete_files=True)
-    except sources.SourceConnectionError as e:
-        return jsonify({"status": "error", "message": str(e)}), 502
+
+    # TR5 — the last honest verification point is here, server-side, immediately
+    # before the delete. The wizard's group can be minutes old: a tab left open,
+    # a cross-seed script adding a registration, a torrent rechecked into a
+    # different path. The expansion is re-run from the confirmed seeds and must
+    # land on exactly the posted set.
+    if items:
+        refusal = _trump_reverify(cfg, items, data)
+        if refusal is not None:
+            return refusal
+
+    # With the grab no longer behind the delete flag, a double submit is a real
+    # second download. Backfill's advisory queue check (B12), not an idempotency
+    # key: the replacement already sitting in the arr's queue — a second click,
+    # or the arr having grabbed it from RSS on its own — is refused unless
+    # `force`, and **before** anything is deleted. A queue that cannot be read
+    # does not block; the answer says it was not checked.
+    queue_checked = None
+    arr_id = data.get('arr_id')
+    if grabbing and isinstance(arr_id, int) and not isinstance(arr_id, bool) and not data.get('force'):
+        season = data.get('season_number')
+        queued = queue_records_for_item(
+            cfg, data['service'], data.get('connection_id'), arr_id,
+            season_number=season if isinstance(season, int) else None)
+        queue_checked = queued is not None
+        if queued:
+            titles = [q.get('title') for q in queued if q.get('title')]
+            name = 'Sonarr' if data['service'] == 'sonarr' else 'Radarr'
+            return jsonify({"status": "error", "code": "already_queued", "titles": titles[:5],
+                            "message": f"Already in {name}'s queue: {titles[0] if titles else 'this item'}. "
+                                       "Nothing was removed or grabbed."}), 409
+
+    removed = 0
+    if items:
+        try:
+            removed = sources.remove_torrents(cfg, items, delete_files=True)
+        except sources.SourceConnectionError as e:
+            return jsonify({"status": "error", "message": str(e)}), 502
 
     grabbed, grab_error = None, ''
-    release = data.get('release') or {}
-    if release.get('guid') and data.get('service'):
+    if grabbing:
         try:
             grab_release(cfg, data['service'], data.get('connection_id'),
                          release['guid'], release.get('indexer_id'))
@@ -1882,25 +2319,39 @@ def workflows_trump_execute():
             grabbed = False
             grab_error = str(e)
 
-    # Credit the swap on the Next steps prize layer. Trumped is the one workflow
-    # counted at execute time: the swap trades one release for another, so the
-    # re-audit below sees a library in much the same shape and has nothing to
-    # infer the action from. Recorded before the rescan so that scan's own
-    # progress pass reads the updated counter.
+    # Credit the swap on the Rounds prize layer. Trumped is counted at execute
+    # time: the swap trades one release for another, so the audit that follows
+    # the import sees a library in much the same shape and has nothing to infer
+    # the action from. A grab with nothing removed is not a swap and pays nothing.
     if removed:
         try:
             db_update_meta('ns_progress',
                            lambda p: rounds.record_trump(p, torrents=removed))
         except Exception as e:
-            log.warning("Could not record trump on Next steps progress: %s", e)
+            log.warning("Could not record trump on Rounds progress: %s", e)
 
-    rescan = False
-    if try_start_scanning("trump"):
-        threading.Thread(target=run_audit_process, args=("trump",), daemon=True).start()
-        rescan = True
-    log.info("Trump execute: removed %d/%d torrent(s), grabbed=%s", removed, len(items), grabbed)
+    # TR9 — the old payload is gone before the new one exists, so the user is
+    # unprotected for the whole download window, and the grab used to be fired
+    # and abandoned. It is followed by the same import watch Backfill uses —
+    # scoped to the library files the trumped release was imported as, which
+    # only the path lookup knows (`library_file_ids`) — and the re-audit waits
+    # for the import (TR10) instead of recording the hole left by the delete.
+    watch_job_id = None
+    arr_id = data.get('arr_id')
+    if grabbed and isinstance(arr_id, int) and not isinstance(arr_id, bool) and data.get('connection_id'):
+        watch_job_id = _start_import_watch(
+            cfg, data['service'], data['connection_id'], arr_id,
+            title=str(data.get('arr_title') or ''),
+            file_ids=_int_list(data.get('library_file_ids')), source='trump')
+    elif removed:
+        # Nothing to follow: the watchdog's entry point, not a direct scan, so
+        # the deferral and debounce every other client action gets apply here.
+        nudge_watchdog('trumped torrents removed via the client')
+    log.info("Trump execute: removed %d/%d torrent(s), grabbed=%s, watching import=%s",
+             removed, len(items), grabbed, bool(watch_job_id))
     return jsonify({"status": "success", "removed": removed, "requested": len(items),
-                    "grabbed": grabbed, "grab_error": grab_error, "rescan_started": rescan})
+                    "grabbed": grabbed, "grab_error": grab_error,
+                    "queue_checked": queue_checked, "watch_job_id": watch_job_id})
 
 
 @app.route('/api/workflows/triage')
@@ -3436,33 +3887,70 @@ def workflows_watch_import():
     # a force import is scoped to their episodes (B11), and a Sonarr watch sent
     # none (an older bundle) force-imports nothing rather than everything.
     file_ids      = _int_list(data.get('file_ids'))
+    # Which workflow the grab belongs to. Anything but an explicit 'trump' is a
+    # Backfill — that is what every bundle that predates the field sends.
+    source        = 'trump' if data.get('source') == 'trump' else 'backfill'
     if not service or not connection_id or arr_id is None:
         return jsonify({'status': 'error', 'message': 'Missing parameters'}), 400
-    arr_name = 'Sonarr' if service == 'sonarr' else 'Radarr'
 
+    # Scored here, at the grab, rather than when the watch confirms the import:
+    # the watch is a best-effort helper that nurses the download into the
+    # library, and tying the prize to its survival meant a container restart or
+    # a stalled import erased credit for work the user had already done. See
+    # `_record_backfill_credit`. **Backfill only**: a trump pays on Kingmaker,
+    # at execute, and sharing this watch must not pay it out on Matchmaker too —
+    # each workflow is paid in its own shape (TR9).
+    if source == 'backfill':
+        _record_backfill_credit(files)
+    return jsonify({'job_id': _start_import_watch(db_load_config(), service, connection_id,
+                                                  arr_id, title, file_ids, source)})
+
+
+def _trump_rescan():
+    """TR10 — the audit a trump used to start seconds after its delete.
+
+    That scan recorded the one moment nobody wants recorded: the media file
+    still there, its torrent-side link gone, so the hardlink ratio — 70 of the
+    100 health points — dipped, and the dip landed in `audit_runs`, the health
+    chart and the change log. It runs once the replacement has imported and
+    re-hardlinked, which is the state worth measuring.
+    """
+    if try_start_scanning("trump"):
+        threading.Thread(target=run_audit_process, args=("trump",), daemon=True).start()
+
+
+def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, source='backfill'):
+    """Follow a grab into the library, on a daemon thread. Returns the job id.
+
+    Shared by Backfill (through `/api/workflows/watch_import`) and Trumped
+    (from `execute`, TR9), so both land in `_import_watches` and in the same
+    bottom-right import panel every page polls. `file_ids` scopes a Sonarr force
+    import to those library files' episodes — the files a backfill is for, or
+    the ones a trumped release was imported as; with none, a Sonarr watch
+    force-imports nothing (B11). A trump watch that confirms its import starts
+    the re-audit (`_trump_rescan`); a Backfill one leaves that to the watchdog,
+    as it always has.
+    """
+    arr_name = 'Sonarr' if service == 'sonarr' else 'Radarr'
+    what     = 'trump' if source == 'trump' else 'backfill'
     job_id = secrets.token_hex(8)
     watch  = {
         'status':       'queued',
         'message':      'Queued — waiting for download client',
         'title':        title,
         'service':      service,
+        'source':       source,
         'completed_at': None,
     }
     _import_watches[job_id] = watch
-    cfg = db_load_config()
-
-    # Scored here, at the grab, rather than from `mark_done` below: the watch is
-    # a best-effort helper that nurses the download into the library, and tying
-    # the prize to its survival meant a container restart or a stalled import
-    # erased credit for work the user had already done. See
-    # `_record_backfill_credit`.
-    _record_backfill_credit(files)
 
     def do_watch():
         def mark_done():
             watch['status']       = 'done'
             watch['message']      = 'Imported successfully'
             watch['completed_at'] = time.time()
+            if source == 'trump':
+                _trump_rescan()
 
         def fail(message):
             watch['status']       = 'error'
@@ -3525,7 +4013,7 @@ def workflows_watch_import():
             if service == 'sonarr' and not scope:
                 # Unknown episodes are not every episode. A pack forced in whole
                 # replaces files other torrents are hardlinked to (B1).
-                fail("Could not tell which episodes this backfill was for, so nothing was "
+                fail(f"Could not tell which episodes this {what} was for, so nothing was "
                      "force-imported over your library — finish it from Activity → Queue in Sonarr")
                 return
 
@@ -3573,7 +4061,7 @@ def workflows_watch_import():
             watch['completed_at'] = time.time()
 
     threading.Thread(target=do_watch, daemon=True).start()
-    return jsonify({'job_id': job_id})
+    return job_id
 
 
 @app.route('/api/workflows/watch_import/status')

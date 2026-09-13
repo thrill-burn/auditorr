@@ -296,6 +296,20 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               Dedupe ↗
             </button>
           )}
+          {/* The reactive counterpart to a trump PM: a tracker dropping an
+              imported torrent is often a trump the user never saw (TR16). */}
+          {item.verdict === 'dead_seed' && (
+            <button
+              onClick={e => { e.stopPropagation(); onNavigate && onNavigate({ tab: 'trumped', oldTitle: item.name || torrentSearchName(item) }) }}
+              title="If the tracker trumped this release, the Trumped workflow removes every cross-seed of it and grabs the replacement"
+              style={{
+                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                background: 'var(--green)18', color: 'var(--green)', border: '1px solid var(--green)40',
+              }}
+            >
+              Trumped? ↗
+            </button>
+          )}
         </div>
       </div>
 
@@ -385,7 +399,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
 // own answer becomes correct.
 const DISMISSED = new Set()
 
-export default function Triage({ onNavigate, cleanupCount }) {
+export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
@@ -865,6 +879,14 @@ export default function Triage({ onNavigate, cleanupCount }) {
           linkLabel="Cleanup"
           count={cleanupCount}
           onClick={() => onNavigate && onNavigate({ tab: 'cleanup' })}
+        />
+      )}
+      {!loading && (
+        <WorkflowCrossLink
+          text="Got a trump PM for a dead seed? Swap the whole cross-seed group for the replacement:"
+          linkLabel="Trumped"
+          count={trumpedCount}
+          onClick={() => onNavigate && onNavigate({ tab: 'trumped' })}
         />
       )}
 

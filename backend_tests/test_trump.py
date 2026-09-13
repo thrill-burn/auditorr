@@ -5,8 +5,71 @@ import app
 from arr import (
     parse_trump_pm, match_trump_release, match_trumped_torrent, _norm_release_name,
     rank_release_matches, score_release_match, _audio_codec, title_soft_match,
-    indexer_key, tracker_matches_indexer, _release_group_tag,
+    indexer_key, tracker_matches_indexer, _release_group_tag, _release_match_features,
+    rank_trump_replacements,
 )
+
+
+class TrumpReplacementRankingTests(unittest.TestCase):
+    """Step 4: the replacement on the tracker that sent the PM is the one to grab
+    — first, and pre-selected — with another tracker's copy the cross-seed edge
+    case. Asked for by the user, 2026-09-13. Fixtures from a real PM (QA-5)."""
+
+    NEW = "Apocalypse Now 1979 Theatrical REPACK 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
+    OLD = "Apocalypse Now 1979 Theatrical 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
+    PM  = "Aither (API) (Prowlarr)"
+
+    def test_the_exact_release_on_the_pm_tracker_leads_whatever_the_seeders(self):
+        rels = [{'guid': 'b', 'title': self.NEW, 'indexer': 'Blutopia', 'seeders': 90},
+                {'guid': 'a', 'title': self.NEW.replace(' ', '.'), 'indexer': 'Aither', 'seeders': 3}]
+        release, cands = rank_trump_replacements(rels, self.NEW, self.PM)
+        self.assertEqual(release['guid'], 'a')
+        self.assertEqual([c['guid'] for c in cands], ['a', 'b'])
+        self.assertEqual([c['pm_tracker'] for c in cands], [True, False])
+
+    def test_the_trumped_original_never_outranks_its_replacement(self):
+        """The fuzzy score cannot tell a REPACK from the release it trumped, so
+        tracker preference over it would pre-select the trumped copy."""
+        self.assertEqual(score_release_match(self.NEW, self.OLD)[0],
+                         score_release_match(self.NEW, self.NEW)[0])
+        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Aither', 'seeders': 200},
+                {'guid': 'new', 'title': self.NEW, 'indexer': 'Blutopia', 'seeders': 5}]
+        release, cands = rank_trump_replacements(rels, self.NEW, self.PM)
+        self.assertEqual(release['guid'], 'new')
+        self.assertEqual(cands[0]['guid'], 'new')
+        self.assertFalse(cands[0]['pm_tracker'])
+
+    def test_with_no_pm_tracker_the_exact_release_still_leads(self):
+        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'X', 'seeders': 200},
+                {'guid': 'new', 'title': self.NEW, 'indexer': 'Y', 'seeders': 5}]
+        release, cands = rank_trump_replacements(rels, self.NEW)
+        self.assertEqual((release['guid'], cands[0]['guid']), ('new', 'new'))
+        self.assertFalse(any(c['pm_tracker'] for c in cands))
+
+    def test_no_exact_release_means_nothing_is_preselected(self):
+        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Aither', 'seeders': 1}]
+        release, cands = rank_trump_replacements(rels, self.NEW, self.PM)
+        self.assertIsNone(release)
+        self.assertEqual([c['guid'] for c in cands], ['old'])
+
+
+class ReleaseMatchCacheTests(unittest.TestCase):
+    """TR11 — features are cached by name, so what is cached must not be editable.
+
+    A cached dict or set that any caller mutated would corrupt every later match
+    in the process, silently. No caller mutates today; this keeps it that way.
+    """
+
+    NAME = "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX"
+
+    def test_the_same_name_is_parsed_once(self):
+        self.assertIs(_release_match_features(self.NAME), _release_match_features(self.NAME))
+
+    def test_cached_features_cannot_be_edited(self):
+        f = _release_match_features(self.NAME)
+        self.assertIsInstance(f['core'], frozenset)
+        with self.assertRaises(TypeError):
+            f['core'] = set()
 
 
 class TrumpPMParseTests(unittest.TestCase):
@@ -60,6 +123,84 @@ class TrumpPMParseTests(unittest.TestCase):
         old, new = parse_trump_pm(pm)
         self.assertEqual(old, ["Old.Release-A"])
         self.assertEqual(new, "New.Release-B")
+
+
+# Real trump PMs, pasted from the field for QA-5 (2026-09-13). All three are one
+# tracker's automated template: indented old title, three blank lines, the
+# delimiter on its own line, the new title with a sentence period, a "Reason:"
+# block, then boilerplate. Kept verbatim, whitespace included — the layout is
+# the fixture. The other delimiter phrases below are NOT yet backed by a real PM.
+_FIELD_TAIL = (
+    "Our system shows that you were either the uploader, a seeder or a leecher on said "
+    "trumped torrent. We just wanted to let you know you can safely remove it from your client,\n"
+    "and please consider seeding the replacement. It has been granted 100% FreeLeech for 7 days!\n\n"
+    "THIS IS AN AUTOMATED SYSTEM MESSAGE, PLEASE DO NOT REPLY!"
+)
+
+
+def _field_pm(old, new, reason):
+    return ("The following torrent(s) have been trumped\n\n"
+            f"    {old}\n\n\n\n"
+            "and will be replaced by\n"
+            f"{new}.\n\n"
+            f"{reason}"
+            f"{_FIELD_TAIL}")
+
+
+FIELD_PMS = [
+    ("Alone S12 1080p AMZN WEB-DL DD+ 5.1 H.264-RAWR",
+     "Alone S12 1080p AMZN WEB-DL DD+ 5.1 H.264-Kitsune",
+     "Reason:\nInternal\n\n"),
+    ("Apocalypse Now 1979 Theatrical 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER",
+     "Apocalypse Now 1979 Theatrical REPACK 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER",
+     "Reason:\nRepack: Removed Commentary which is intended for Redux Cut\n\n"),
+    ("Finding Nemo 2003 2160p UHD BluRay DD+ 5.1 HDR AV1-TiZU",
+     "Finding Nemo 2003 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-W4NK3R",
+     "Reason:\nNo slot for AV1\n\n"),
+]
+
+
+class TrumpPMFieldTests(unittest.TestCase):
+    """TR6 — written against real PMs (QA-5), not only the TRUMP.md example."""
+
+    def test_real_pms_parse(self):
+        for old, new, reason in FIELD_PMS:
+            with self.subTest(old=old):
+                self.assertEqual(parse_trump_pm(_field_pm(old, new, reason)), ([old], new))
+
+    def test_a_pm_without_a_reason_block_stops_at_the_blank_line(self):
+        """The only terminator was a literal `Reason:` line, so everything after
+        the delimiter — here the tracker's own boilerplate — joined the title."""
+        for old, new, _reason in FIELD_PMS:
+            with self.subTest(old=old):
+                self.assertEqual(parse_trump_pm(_field_pm(old, new, '')), ([old], new))
+
+    def test_a_sign_off_on_the_next_line_is_not_part_of_the_title(self):
+        pm = ("Trumped\nOld.Release-A\nwill be replaced by\nNew.Release-B.\n"
+              "Please remove the old torrent within 48 hours. Thanks for seeding!")
+        self.assertEqual(parse_trump_pm(pm), (["Old.Release-A"], "New.Release-B"))
+
+    def test_a_greeting_above_the_delimiter_is_not_a_trumped_release(self):
+        """With no header line every line above the delimiter became a title,
+        and phase 1 ranked every torrent in the client against `Hi there,`."""
+        pm = "Hi there,\nShow.S01E01.1080p-OLD\nwill be replaced by\nShow.S01E01.1080p-NEW"
+        self.assertEqual(parse_trump_pm(pm), (["Show.S01E01.1080p-OLD"], "Show.S01E01.1080p-NEW"))
+
+    def test_the_delimiter_may_carry_a_colon(self):
+        pm = "Trumped\nOld.Release-A\nwill be replaced by: New.Release-B"
+        self.assertEqual(parse_trump_pm(pm), (["Old.Release-A"], "New.Release-B"))
+
+    def test_a_missing_new_title_is_not_the_reason_line(self):
+        pm = "Trumped\nOld.Release-A\nwill be replaced by\n\nReason: dupe"
+        self.assertEqual(parse_trump_pm(pm), (["Old.Release-A"], ""))
+
+    def test_the_other_delimiter_phrases_in_circulation(self):
+        """Not yet backed by a real PM — QA-5 stays open for these."""
+        for phrase in ("has been trumped by", "has been superseded by", "superseded by",
+                       "replaced with", "has been replaced by"):
+            with self.subTest(phrase=phrase):
+                pm = f"Your torrent\nOld.Release-A\n{phrase}\nNew.Release-B."
+                self.assertEqual(parse_trump_pm(pm), (["Old.Release-A"], "New.Release-B"))
 
 
 class TrumpedTorrentMatchTests(unittest.TestCase):
@@ -179,6 +320,15 @@ class TrumpReleaseMatchTests(unittest.TestCase):
             self.releases, "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
             indexer="OtherTracker")
         self.assertIsNone(m)
+
+    def test_indexer_filter_reconciles_names_like_the_rest_of_the_flow(self):
+        """Indexer names are pooled across every arr, so the same tracker can
+        arrive as "Aither (API) (Prowlarr)" and "Aither". Exact lowercase
+        equality fell through to the any-indexer retry."""
+        m = match_trump_release(
+            self.releases, "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
+            indexer="Aither (API) (Prowlarr)")
+        self.assertIsNotNone(m)
 
     def test_no_match_returns_none(self):
         self.assertIsNone(match_trump_release(self.releases, "Completely Different Release-XYZ"))
@@ -426,20 +576,26 @@ class TrumpSeedFileListRuleTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 502)
         self.assertEqual(resp.get_json()['status'], 'error')
 
-    def test_an_unreadable_candidate_does_not_refuse(self):
-        """Only the *seed* rule lands in this pass. A candidate whose list is
-        unknown still only narrows the group, and reporting that is TR1's
-        remaining half (roadmap Phase 7) — it must not start failing the request
-        here, and it must not raise on the `None` the source layer now sends."""
-        resp = self._resolve({'aaa': ['j.mkv'], 'bbb': ['j.mkv'], 'ccc': []})
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(sorted(t['hash'] for t in resp.get_json()['torrents']),
-                         ['aaa', 'bbb'])
-
+    def test_an_unreadable_candidate_does_not_refuse_but_is_reported(self):
+        """A candidate whose list is unknown only narrows the group, so it must
+        not fail the request — and since Phase 7 it must not pass as a confident
+        answer either (TR1c). The two spellings resolve differently, on purpose:
+        `None` ("could not ask") marks the group `partial`; `[]` ("the client
+        says there are none") does not, because a torrent holding no files has
+        nothing on disk to share or to lose."""
         resp = self._resolve({'aaa': ['j.mkv'], 'bbb': ['j.mkv'], 'ccc': None})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(sorted(t['hash'] for t in resp.get_json()['torrents']),
-                         ['aaa', 'bbb'])
+        body = resp.get_json()
+        self.assertEqual(sorted(t['hash'] for t in body['torrents']), ['aaa', 'bbb'])
+        self.assertTrue(body['partial'])
+        self.assertEqual(body['unknown_listings'], 1)
+
+        resp = self._resolve({'aaa': ['j.mkv'], 'bbb': ['j.mkv'], 'ccc': []})
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertEqual(sorted(t['hash'] for t in body['torrents']), ['aaa', 'bbb'])
+        self.assertFalse(body['partial'])
+        self.assertEqual(body['unknown_listings'], 0)
 
 
 if __name__ == "__main__":

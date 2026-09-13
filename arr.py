@@ -3,7 +3,9 @@ import re
 import json
 import logging
 import time
+import functools
 import unicodedata
+from types import MappingProxyType
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -394,22 +396,49 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
     return result
 
 
+# The phrase separating the trumped release(s) from the replacement. "(and) will
+# be replaced by" is the one layout on record from the field — three real PMs,
+# one tracker's automated template (QA-5, 2026-09-13). The others are in
+# circulation on other trackers and returned ([], '') here, dropping the user
+# into manual entry for want of an alternation; none of them is backed by a real
+# PM yet. Leftmost match wins, so "will be replaced by" is never cut short to
+# its trailing "replaced by".
+_TRUMP_DELIMITER_RE = re.compile(
+    r'(?i)\b(?:(?:and\s+)?will\s+be\s+replaced\s+by'
+    r'|has\s+been\s+trumped\s+by'
+    r'|(?:has\s+been\s+)?superseded\s+by'
+    r'|(?:has\s+been\s+)?replaced\s+(?:with|by))\b')
+
+
 def parse_trump_pm(pm_text):
     """Extract (old_titles, new_title) from a tracker trump PM.
 
     A PM lists one or more trumped releases between the "...trumped" /
-    "following torrent" header and the "(and) will be replaced by" phrase, then
-    the single replacement (typically a season pack when several episodes are
-    trumped together), optionally terminated by a "Reason:" line. Returns
-    ([], '') when the delimiter phrase is absent — the UI falls back to manual
-    fields. The old side is a list to cover season-pack trumps (N episodes → 1
-    pack); a single-release trump just yields a one-element list.
+    "following torrent" header and the delimiter phrase, then the single
+    replacement (typically a season pack when several episodes are trumped
+    together). Returns ([], '') when no delimiter phrase is present — the UI
+    falls back to manual fields. The old side is a list to cover season-pack
+    trumps (N episodes → 1 pack); a single-release trump just yields a
+    one-element list.
+
+    **A release name is one line** (TR6). The new title is the first non-empty
+    line after the delimiter, and nothing after it: the only terminator used to
+    be a literal `Reason:` line, so a PM without one — or with a sign-off on the
+    next line — had its boilerplate joined into the title, across blank lines.
+    That title then fails the exact release match by construction, and its junk
+    tokens drag every real candidate's title similarity below the gate, so a
+    PM that parsed "perfectly" produced an empty candidate list.
     """
     text = re.sub(r'\r\n?', '\n', str(pm_text or ''))
-    halves = re.split(r'(?i)\b(?:and\s+)?will\s+be\s+replaced\s+by\b', text, maxsplit=1)
+    halves = _TRUMP_DELIMITER_RE.split(text, maxsplit=1)
     if len(halves) != 2:
         return [], ''
     before, after = halves
+
+    def _clean(line):
+        # Trailing sentence periods (PMs end the phrase with "."); scene names
+        # never end in a bare dot, so stripping one is safe.
+        return line.strip().rstrip('.').strip()
 
     # Old titles are every release line after the header. Anchor on the last
     # header line so any greeting above it is ignored; "trumped" / "following
@@ -419,15 +448,20 @@ def parse_trump_pm(pm_text):
     for i, line in enumerate(lines):
         if re.search(r'(?i)trumped|following\s+torrent', line):
             header_idx = i
-    # Trailing sentence periods (PMs end the phrase with "."); scene names never
-    # end in a bare dot, so stripping one is safe.
-    old_titles = [l.strip().rstrip('.').strip()
-                  for l in lines[header_idx + 1:] if l.strip()]
+    if header_idx >= 0:
+        old_titles = [_clean(l) for l in lines[header_idx + 1:] if l.strip()]
+    else:
+        # No header: only the line immediately above the delimiter. Taking every
+        # line made "Hi there," a trumped release that phase 1 then ranked every
+        # torrent in the client against.
+        tail = [l for l in lines if l.strip()]
+        old_titles = [_clean(tail[-1])] if tail else []
 
-    after = re.split(r'(?i)\n\s*reason\s*:', after, maxsplit=1)[0]
-    new = ' '.join(l.strip() for l in after.strip().split('\n') if l.strip())
-
-    return old_titles, new.rstrip('.').strip()
+    new = next((l.strip().lstrip(':').strip() for l in after.split('\n')
+                if l.strip().lstrip(':').strip()), '')
+    if re.match(r'(?i)reason\s*:', new):
+        new = ''
+    return old_titles, _clean(new)
 
 
 _SEASON_EP_RE = re.compile(r'\bs\d{1,2}(?:e\d{1,4})?\b')
@@ -578,12 +612,18 @@ def match_trump_release(releases, new_title, indexer=''):
     id — fuzzy matching would only invite grabbing the wrong release. When
     several indexers carry the same release, the optional indexer filter (or
     the highest seeder count) decides.
+
+    The *indexer* comparison is the one place fuzziness is right, and it is the
+    same `tracker_matches_indexer` the rest of the flow uses: indexer names are
+    pooled across every arr by `fetch_arr_indexers`, so one tracker can arrive
+    as "Aither (API) (Prowlarr)" on one instance and "Aither" on another, and
+    exact equality fell through to the any-indexer retry.
     """
     target = _norm_release_name(new_title)
     if not target:
         return None
     pool = [r for r in releases
-            if not indexer or (r.get('indexer') or '').lower() == indexer.lower()]
+            if not indexer or tracker_matches_indexer(r.get('indexer'), indexer)]
     exact = [r for r in pool if _norm_release_name(r.get('title')) == target]
     if not exact:
         return None
@@ -682,12 +722,23 @@ def _title_core_tokens(norm, group=''):
     return out
 
 
+@functools.lru_cache(maxsize=32768)
 def _release_match_features(name):
+    """Match features of one release name, cached by name (TR11).
+
+    Phase 1 ranks every torrent in the client against every trumped title, and
+    a season-pack PM lists one title per episode, so the same few thousand names
+    were re-parsed once per title — ~27s of single-threaded CPU in one request
+    for 20 titles over 15k torrents, ~2s cached. **What is cached is read-only**:
+    a cached dict or set that one caller edited would corrupt every later match
+    in the process, so the mapping is a proxy and the title core a frozenset.
+    `release_match_cache_clear` releases the entries when a phase-1 request ends.
+    """
     norm  = _norm_release_name(name)
     info  = parse_release_info(name)
     group = _release_group_tag(name)
-    return {
-        'core':   _title_core_tokens(norm, group),
+    return MappingProxyType({
+        'core':   frozenset(_title_core_tokens(norm, group)),
         'res':    info['resolution'],
         'source': info['source'],
         'hdr':    info['hdr'],
@@ -695,7 +746,14 @@ def _release_match_features(name):
         'group':  group,
         'year':   info['year'],
         'anchor': _season_ep_anchor(norm),
-    }
+    })
+
+
+def release_match_cache_clear():
+    """Drop cached release-match features — the cache pays for itself inside one
+    request, and a client of 15k torrents should not leave 15k entries resident
+    on a process whose memory is already the thing to watch."""
+    _release_match_features.cache_clear()
 
 
 _MIN_TITLE_SIM = 0.3
@@ -717,8 +775,17 @@ def score_release_match(query, cand_name):
     group/audio/hdr/anchor to 'same' | 'diff' | 'partial' | '' (missing on a
     side).
     """
-    q = _release_match_features(query)
-    c = _release_match_features(cand_name)
+    return _score_match_features(_release_match_features(query),
+                                 _release_match_features(cand_name))
+
+
+def _score_match_features(q, c):
+    """`score_release_match` over features already extracted — see there.
+
+    Split out so a ranking loop extracts the query's features once rather than
+    once per candidate (TR11): the query is invariant across the loop, and
+    re-parsing it was half the cost of a phase-1 pass.
+    """
     b = {'title': '', 'year': '', 'res': '', 'source': '', 'group': '', 'audio': '', 'hdr': '', 'anchor': ''}
 
     # Title gate — both sides must have parseable title words that overlap.
@@ -791,13 +858,61 @@ def rank_release_matches(items, query, name_key='name', limit=8, min_score=0.0):
     or the arr deep link).
     """
     scored = []
+    q = _release_match_features(query)
     for it in items:
-        s, brk = score_release_match(query, it.get(name_key) or '')
+        s, brk = _score_match_features(q, _release_match_features(it.get(name_key) or ''))
         if s <= 0 or s < min_score:
             continue
         scored.append({**it, 'match_score': round(s, 3), 'match': brk})
     scored.sort(key=lambda x: (x['match_score'], x.get('seeders') or 0), reverse=True)
     return scored[:limit]
+
+
+def rank_trump_replacements(releases, new_title, indexer='', limit=8):
+    """(release, candidates) — Trumped step 4's replacement, best first.
+
+    Three tiers, in this order:
+
+    1. **The exact release on the tracker that sent the PM.** That is the copy
+       the user means to grab — it is the one carrying the PM's freeleech, and
+       seeding the replacement where the trump happened is the point of
+       complying. It leads and is pre-selected.
+    2. **The exact release on another tracker.** Grabbing there and
+       cross-seeding is a legitimate edge case (the PM's tracker has not listed
+       it yet, or the user prefers it), never the default.
+    3. Everything else that clears the title gate, by score; ties broken by
+       fewer disagreeing fields, then the PM's tracker, then seeders.
+
+    **Exactness is required for the top two tiers, and it is load-bearing.**
+    `repack` and `proper` are quality noise to the fuzzy score, so a trump that
+    replaces a release with its own REPACK scores the trumped original — still
+    cached on an indexer — exactly as high as the replacement, and the score
+    saturates at 1.0 for most same-title releases anyway. Ranking by tracker
+    over that score would pre-select the release that was just trumped. Within
+    tiers 1 and 2 every copy is the same release, so seeders decide.
+
+    `release` is the head of tier 1 or 2, else None — no confident match. Each
+    candidate carries `pm_tracker` and `exact`.
+    """
+    target = _norm_release_name(new_title)
+    q = _release_match_features(new_title)
+    rows = []
+    for r in releases:
+        exact = bool(target) and _norm_release_name(r.get('title')) == target
+        s, brk = _score_match_features(q, _release_match_features(r.get('title') or ''))
+        if s <= 0 and not exact:
+            continue
+        rows.append({**r, 'match_score': 1.0 if exact else round(s, 3), 'match': brk, 'exact': exact,
+                     'pm_tracker': bool(indexer) and tracker_matches_indexer(r.get('indexer'), indexer)})
+
+    def _key(r):
+        tier = 0 if (r['exact'] and r['pm_tracker']) else (1 if r['exact'] else 2)
+        diffs = sum(1 for v in r['match'].values() if v == 'diff')
+        return (tier, -r['match_score'], diffs, not r['pm_tracker'], -(r.get('seeders') or 0))
+
+    rows.sort(key=_key)
+    release = rows[0] if rows and rows[0]['exact'] else None
+    return release, rows[:limit]
 
 
 def title_soft_match(query_title, candidate_title):
@@ -1397,6 +1512,10 @@ def _fetch_radarr_media(conn):
             'year': movie.get('year'),
             'path': path,
             'relative_path': movie_file.get('relativePath'),
+            # MovieFileResource.Size (long). Lets Trumped narrow its inode join
+            # to rows that could be the same file before stat'ing any (TR7):
+            # a hardlink shares its size.
+            'size': movie_file.get('size'),
             'arr_id': movie.get('id'),
             'file_id': movie_file.get('id'),
             'title_slug': movie.get('titleSlug') or '',
@@ -1446,6 +1565,8 @@ def _fetch_sonarr_media(conn):
                 'year': series.get('year'),
                 'path': path,
                 'relative_path': episode_file.get('relativePath'),
+                # EpisodeFileResource.Size (long) — see _fetch_radarr_media.
+                'size': episode_file.get('size'),
                 'arr_id': series_id,
                 'file_id': episode_file.get('id'),
                 'episode_ids': episode_file.get('episodeIds') or [],
@@ -1933,12 +2054,21 @@ def _arr_candidate_score(row, parsed):
     if season is not None:
         row_season = row.get('season_number')
         row_eps    = row.get('episode_numbers') or []
+        rel = os.path.basename(row.get('relative_path') or row.get('path') or '')
         if row_season is None:
             # Title-list rows have no per-file season, and media-index rows
             # written before Sonarr's own numbers were carried have none either
             # — fall back to the filename the way the rest of the app does.
-            rel = os.path.basename(row.get('relative_path') or row.get('path') or '')
             row_season, row_eps = season_episodes_from_name(rel)
+        elif not row_eps:
+            # A media-index row carries Sonarr's own season but never its
+            # episode numbers — `/api/v3/episodefile` has none (Phase 6) — so
+            # the episode anchor below was inert on every such row. The filename
+            # supplies the episode half only, and only when it agrees with
+            # Sonarr about the season.
+            name_season, name_eps = season_episodes_from_name(rel)
+            if name_season == row_season:
+                row_eps = name_eps
         if row_season is not None:
             score += 4 if row_season == season else -4
             episode = parsed.get('episode')
