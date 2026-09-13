@@ -42,7 +42,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
 from scripts import generate_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
@@ -406,7 +406,10 @@ def debug_report():
     report['app_gauges'] = {
         'release_jobs':         len(_release_jobs),
         'import_watches':       len(_import_watches),
-        'generate_job_results': len((_gen_state.get('job') or {}).get('results') or []),
+        # Backfill runs retained (bounded by _GEN_JOBS_KEPT + one running) and
+        # the result rows they hold between them.
+        'generate_jobs':        len(_gen_jobs),
+        'generate_job_results': sum(len(j.get('results') or []) for j in list(_gen_jobs.values())),
         # True while background scans are deferring to an active workflow
         # session — evidence for "why didn't the watchdog scan run yet"
         'workflow_active':      workflow_active(),
@@ -2505,104 +2508,40 @@ def workflows_dedupe():
 @app.route('/api/workflows/acquire_candidates')
 @require_auth
 def workflows_acquire_candidates():
+    """Backfill's candidates exactly as they will be searched, plus the file counts.
+
+    Grouped and scoped by `_resolve_backfill` — the same call `generate` searches
+    from — and by nothing else. This used to ship a row for every unseeded file,
+    resolved or not, so the browser could discard the unresolved ones and regroup
+    the rest with its own copy of the season key (B7). After B1 that copy could
+    not be kept correct at all: whether a season is one pack or N episodes turns
+    on how many files the arr holds in it, which the client never sees (B7b).
+
+    Two units, and the page keeps them as two sentences: `counts` is candidates
+    (groups — a season pack is one), `resolved_count` / `unresolved_count` are
+    files.
+    """
     cfg = db_load_config()
-    media_files = db_load_file_results('media')
-
-    candidates_raw = [
-        f for f in media_files
-        if not f.get('excluded') and not [t for t in (f.get('trackers') or []) if t != 'None']
-    ]
-
-    arr_media = fetch_arr_media_index(cfg)
-    media_root = cfg.get('MEDIA_PATH', '')
-
-    def _norm(p):
-        return os.path.normpath(str(p or '')).replace('\\', '/')
-
-    arr_index = {}
-    for item in arr_media:
-        key = _norm(item.get('path', ''))
-        if key:
-            arr_index[key] = item
-
-    svc_map = {
-        'sonarr': {'slug_prefix': '/series/'},
-        'radarr': {'slug_prefix': '/movie/'},
-    }
-
-    all_conns = normalize_arr_connections(cfg)
-    conn_by_id = {c['id']: c for c in all_conns}
-    fallback_base_url = link_base(all_conns[0]) if all_conns else ''
-
-    candidates = []
-    resolved_count = 0
-    unresolved_count = 0
-
-    for f in candidates_raw:
-        rel_path = f.get('path', '')
-        abs_path = _norm(os.path.join(media_root, rel_path) if not os.path.isabs(rel_path) else rel_path)
-        arr_item = arr_index.get(abs_path)
-
-        if arr_item:
-            service = arr_item.get('service', '')
-            conn_id = arr_item.get('connection_id', '')
-            arr_id = arr_item.get('arr_id')
-            title = arr_item.get('title', '')
-            episode_ids = arr_item.get('episode_ids') or []
-            episode_id = episode_ids[0] if episode_ids else None
-            slug_prefix = svc_map.get(service, {}).get('slug_prefix', '/')
-            title_slug = arr_item.get('titleSlug') or arr_item.get('title_slug')
-            conn = conn_by_id.get(conn_id)
-            base_url = link_base(conn) if conn else ''
-            if title_slug:
-                arr_url = base_url + slug_prefix + title_slug
-            else:
-                arr_url = base_url + slug_prefix + str(arr_id) if arr_id else base_url
-            candidates.append({
-                **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
-                'resolved': True,
-                'arr_service': service,
-                'arr_connection_id': conn_id,
-                'arr_id': arr_id,
-                'arr_title': title,
-                'episode_id': episode_id,
-                'arr_url': arr_url,
-                # Shipped so the client's copy of the season grouping key keys on
-                # the same thing the server's does. The two must agree, and the
-                # library where they would not is exactly the library this
-                # exists for — one whose filenames the regex cannot parse (B7b
-                # deletes the client copy outright in Phase 6).
-                'season_number': _gen_season_of(arr_item, rel_path) if service == 'sonarr' else None,
-            })
-            resolved_count += 1
-        else:
-            filename = os.path.basename(rel_path)
-            search_url = ''
-            if fallback_base_url:
-                term = os.path.splitext(filename)[0]
-                search_url = fallback_base_url + '/add/new?term=' + urllib.parse.quote(term)
-            candidates.append({
-                **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
-                'resolved': False,
-                'arr_service': None,
-                'arr_connection_id': None,
-                'arr_id': None,
-                'arr_title': None,
-                'episode_id': None,
-                'arr_url': search_url,
-            })
-            unresolved_count += 1
-
+    backfill = _resolve_backfill(cfg)
+    # Read straight after the resolve, which is what fetched the index: the
+    # accessor describes the list the caller just received. An instance whose
+    # index failed contributes no rows — indistinguishable from one managing
+    # nothing — so it is reported rather than left to be inferred from a gap.
+    arr_errors = arr_media_index_errors()
+    groups = backfill['groups']
+    by_scope = {'season': 0, 'episode': 0, 'movie': 0}
+    for g in groups:
+        by_scope[g['scope']] += 1
     return jsonify({
         "status": "success",
-        "candidates": candidates,
-        "resolved_count": resolved_count,
-        "unresolved_count": unresolved_count,
-        # An instance whose index failed contributes no rows, which is
-        # indistinguishable from one managing nothing: its files fall to
-        # unresolved and drop out of the page entirely, folder chips included.
-        # Report it rather than leaving the user to infer a gap.
-        "arr_errors": arr_media_index_errors(),
+        "candidates": groups,
+        "counts": {'candidates': len(groups), **by_scope},
+        "resolved_count": backfill['resolved_count'],
+        "unresolved_count": backfill['unresolved_count'],
+        # B9: how many of the unresolved files are video. The rest are sidecars
+        # no arr indexes; these are the ones worth acting on.
+        "unresolved_video_count": backfill['unresolved_video_count'],
+        "arr_errors": arr_errors,
     })
 
 
@@ -2654,9 +2593,109 @@ def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, sou
         # 'SDR' maps to empty string (no HDR detected); other values match hdr field directly
         target_hdr = {'' if h == 'SDR' else h for h in hdr_filter}
         filtered = [r for r in filtered if r.get('hdr', '') in target_hdr]
-    # Sort: custom format score desc, quality weight desc, seeders desc (matches Sonarr/Radarr interactive search order)
-    filtered.sort(key=lambda r: (r.get('custom_format_score', 0), r.get('quality_weight', 0), r.get('seeders', 0)), reverse=True)
+    # Sort: custom format score desc, quality weight desc, seeders desc (matches
+    # Sonarr/Radarr interactive search order). `or 0`, not a .get default: both
+    # arrs declare Seeders as `int?`, so the key is present and null on usenet.
+    filtered.sort(key=lambda r: (r.get('custom_format_score') or 0, r.get('quality_weight') or 0,
+                                 r.get('seeders') or 0), reverse=True)
     return filtered
+
+
+# Within this fraction of the local size a release still counts as "the same
+# payload". A scene torrent carries an .nfo, an .srr and often a sample beside
+# the video, so byte equality with the one library file is the rarer case.
+_SIZE_MATCH_TOLERANCE = 0.01
+
+
+def _release_closeness(release, local):
+    """`(sort_key, size_delta, match)` — how close a release is to the file on disk.
+
+    `match` is the per-field breakdown the page renders beside each release, in
+    Trumped's vocabulary: `same` / `partial` / `diff`, or `''` where there is no
+    evidence either way (an unparseable quality, SDR on both sides).
+    """
+    want = local.get('total_size') or 0
+    size = release.get('size') or 0
+    delta = size - want if (want and size) else None
+    if delta is None:
+        size_match, size_tier = '', 2
+    elif delta == 0:
+        size_match, size_tier = 'same', 0
+    elif abs(delta) <= want * _SIZE_MATCH_TOLERANCE:
+        size_match, size_tier = 'partial', 1
+    else:
+        size_match, size_tier = 'diff', 2
+
+    l_res, l_src = parse_quality_name(local.get('file_quality'))
+    r_res, r_src = parse_quality_name(release.get('quality_name'))
+    if not (l_res or l_src) or not (r_res or r_src):
+        quality_match, quality_tier = '', 2
+    elif (l_res, l_src) == (r_res, r_src):
+        quality_match, quality_tier = 'same', 0
+    elif (l_res and l_res == r_res) or (l_src and l_src == r_src):
+        quality_match, quality_tier = 'partial', 1
+    else:
+        quality_match, quality_tier = 'diff', 2
+
+    l_hdr, r_hdr = local.get('file_hdr') or '', release.get('hdr') or ''
+    hdr_match = '' if not (l_hdr or r_hdr) else ('same' if l_hdr == r_hdr else 'diff')
+    hdr_tier = 0 if l_hdr == r_hdr else 1
+
+    key = (size_tier, quality_tier, hdr_tier, -(release.get('seeders') or 0),
+           abs(delta) if delta is not None else float('inf'))
+    return key, delta, {'size': size_match, 'quality': quality_match, 'hdr': hdr_match}
+
+
+def _rank_releases(rows, rank='closest', local=None):
+    """Order one candidate's filtered releases, and attach the evidence (B3).
+
+    Backfill's question is not the arr's. Interactive search ranks by custom
+    format score and quality weight, which answers *"what is the best copy of
+    this?"* — the upgrade question. Backfill asks *"which of these is the file I
+    already have?"*, and the answer is the release whose size and quality match
+    the one on disk: that is the release the file came from, and grabbing it is
+    the only outcome that leaves the library where it started with a seed behind
+    it. The top-scoring release instead means a bigger download, a library file
+    replaced by a different encode, and — for anyone whose quality profile
+    already had its chance at that upgrade — a release the arr passed over.
+
+    `closest` (the default): exact size, then within `_SIZE_MATCH_TOLERANCE`,
+    then quality, then HDR, then seeders. `upgrade` keeps the arr's order, for
+    the user who does want to upgrade while backfilling — deliberately, not by
+    accident. Rows are expected in upgrade order already (`_apply_release_filters`)
+    and the sort is stable, so ties keep it.
+
+    Without a `local` file there is nothing to be close to and rows come back
+    as given.
+    """
+    if not local:
+        return rows
+    scored = []
+    for r in rows:
+        key, delta, match = _release_closeness(r, local)
+        scored.append((key, dict(r, size_delta=delta, match=match)))
+    if rank != 'upgrade':
+        scored.sort(key=lambda kr: kr[0])
+    return [r for _key, r in scored]
+
+
+def _sweep_backfill_jobs():
+    """Expire Backfill's in-memory jobs: release searches and finished generate runs.
+
+    Called from `watch_import/active` — which every open auditorr page polls every
+    five seconds — as well as from the endpoints that own the jobs. Release
+    searches used to be swept only from inside `acquire_releases`, so an entry
+    lived until the next release search, which may never come (B13).
+    """
+    now = time.time()
+    for k in [k for k, v in list(_release_jobs.items()) if now - v['ts'] > _RELEASE_JOB_TTL]:
+        _release_jobs.pop(k, None)
+    with _gen_jobs_lock:
+        _sweep_gen_jobs(now)
+
+
+def _csv_arg(name):
+    return [v for v in (request.args.get(name) or '').split(',') if v]
 
 
 @app.route('/api/workflows/acquire_releases')
@@ -2671,11 +2710,7 @@ def workflows_acquire_releases():
     if not service or not connection_id or arr_id is None:
         return jsonify({"status": "error", "message": "service, connection_id, and arr_id are required"}), 400
 
-    # Expire old jobs
-    now = time.time()
-    expired = [k for k, v in _release_jobs.items() if now - v['ts'] > _RELEASE_JOB_TTL]
-    for k in expired:
-        del _release_jobs[k]
+    _sweep_backfill_jobs()
 
     job_key = _release_job_key(service, connection_id, arr_id, episode_id, season_number, file_path)
 
@@ -2683,10 +2718,17 @@ def workflows_acquire_releases():
         job = _release_jobs[job_key]
         if job['status'] == 'done':
             cfg = db_load_config()
+            # The same filters `generate` applies, on this branch too (B13). It
+            # applied the indexer strategy and dropped resolution/source/HDR, so
+            # one endpoint answered the same inputs two ways depending on whether
+            # the search happened to be cached.
             releases = _apply_release_filters(
                 job['releases'],
                 cfg.get('ACQUIRE_DOWNLOAD_FROM') or [],
                 cfg.get('ACQUIRE_SEEDING_ON') or [],
+                res_filter=_csv_arg('res_filter'),
+                source_filter=_csv_arg('source_filter'),
+                hdr_filter=_csv_arg('hdr_filter'),
             )
             return jsonify({"status": "done", "releases": releases})
         return jsonify({"status": job['status'], "message": job.get('message', '')})
@@ -2721,62 +2763,208 @@ def workflows_grab_release():
     if not service or not connection_id or not guid or indexer_id is None:
         return jsonify({"status": "error", "message": "service, connection_id, guid, and indexer_id are required"}), 400
     cfg = db_load_config()
+
+    # B12 — a candidate whose download is already in the arr's queue is not
+    # grabbed again: not by a retry after a timeout the arr had in fact
+    # processed, not by a second run, not by a click on a row that reported
+    # failure. `force` is the page's "Grab anyway". Advisory: a queue that cannot
+    # be read does not block the grab — the cost there is a possible duplicate
+    # download, not a lost file — and the answer says it was not checked.
+    queue_checked = None
+    arr_id = data.get('arr_id')
+    if isinstance(arr_id, int) and not data.get('force'):
+        season = data.get('season_number')
+        queued = queue_records_for_item(
+            cfg, service, connection_id, arr_id,
+            episode_ids=_int_list(data.get('episode_ids')) or None,
+            season_number=season if isinstance(season, int) else None)
+        queue_checked = queued is not None
+        if queued:
+            titles = [q.get('title') for q in queued if q.get('title')]
+            name = 'Sonarr' if service == 'sonarr' else 'Radarr'
+            return jsonify({"status": "error", "code": "already_queued", "titles": titles[:5],
+                            "message": f"Already in {name}'s queue: {titles[0] if titles else 'this item'}"}), 409
     try:
         grab_release(cfg, service, connection_id, guid, indexer_id)
-        return jsonify({"status": "success"})
+        return jsonify({"status": "success", "queue_checked": queue_checked})
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors='replace')
         msg = f"HTTP {e.code}: {e.reason}"
+        parsed = False
         try:
             msg = json.loads(body).get('message') or msg
+            parsed = True
         except Exception:
             pass
         log.warning("Grab failed for %s/%s: %s", service, guid, msg)
-        return jsonify({"status": "error", "message": msg}), 400
+        out = {"status": "error", "message": msg}
+        # The one failure a fresh search fixes: the guid fell out of the arr's
+        # release cache, which both arrs answer with a 404 and this message.
+        # Anything else — an indexer error, an auth failure, a timeout on a grab
+        # the arr may already have processed — is surfaced as it is and never
+        # retried automatically, because the retry grabs a second copy (B12).
+        if 'requested release in cache' in msg.lower() or (e.code == 404 and not parsed):
+            out['code'] = 'stale_release'
+        return jsonify(out), 400
     except Exception as e:
         log.warning("Grab failed for %s/%s: %s", service, guid, e)
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
-_gen_state = {'job': None}
+# Generate runs, keyed by id (B4). This was one process-wide slot: navigating
+# away lost the only handle to a run while its searches carried on against the
+# user's indexers, a second tab's Generate silently stopped the first tab's
+# half-finished run, and a finished run's full result set stayed resident until
+# the next run replaced it.
+_gen_jobs = {}
+_gen_jobs_lock = threading.Lock()
+_GEN_JOB_TTL = 3600       # a finished run stays readable, and reattachable, for an hour
+_GEN_JOBS_KEPT = 3        # and at most this many finished runs are kept, newest first
+_GEN_ABANDON_SECS = 600   # a running job nobody has polled for this long stops itself
 
 
-def _gen_root_folder(path):
-    if not path:
-        return 'Other'
-    normalized = path.replace('\\', '/').lstrip('/')
-    parts = normalized.split('/')
-    return parts[0] if parts else 'Other'
+def _sweep_gen_jobs(now=None):
+    """Drop finished runs past their TTL or beyond the newest `_GEN_JOBS_KEPT`.
+
+    Callers hold `_gen_jobs_lock`. A running job is never swept — it ends by
+    finishing, by a stop, or by nobody polling it for `_GEN_ABANDON_SECS`.
+    """
+    now = now or time.time()
+    finished = sorted((j for j in list(_gen_jobs.values()) if j.get('finished_at')),
+                      key=lambda j: j['finished_at'], reverse=True)
+    for i, job in enumerate(finished):
+        if i >= _GEN_JOBS_KEPT or now - job['finished_at'] > _GEN_JOB_TTL:
+            _gen_jobs.pop(job['id'], None)
+
+
+def _running_gen_job():
+    return next((j for j in list(_gen_jobs.values()) if j['status'] == 'running'), None)
+
+
+def _gen_job_running_response(job):
+    """Refused, not replaced: a new run never stops somebody else's (B4)."""
+    return jsonify({'status': 'error', 'code': 'job_running', 'job_id': job['id'],
+                    'message': 'A search is already running — showing it instead.'}), 409
 
 
 def _gen_parse_season(path):
+    """The filename's season, as a *label* for an episode Sonarr gave no season.
+
+    Never evidence of coverage: a pack is only ever searched for a season Sonarr
+    itself numbered (B1). It misses daily series, anime absolute numbering and
+    `S01.E02`, which is why the season is read off the arr's record first (B8).
+    """
     m = re.search(r'[Ss](\d{1,2})[Ee]', os.path.basename(str(path or '')))
     return int(m.group(1)) if m else None
 
 
-def _gen_season_of(arr_item, path):
-    """The season an unseeded episode belongs to — Sonarr's own number first.
+def _sonarr_season_coverage(arr_media):
+    """How many episode files each Sonarr holds per season — B1's denominator.
 
-    The filename regex is kept only as a fallback. It misses daily series
-    ("Show - 2024-01-05"), anime absolute numbering ("Show - 087"), "S01.E02"
-    and any non-standard renamer, and the failure is not a missing season but a
-    **merge**: every unparseable episode of a series collapses into one
-    `{conn}_{id}_SNone` candidate, which then falls to the episode_id branch and
-    searches for one episode while the row reads "N ep". Sonarr reports
-    `seasonNumber` on the very episode-file record the media index is built
-    from, at zero extra API cost (B8).
+    Returns `(held, unknown)`. `held[(connection_id, arr_id, season)]` counts the
+    episode-file records the arr reported in that season; `unknown` is the set of
+    `(connection_id, arr_id)` series with at least one record whose season the
+    arr did not report.
+
+    The unit is **files the arr holds**, not episodes the season has. A season
+    still airing is fully covered the moment every file the arr holds is
+    unseeded — the case a pack search was written for, and there it is strictly
+    right: nothing was seeded, so nothing is orphaned by replacing it.
+
+    A series in `unknown` has no season that can be proven covered: the record
+    with no season could sit in any of them, seeded, and a pack would replace it.
     """
-    season = (arr_item or {}).get('season_number')
-    return _gen_parse_season(path) if season is None else season
+    held, unknown = {}, set()
+    for item in arr_media:
+        if item.get('service') != 'sonarr':
+            continue
+        series = (item.get('connection_id'), item.get('arr_id'))
+        season = item.get('season_number')
+        if season is None:
+            unknown.add(series)
+        else:
+            key = series + (season,)
+            held[key] = held.get(key, 0) + 1
+    return held, unknown
 
 
-def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
-    """Resolved, season-grouped candidates for the generate workflow."""
+def _backfill_search(group, episode_id=None):
+    """The release search for one candidate — the only place a scope becomes a query.
+
+    The same dict is what `acquire_releases` is re-asked with when a grab has to
+    be retried, so a retry can never widen an episode row into a pack search by
+    rebuilding the query from a season number the row merely displays.
+    """
+    params = {'service': group['arr_service'], 'connection_id': group['arr_connection_id'],
+              'arr_id': group['arr_id']}
+    if group['scope'] == 'season':
+        params['season_number'] = group['season_number']
+    elif group['scope'] == 'episode':
+        eid = episode_id or group.get('episode_id')
+        if eid:
+            params['episode_id'] = eid
+        params['path'] = group['rep_path']
+    return params
+
+
+def _backfill_group(scope, files, season=None, held=None, unseeded=None):
+    """One searchable Backfill candidate, built from the resolved files it covers."""
+    first = files[0]
+    group = {k: first[k] for k in ('arr_service', 'arr_connection_id', 'arr_id',
+                                   'arr_title', 'arr_url', 'file_quality', 'file_hdr')}
+    conn, arr_id = first['arr_connection_id'], first['arr_id']
+    if scope == 'movie':
+        key = f'{conn}_{arr_id}'
+    elif scope == 'season':
+        key = f'{conn}_{arr_id}_S{season}'
+    else:
+        ident = first['file_id'] if first.get('file_id') is not None else first['path']
+        key = f'{conn}_{arr_id}_S{season}_F{ident}'
+    episode_numbers, episode_id = [], None
+    if scope == 'episode':
+        episode_numbers = first['episode_numbers'] or season_episodes_from_name(first['path'])[1]
+        episode_id = first['episode_ids'][0] if first['episode_ids'] else None
+    group.update({
+        'key':             key,
+        'scope':           scope,
+        'path':            first['path'],
+        'rep_path':        first['path'],
+        'season_number':   season,
+        'episode_numbers': episode_numbers,
+        'episode_id':      episode_id,
+        'file_count':      len(files),
+        'total_size':      sum(c['size'] for c in files),
+        # The arr's own ids for the files this candidate is about. The import
+        # watch scopes a force import to their episodes (B11), and that join
+        # has to happen before the grab replaces them.
+        'file_ids':        [c['file_id'] for c in files if c.get('file_id') is not None],
+        # The two numbers the pack-or-episode decision was made on, so a row can
+        # say why an episode was not searched as part of its season.
+        'season_files_held':     held,
+        'season_files_unseeded': unseeded,
+    })
+    return group
+
+
+def _resolve_backfill(cfg):
+    """Backfill's candidates — resolved, scoped and grouped — plus the file counts.
+
+    The one computation behind both `acquire_candidates` (what the page counts)
+    and `generate` (what gets searched), so the number on the button and the
+    searches that run cannot disagree (B7b).
+
+    Sonarr files are bucketed by `(connection, series, season)` — ids are
+    per-instance (#22) and the season is Sonarr's own (B8) — and a bucket becomes
+    **one season-pack candidate only if it covers the season**: every episode
+    file the arr holds in that season is unseeded. Otherwise each file is its own
+    episode candidate (B1). A pack search for a partly seeded season downloads
+    the whole season and then force-imports it over the files that were already
+    hardlinked, orphaning every one of their torrents. Where coverage cannot be
+    established — the arr reported no season on this file, or on any file of the
+    series — the answer is per-episode, never a pack: a missing count read as
+    "covers the season" is precisely the harm.
+    """
     media_files = db_load_file_results('media')
-    candidates_raw = [
-        f for f in media_files
-        if not f.get('excluded') and not [t for t in (f.get('trackers') or []) if t != 'None']
-    ]
     arr_media = fetch_arr_media_index(cfg)
     media_root = cfg.get('MEDIA_PATH', '')
 
@@ -2788,70 +2976,193 @@ def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
         key = _norm(item.get('path', ''))
         if key:
             arr_index[key] = item
+    held, unknown_series = _sonarr_season_coverage(arr_media)
+    conns = normalize_arr_connections(cfg)
+    # Read straight after the fetch, per the accessor's contract.
+    root_labels = _root_folder_labels(conns, arr_root_folders())
 
     svc_slug = {'sonarr': '/series/', 'radarr': '/movie/'}
-    conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
+    conn_by_id = {c['id']: c for c in conns}
 
-    flat = []
-    for f in candidates_raw:
+    # Encounter order is kept so ties under the chosen sort land as they did.
+    order, seasons, folder_of = [], {}, {}
+    resolved = unresolved = unresolved_video = 0
+    for f in media_files:
+        if f.get('excluded') or [t for t in (f.get('trackers') or []) if t != 'None']:
+            continue
         rel_path = f.get('path', '')
         abs_path = _norm(os.path.join(media_root, rel_path) if not os.path.isabs(rel_path) else rel_path)
         arr_item = arr_index.get(abs_path)
         if not arr_item:
+            unresolved += 1
+            # B9: a subtitle or a poster failing to match is normal — no arr
+            # indexes them. A *video* failing to match is the number worth
+            # acting on, and is usually a path-mapping mismatch.
+            if os.path.splitext(rel_path)[1].lower() in VIDEO_EXTENSIONS:
+                unresolved_video += 1
             continue
+        resolved += 1
         service  = arr_item.get('service', '')
         conn_id  = arr_item.get('connection_id', '')
         arr_id   = arr_item.get('arr_id')
-        title    = arr_item.get('title', '')
-        ep_ids   = arr_item.get('episode_ids') or []
         t_slug   = arr_item.get('titleSlug') or arr_item.get('title_slug')
         conn     = conn_by_id.get(conn_id)
         base_url = link_base(conn) if conn else ''
         slug     = svc_slug.get(service, '/')
-        arr_url  = (base_url + slug + t_slug) if t_slug else (base_url + slug + str(arr_id) if arr_id else base_url)
-        flat.append({
-            'path': rel_path, 'size': f.get('size', 0),
+        # Matched on the arr-side path, which is what a root folder is written in.
+        folder_of[rel_path] = _root_folder_of(
+            root_labels, conn_id,
+            str(arr_item.get('arr_path') or arr_item.get('path') or '').replace('\\', '/'))
+        c = {
+            'path': rel_path, 'size': f.get('size') or 0,
             'arr_service': service, 'arr_connection_id': conn_id,
-            'arr_id': arr_id, 'arr_title': title,
-            'episode_id': ep_ids[0] if ep_ids else None,
-            'arr_url': arr_url,
+            'arr_id': arr_id, 'arr_title': arr_item.get('title', ''),
+            'arr_url': (base_url + slug + t_slug) if t_slug else (base_url + slug + str(arr_id) if arr_id else base_url),
+            'file_id': arr_item.get('file_id'),
+            'episode_ids': list(arr_item.get('episode_ids') or []),
+            'episode_numbers': list(arr_item.get('episode_numbers') or []),
             'file_quality': arr_item.get('file_quality_name', ''),
-            'file_hdr':     arr_item.get('file_hdr', ''),
-            # Sonarr's own season number, off the episode-file record (B8)
-            'season_number': _gen_season_of(arr_item, rel_path) if service == 'sonarr' else None,
-        })
+            'file_hdr': arr_item.get('file_hdr', ''),
+        }
+        if service != 'sonarr':
+            order.append(('movie', c))
+            continue
+        season = arr_item.get('season_number')
+        if season is None:
+            order.append(('loose', c))
+            continue
+        bucket = (conn_id, arr_id, season)
+        if bucket not in seasons:
+            seasons[bucket] = []
+            order.append(('season', bucket))
+        seasons[bucket].append(c)
 
-    # Group Sonarr episodes by (arr_id, season)
     groups = []
-    sonarr_map = {}
-    for c in flat:
-        if c['arr_service'] == 'sonarr':
-            season = c.get('season_number')
-            # Series ids are per-instance, so two Sonarrs both number from 1 and
-            # a bare id merges unrelated shows — the winner keeps its own
-            # connection and the loser's episodes are searched against it.
-            key = f"{c['arr_connection_id']}_{c['arr_id']}_S{season}"
-            if key in sonarr_map:
-                g = groups[sonarr_map[key]]
-                g['file_count'] += 1
-                g['total_size'] = g.get('total_size', 0) + (c.get('size') or 0)
-                if not g.get('episode_id') and c.get('episode_id'):
-                    g['episode_id'] = c['episode_id']
-            else:
-                sonarr_map[key] = len(groups)
-                groups.append({**c, 'season_number': season, 'file_count': 1,
-                                'total_size': c.get('size') or 0, 'rep_path': c['path']})
+    for kind, ref in order:
+        if kind == 'movie':
+            groups.append(_backfill_group('movie', [ref]))
+        elif kind == 'loose':
+            # No season from the arr: the filename is only a label here, never
+            # evidence of coverage.
+            groups.append(_backfill_group('episode', [ref], season=_gen_parse_season(ref['path'])))
         else:
-            groups.append({**c, 'season_number': None, 'file_count': 1,
-                           'total_size': c.get('size') or 0, 'rep_path': c['path']})
+            files = seasons[ref]
+            n_held = held.get(ref)
+            covered = (ref[:2] not in unknown_series and n_held is not None
+                       and len(files) == n_held)
+            if covered:
+                groups.append(_backfill_group('season', files, season=ref[2],
+                                              held=n_held, unseeded=len(files)))
+            else:
+                groups.extend(_backfill_group('episode', [c], season=ref[2],
+                                              held=n_held, unseeded=len(files))
+                              for c in files)
+    for g in groups:
+        g['search'] = _backfill_search(g)
+        g['folder'] = folder_of.get(g['rep_path'], 'Other')
+    return {'groups': groups, 'resolved_count': resolved, 'unresolved_count': unresolved,
+            'unresolved_video_count': unresolved_video}
 
+
+def _root_folder_labels(conns, roots):
+    """`{connection_id: [(root, label), ...]}`, longest root first (B10).
+
+    The folder chips used to be the first path segment below MEDIA_PATH, taken
+    over resolved candidates and headed "Root Folders" — auditorr had never
+    asked an arr for its root folders. They collapsed when the real roots sat
+    deeper than one level and were named after a directory rather than the thing
+    configured in Sonarr/Radarr. These are each arr's own `/api/v3/rootfolder`
+    paths, labelled verbatim; the instance name is added only where two
+    instances configure the same path string, which would otherwise be one chip
+    covering two libraries. A connection whose root folders could not be read
+    contributes nothing, so its files land in `Other` rather than silently
+    defining a root from their first segment.
+    """
+    name_of = {c['id']: c.get('name') or c['id'] for c in conns}
+    owners = {}
+    for conn_id, paths in (roots or {}).items():
+        for p in paths or []:
+            owners.setdefault(p, set()).add(conn_id)
+    labels = {}
+    for conn_id, paths in (roots or {}).items():
+        labels[conn_id] = [
+            (p, p if len(owners[p]) == 1 else f'{p} ({name_of.get(conn_id, conn_id)})')
+            for p in sorted(paths or [], key=lambda p: (-len(p), p))
+        ]
+    return labels
+
+
+def _root_folder_of(labels, conn_id, arr_path):
+    """The label of the longest root holding `arr_path`, on whole path segments."""
+    for root, label in labels.get(conn_id) or []:
+        if arr_path == root or arr_path.startswith(root + '/'):
+            return label
+    return 'Other'
+
+
+def _release_in_scope(release, scope, episode_numbers):
+    """May this release be offered for a candidate of this scope? (B1, at the release)
+
+    An episode candidate exists *because* part of its season is already seeded,
+    so a release covering more than the candidate's own file replaces library
+    files other torrents are hardlinked to — B1's harm, reached through the
+    results list instead of the search path. The episode search alone does not
+    prevent it: interactive search returns rejected releases alongside approved
+    ones (a pack in an episode search comes back flagged, not absent), and a grab
+    through `/api/v3/release` bypasses the rejection.
+
+    Only what a release *says* it covers is acted on — the pack flag, or episode
+    numbers outside the candidate's. One that reports no episode numbers (daily
+    and absolute-numbered series) is kept: refusing those would empty the
+    workflow for exactly the libraries B8 was written for, and the import watch
+    scopes by episode id as well (B11). Where the candidate's own episodes are
+    unknown, a release that names episodes cannot be shown to fit, so it goes.
+    """
+    if scope != 'episode':
+        return True
+    if release.get('full_season'):
+        return False
+    covers = set(release.get('episode_numbers') or [])
+    if not covers:
+        return True
+    mine = set(episode_numbers or [])
+    return bool(mine) and covers <= mine
+
+
+def _episode_scope(cfg, candidate, cache):
+    """`(episode_id, episode_numbers)` for an episode candidate, off Sonarr's own join.
+
+    The media index cannot answer this — `/api/v3/episodefile` carries no episode
+    ids — so it is joined in from the series' episode list by file id, once per
+    series per job (`cache`). Falls back to what the candidate already carries
+    (the filename parse) when the join is unavailable, which is where the search
+    has always come from.
+    """
+    episode_id = candidate.get('episode_id')
+    numbers = candidate.get('episode_numbers') or []
+    file_id = next(iter(candidate.get('file_ids') or []), None)
+    if episode_id or file_id is None:
+        return episode_id, numbers
+    series = (candidate['arr_connection_id'], candidate['arr_id'])
+    if series not in cache:
+        cache[series] = sonarr_episodes_by_file(cfg, *series)
+    eps = (cache[series] or {}).get(file_id)
+    if not eps:
+        return episode_id, numbers
+    return eps[0][0], [e[2] for e in eps if e[2] is not None]
+
+
+def _build_generate_candidates(cfg, folders=None, title_search=None):
+    """Resolved, scoped candidates for the generate workflow, narrowed by the page's
+    folder and title filters. Uncapped: `generate` sorts and cuts to its own count
+    (the old `limit=20` default had one caller, which passed None — B13)."""
+    groups = _resolve_backfill(cfg)['groups']
     if folders:
-        groups = [g for g in groups if _gen_root_folder(g.get('rep_path') or g.get('path', '')) in folders]
+        groups = [g for g in groups if g['folder'] in folders]
     if title_search:
         term = title_search.strip().lower()
         groups = [g for g in groups if term in (g.get('arr_title') or '').lower()]
-
-    return groups[:limit]
+    return groups
 
 
 def _sort_generate_candidates(groups, sort):
@@ -2880,14 +3191,19 @@ def workflows_generate():
     hdr_filter    = data.get('hdr_filter') or []
     title_search  = (data.get('title_search') or '').strip()
 
-    existing = _gen_state.get('job')
-    if existing and existing.get('status') == 'running':
-        existing['stop_flag'] = True
+    # Checked before the build, which deserializes the media list, so a refused
+    # request costs nothing; and again at insert, because the build takes long
+    # enough for a second tab to get there first.
+    with _gen_jobs_lock:
+        _sweep_gen_jobs()
+        running = _running_gen_job()
+    if running:
+        return _gen_job_running_response(running)
 
     cfg = db_load_config()
     try:
         candidates = _sort_generate_candidates(
-            _build_generate_candidates(cfg, folders=folders or None, limit=None, title_search=title_search or None),
+            _build_generate_candidates(cfg, folders=folders or None, title_search=title_search or None),
             sort,
         )[:count]
     except Exception as e:
@@ -2901,16 +3217,36 @@ def workflows_generate():
     arr_errors = arr_media_index_errors()
 
     job_id = secrets.token_hex(8)
+    now = time.time()
     job = {'id': job_id, 'status': 'running', 'total': len(candidates),
-           'completed': 0, 'stop_flag': False, 'results': []}
-    _gen_state['job'] = job
+           'completed': 0, 'stop_flag': False, 'stop_reason': None, 'results': [],
+           'started_at': now, 'last_polled': now, 'finished_at': None,
+           # Kept on the job so a page that reattaches can still say which
+           # instances this run could not read.
+           'arr_errors': arr_errors}
+    with _gen_jobs_lock:
+        running = _running_gen_job()
+        if running:
+            return _gen_job_running_response(running)
+        _gen_jobs[job_id] = job
 
     def do_generate():
+        episode_cache = {}   # (connection, series) -> Sonarr's file->episode join, per job
         for candidate in candidates:
+            if not job['stop_flag'] and time.time() - job['last_polled'] > _GEN_ABANDON_SECS:
+                # Nobody has asked about this run for ten minutes: the tab that
+                # started it is gone. Stop querying indexers for results no one
+                # will see (B4). A page that merely navigated away reattaches
+                # well inside that window.
+                job['stop_flag'] = True
+                job['stop_reason'] = 'abandoned'
             if job['stop_flag']:
                 job['status'] = 'stopped'
                 return
+            scope = candidate.get('scope')
             result = {
+                'key':               candidate.get('key'),
+                'scope':             scope,
                 'arr_title':         candidate.get('arr_title', ''),
                 'arr_service':       candidate.get('arr_service'),
                 'arr_connection_id': candidate.get('arr_connection_id'),
@@ -2918,10 +3254,15 @@ def workflows_generate():
                 'arr_url':           candidate.get('arr_url'),
                 'path':              candidate.get('rep_path') or candidate.get('path'),
                 'season_number':     candidate.get('season_number'),
+                'episode_numbers':   candidate.get('episode_numbers') or [],
                 'file_count':        candidate.get('file_count', 1),
                 'total_size':        candidate.get('total_size', 0),
                 'file_quality':      candidate.get('file_quality', ''),
                 'file_hdr':          candidate.get('file_hdr', ''),
+                'file_ids':          candidate.get('file_ids') or [],
+                'season_files_held':     candidate.get('season_files_held'),
+                'season_files_unseeded': candidate.get('season_files_unseeded'),
+                'search':            candidate.get('search'),
                 'status':            'searching',
                 'releases':          None,
                 'best_release':      None,
@@ -2929,13 +3270,31 @@ def workflows_generate():
             }
             job['results'].append(result)
             try:
+                search = candidate['search']
+                episode_numbers = candidate.get('episode_numbers') or []
+                if scope == 'episode':
+                    episode_id, episode_numbers = _episode_scope(cfg, candidate, episode_cache)
+                    search = _backfill_search(candidate, episode_id=episode_id)
+                    result['search'] = search
+                    result['episode_numbers'] = episode_numbers
                 rows = fetch_release_matrix(
-                    cfg, candidate['arr_service'], candidate['arr_connection_id'], candidate['arr_id'],
-                    episode_id=candidate.get('episode_id'),
-                    season_number=candidate.get('season_number'),
-                    file_path=candidate.get('rep_path') or candidate.get('path'),
+                    cfg, search['service'], search['connection_id'], search['arr_id'],
+                    episode_id=search.get('episode_id'),
+                    season_number=search.get('season_number'),
+                    file_path=search.get('path'),
                 )
+                rows = [r for r in rows if _release_in_scope(r, scope, episode_numbers)]
                 filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter, hdr_filter=hdr_filter)
+                # Closest to the file on disk unless the user asked for the
+                # upgrade order (B3). `best` is what a single-release row grabs,
+                # so the default pick must answer Backfill's question, not the arr's.
+                filtered = _rank_releases(
+                    filtered,
+                    'upgrade' if data.get('release_rank') == 'upgrade' else 'closest',
+                    {'total_size':   candidate.get('total_size') or 0,
+                     'file_quality': candidate.get('file_quality') or '',
+                     'file_hdr':     candidate.get('file_hdr') or ''},
+                )
                 best = filtered[0] if filtered else None
                 result['status']       = 'found' if best else 'not_found'
                 result['releases']     = filtered
@@ -2948,29 +3307,64 @@ def workflows_generate():
 
         job['status'] = 'done'
 
-    threading.Thread(target=do_generate, daemon=True).start()
+    def run():
+        try:
+            do_generate()
+        except Exception as e:
+            # A run left 'running' would refuse every later run forever.
+            log.warning("Generate job %s failed: %s", job_id, e)
+            job['status'] = 'error'
+        finally:
+            job['finished_at'] = time.time()
+
+    threading.Thread(target=run, daemon=True).start()
     return jsonify({'job_id': job_id, 'total': len(candidates), 'arr_errors': arr_errors})
 
 
 @app.route('/api/workflows/generate/status')
 @require_auth
 def workflows_generate_status():
-    job_id = request.args.get('job_id', '')
-    job = _gen_state.get('job')
-    if not job or job['id'] != job_id:
-        return jsonify({'status': 'error', 'message': 'Job not found'}), 404
-    return jsonify({'status': job['status'], 'total': job['total'],
-                    'completed': job['completed'], 'results': list(job['results'])})
+    """One run's progress, incrementally (B5).
+
+    `since=n` returns only `results[n:completed]` — the rows that finished since
+    the client last read — plus the in-flight row as `current`, without its
+    releases. It used to re-send the whole growing result set, every candidate's
+    full release list, every two seconds for a run that can last hours.
+    Completed rows never change, so there is nothing to reconcile: the client
+    appends them and asks again from `next`. Omitting `since` returns everything
+    completed so far, which is how a page that navigated away catches up (B4).
+
+    Polling is also what keeps a run alive: `last_polled` is what
+    `_GEN_ABANDON_SECS` measures.
+    """
+    job = _gen_jobs.get(request.args.get('job_id', ''))
+    if not job:
+        # Swept, or from before a restart. The page forgets the id on this code.
+        return jsonify({'status': 'error', 'code': 'job_not_found', 'message': 'Job not found'}), 404
+    job['last_polled'] = time.time()
+    # Rows below `completed` are final: the job thread bumps the count only after
+    # it has finished writing the row.
+    completed = job['completed']
+    since = max(0, min(request.args.get('since', 0, type=int) or 0, completed))
+    current = None
+    if job['status'] == 'running' and len(job['results']) > completed:
+        current = {k: v for k, v in job['results'][completed].items() if k != 'releases'}
+    return jsonify({'status': job['status'], 'total': job['total'], 'completed': completed,
+                    'since': since, 'next': completed,
+                    'results': job['results'][since:completed],
+                    'current': current,
+                    'stop_reason': job.get('stop_reason'),
+                    'arr_errors': job.get('arr_errors') or []})
 
 
 @app.route('/api/workflows/generate/stop', methods=['POST'])
 @require_auth
 def workflows_generate_stop():
-    data   = request.json or {}
-    job_id = data.get('job_id', '')
-    job    = _gen_state.get('job')
-    if job and job['id'] == job_id and job['status'] == 'running':
+    data = request.json or {}
+    job  = _gen_jobs.get(data.get('job_id', ''))
+    if job and job['status'] == 'running':
         job['stop_flag'] = True
+        job['stop_reason'] = 'stopped'
     return jsonify({'status': 'ok'})
 
 
@@ -3001,6 +3395,31 @@ def _record_backfill_credit(files):
         log.warning("Could not record backfill on Rounds progress: %s", e)
 
 
+def _int_list(value, cap=500):
+    """A client-sent id list, reduced to at most `cap` ints. Anything else is dropped."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, int) and not isinstance(v, bool)][:cap]
+
+
+def _watch_episode_scope(cfg, connection_id, series_id, file_ids):
+    """The episode ids a Sonarr backfill may force-import over, or None if unknown.
+
+    Joined from the library files the candidate was built from, through Sonarr's
+    own episode list — `/api/v3/episodefile` carries no episode ids. None when
+    there is nothing to join or Sonarr could not be asked, and the watch then
+    force-imports nothing: a scope that cannot be established is not a licence
+    to import the whole download.
+    """
+    if not file_ids:
+        return None
+    by_file = sonarr_episodes_by_file(cfg, connection_id, series_id)
+    if by_file is None:
+        return None
+    ids = sorted({ep_id for fid in file_ids for ep_id, _s, _e in by_file.get(fid, [])})
+    return ids or None
+
+
 @app.route('/api/workflows/watch_import', methods=['POST'])
 @require_auth
 def workflows_watch_import():
@@ -3013,8 +3432,13 @@ def workflows_watch_import():
     # episodes, and Matchmaker counts files. Clamped in `record_backfill`;
     # missing (an older frontend bundle) simply credits one.
     files         = data.get('files', 1)
+    # The arr's ids for the library files this backfill is for. Only narrows:
+    # a force import is scoped to their episodes (B11), and a Sonarr watch sent
+    # none (an older bundle) force-imports nothing rather than everything.
+    file_ids      = _int_list(data.get('file_ids'))
     if not service or not connection_id or arr_id is None:
         return jsonify({'status': 'error', 'message': 'Missing parameters'}), 400
+    arr_name = 'Sonarr' if service == 'sonarr' else 'Radarr'
 
     job_id = secrets.token_hex(8)
     watch  = {
@@ -3040,7 +3464,17 @@ def workflows_watch_import():
             watch['message']      = 'Imported successfully'
             watch['completed_at'] = time.time()
 
+        def fail(message):
+            watch['status']       = 'error'
+            watch['message']      = message
+            watch['completed_at'] = time.time()
+
         try:
+            # Joined first, long before the import can land: the join runs from
+            # file id to episode, and the import is what replaces those files and
+            # retires their ids.
+            scope = (_watch_episode_scope(cfg, connection_id, arr_id, file_ids)
+                     if service == 'sonarr' else None)
             # Brief delay so qBit + Sonarr/Radarr have time to register the grab before we poll
             time.sleep(8)
             def on_downloading():
@@ -3081,6 +3515,19 @@ def workflows_watch_import():
                 log.info("Manual import will use downloadId %s", download_id)
             elif download_folder:
                 log.info("Manual import will use download folder %s", download_folder)
+            else:
+                # The arr's library folder used to stand in here, and its listing
+                # is the library file itself — a force import from it re-imports
+                # the file it is replacing (B11). Say so instead.
+                fail(f"{arr_name} did not report where this download is, so nothing was "
+                     f"force-imported — finish it from Activity → Queue in {arr_name}")
+                return
+            if service == 'sonarr' and not scope:
+                # Unknown episodes are not every episode. A pack forced in whole
+                # replaces files other torrents are hardlinked to (B1).
+                fail("Could not tell which episodes this backfill was for, so nothing was "
+                     "force-imported over your library — finish it from Activity → Queue in Sonarr")
+                return
 
             watch['status']  = 'importing'
             watch['message'] = 'Importing — triggering manual import'
@@ -3088,9 +3535,16 @@ def workflows_watch_import():
             # Retry loop: fire the command up to 3 times, confirming via both queue state
             # and a direct Arr API check (file ID change) after each attempt.
             still_active = last_active
+            scope_error  = None
             for attempt in range(3):
-                force_manual_import_by_id(cfg, service, connection_id, arr_id,
-                                          download_id=download_id, download_folder=download_folder)
+                try:
+                    force_manual_import_by_id(cfg, service, connection_id, arr_id,
+                                              download_id=download_id, download_folder=download_folder,
+                                              only_episode_ids=scope, media_folder_fallback=False)
+                except ValueError as e:
+                    # Typically: nothing in scope is importable any more — the arr
+                    # took those episodes itself, and what is left is out of scope.
+                    scope_error = str(e)
                 still_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=60)
                 if not still_active:
                     break
@@ -3108,7 +3562,7 @@ def workflows_watch_import():
                 stuck_rec = still_active[0]
                 msgs = [m for msg in stuck_rec.get('statusMessages', []) for m in msg.get('messages', [])]
                 watch['status']  = 'error'
-                watch['message'] = 'Import stalled: ' + ('; '.join(msgs) or 'queue item remained')
+                watch['message'] = 'Import stalled: ' + ('; '.join(msgs) or scope_error or 'queue item remained')
                 watch['completed_at'] = time.time()
             else:
                 mark_done()
@@ -3135,6 +3589,9 @@ def workflows_watch_import_status():
 @app.route('/api/workflows/watch_import/active')
 @require_auth
 def workflows_watch_import_active():
+    # Every open auditorr page polls this every five seconds, which makes it the
+    # one place Backfill's in-memory jobs are reliably swept (B13).
+    _sweep_backfill_jobs()
     now = time.time()
     # Expire jobs completed more than 5 minutes ago
     expired = [k for k, v in _import_watches.items() if v.get('completed_at') and now - v['completed_at'] > 300]

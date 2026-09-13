@@ -288,6 +288,18 @@ imported yet.
 
 ---
 
+## Backfill's Root Folders shows only "Other"
+
+The folder chips are the root folders configured in Sonarr and Radarr, and a
+file is grouped under **Other** when it isn't inside any of them. If *everything*
+is under Other, auditorr either couldn't read the root folder lists — they're
+fetched alongside your library, and a failure there is only logged, because all
+it costs you is the filter — or your files sit outside every root folder the arr
+reports. Nothing about the search depends on the chips: **All** still searches
+everything.
+
+---
+
 ## Half my library is invisible to Sonarr/Radarr features
 
 Symptoms cluster: Backfill offers candidates from only one of your libraries and

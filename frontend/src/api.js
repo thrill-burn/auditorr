@@ -25,6 +25,7 @@ async function req(path, opts = {}, retried = false) {
   if (!res.ok) {
     const err = new Error(data.message || data.error || 'Request failed')
     err.code = data.code
+    err.data = data
     throw err
   }
   return data
@@ -51,6 +52,7 @@ async function reqText(path, opts = {}, retried = false) {
     const data = await res.json().catch(() => ({}))
     const err = new Error(data.message || data.error || 'Request failed')
     err.code = data.code
+    err.data = data
     throw err
   }
   return res.text()
@@ -102,7 +104,7 @@ export const api = {
   watchImportActive:  ()       => req('/workflows/watch_import/active'),
   importCheck:        (items)  => req('/workflows/import_check',        { method: 'POST', body: JSON.stringify({ items }) }),
   startGenerate:  (params) => req('/workflows/generate',        { method: 'POST', body: JSON.stringify(params) }),
-  generateStatus: (jobId)  => req('/workflows/generate/status?job_id=' + jobId),
+  generateStatus: (jobId, since) => req('/workflows/generate/status?job_id=' + jobId + (since != null ? '&since=' + since : '')),
   stopGenerate:   (jobId)  => req('/workflows/generate/stop',   { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
   workflowIndexers: ()   => req('/workflows/indexers'),
   triageReport:   ()         => req('/workflows/triage'),

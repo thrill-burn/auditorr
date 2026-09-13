@@ -135,16 +135,37 @@ def normalize_arr_connections(cfg, service=None):
     return legacy + explicit
 
 
+def _fetch_root_folders(conn):
+    """One arr's configured root folders — arr-side paths, longest first — or None.
+
+    None is "could not read them", kept apart from `[]` ("none configured"). A
+    failure here never fails the media index: the chips it feeds are a filter,
+    and a missing filter must not cost the library it filters.
+    """
+    try:
+        rows = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/rootfolder')
+    except Exception as e:
+        log.warning("Could not fetch root folders from %s: %s", conn['id'], e)
+        return None
+    if not isinstance(rows, list):
+        return None
+    paths = {_path_norm(r.get('path')).rstrip('/') for r in rows
+             if isinstance(r, dict) and r.get('path')}
+    return sorted((p for p in paths if p), key=lambda p: (-len(p), p))
+
+
 def fetch_arr_media_index(cfg, force=False):
     """Fetch managed media-file paths from every configured Arr instance.
 
     Results are cached for _ARR_MEDIA_INDEX_TTL seconds. Pass force=True to bypass.
+    Each instance's root folders are read alongside (`arr_root_folders`).
     """
     now = time.monotonic()
     if not force and _arr_media_index_cache['data'] is not None and (now - _arr_media_index_cache['ts']) < _ARR_MEDIA_INDEX_TTL:
         return _arr_media_index_cache['data']
     media = []
     errors = []
+    roots = {}
     for conn in normalize_arr_connections(cfg):
         try:
             if conn['service'] == 'radarr':
@@ -152,6 +173,9 @@ def fetch_arr_media_index(cfg, force=False):
             else:
                 rows, partial = _fetch_sonarr_media(conn)
             media.extend(_apply_arr_media_path_mapping(rows, conn, cfg))
+            # Only for an instance that answered — a dead one would only add a
+            # second timeout. Per connection, never per row: one small list.
+            roots[conn['id']] = _fetch_root_folders(conn)
             if partial:
                 # Some of the library came back. Reported on the same channel as
                 # a total failure because the consequence is the same shape — an
@@ -169,8 +193,21 @@ def fetch_arr_media_index(cfg, force=False):
                            'message': str(e)})
     _arr_media_index_cache['data'] = media
     _arr_media_index_cache['errors'] = errors
+    _arr_media_index_cache['roots'] = roots
     _arr_media_index_cache['ts'] = now
     return media
+
+
+def arr_root_folders():
+    """`{connection_id: [root, ...] | None}` for the most recent index fetch (B10).
+
+    Arr-side paths as configured in Sonarr/Radarr, longest first. `None` for an
+    instance whose root folders could not be read; an instance whose media index
+    failed has no entry at all. Same contract as `arr_media_index_errors`: it
+    describes the list the caller just received, so call the fetch and then
+    this, in that order, in the same request.
+    """
+    return dict(_arr_media_index_cache.get('roots') or {})
 
 
 def arr_media_index_errors():
@@ -258,6 +295,44 @@ def _episode_id_from_path(conn, arr_id, file_path):
     return next((by_num[n] for n in ep_nums if by_num.get(n) is not None), None)
 
 
+def sonarr_episodes_by_file(cfg, connection_id, series_id):
+    """`{episode_file_id: [(episode_id, season, episode), ...]}` for one series, or None.
+
+    The only authoritative route from a library file to the episodes it holds.
+    `/api/v3/episodefile` does not carry them — Sonarr's `EpisodeFileResource`
+    has a `seasonNumber` and **no** episode ids or numbers — so the
+    `episode_ids` / `episode_numbers` `_fetch_sonarr_media` reads off that record
+    are always empty against a real Sonarr, and every fixture that populated
+    them was testing a field that does not exist. `/api/v3/episode?seriesId=`
+    does carry `episodeFileId`, and that join also works for daily and
+    absolute-numbered series, where parsing the filename does not.
+
+    `None` is "could not ask", kept distinct from `{}` ("this series holds no
+    files") for the reason R1 records: both Backfill consumers narrow a search or
+    an import by this answer, and an unknown read as "no episodes" would narrow
+    it to nothing silently.
+    """
+    conns = normalize_arr_connections(cfg, service='sonarr')
+    conn = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        return None
+    try:
+        episodes = _arr_get(conn['base_url'], conn['api_key'],
+                            f'/api/v3/episode?seriesId={series_id}')
+    except Exception as e:
+        log.warning("Could not list episodes for series %s on %s: %s", series_id, connection_id, e)
+        return None
+    out = {}
+    for ep in episodes or []:
+        file_id = ep.get('episodeFileId')
+        if file_id and ep.get('id') is not None:
+            out.setdefault(file_id, []).append(
+                (ep['id'], ep.get('seasonNumber'), ep.get('episodeNumber')))
+    for eps in out.values():
+        eps.sort(key=lambda e: (e[1] if e[1] is not None else -1, e[2] if e[2] is not None else -1))
+    return out
+
+
 def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None, file_path=None):
     """Fetch the interactive release search for a single Arr item.
 
@@ -305,6 +380,16 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'hdr':                 _detect_hdr(r.get('title', '')),
             'custom_format_score': r.get('customFormatScore', 0),
             'quality_weight':      r.get('qualityWeight', 0),
+            # Sonarr only: what the release covers. An episode search can still
+            # return a season pack or a multi-episode file — interactive search
+            # lists rejected releases alongside approved ones, and a grab
+            # through /api/v3/release bypasses the rejection — so Backfill's
+            # scope gate has to see this to keep a pack off an episode row (B1).
+            'full_season':         bool(r.get('fullSeason')),
+            # Mapped first: `episodeNumbers` is parsed off the title in scene
+            # numbering, `mappedEpisodeNumbers` is the series' own numbering —
+            # the one an episode-file join yields.
+            'episode_numbers':     list(r.get('mappedEpisodeNumbers') or r.get('episodeNumbers') or []),
         })
     return result
 
@@ -372,6 +457,19 @@ _FILE_EXT_RE = re.compile(
 def _strip_file_ext(name):
     """Drop a trailing real file extension from a release file or folder name."""
     return _FILE_EXT_RE.sub('', str(name or '').strip())
+
+
+# Container extensions an arr imports as video — dotted, lowercase. What tells
+# an unmatched *video* (usually a path-mapping mismatch, and worth acting on)
+# from an unmatched sidecar (subtitles, artwork, .nfo — which no arr indexes)
+# in Backfill's resolution readout (B9). Triage's narrower `_VIDEO_EXTS` in
+# app.py predates this and is Phase 9's to reconcile.
+VIDEO_EXTENSIONS = frozenset({
+    '.mkv', '.mk3d', '.mp4', '.m4v', '.avi', '.mov', '.qt', '.wmv', '.asf',
+    '.mpg', '.mpeg', '.m2v', '.ts', '.m2ts', '.mts', '.wtv', '.vob', '.iso',
+    '.webm', '.flv', '.ogm', '.ogv', '.divx', '.xvid', '.rm', '.rmvb', '.3gp',
+    '.dvr-ms',
+})
 
 
 def _release_group_tag(name):
@@ -776,6 +874,41 @@ def grab_release(cfg, service, connection_id, guid, indexer_id):
         return json.loads(raw) if raw.strip() else {}
 
 
+def queue_records_for_item(cfg, service, connection_id, arr_id, episode_ids=None, season_number=None):
+    """The arr's live queue entries for one Backfill candidate, or None if unreadable.
+
+    Sonarr: entries on this series carrying one of `episode_ids`; failing those,
+    entries in `season_number`; failing both, any entry on the series. Radarr:
+    entries on this movie. An entry in a terminal failed state is not a download
+    in progress and is not returned — the same reading `poll_queue_until_clear`
+    takes.
+
+    Keeps a candidate from being grabbed a second time (B12): by a retry after a
+    timeout the arr had in fact processed, by a second run, or by a click on a
+    row that reported failure. `None` is "could not ask", distinct from `[]`.
+    """
+    conns = normalize_arr_connections(cfg, service=service)
+    conn = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        return None
+    try:
+        result = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/queue?pageSize=500', timeout=10)
+    except Exception as e:
+        log.warning("Could not read the %s queue on %s: %s", service, connection_id, e)
+        return None
+    records = result.get('records', []) if isinstance(result, dict) else (result or [])
+    live = [r for r in records if isinstance(r, dict) and r.get('status') not in ('failed', 'error')]
+    if service == 'radarr':
+        return [r for r in live if r.get('movieId') == arr_id]
+    mine = [r for r in live if r.get('seriesId') == arr_id]
+    if episode_ids:
+        wanted = set(episode_ids)
+        return [r for r in mine if r.get('episodeId') in wanted]
+    if season_number is not None:
+        return [r for r in mine if r.get('seasonNumber') == season_number]
+    return mine
+
+
 def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None):
     """Poll Sonarr/Radarr queue for arr_id until the item clears or timeout (seconds).
 
@@ -843,7 +976,8 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
 
 
 def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=None,
-                              download_folder=None, only_paths=None, import_mode='Auto'):
+                              download_folder=None, only_paths=None, import_mode='Auto',
+                              only_episode_ids=None, media_folder_fallback=True):
     """Force manual import of a movie or series, bypassing quality cutoff.
 
     download_id:     the downloadId from the Radarr/Sonarr queue record (qBittorrent hash).
@@ -852,17 +986,30 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
                      quality grabs that sit in importPending state.
     download_folder: fallback — parent directory of outputPath from the queue record.
                      Used when download_id is unavailable.  Falls back further to the
-                     media folder for hardlink/backfill cases where the file is already
-                     at its final location.
+                     media folder unless `media_folder_fallback` is False.
     only_paths:      restrict the import to these exact arr-side file paths. A folder
                      lookup returns every file in the folder, and a single-file torrent's
                      folder is the shared category dir — without this, importing one
                      torrent would sweep in every unrelated file sitting beside it.
-    import_mode:     'Auto' is safe only when a download_id resolves to a tracked
-                     download: the arr then sees CanMoveFiles=false on a seeding
-                     torrent and hardlinks. With no tracked download Auto means
-                     move, which would pull the payload out from under the seed —
-                     callers working from a bare path must pass 'Copy'.
+    only_episode_ids: Sonarr only — keep a row only if every episode it names is in
+                     this set, and drop a row that names none. The path form above
+                     cannot scope a *grab*: the files to import do not exist until the
+                     download does, while the library paths a caller knows are the
+                     files being replaced, not imported. Episodes are the unit both
+                     sides share. Without it a season pack grabbed for one episode
+                     replaces every episode it carries (BACKFILL B1/B11).
+    media_folder_fallback: the arr's own library folder as a last resort. Its listing
+                     is the library file itself, so without a path scope a force
+                     import from it re-imports the very file it is replacing. A caller
+                     that has nothing to scope it with must pass False and report the
+                     missing download location rather than reach for this.
+    import_mode:     'Auto' is honoured **only when the rows came from the downloadId
+                     lookup**: the arr then sees CanMoveFiles=false on a seeding torrent
+                     and hardlinks. Every folder branch imports with 'Copy' whatever was
+                     asked for — with no tracked download Auto means move, which pulls
+                     the payload out from under the seed, and the branch is decided in
+                     here, so a caller cannot know which one it will get. 'Copy' is
+                     HardLinkOrCopy when the arr has hardlinks enabled.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
@@ -879,10 +1026,18 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         id_param     = f'seriesId={arr_id}'
 
     def _keep(rows):
-        if only_paths is None:
-            return rows or []
-        wanted = set(only_paths)
-        return [r for r in (rows or []) if (r.get('path') or '') in wanted]
+        rows = rows or []
+        if only_paths is not None:
+            wanted = set(only_paths)
+            rows = [r for r in rows if (r.get('path') or '') in wanted]
+        if only_episode_ids is not None:
+            allowed = set(only_episode_ids)
+
+            def _in_scope(row):
+                ids = {ep.get('id') for ep in (row.get('episodes') or []) if ep.get('id') is not None}
+                return bool(ids) and ids <= allowed
+            rows = [r for r in rows if _in_scope(r)]
+        return rows
 
     def _query_by_download_id(dl_id):
         try:
@@ -910,39 +1065,50 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
             return []
 
     # Try downloadId first (finds download-client-tracked files), then folder fallbacks.
+    folders_to_try = [f for f in [download_folder, media_folder if media_folder_fallback else None] if f]
     files = []
+    via_download = False
     if download_id:
         files = _query_by_download_id(download_id)
+        via_download = bool(files)
         if files:
             log.info("Found %d importable file(s) for %s %s via downloadId", len(files), service, arr_id)
 
     if not files:
-        folders_to_try = [f for f in [download_folder, media_folder] if f]
         for folder in folders_to_try:
             files = _query_by_folder(folder)
             if files:
                 log.info("Found %d importable file(s) for %s %s in %s", len(files), service, arr_id, folder)
                 break
 
-    if not files:
+    if not files and (download_id or folders_to_try):
         # Retry once after a delay — handles timing race where qBit finishes but files
         # aren't importable yet from Sonarr/Radarr's perspective
         log.info("No importable files for %s %s on first attempt, retrying in 15s…", service, arr_id)
         time.sleep(15)
         if download_id:
             files = _query_by_download_id(download_id)
+            via_download = bool(files)
         if not files:
-            for folder in [f for f in [download_folder, media_folder] if f]:
+            for folder in folders_to_try:
                 files = _query_by_folder(folder)
                 if files:
                     break
 
     if not files:
-        if only_paths:
+        if not download_id and not folders_to_try:
+            raise ValueError("Nothing to import from — no download id or folder was given")
+        if only_paths or only_episode_ids is not None:
             raise ValueError(
                 f"{_SERVICE_MAP[service]['name']} does not list the selected file(s) as importable — "
                 "they may have already been imported, or moved")
         raise ValueError(f"No importable files found — check {service} queue manually")
+
+    # Auto survives only where a tracked download stands behind the rows; every
+    # folder branch copies (see the docstring). Decided here because only here
+    # is the branch known.
+    if not via_download:
+        import_mode = 'Copy'
 
     # Use the ManualImport command endpoint with replaceExistingFiles=True.
     # This mirrors what Radarr/Sonarr's "Import Anyway" UI button does and bypasses

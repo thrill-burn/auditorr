@@ -122,21 +122,77 @@ seeding torrent — a trumped release, a dead tracker, a rip you made yourself.
 They cost you disk space and return nothing.
 
 Backfill matches those files against your Sonarr/Radarr library, then searches
-your indexers for a version that is actually seeding. Sonarr episodes are
-grouped by series and season so you search for a season pack rather than
-twelve episodes.
-
-Results are filtered by resolution, source and HDR format, then sorted by
-custom format score, quality, and seeders. Grabbing hands the release to
-Sonarr/Radarr, which downloads and imports it normally — the new torrent
-hardlinks into the library and the file stops being orphaned.
+your indexers for a version that is actually seeding.
 
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
+### Season packs and single episodes
+
+A Sonarr season is searched as **one season pack only when every episode file
+Sonarr holds in that season is unseeded**. Otherwise each unseeded episode is
+searched on its own. The rows say which: `S01 season pack · 10 ep`, or `S01E05`.
+
+This matters more than it looks. A pack grabbed to backfill one episode of a
+season whose other nine are already seeding downloads the whole season, and
+importing it replaces all ten library files — so the nine torrents that were
+hardlinked to them become orphans, and the health score falls on two counts at
+once. An episode search can still turn up a season pack or a multi-episode
+release, and those are left off an episode row. Where Sonarr hasn't numbered
+every file of a show, auditorr can't show that a season is fully unseeded, so
+it searches episode by episode.
+
+### Ranking
+
+**Closest to my file** (the default) puts first the release that looks like the
+file you already have: an exact size match, then one within 1% (a scene
+torrent's `.nfo` and sample), then the same quality, then the same HDR, then
+the most seeders. Each release shows its size against your file (`= exact`,
+`+1.2 GB`) and whether size, quality and HDR agree. **Best available
+(upgrade)** keeps Sonarr/Radarr's own order — custom format score, quality,
+seeders — for when you mean to upgrade while you backfill.
+
+Results can also be filtered by resolution, source and HDR format.
+
+### Grabbing and importing
+
+Grabbing hands the release to Sonarr/Radarr, which downloads and imports it
+normally — the new torrent hardlinks into the library and the file stops being
+orphaned. When the arr parks the download because it isn't an upgrade (usual
+for a backfill, since you already have this content), auditorr imports it
+anyway — but only over the episodes that row was for, and always as a copy, so
+nothing is moved out from under a seeding torrent. If the arr doesn't say where
+the download is, or auditorr can't tell which episodes the row covered, it stops
+and asks you to finish the import in Sonarr/Radarr rather than guessing.
+
+A grab that fails because the release has dropped out of the arr's cache is
+searched again and retried once. Any other failure is shown as it is — a
+timeout may be a grab that actually went through, and retrying it would
+download the release twice. For the same reason, a release already in the
+arr's queue isn't grabbed again unless you click **anyway**.
+
+### Runs
+
+A search keeps running if you leave the page, and Backfill picks it back up when
+you come back in the same browser tab. Starting a second search while one is
+running shows you the running one instead of stopping it. A search nobody is
+watching stops itself after ten minutes, and a finished one is kept for an hour.
+
+### The rest of the page
+
+**Root Folders** are the root folders configured in Sonarr/Radarr; a file under
+none of them is grouped under **Other**.
+
+**Search Depth** reports two different units in two sentences: candidates (a
+season pack is one) and files. Of the unseeded files that didn't match your
+library, it separates subtitles, artwork and other files no arr indexes from
+**video files that didn't match** — usually a path-mapping problem, and the
+number worth acting on.
+
 **Indexer strategy** lets you say "download from these indexers, but only if the
 release is also on that one" — useful when you want to satisfy one tracker's
-seeding requirements using another's copy. Filter preferences persist between
-visits.
+seeding requirements using another's copy. Downloading a release from one of
+those indexers counts as it being listed there. Filter preferences persist
+between visits.
 
 ---
 

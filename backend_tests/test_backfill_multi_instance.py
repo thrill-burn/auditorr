@@ -34,7 +34,7 @@ def _two_sonarrs():
 
 
 def _clear_index_cache():
-    arr._arr_media_index_cache.update({'data': None, 'ts': 0, 'errors': []})
+    arr._arr_media_index_cache.update({'data': None, 'ts': 0, 'errors': [], 'roots': {}})
 
 
 # ── Series-id collision ───────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ def test_same_series_id_on_two_sonarrs_stays_two_candidates():
     ]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
          patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
-        groups = app_module._build_generate_candidates(_two_sonarrs(), limit=None)
+        groups = app_module._build_generate_candidates(_two_sonarrs())
 
     assert len(groups) == 2, 'the anime series was absorbed into the TV series'
     assert {g['arr_connection_id'] for g in groups} == {'sonarr-tv', 'sonarr-anime'}
@@ -79,12 +79,14 @@ def test_both_instances_contribute_a_root_folder():
         {'service': 'sonarr', 'connection_id': 'sonarr-anime', 'arr_id': 1,
          'title': 'Anime', 'path': '/data/media/anime/Anime/Anime.S01E01.mkv'},
     ]
+    roots = {'sonarr-tv': ['/data/media/tv'], 'sonarr-anime': ['/data/media/anime']}
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
-        groups = app_module._build_generate_candidates(_two_sonarrs(), limit=None)
+         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media), \
+         patch.object(app_module, 'arr_root_folders', return_value=roots):
+        groups = app_module._build_generate_candidates(_two_sonarrs())
 
-    folders = {app_module._gen_root_folder(g['rep_path']) for g in groups}
-    assert folders == {'tv', 'anime'}
+    # The arrs' own root folders since B10, not the first segment below MEDIA_PATH.
+    assert {g['folder'] for g in groups} == {'/data/media/tv', '/data/media/anime'}
 
 
 # ── Season grouping keys on Sonarr's number, not the filename (B8) ───────────
@@ -123,7 +125,7 @@ def test_unparseable_episode_names_do_not_merge_seasons():
     ]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
          patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
-        groups = app_module._build_generate_candidates(_single_sonarr(), limit=None)
+        groups = app_module._build_generate_candidates(_single_sonarr())
 
     assert len(groups) == 2, 'two seasons merged into one candidate'
     assert sorted(g['season_number'] for g in groups) == [1, 2]
@@ -145,7 +147,7 @@ def test_the_filename_regex_is_still_the_fallback():
     ]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
          patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
-        groups = app_module._build_generate_candidates(_single_sonarr(), limit=None)
+        groups = app_module._build_generate_candidates(_single_sonarr())
 
     assert sorted(g['season_number'] for g in groups) == [1, 2]
 
@@ -161,7 +163,7 @@ def test_a_whole_season_still_groups_into_one_candidate():
                  for n in (1, 2, 3)]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
          patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
-        groups = app_module._build_generate_candidates(_single_sonarr(), limit=None)
+        groups = app_module._build_generate_candidates(_single_sonarr())
 
     assert len(groups) == 1
     assert groups[0]['file_count'] == 3
