@@ -185,8 +185,10 @@ none of them is grouped under **Other**.
 **Search Depth** reports two different units in two sentences: candidates (a
 season pack is one) and files. Of the unseeded files that didn't match your
 library, it separates subtitles, artwork and other files no arr indexes from
-**video files that didn't match** — usually a path-mapping problem, and the
-number worth acting on.
+**video files that didn't match**, which are the number worth acting on. If
+little of your library matched, a path mapping is the usual cause. If most of
+it did, those videos are files Sonarr/Radarr don't track at those paths — a
+title they don't manage, or manage somewhere else.
 
 **Indexer strategy** lets you say "download from these indexers, but only if the
 release is also on that one" — useful when you want to satisfy one tracker's

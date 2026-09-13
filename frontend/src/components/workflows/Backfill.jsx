@@ -77,14 +77,25 @@ function matchedFilesLine(matched, total) {
 // is the number worth acting on — a path-mapping mismatch is the usual reason —
 // and it used to be buried in one undifferentiated count. Its own sentence, for
 // the same reason as the one above.
+//
+// Which cause it names depends on how much of the library matched. A path
+// mapping breaks every file on an instance, so it is the likely explanation only
+// when matches are rare. Where most of the library matched, the unmatched videos
+// are files the arr does not track at those paths. The first cut blamed a path
+// mapping either way, and the reference box answered it: 797 files matched, and
+// the unmatched videos sat together in one folder.
 function unmatchedFilesLine(matched, total, video) {
   if (video == null || total - matched <= 0) return ''
   const other = total - matched - video
   const parts = []
   if (other === 1) parts.push('1 is a subtitle, artwork or other non-video file, which no arr indexes.')
   else if (other > 1) parts.push(`${other.toLocaleString()} are subtitles, artwork and other non-video files, which no arr indexes.`)
-  if (video === 1) parts.push('1 is a video file that did not match — usually a path-mapping mismatch.')
-  else if (video > 1) parts.push(`${video.toLocaleString()} are video files that did not match — usually a path-mapping mismatch.`)
+  if (video > 0) {
+    const are = video === 1 ? '1 is a video file' : `${video.toLocaleString()} are video files`
+    parts.push(matched < video
+      ? `${are} that did not match — usually a path-mapping mismatch.`
+      : `${are} Sonarr/Radarr ${video === 1 ? "doesn't" : "don't"} track at ${video === 1 ? 'that path' : 'those paths'} — a title they don't manage, or manage somewhere else.`)
+  }
   return parts.join(' ')
 }
 
