@@ -18,6 +18,7 @@ import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
 import { api } from './api'
+import { formatBytes } from './utils'
 
 
 // ── Script Modal ──────────────────────────────────────────────────────────────
@@ -25,16 +26,47 @@ function _btnStyle(bg, color) {
   return { padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border2)', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
 }
 
+// What the server says about a script it just built. Only Cleanup's delete
+// script sends these (it re-checks the selection against the torrent client
+// immediately before building it); Dedupe's sends none, and renders as before.
+function scriptMeta(headers) {
+  const at = headers?.get?.('X-Auditorr-Verified-At')
+  if (!at) return null
+  const num = k => Number(headers.get(k) || 0)
+  return {
+    verifiedAt: Number(at),
+    dropped:    num('X-Auditorr-Dropped'),
+    files:      num('X-Auditorr-Files'),
+    freeable:   num('X-Auditorr-Freeable'),
+  }
+}
+
 function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
   const [script, setScript] = useState(null)
+  const [meta, setMeta] = useState(null)
+  const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  // One request per modal open. StrictMode runs effects twice in development,
+  // and for Cleanup every request is a fresh round of torrent-client listings.
+  const requested = useRef(null)
 
   useEffect(() => {
+    if (requested.current === body) return
+    requested.current = body
     api.actionScript(scriptType, body)
-      .then(text => { setScript(text); setLoading(false) })
-      .catch(e => { setScript(`# Error loading script: ${e.message}`); setLoading(false) })
+      .then(({ text, headers }) => { setScript(text); setMeta(scriptMeta(headers)); setLoading(false) })
+      // A refusal is not a script. It used to render inside the code box as
+      // `# Error loading script: …` — copyable, downloadable, and shaped like
+      // something to run.
+      .catch(e => { setError(e.message || 'Could not build the script'); setLoading(false) })
   }, [scriptType, body])
+
+  // The page computed its subtitle from the selection; the server's count is the
+  // one that holds after files a torrent now claims were dropped.
+  const shownSubtitle = meta
+    ? `${meta.files} file${meta.files !== 1 ? 's' : ''} · up to ${formatBytes(meta.freeable)} freed`
+    : subtitle
 
   const handleCopy = () => {
     const ta = document.createElement('textarea')
@@ -95,23 +127,40 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>{subtitle}</div>}
+            {shownSubtitle && !error && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>{shownSubtitle}</div>}
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
         </div>
-        <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 12, color: 'var(--text-dim)', flexShrink: 0 }}>
-          ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
-        </div>
+        {!error && (
+          <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 12, color: 'var(--text-dim)', flexShrink: 0 }}>
+            ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
+            {meta && (
+              <div style={{ marginTop: 6 }}>
+                Checked against your torrent client at {new Date(meta.verifiedAt * 1000).toLocaleTimeString()} — run it soon; it warns if it is more than a day old.
+                {meta.dropped > 0 && (
+                  <span style={{ color: 'var(--yellow)' }}>
+                    {' '}{meta.dropped} selected file{meta.dropped !== 1 ? 's are' : ' is'} in use by a torrent now and {meta.dropped !== 1 ? 'were' : 'was'} left out.
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
           {loading ? (
-            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
+            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Checking…</div>
+          ) : error ? (
+            <div style={{ padding: '12px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', fontSize: 13, lineHeight: 1.6 }}>
+              <div style={{ color: 'var(--red)', fontWeight: 600, marginBottom: 4 }}>No script was built</div>
+              <div style={{ color: 'var(--text)' }}>{error}</div>
+            </div>
           ) : (
             <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
           )}
         </div>
         <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
           <button onClick={onClose} style={_btnStyle('var(--surface2)', 'var(--text-dim)')}>Close</button>
-          {!loading && script && (
+          {!loading && !error && script && (
             <>
               <button onClick={handleDownload} style={_btnStyle('var(--surface2)', 'var(--text)')}>Download .sh</button>
               <button onClick={handleCopy} style={_btnStyle('var(--accent)', '#0a0a0a')}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</button>

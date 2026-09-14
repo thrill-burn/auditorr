@@ -18,8 +18,8 @@ import qbittorrentapi
 
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
-    disk_fallback_paths, new_source_report, report_note,
-    torrent_complete, incomplete_claims, remap_path,
+    new_source_report, report_note,
+    torrent_complete, torrent_claimed_paths, remap_path,
 )
 
 log = logging.getLogger(__name__)
@@ -29,17 +29,17 @@ log = logging.getLogger(__name__)
 # fetch_file_map
 # ---------------------------------------------------------------------------
 
-def fetch_file_map(cfg):
+def fetch_file_map(cfg, unresolved_roots=None):
     socket.setdefaulttimeout(30)
     try:
-        return _fetch_inner(cfg)
+        return _fetch_inner(cfg, unresolved_roots)
     except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
         raise SourceConnectionError(f"qBittorrent error: {e}") from e
     finally:
         socket.setdefaulttimeout(None)
 
 
-def _fetch_inner(cfg):
+def _fetch_inner(cfg, unresolved_roots=None):
     qbt = qbittorrentapi.Client(
         host=cfg.get('QB_HOST'),
         username=cfg.get('QB_USER'),
@@ -163,19 +163,24 @@ def _fetch_inner(cfg):
         elif complete is None:
             report['completion_unknown'] += 1
         health, health_msg = health_map.get(torrent.hash, ('unknown', ''))
-        if torrent.hash in failed_listings:
-            # Disk fallback (ported from the qui backend). The listing failed, so
-            # the paths are exactly what we do not have — but the payload lives
-            # at save_path/name, and enumerating it there claims the files
-            # instead of leaving them to default to 'Orphaned'. What it cannot
-            # find stays unresolved and is counted, not swallowed.
-            recovered = disk_fallback_paths(
-                save_path, getattr(torrent, 'name', '') or '', content_path)
-            full_paths = recovered
-            if recovered:
+        # The claim rule is `sources.torrent_claimed_paths`, shared with qui and
+        # with Cleanup's live re-verify so the three cannot disagree. A failed
+        # listing is `None`: the paths are exactly what we do not have, so the
+        # payload is enumerated from disk instead (ported from the qui backend)
+        # rather than left to default to 'Orphaned'.
+        listed = None if torrent.hash in failed_listings else \
+            [f.name for f in files_map.get(torrent.hash, [])]
+        full_paths = torrent_claimed_paths(
+            save_path, getattr(torrent, 'name', '') or '', content_path, listed, complete)
+        if listed is None:
+            if full_paths:
                 report['listing_recovered'] += 1
             else:
+                # What the fallback cannot find stays unresolved and is counted,
+                # not swallowed.
                 report['listing_unresolved'] += 1
+                if unresolved_roots is not None:
+                    unresolved_roots.extend(r for r in (save_path, content_path) if r)
                 # Deliberately no infohash: these notes reach the debug report,
                 # which is meant to be safe to paste in public, and an infohash
                 # names a specific release on a private tracker. A short prefix
@@ -183,16 +188,6 @@ def _fetch_inner(cfg):
                 # redactor fires at. The save path goes through its sanitizer.
                 report_note(report,
                             f"file listing failed and nothing was found at {save_path}")
-        else:
-            file_names = [f.name for f in files_map.get(torrent.hash, [])]
-            full_paths = [os.path.join(save_path, n) for n in file_names]
-            if complete is not True:
-                # An unfinished payload may not be where the listing says it
-                # will end up. Adds nothing on a client with neither the temp
-                # directory nor the `.!qB` suffix enabled.
-                full_paths = full_paths + incomplete_claims(
-                    content_path, getattr(torrent, 'name', '') or '',
-                    file_names, full_paths)
         for full_path in full_paths:
             entry = file_map.setdefault(full_path, {
                 "status": status,
@@ -348,9 +343,14 @@ def list_torrents(cfg):
     """Light live listing of every torrent in the client.
 
     Returns ([rows], report) where a row is {'hash', 'name', 'size',
-    'save_path', 'tracker', 'instance_id', 'instance_name'} — size is the
-    torrent's payload size, so cross-seeds of the same content report identical
-    values (the Trumped workflow's sibling pre-filter).
+    'save_path', 'content_path', 'progress', 'completion_on', 'tracker',
+    'instance_id', 'instance_name'} — size is the torrent's payload size, so
+    cross-seeds of the same content report identical values (the Trumped
+    workflow's sibling pre-filter). `save_path` and `content_path` are the
+    client's own, unremapped. The last three fields are what Cleanup's live
+    re-verify needs to apply the audit's claim rule to one torrent
+    (`sources.torrent_claimed_paths`); `fetch_file_map` already read all three
+    off this same call (M7, Phase 3's parity check).
 
     A single instance, so the listing is all-or-nothing: it either returns every
     torrent or raises. `report` exists to match the qui backend's shape, where
@@ -373,6 +373,9 @@ def list_torrents(cfg):
                 'name':          t.name,
                 'size':          t.size,
                 'save_path':     t.save_path,
+                'content_path':  getattr(t, 'content_path', '') or '',
+                'progress':      getattr(t, 'progress', None),
+                'completion_on': getattr(t, 'completion_on', None),
                 'tracker':       parts[2] if len(parts) > 2 else '',
                 'instance_id':   None,
                 'instance_name': None,

@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import app
-from audit import _assemble_records, _mark_whole_torrents
+from audit import _assemble_records, _mark_cleanup_folders, _mark_whole_torrents
 from db import (EXCLUSION_PATTERNS_MAX, EXCLUSION_PATTERN_MAX_CHARS,
                 validate_config)
 from exclusions import compile_exclusions, is_excluded
@@ -30,43 +30,70 @@ def _orphan(path, size=100):
             'excluded': False, 'linked_paths': []}
 
 
-def _cleanup(records):
+def _cleanup(records, media=None):
+    """The Cleanup report for `records`, stamped by the audit's folder test first.
+
+    `media` is the media list the audit would have in hand; `None` sends the
+    records unstamped, the shape of a database whose last audit predates the
+    stamp.
+    """
+    if media is not None:
+        _mark_cleanup_folders(records, [{'path': p} for p in media])
     with patch.object(app, 'db_load_config', return_value={'LOCAL_PATH': ''}), \
+         patch.object(app, 'db_load_results', return_value={}), \
+         patch.object(app, 'db_has_file_results', return_value=False), \
          patch.object(app, 'db_load_file_results', return_value=records):
         resp = app.app.test_client().get('/api/workflows/cleanup')
     return resp.get_json()
 
 
+# A library laid out the way the arrs lay one out: the category dirs are shared
+# with the torrent tree by construction, the release folders are renamed.
+_LIBRARY = ['movies/Film (2020)/Film (2020).mkv', 'movies/Sicario (2015)/Sicario.mkv']
+
+
 class CategoryDirGroupingTests(unittest.TestCase):
-    """C7: one click could write `movies/`, which matches the media library too."""
+    """C7: one click could write `movies/`, which matches the media library too.
+
+    Rewritten deliberately in Phase 8, keeping every fixture. These asserted on
+    `loose`, the **depth** flag Phase 5 shipped, and that flag was a proxy: it
+    refused one-segment release folders and offered any folder a live torrent
+    shared with an orphan (C16). The intent survives unchanged — a category dir
+    never yields a folder rule, and a release folder does — and is now asserted
+    on the audit's `excl_folder` stamp, which tests the two real properties.
+    """
 
     def test_a_single_file_orphan_in_a_category_dir_yields_no_folder_pattern(self):
         report = _cleanup([
             _orphan('movies/Film.2020.1080p.mkv'),
             _orphan('movies/Other.2019.1080p.mkv'),
-        ])
+        ], media=_LIBRARY)
         groups = report['groups']
         self.assertEqual(len(groups), 1)
         g = groups[0]
         self.assertEqual(g['folder'], 'movies')
-        # The flag is the answer, shipped by the server so the client never
-        # re-derives the depth rule.
-        self.assertTrue(g['loose'])
+        # The stamp is the answer, computed by the audit so the client never
+        # re-derives the rule.
+        self.assertIsNone(g['excl_folder'])
+        self.assertEqual(g['no_folder_rule'], 'media_root')
+        self.assertTrue(g['loose'], 'kept for a stale bundle, which reads only this')
         self.assertEqual(len(g['files']), 2)
 
     def test_root_level_orphans_are_loose_too(self):
-        report = _cleanup([_orphan('Stray.mkv')])
+        report = _cleanup([_orphan('Stray.mkv')], media=_LIBRARY)
         g = report['groups'][0]
         self.assertEqual(g['folder'], '(root)')
-        self.assertTrue(g['loose'])
+        self.assertIsNone(g['excl_folder'])
+        self.assertEqual(g['no_folder_rule'], 'root')
 
     def test_a_release_folder_group_is_not_loose(self):
         report = _cleanup([
             _orphan('movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.mkv'),
             _orphan('movies/Sicario.2015.1080p.BluRay.x264-GRP/Sicario.nfo'),
-        ])
+        ], media=_LIBRARY)
         g = report['groups'][0]
         self.assertEqual(g['folder'], 'movies/Sicario.2015.1080p.BluRay.x264-GRP')
+        self.assertEqual(g['excl_folder'], 'movies/Sicario.2015.1080p.BluRay.x264-GRP')
         self.assertFalse(g['loose'])
 
     def test_the_category_pattern_it_used_to_emit_really_does_hide_the_library(self):

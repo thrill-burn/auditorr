@@ -201,25 +201,81 @@ between visits.
 ## Cleanup
 
 **Targets orphaned torrent files**: files sitting in your torrent folder that
-your client has no torrent for. Nothing is seeding them and nothing is
+no torrent in your client claims. Nothing is seeding them and nothing is
 protecting them.
 
-They're grouped by release folder so you review whole releases rather than
-individual files. Select what you want gone and generate a delete script — plain
-bash, using paths relative to your torrent directory, with a working-directory
-guard at the top. Read it, then run it wherever you like.
+Cleanup is the one workflow whose result can't be undone — its script deletes
+files — so the page is organised around one question: **does anything else
+still hold this data?**
 
-A group marked **loose files** isn't a release — those files sit directly in a
-category directory such as `movies/`, which is where qBittorrent saves
-single-file torrents by default. They're grouped for convenience only, and
-excluding them writes one rule per file rather than a folder rule, because a
-category directory is shared with your media library.
+- **Your library keeps a copy** comes first. Another hardlink to the file stays
+  on disk — normally your media library's copy — so deleting the torrent-folder
+  path loses nothing, and frees nothing either. Clearing this pile is what tidies
+  a torrent folder.
+- **This is the only copy** comes second. Deleting these is permanent.
+- **Could not check** appears only when your client didn't fully answer on the
+  last scan. Those files might belong to a live torrent, so they're shown but
+  can't be selected until a scan reads every torrent's file list.
+
+Every file carries its state — **library copy**, **linked elsewhere** (a
+hardlink outside your torrent and media folders, such as a snapshot), **only
+copy** or **could not check** — and its age. Within each pile the oldest comes
+first: a file that has sat there for years is likelier junk than one from this
+week. A file hardlinked at two places in your torrent folder — a cross-seed
+whose torrents are both gone — is one row listing both paths, because its space
+is freed only when both are deleted. **Freed at most** is an upper bound; the
+script reports what it actually frees.
+
+Files are grouped by release folder so you review whole releases rather than
+individual files, and nothing is ever selected for you.
 
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
+
+### The delete script
+
+Select what you want gone and generate a delete script — plain bash, using paths
+relative to your torrent directory. **Right before building it, auditorr asks
+your torrent client about the selection again.** Any file a torrent claims now —
+a cross-seed tool injected one since the scan, or you re-added a torrent — is
+left out, and both the dialog and the script's header say how many. If your
+client, or any qui instance, doesn't answer, no script is built.
+
+The script:
+
+- checks that it's running in your torrent folder;
+- warns if it was generated more than a day ago (it doesn't refuse — the clock on
+  the machine running it isn't auditorr's);
+- counts every file as **deleted**, **already gone** or **FAILED**. A delete that
+  fails — a read-only mount, a permission problem — is reported as a failure,
+  never as done, and the script exits non-zero;
+- removes release folders it emptied — never a category folder, and never one
+  that still holds anything;
+- is safe to run again: a second run reports everything as already gone.
+
+Run it with `--dry-run` first to see what it would do without touching anything:
+`bash orphaned_torrents_delete.sh --dry-run`.
+
+### Excluding a group
 
 If a group is something you put there deliberately, **Exclude** it instead and
 it stops being counted against you. You're shown the exact rules first; they
 land in [Config → Excluded Files](configuration.md#excluded-files--folders).
+
+A fully selected release folder becomes one folder rule, but only where auditorr
+has checked that's safe. Otherwise the group's header says why, and excluding
+writes one rule per file:
+
+- **category folder** — the folder shares its name with one at the top of your
+  media library (`movies/`, say — where qBittorrent saves single-file torrents by
+  default), so a folder rule would hide library files too;
+- **shared with a torrent** — the folder also holds files a torrent in your
+  client still uses;
+- **unchecked files** — it holds files the last scan couldn't check;
+- **top level** — the files sit at the top of your torrent folder;
+- **not yet checked** — the last scan predates the check; the next one settles it.
+
+A release folder saved with no category directory above it gets a folder rule
+like any other.
 
 > Cleanup deals only with files your client doesn't know about. If a torrent
 > exists, it belongs to [Triage](#triage) — deleting files under a live torrent

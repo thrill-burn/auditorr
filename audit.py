@@ -2,6 +2,7 @@ import os
 import gc
 import math
 import time
+import posixpath
 import hashlib
 import logging
 import threading
@@ -246,7 +247,139 @@ def _build_duplicate_map(inode_map):
     return duplicate_map
 
 
-def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map):
+def _norm_abs(path):
+    p = str(path or '').replace('\\', '/')
+    return posixpath.normpath(p) if p else ''
+
+
+def _path_under(path, root):
+    """`path` is `root` or inside it. Both already `_norm_abs`'d; a root of '' or
+    '/' contains everything."""
+    if root in ('', '/'):
+        return True
+    return path == root or path.startswith(root + '/')
+
+
+def unverified_spec(report, unresolved_roots):
+    """Which orphans the scan could not ask about, or None (CLEANUP §5.3).
+
+    Since Phase 2 a failed listing claims whatever sits at its roots, so a
+    per-file unknown is reachable in exactly two cases, and both are derived
+    here rather than guessed:
+
+    * **`all`** — the scan persisted even though a client instance failed. The
+      plausibility guard refuses that on every trigger but a manual scan, which
+      is the explicit override; a torrent on the instance that did not answer is
+      invisible, so every orphan of that scan is `unverified`.
+    * **`roots`** — torrents whose listing failed *and* whose disk fallback found
+      nothing (`listing_unresolved`). Their files could be anywhere under their
+      save path, so every orphan under it is `unverified`. Blunt when it fires —
+      it can cover a whole category dir — but near-empty on a sane install, the
+      fail-safe direction, and gone on the next clean scan.
+
+    `unresolved_roots` comes out of `sources.fetch_file_map` in memory only; the
+    persisted source report carries counts and must stay free of paths.
+    """
+    failed = bool((report or {}).get('instances_failed'))
+    roots = sorted({_norm_abs(r) for r in (unresolved_roots or []) if r})
+    if not failed and not roots:
+        return None
+    return {'all': failed, 'roots': roots}
+
+
+def _torrent_tree_base(info):
+    """The walk's own prefix for this inode's torrent paths, or None.
+
+    `torrent_rel_path` is `os.path.relpath(first path, LOCAL_PATH)` and the first
+    entry of `torrent_paths` is that path, both from one `os.walk` — so the base
+    is a string suffix-strip, and every other torrent path of the inode shares
+    it. No `relpath` over mixed separators (the `_local_to_abs` trap), and no
+    `LOCAL_PATH` threaded through.
+    """
+    paths = info.get('torrent_paths') or []
+    rel = info.get('torrent_rel_path')
+    if not paths or not rel or not paths[0].endswith(rel):
+        return None
+    return paths[0][:len(paths[0]) - len(rel)]
+
+
+def _stamp_orphan(record, info, compiled_exclusions, unverified):
+    """What Cleanup needs about one orphaned inode that only the walk knows.
+
+    Sparse, and written **only on non-excluded orphans** — the `dead_siblings` /
+    `incomplete` rule: a field on every torrent-file record multiplies across
+    the library and grows `files_json`. Bounded by the orphan count, and run once
+    per scan where the page used to stat per load.
+
+    * `mtime`, `nlink` — one `os.stat` of the walked path (C9, C6). Not a field
+      on `inode_map`, which every file would pay for (`_walk_directory`'s
+      `oldest_mtime` note). A failed stat leaves both absent, and absence reads
+      as the alarming state downstream (`app._cleanup_state`).
+    * `other_paths` — the inode's *other* torrent-tree paths, relative and posix
+      (C5). `_assemble_records` emits one record per inode, and it used to keep
+      only the first path: a distinct-hardlink cross-seed whose registrations
+      had both gone listed one file, and the second could never be cleaned up
+      through the workflow at all. An excluded sibling path is not listed — it
+      is not the user's to delete — and `nlink` then counts it as a link that
+      survives.
+    * `unverified` — see `unverified_spec`.
+    """
+    paths = info.get('torrent_paths') or []
+    if paths:
+        try:
+            st = os.stat(paths[0])
+            record["mtime"] = int(st.st_mtime)
+            record["nlink"] = int(st.st_nlink)
+        except (OSError, ValueError, OverflowError):
+            pass
+    base = _torrent_tree_base(info)
+    others = []
+    for p in paths[1:]:
+        if base is None or not p.startswith(base):
+            continue
+        rel = p[len(base):].replace('\\', '/')
+        if compiled_exclusions is not None and \
+                compiled_exclusions.match(p, rel, os.path.basename(p)):
+            continue
+        others.append(rel)
+    if others:
+        record["other_paths"] = others
+    if unverified and (unverified.get('all') or any(
+            _path_under(_norm_abs(p), root) for p in paths for root in unverified['roots'])):
+        record["unverified"] = True
+
+
+def _extra_torrent_paths(inode_map):
+    """Every torrent-tree path that is *not* on a record: `(rel posix | None, orphan)`.
+
+    A record carries its inode's first walked path only, so a live
+    distinct-hardlink cross-seed's second path sits under some folder while
+    appearing on no record at all. Lazy on purpose — the exclusivity test
+    consumes it path by path and accumulates nothing. `None` means a path could
+    not be placed relative to the torrent tree (not reachable by construction);
+    the consumer then refuses every folder rather than guess.
+    """
+    for info in inode_map.values():
+        paths = info.get('torrent_paths') or []
+        if len(paths) < 2 or info.get('torrent_rel_path') is None:
+            continue
+        base = _torrent_tree_base(info)
+        orphan = info.get('status') == 'Orphaned'
+        for p in paths[1:]:
+            if base is None or not p.startswith(base):
+                yield None, orphan
+            else:
+                yield p[len(base):].replace('\\', '/'), orphan
+
+
+def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map,
+                      compiled_exclusions=None, unverified=None):
+    if unverified:
+        # Normalised once here as well as in `unverified_spec`: every comparison
+        # below is against `_norm_abs` paths, and a root spelled any other way
+        # would silently mark nothing — the unsafe direction.
+        unverified = {'all': bool(unverified.get('all')),
+                      'roots': [_norm_abs(r) for r in (unverified.get('roots') or []) if r]}
     torrent_files_data = []
     seen_torrent_keys = set()
     for file_key in torrent_key_order:
@@ -300,6 +433,8 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             record["incomplete"] = True
         elif info.get('completion_unknown'):
             record["completion_unknown"] = True
+        if info['status'] == 'Orphaned' and not info['torrent_excluded']:
+            _stamp_orphan(record, info, compiled_exclusions, unverified)
         torrent_files_data.append(record)
     media_files_data = []
     seen_media_keys = set()
@@ -319,7 +454,123 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "excluded": info['media_excluded'],
         })
     _mark_whole_torrents(torrent_files_data, media_files_data)
+    _mark_cleanup_folders(torrent_files_data, media_files_data,
+                          extra_paths=_extra_torrent_paths(inode_map))
     return torrent_files_data, media_files_data
+
+
+def _media_root_names(media_files_data):
+    """Lower-cased names of the directories at the top of the media library.
+
+    The C7 half of both folder-rule tests (Triage's `_mark_whole_torrents` and
+    Cleanup's `_mark_cleanup_folders`): a one-segment folder sharing its name
+    with one of these matches *both* walks, because `_matches_prefix` matches a
+    prefix anywhere in the path. One computation, two consumers.
+    """
+    return {p.split('/', 1)[0].lower()
+            for p in (str(m.get('path') or '').replace('\\', '/') for m in media_files_data)
+            if '/' in p}
+
+
+# Precedence when a candidate folder is refused for more than one reason: the
+# most fundamental answer is the one the page shows.
+_FOLDER_REFUSAL_RANK = {'unverified': 1, 'live_torrent': 2, 'not_established': 3, 'media_root': 4}
+
+
+def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
+    """Stamp the folder a Cleanup exclusion rule may name (C16 + Cleanup's C7).
+
+    Cleanup groups orphans at `dir_segs[:2]`, and a fully selected group can be
+    excluded with one subtree rule. That rule used to be offered by **depth**
+    (`loose` below two segments), and nothing tested whether anything *other*
+    than orphans lived under the folder. So one stray orphan inside a live
+    torrent's release folder — a sample a repack dropped — made a one-file group
+    whose rule hid the live torrent (C16, TRIAGE T6's bug on the side Phase 5 did
+    not fix). Depth also refused the reference box's one-segment release
+    folders, torrents saved with no category directory.
+
+    **The field name is Triage's, deliberately: `excl_folder`** — one name, one
+    meaning, *the folder a rule for this row may name*. Orphans are never
+    `_is_triage_relevant` (they carry no hash), so the two stamps cannot
+    collide. The candidate is the group folder, and it is safe only when:
+
+    1. **Exclusivity** — every *non-excluded* torrent-tree path under it belongs
+       to an orphan. Tested over **paths**, not records: a live cross-seed's
+       second hardlink sits on no record (`extra_paths`). An excluded record
+       does not disqualify — a folder rule cannot hide what is hidden, which is
+       what keeps a tombstone from blocking it (see `_mark_whole_torrents`). A
+       live inode's extra path is treated as not excluded, since only its first
+       path's flag is known. An `unverified` orphan disqualifies it too: it may
+       be a live torrent's file.
+    2. **Not a media-tree root name**, at one segment (C7).
+
+    Phase 5 recorded that "an orphan has no torrent to test exclusivity
+    against". True of Triage's hash-owned test and not of the property:
+    exclusivity against the *folder* is testable here, where every path is
+    visible — so ROADMAP's "small persisted set" of media-root names is not
+    needed either, because the audit has the media list in hand.
+
+    Positive evidence only. `excl_folder` when safe; otherwise `excl_refused`
+    (`media_root` | `live_torrent` | `unverified` | `not_established`) so the
+    page can say why. **Absent both, the page falls back to per-file rules** —
+    a database whose last audit predates these fields looks exactly like that.
+    Written only on non-excluded orphans, and `O(paths × 2)` dict lookups.
+    """
+    candidates = {}
+    for r in torrent_files_data:
+        if r.get('status') != 'Orphaned' or r.get('excluded'):
+            continue
+        segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
+        if segs:
+            candidates.setdefault('/'.join(segs[:2]), None)
+    if not candidates:
+        return
+
+    def refuse(path, reason):
+        segs = str(path or '').replace('\\', '/').split('/')[:-1]
+        for k in (1, 2):
+            if len(segs) < k:
+                break
+            folder = '/'.join(segs[:k])
+            if folder in candidates:
+                cur = candidates[folder]
+                if cur is None or _FOLDER_REFUSAL_RANK[reason] > _FOLDER_REFUSAL_RANK[cur]:
+                    candidates[folder] = reason
+
+    for r in torrent_files_data:
+        if r.get('excluded'):
+            continue
+        if r.get('status') != 'Orphaned':
+            refuse(r.get('path'), 'live_torrent')
+        elif r.get('unverified'):
+            for p in [r.get('path')] + list(r.get('other_paths') or []):
+                refuse(p, 'unverified')
+    for rel, orphan in extra_paths:
+        if rel is None:
+            for folder in candidates:
+                if candidates[folder] is None:
+                    candidates[folder] = 'not_established'
+            break
+        if not orphan:
+            refuse(rel, 'live_torrent')
+
+    media_roots = _media_root_names(media_files_data)
+    for folder in candidates:
+        if '/' not in folder and folder.lower() in media_roots:
+            candidates[folder] = 'media_root'
+
+    for r in torrent_files_data:
+        if r.get('status') != 'Orphaned' or r.get('excluded'):
+            continue
+        segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
+        if not segs:
+            continue
+        folder = '/'.join(segs[:2])
+        reason = candidates.get(folder)
+        if reason is None:
+            r["excl_folder"] = folder
+        else:
+            r["excl_refused"] = reason
 
 
 def _mark_whole_torrents(torrent_files_data, media_files_data):
@@ -431,10 +682,7 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
                 candidates[folder] = None
 
     # Pass 4 — the C7 half, which only bites at one segment.
-    media_roots = {p.split('/', 1)[0].lower()
-                   for p in (str(m.get('path') or '').replace('\\', '/')
-                             for m in media_files_data)
-                   if '/' in p}
+    media_roots = _media_root_names(media_files_data)
     safe = {}
     for folder, owner in candidates.items():
         if owner is None:
@@ -549,6 +797,11 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
             "total_torrents_size": total_torrents_size, "orphaned_torrent_size": orphaned_torrent_size,
             "not_imported_size": not_imported_size, "duplicate_size": dup_size,
             "orphaned_torrent_count": sum(1 for f in scoring_torrents if f['status'] == 'Orphaned'),
+            # Cleanup's Excluded box. Counted here rather than carried on the
+            # compact `cleanup` row, which holds only what the page acts on —
+            # see app._cleanup_records. Per record, i.e. per inode.
+            "orphaned_excluded_count": sum(1 for f in torrent_files
+                                           if f['status'] == 'Orphaned' and f.get('excluded')),
             "not_imported_count": sum(1 for f in scoring_torrents if not f['imported'] and f['status'] != 'Orphaned'),
             "dead_seed_count": sum(1 for f in scoring_torrents
                                    if f['imported'] and f['status'] != 'Orphaned'
@@ -1061,6 +1314,22 @@ def _is_triage_relevant(f):
     return f.get('tracker_health') == 'unregistered'
 
 
+def _is_cleanup_relevant(f):
+    """Torrent-file records the Cleanup workflow reads: non-excluded orphans.
+
+    Persisted as the compact 'cleanup' file_results row, the way 'triage' is, so
+    neither the Cleanup page nor its delete script deserializes the full torrent
+    list for the ~1% of records it acts on (CLEANUP C10). **Must stay in lockstep
+    with the details' `orphaned_torrent_count`** (orphans among the non-excluded
+    records, in `process_health_metrics`) and with `app._cleanup_records`'
+    fallback, which applies this same predicate to the full list — when they
+    disagree, the page, the stored subset and the sidebar badge each report a
+    different number. Excluded orphans are counted into the details
+    (`orphaned_excluded_count`) rather than carried here.
+    """
+    return f.get('status') == 'Orphaned' and not f.get('excluded')
+
+
 def _is_dead_seed_torrent(f):
     return (
         not f.get('excluded')
@@ -1426,7 +1695,11 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     threading.Thread(target=_memory_sampler, args=(sampler_stop,), daemon=True,
                      name="audit-memory-sampler").start()
     try:
-        qbit_file_map, trackers, tracker_snapshot, source_report = sources.fetch_file_map(cfg)
+        # Save roots of listings that failed with nothing found on disk — in
+        # memory only, never on the persisted report (see `unverified_spec`).
+        unresolved_roots = []
+        qbit_file_map, trackers, tracker_snapshot, source_report = sources.fetch_file_map(
+            cfg, unresolved_roots=unresolved_roots)
         set_state(source_file_count=len(qbit_file_map))
         # Everything downstream treats "no client entry for this path" as proof
         # of orphanhood. Check the client's answer against the last one that was
@@ -1463,9 +1736,17 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         _enter_phase("post", "Detecting duplicates...")
         duplicate_map = _build_duplicate_map(inode_map)
         _enter_phase("post", "Assembling file records...")
+        _unverified = unverified_spec(source_report, unresolved_roots)
         torrent_files_data, media_files_data = _assemble_records(
-            torrent_key_order, media_key_order, inode_map, duplicate_map)
+            torrent_key_order, media_key_order, inode_map, duplicate_map,
+            compiled_exclusions=compiled_excl, unverified=_unverified)
         del torrent_key_order, media_key_order, inode_map, duplicate_map
+        if _unverified:
+            log.warning("Audit: %d orphaned file(s) marked unverified — the client could not "
+                        "be fully asked on this scan (%s)",
+                        sum(1 for f in torrent_files_data if f.get('unverified')),
+                        'an instance did not answer' if _unverified['all']
+                        else f"{len(_unverified['roots'])} unresolved save path(s)")
         _enter_phase("post", "Computing health metrics...")
         # Prize-layer inputs that only exist outside the file records: seeding
         # time rides the source layer's torrent list, oldest_media_age_days the
@@ -1579,6 +1860,10 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # Triage page skip deserializing the full torrent list.
         db_save_file_results('triage',
                              [f for f in torrent_files_data if _is_triage_relevant(f)])
+        # Compact Cleanup working set, after the orphan stamps (C10): the page
+        # and the delete script read this and never the full torrent list.
+        db_save_file_results('cleanup',
+                             [f for f in torrent_files_data if _is_cleanup_relevant(f)])
         db_save_file_signatures('media',    file_signatures(media_files_data))
         db_save_file_signatures('torrents', file_signatures(torrent_files_data))
         _enter_phase("post", "Saving audit results...")

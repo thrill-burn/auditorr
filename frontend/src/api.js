@@ -31,6 +31,10 @@ async function req(path, opts = {}, retried = false) {
   return data
 }
 
+// A plain-text body (a generated script) plus its response headers. The body
+// stays plain so copy and download hand over exactly the script; what a page
+// needs to know about it — when Cleanup's selection was checked against the
+// torrent client, how many files that dropped — rides the headers instead.
 async function reqText(path, opts = {}, retried = false) {
   const secret = getSecret()
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
@@ -55,7 +59,7 @@ async function reqText(path, opts = {}, retried = false) {
     err.data = data
     throw err
   }
-  return res.text()
+  return { text: await res.text(), headers: res.headers }
 }
 
 export const api = {

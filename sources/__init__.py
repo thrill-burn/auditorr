@@ -313,6 +313,50 @@ def disk_fallback_paths(save_path, torrent_name, content_path=''):
     return found
 
 
+def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, complete):
+    """Every on-disk path one torrent claims — **the** claim rule, in one place.
+
+    "Orphaned" is the absence of a claim, so what counts as a claim decides what
+    Cleanup offers for `rm`. It used to be written inline in both backends'
+    `fetch_file_map` loops, and CLEANUP C3's live re-verify needs to ask the
+    same question of a single torrent at script generation. A second copy of
+    the rule there would be a rule that disagrees with the audit, and the one
+    direction it must never disagree in is claiming less. So both backends and
+    `app._cleanup_live_claims` call this.
+
+    `save_path` and `content_path` are already remapped to auditorr's view
+    (`remap_path`). `file_names` is the client's per-torrent listing, relative
+    to `save_path`, or **`None` when the listing is not usable** — and *which*
+    listings are unusable is the caller's to decide, deliberately: the qBittorrent
+    backend means "the call failed", while qui also treats an empty listing that
+    way because qui may not expose per-torrent file lists at all. Keeping that
+    decision at the call site is what keeps each backend's `file_map`
+    byte-identical to what it built before this function existed — and
+    `file_map_size` is the plausibility guard's baseline.
+
+    A torrent claims:
+
+    * its listing's names joined on `save_path` — with `os.path.join`, as both
+      backends always did (see `content_rooted_paths` for why the *extra* claims
+      are posix; changing this join would move `file_map_size`);
+    * plus `incomplete_claims(...)` when it is not known to be complete (C4a/C4b);
+    * or, with no usable listing, `disk_fallback_paths(save_path, name,
+      content_path)` — which over-claims, the fail-safe direction, and returns
+      `[]` when nothing is on disk at either root. The caller counts that as
+      `listing_unresolved`; it is never "this torrent has no files".
+    """
+    if file_names is None:
+        return disk_fallback_paths(save_path, torrent_name, content_path)
+    full_paths = [os.path.join(save_path, n) for n in file_names]
+    if complete is not True:
+        # An unfinished payload may not be where the listing says it will end
+        # up. Adds nothing on a client with neither the temp directory nor the
+        # `.!qB` suffix enabled.
+        full_paths = full_paths + incomplete_claims(
+            content_path, torrent_name, file_names, full_paths)
+    return full_paths
+
+
 # Substrings (lowercased) of tracker status messages that mean the torrent is
 # no longer registered on the tracker — trumped, deleted, or nuked. Seeding
 # such a torrent earns nothing; it is the strongest "dead weight" signal the
@@ -394,16 +438,24 @@ def _source(cfg):
     return cfg.get('TORRENT_SOURCE', 'qbit')
 
 
-def fetch_file_map(cfg):
+def fetch_file_map(cfg, unresolved_roots=None):
     """(file_map, sorted_trackers, tracker_snapshot, report).
 
     `report` is a `new_source_report` dict describing how completely the client
     could be asked — see the module docstring. The audit reads it to decide
     whether this scan's orphan classification is trustworthy enough to persist.
+
+    `unresolved_roots`, when a list, receives the remapped `save_path` (and
+    `content_path`, if any) of every torrent whose listing failed *and* whose
+    disk fallback found nothing — the torrents counted as `listing_unresolved`.
+    Their files could be anywhere under those roots, so the audit marks the
+    orphans there `unverified` (CLEANUP §5.3). **An out-parameter, in memory
+    only, on purpose:** the report is persisted and reaches
+    `/api/debug/report`, which must stay free of paths.
     """
     if _source(cfg) == 'qui':
-        return _qui_fetch_file_map(cfg)
-    return _qbit_fetch_file_map(cfg)
+        return _qui_fetch_file_map(cfg, unresolved_roots=unresolved_roots)
+    return _qbit_fetch_file_map(cfg, unresolved_roots=unresolved_roots)
 
 
 def test_connection(payload):

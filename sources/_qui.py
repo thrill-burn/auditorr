@@ -45,8 +45,8 @@ import requests
 
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
-    disk_fallback_paths, new_source_report, report_instance_failure, report_note,
-    torrent_complete, incomplete_claims, remap_path,
+    new_source_report, report_instance_failure, report_note,
+    torrent_complete, torrent_claimed_paths, remap_path,
 )
 
 log = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                      seen_hashes, seed_totals=None, report=None):
+                      seen_hashes, seed_totals=None, report=None, unresolved_roots=None):
     inst_id   = inst['id']
     inst_name = inst.get('name', str(inst_id))
 
@@ -454,16 +454,19 @@ def _process_instance(session, base, inst, remote_path, local_path,
 
         listing_failed = th in failed_listings
 
-        if torrent_files:
+        # The claim rule is `sources.torrent_claimed_paths`, shared with the
+        # qbit backend and with Cleanup's live re-verify. qui passes `None` for
+        # an *empty* listing as well as a failed one: qui may not expose
+        # per-torrent file lists at all, so an empty answer is not evidence the
+        # torrent holds nothing, and the payload is enumerated from disk — at
+        # content_path while it is still downloading, at save_path/name once it
+        # has finished — rather than left to default to 'Orphaned'.
+        file_names = [f['name'] for f in torrent_files] if torrent_files else None
+        full_paths = torrent_claimed_paths(
+            save_path, nt['name'], content_path, file_names, complete)
+
+        if file_names is not None:
             nonempty_file_count += 1
-            file_names = [f['name'] for f in torrent_files]
-            full_paths = [os.path.join(save_path, n) for n in file_names]
-            if complete is not True:
-                # An unfinished payload may not be where the listing says it
-                # will end up. Adds nothing on a client with neither the temp
-                # directory nor the `.!qB` suffix enabled.
-                full_paths = full_paths + incomplete_claims(
-                    content_path, nt['name'], file_names, full_paths)
             for i, full_path in enumerate(full_paths):
                 if len(sample_paths) < 3:
                     sample_paths.append({
@@ -478,12 +481,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 _add_entry(full_path, status, hosts, nt.get('category', ''), complete)
         else:
             empty_file_count += 1
-            # Fallback: qui may not expose per-torrent file lists, and a listing
-            # can fail outright. Either way the payload is on disk — at
-            # content_path while it is still downloading, at save_path/name once
-            # it has finished — so enumerate it there rather than letting the
-            # files default to 'Orphaned' in the walk.
-            recovered = disk_fallback_paths(save_path, nt['name'], content_path)
+            recovered = full_paths
             for full_path in recovered:
                 disk_fallback_count += 1
                 if len(sample_paths) < 3:
@@ -505,6 +503,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     report['listing_recovered'] += 1
                 else:
                     report['listing_unresolved'] += 1
+                    if unresolved_roots is not None:
+                        unresolved_roots.extend(r for r in (save_path, content_path) if r)
                     # No infohash — see the matching note in _qbit.py.
                     report_note(report,
                                 f"{inst_name}: file listing failed and nothing "
@@ -538,10 +538,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
 # fetch_file_map
 # ---------------------------------------------------------------------------
 
-def fetch_file_map(cfg):
+def fetch_file_map(cfg, unresolved_roots=None):
     socket.setdefaulttimeout(30)
     try:
-        return _fetch_inner(cfg)
+        return _fetch_inner(cfg, unresolved_roots)
     except SourceConnectionError:
         raise
     except requests.exceptions.ConnectionError as e:
@@ -555,7 +555,7 @@ def fetch_file_map(cfg):
         socket.setdefaulttimeout(None)
 
 
-def _fetch_inner(cfg):
+def _fetch_inner(cfg, unresolved_roots=None):
     base    = cfg.get('QUI_HOST', '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
     remote_path = cfg.get('REMOTE_PATH', '')
@@ -597,7 +597,8 @@ def _fetch_inner(cfg):
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                               seen_hashes, seed_totals, report=report)
+                               seen_hashes, seed_totals, report=report,
+                               unresolved_roots=unresolved_roots)
             report['instances_ok'] += 1
         except Exception as e:
             # Skipping an instance is still the right call — the others have
@@ -753,9 +754,12 @@ def list_torrents(cfg):
     """Light live listing of every torrent across all eligible qui instances.
 
     Returns ([rows], report); a row is {'hash', 'name', 'size', 'save_path',
-    'tracker', 'instance_id', 'instance_name'}, deduplicated by hash (qui
-    per-instance endpoints can return all managed torrents regardless of which
-    instance is queried).
+    'content_path', 'progress', 'completion_on', 'tracker', 'instance_id',
+    'instance_name'}, deduplicated by hash (qui per-instance endpoints can return
+    all managed torrents regardless of which instance is queried). The paths are
+    unremapped; the completion fields are `_norm_torrent`'s, the same ones
+    `fetch_file_map` reads, so Cleanup's live re-verify applies the audit's own
+    claim rule (`sources.torrent_claimed_paths`).
 
     An instance that fails to list is **recorded on the report**, which is what
     the `sources.list_torrents` wrapper refuses on. This used to log and carry
@@ -792,6 +796,9 @@ def list_torrents(cfg):
                         'name':          nt['name'],
                         'size':          nt['size'],
                         'save_path':     nt['save_path'],
+                        'content_path':  nt['content_path'],
+                        'progress':      nt['progress'],
+                        'completion_on': nt['completion_on'],
                         'tracker':       parts[2] if len(parts) > 2 else '',
                         'instance_id':   inst['id'],
                         'instance_name': inst.get('name', str(inst['id'])),
