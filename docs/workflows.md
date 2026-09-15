@@ -456,17 +456,82 @@ can see and undo it. Subtitles and Extras are deliberately never suggested.
 **Targets duplicate files**: bit-for-bit identical files that don't share an
 inode, i.e. two real copies burning two lots of disk space.
 
-Review the duplicate groups, select the ones you want collapsed, and generate a
-script that replaces each copy with a hardlink to a single kept file. The script
-runs `cmp` on every pair before linking, so it will refuse to collapse anything
-that isn't genuinely identical.
+Often one copy is in your torrent folder and the other in your library, because
+Sonarr or Radarr copied the file instead of hardlinking it (hardlinks turned off,
+or an import that crossed a filesystem). Linking those two repairs the import as
+well as freeing the space: the torrent reads as imported again, the library file
+stops counting as unseeded, and your health score rises. Each group says which
+kind it is — **missing hardlink**, or **duplicate copies** (the same bytes twice
+in one folder). auditorr doesn't claim either kind is the common one in your
+library.
+
+A group is a set of identical files. Every path of each file is listed, so a
+file already hardlinked into your library shows its torrent path and its library
+path together. No copy is marked as the one to keep: the script decides that
+when it runs.
+
+The headline says how many files would share a copy and how much that frees
+**at most**. It is a maximum because only the script, running on the machine
+that holds the files, can tell whether two copies really share a disk and
+whether a file has hardlinks auditorr doesn't know about. Nothing is selected
+for you.
+
+Each group also says what auditorr could check:
+
+| | What it means | Selectable |
+| --- | --- | --- |
+| **same disk** | Every copy reports the same disk. | yes |
+| **different disks** | The script links the copies that share a disk and leaves the rest alone. | yes |
+| **could not check** | The files are on a pooled filesystem (an Unraid share, mergerfs), where every drive reports the same disk; or a file couldn't be read; or one copy sits outside the folder the script runs from, and is left out of it. | yes |
+| **changed since the scan** | A copy has gone since the last scan. Scan again. | no |
 
 <p><img src="workflow-dedupe.png" alt="Dedupe workflow" width="100%" /></p>
 
+### What the script does
+
+The script is the part that decides, because it runs where the files are. Run it
+from the folder it names at the top. For each group it:
+
+1. looks at every listed path again, and leaves alone a symlink, a missing file,
+   a file whose size changed, or a file that looks unfinished (sparse — on a
+   compressed filesystem, where a finished file can look like that, pass
+   `--allow-sparse`);
+2. groups the copies by disk, and only ever links copies on the same one;
+3. keeps the copy whose owner and permissions most copies share, then the one
+   with the most hardlinks. A copy with a different owner or permissions is left
+   alone, because every path of a linked file takes the kept copy's;
+4. leaves alone a copy with hardlinks the script doesn't list — replacing only
+   some of a file's paths frees nothing, and would split a torrent file from its
+   library copy;
+5. compares each copy with the kept one byte for byte (`cmp`);
+6. makes the new hardlink under a temporary name beside the file, then renames it
+   over the original. Nothing is removed before its replacement exists, and no
+   path is ever missing, so a seeding torrent never sees a gap.
+
+On a pooled share, a link between two drives fails even though both report the
+same disk. The script then tries the copies that failed against each other, so
+copies that share a drive still get linked, and leaves alone whatever is left.
+
+Every file gets an outcome — linked, already linked, left alone (with the
+reason), or **FAILED** — and space counts as freed only once every link to a copy
+has been replaced. It is safe to run twice: the second run reports everything as
+already linked. If a run is interrupted, or a rename fails part-way, nothing is
+missing; run it again and it finishes. `bash dedupe.sh --dry-run` checks and
+compares everything and changes nothing. The script needs GNU `stat` (any Linux,
+not macOS), and says up front how much it will read — `cmp` reads both copies of
+every file, which on a spinning array can take hours. When it finishes, auditorr
+notices the changes and scans again shortly.
+
+### What detection skips
+
 Disc rips generate enormous numbers of identically-sized structural files, so
-detection skips excluded files, skips size groups above 200 files, and records
-at most 10 siblings per file. If you rip discs, turn on the disc-rip exclusion
-preset and this page gets dramatically more useful.
+detection skips excluded files and size groups above 200 files. Each file
+remembers at most 10 of its identical siblings; a larger group is still shown
+whole, because the page joins what every file remembers. If you rip discs, turn
+on the disc-rip exclusion preset and this page gets dramatically more useful.
+
+Files are matched by size, then by a fingerprint of their start, middle and end,
+so two encodes that share only a container header and trailer aren't offered.
 
 **Unfinished downloads are never offered**, and this is the one case where the
 script's `cmp` check cannot protect you. qBittorrent doesn't pad a file out as
@@ -477,7 +542,9 @@ that moment: same size, same fingerprint, and `cmp` agrees. Hardlink them and
 both torrents write into one file and both are ruined. So detection now requires
 your client to confirm a torrent is finished, and anything it can't confirm is
 left out — that costs you some disk space you might have reclaimed, which is
-the cheaper mistake by a wide margin.
+the cheaper mistake by a wide margin. The script checks for this itself as well,
+leaving alone any file that looks sparse, so it doesn't rest on your client's
+answer alone.
 
 ---
 

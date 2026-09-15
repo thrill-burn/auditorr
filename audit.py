@@ -35,12 +35,24 @@ log = logging.getLogger(__name__)
 
 
 def get_fast_hash(filepath, size, chunk_size=65536):
+    """md5 of the first, middle and last `chunk_size` bytes; the whole file when
+    it is no bigger than the three chunks.
+
+    The middle chunk is DEDUPE F7. Two encodes sharing a container header and
+    trailer collided on head + tail, so they were offered as duplicates, counted
+    in the headline and `duplicate_count`, and found to differ only by the
+    script's `cmp` after reading both files in full. An extra chunk can only
+    split a candidate set, never join one, and the hash is never persisted, so
+    nothing migrates.
+    """
     try:
         hasher = hashlib.md5()
         with open(filepath, 'rb') as f:
-            if size <= chunk_size * 2:
+            if size <= chunk_size * 3:
                 hasher.update(f.read())
             else:
+                hasher.update(f.read(chunk_size))
+                f.seek(size // 2 - chunk_size // 2)
                 hasher.update(f.read(chunk_size))
                 f.seek(-chunk_size, 2)
                 hasher.update(f.read(chunk_size))

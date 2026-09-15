@@ -519,9 +519,13 @@ class TombstoneTests(unittest.TestCase):
         """The destructive one, and the walk's exclusion cannot reach it.
 
         These records come from the *last* scan, so on the run right after an
-        upgrade the tombstone is still `excluded: False`. A group's canonical is
-        its smallest path and `.` sorts ahead of every release name, so left
-        alone the tombstone becomes the copy every other file is replaced with.
+        upgrade the tombstone is still `excluded: False`. Before Phase 10 a
+        group's canonical was its smallest path and `.` sorts ahead of every
+        release name, so the tombstone became the copy every other file was
+        replaced with. Phase 10 emits no canonical — the script picks one at run
+        time, by link count — and a tombstone must be neither kept nor replaced,
+        so it is still no member at all. Rewritten deliberately for the new
+        group shape; the fixture is unchanged.
         """
         stale = [
             {'path': _TOMB, 'size': 3778088771, 'inode': 12384898988599979,
@@ -551,7 +555,9 @@ class TombstoneTests(unittest.TestCase):
             dup_group_inputs(real, [], '/data/torrents', '/data/media'),
             '/data/torrents', '/data/media')
         self.assertEqual(len(out['groups']), 1)
-        self.assertEqual(len(out['groups'][0]['files']), 2)
+        # Phase 10: a group is a set of equal files (`members`, one per inode),
+        # not a canonical plus `files`. Rewritten deliberately; same fixture.
+        self.assertEqual(len(out['groups'][0]['members']), 2)
 
 
 if __name__ == '__main__':

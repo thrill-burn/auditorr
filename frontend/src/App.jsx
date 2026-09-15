@@ -26,13 +26,22 @@ function _btnStyle(bg, color) {
   return { padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border2)', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
 }
 
-// What the server says about a script it just built. Only Cleanup's delete
-// script sends these (it re-checks the selection against the torrent client
-// immediately before building it); Dedupe's sends none, and renders as before.
+// What the server says about a script it just built. Cleanup's delete script
+// sends a verification time (it re-checks the selection against the torrent
+// client immediately before building it); Dedupe's sends the groups and files it
+// actually scripted, which leave out any group that changed since the scan.
 function scriptMeta(headers) {
+  const num = k => Number(headers.get(k) || 0)
+  if (headers?.get?.('X-Auditorr-Groups')) {
+    return {
+      kind:      'dedupe',
+      groups:    num('X-Auditorr-Groups'),
+      files:     num('X-Auditorr-Files'),
+      freesUpTo: num('X-Auditorr-Frees-Up-To'),
+    }
+  }
   const at = headers?.get?.('X-Auditorr-Verified-At')
   if (!at) return null
-  const num = k => Number(headers.get(k) || 0)
   return {
     verifiedAt: Number(at),
     dropped:    num('X-Auditorr-Dropped'),
@@ -63,10 +72,13 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
   }, [scriptType, body])
 
   // The page computed its subtitle from the selection; the server's count is the
-  // one that holds after files a torrent now claims were dropped.
-  const shownSubtitle = meta
-    ? `${meta.files} file${meta.files !== 1 ? 's' : ''} · up to ${formatBytes(meta.freeable)} freed`
-    : subtitle
+  // one that holds after files a torrent now claims were dropped (Cleanup), or
+  // after groups that changed since the scan were left out (Dedupe).
+  const plural = (n, w) => `${n} ${w}${n !== 1 ? 's' : ''}`
+  const shownSubtitle = !meta ? subtitle
+    : meta.kind === 'dedupe'
+      ? `${plural(meta.groups, 'group')} · ${plural(meta.files, 'file')} · frees up to ${formatBytes(meta.freesUpTo)}`
+      : `${plural(meta.files, 'file')} · up to ${formatBytes(meta.freeable)} freed`
 
   const handleCopy = () => {
     const ta = document.createElement('textarea')

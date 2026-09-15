@@ -44,7 +44,8 @@ from state import (
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, fetch_arr_media_index_result, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
-from scripts import generate_script, build_cleanup_script, _build_dup_groups, dup_group_inputs
+from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
+                     dedupe_script_units)
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets, is_tombstone_path
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
 from debug import (
@@ -870,7 +871,8 @@ _CLEANUP_VERIFY_BOUND = 150
 
 
 class _CleanupRefusal(Exception):
-    """A delete script that must not be built, with the reason as a response."""
+    """A script that must not be built, with the reason as a response — Cleanup's
+    delete script, and since Phase 10 the Dedupe script's selection refusals."""
 
     def __init__(self, status, code, message, **extra):
         super().__init__(message)
@@ -1234,27 +1236,78 @@ def _cleanup_script_response(cfg, selection):
     return resp
 
 
+def _dedupe_script_response(cfg, selection):
+    """The Dedupe script, for an explicit selection of groups.
+
+    * **No selection, no script** — 400 `selection_required` for a GET, `{}`,
+      `{groups: []}` or a `groups` that is not a list. `if selection.get('groups')`
+      read `[]` as "no filter" and scripted every group: the 2026-09-10 review's
+      note under S10, and the shape Cleanup closed as C14.
+    * A group is selected by its id **or any member path**. An open tab from
+      before Phase 10 posts the old canonical path, and every one of those is a
+      member path — so a stale bundle still selects exactly its groups.
+    * Nothing to script → 409 `nothing_selected`: no group matched, every match
+      changed since the scan (`stale`), or none keeps two copies inside the
+      script root.
+
+    Built from `scripts.build_dedupe_report`, the page's own builder (F13). The
+    body stays plain text; what was actually scripted rides `X-Auditorr-*`
+    headers, for the dialog's subtitle.
+    """
+    raw = selection.get('groups') if isinstance(selection, dict) else None
+    wanted = ({str(g).replace('\\', '/') for g in raw if str(g).strip()}
+              if isinstance(raw, list) else set())
+    if not wanted:
+        return _CleanupRefusal(
+            400, 'selection_required',
+            "Select the duplicate groups to link first — a dedupe script is only built for an "
+            "explicit selection.").response()
+
+    report = build_dedupe_report(db_load_file_results('torrents'),
+                                 db_load_file_results('media'), cfg)
+    chosen = [g for g in report['groups']
+              if g['id'] in wanted
+              or any(p['path'] in wanted for m in g['members'] for p in m['paths'])]
+    stale = sum(1 for g in chosen if not g['selectable'])
+    units, _ = dedupe_script_units([g for g in chosen if g['selectable']])
+    if not units:
+        if not chosen:
+            message = ("None of the selected groups are among the last scan's duplicates, so there "
+                       "is nothing to link.")
+        elif stale == len(chosen):
+            message = ("Every selected group has changed since the last scan — a copy is gone. Scan "
+                       "again to refresh the page.")
+        else:
+            message = ("None of the selected groups keeps two copies inside the folder the script "
+                       "runs from, so there is nothing to link.")
+        return _CleanupRefusal(409, 'nothing_selected', message, stale=stale).response()
+
+    log.info("Dedupe: script built for %d of %d selected group(s)", len(units), len(chosen))
+    script = build_dedupe_script(
+        [g for g, _ in units], script_root=report['script_root'], generated_at=int(time.time()),
+        excluded_count=report['excluded_count'], stale=stale)
+    resp = app.response_class(script, mimetype='text/plain; charset=utf-8')
+    resp.headers['X-Auditorr-Groups'] = str(len(units))
+    resp.headers['X-Auditorr-Files'] = str(sum(len(m) for _, m in units))
+    resp.headers['X-Auditorr-Frees-Up-To'] = str(sum(g['size'] * (len(m) - 1) for g, m in units))
+    return resp
+
+
 @app.route('/api/actions/script/<script_type>', methods=['GET', 'POST'])
 @require_auth
 def get_action_script(script_type):
     cfg = db_load_config()
     # POST carries a selection from a workflow page: {'paths': [...]} for the
-    # Cleanup delete script, {'groups': [...]} (canonical paths) for dedupe.
+    # Cleanup delete script, {'groups': [...]} for dedupe. Neither script is ever
+    # built without one.
     selection = (request.get_json(silent=True) or {}) if request.method == 'POST' else None
     if script_type == 'orphaned_torrents_delete':
         # Built from the compact `cleanup` row and a live check of the client —
         # never from the full torrent list, and never without a selection.
         return _cleanup_script_response(cfg, selection or {})
-    if script_type != 'dedupe':
-        return jsonify({"status": "error", "message": "Unknown script type"}), 400
-    results = db_load_results()
-    results['torrent_files'] = db_load_file_results('torrents')
-    results['media_files'] = db_load_file_results('media')
-    try:
-        script = generate_script(script_type, results, cfg, selection=selection)
-    except ValueError as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
-    return app.response_class(script, mimetype='text/plain; charset=utf-8')
+    if script_type == 'dedupe':
+        return _dedupe_script_response(cfg, selection or {})
+    return jsonify({"status": "error", "message": "Unknown script type"}), 400
 
 
 @app.route('/api/actions/sonarr_rescan', methods=['POST'])
@@ -3747,34 +3800,18 @@ def workflows_cleanup():
 @app.route('/api/workflows/dedupe')
 @require_auth
 def workflows_dedupe():
-    """Duplicate-group report — the same groups the dedupe script is built from."""
+    """Duplicate groups, built by the same function the dedupe script is (F13).
+
+    Each group is a set of identical files — one member per inode, every known
+    path listed — with a `status` (`linkable` / `cross_device` /
+    `unverifiable` / `stale`), a `cause` and a `frees_up_to` maximum. No copy is
+    canonical: the script chooses the one to keep, per disk, when it runs. See
+    `scripts.build_dedupe_report`.
+    """
     cfg = db_load_config()
-    local_path = cfg.get('LOCAL_PATH', '')
-    media_path = cfg.get('MEDIA_PATH', '')
-    torrent_files = db_load_file_results('torrents')
-    media_files   = db_load_file_results('media')
-    dup_result = _build_dup_groups(
-        dup_group_inputs(torrent_files, media_files, local_path, media_path),
-        local_path, media_path)
-
-    groups_out = []
-    for g in dup_result['groups']:
-        canonical = next(f for f in g['files'] if f['canonical'])
-        groups_out.append({
-            'id':               canonical['path'],
-            'files':            g['files'],
-            'recoverable_size': g['recoverable_size'],
-            'cross_fs':         g['skipped'],
-        })
-    groups_out.sort(key=lambda g: (g['cross_fs'], -g['recoverable_size']))
-
-    return jsonify({
-        "status":            "success",
-        "groups":            groups_out,
-        "script_root":       dup_result['script_root'],
-        "excluded_count":    dup_result.get('excluded_count', 0),
-        "total_recoverable": sum(g['recoverable_size'] for g in groups_out),
-    })
+    report = build_dedupe_report(db_load_file_results('torrents'),
+                                 db_load_file_results('media'), cfg)
+    return jsonify({"status": "success", **report})
 
 
 @app.route('/api/workflows/acquire_candidates')
