@@ -276,7 +276,15 @@ def fetch_torrent_details(cfg, items):
     """Live lookup of upload stats + tracker health for specific torrents.
 
     items: [{'hash': str, ...}] — instance_id is ignored (single instance).
-    Returns {hash: {'uploaded', 'ratio', 'added_on', 'tracker_health', 'tracker_msg'}}.
+    Returns {hash: {'uploaded', 'ratio', 'seeding_time', 'added_on', 'size',
+    'tracker_health', 'tracker_msg'}}, and **`{'found': False}` for a hash the
+    client does not list** (T10). A single instance filtered server-side, so the
+    listing is complete or it raised: a missing hash is gone, not unasked.
+
+    `size` is qBittorrent's `size` — the files *selected for download* — and not
+    `total_size`, which counts unselected files too (qBittorrent WebUI API,
+    `torrents/info`). It is the number Triage puts beside a delete (T5), and an
+    unselected file was never downloaded, so it is not bytes a delete removes.
     """
     hashes = sorted({i.get('hash') for i in items if i.get('hash')})
     if not hashes:
@@ -296,6 +304,7 @@ def fetch_torrent_details(cfg, items):
                 'ratio':          round(float(torrent.ratio), 3),
                 'seeding_time':   getattr(torrent, 'seeding_time', None),
                 'added_on':       getattr(torrent, 'added_on', None),
+                'size':           getattr(torrent, 'size', None),
                 'tracker_health': 'unknown',
                 'tracker_msg':    '',
             }
@@ -328,6 +337,9 @@ def fetch_torrent_details(cfg, items):
                 torrent_hash, (health, msg) = future.result()
                 details[torrent_hash]['tracker_health'] = health
                 details[torrent_hash]['tracker_msg']    = msg
+        for h in hashes:
+            if h not in details:
+                details[h] = {'found': False}
         return details
     except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
         raise SourceConnectionError(f"qBittorrent error: {e}") from e

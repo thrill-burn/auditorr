@@ -116,7 +116,7 @@ export const api = {
   cleanupReport:  ()         => req('/workflows/cleanup'),
   dedupeReport:   ()         => req('/workflows/dedupe'),
   excludePatterns: (patterns) => req('/workflows/exclude', { method: 'POST', body: JSON.stringify({ patterns }) }),
-  removeTorrents: (items, deleteFiles = true) => req('/workflows/remove_torrents', { method: 'POST', body: JSON.stringify({ items, delete_files: deleteFiles }) }),
+  removeTorrents: (items, deleteFiles = 'auto', plan) => req('/workflows/remove_torrents', { method: 'POST', body: JSON.stringify({ items, delete_files: deleteFiles, ...(plan ? { plan } : {}) }) }),
   triageResolveGroups: (hashes) => req('/workflows/triage/resolve_groups', { method: 'POST', body: JSON.stringify({ hashes }) }),
   trumpParse:        (pmText)  => req('/workflows/trump/parse',          { method: 'POST', body: JSON.stringify({ pm_text: pmText }) }),
   trumpResolveGroup: (oldTitles, seedHashes, indexer) => req('/workflows/trump/resolve_group', { method: 'POST', body: JSON.stringify({ old_titles: oldTitles, seed_hashes: seedHashes, indexer }) }),

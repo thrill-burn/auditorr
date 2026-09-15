@@ -43,7 +43,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, fetch_arr_media_index_result, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
 from scripts import generate_script, build_cleanup_script, _build_dup_groups, dup_group_inputs
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets, is_tombstone_path
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
@@ -1424,7 +1424,10 @@ def workflows_indexers():
 # Workflow report endpoints (Triage / Cleanup / Dedupe)
 # ---------------------------------------------------------------------------
 
-_VIDEO_EXTS = {'.mkv', '.mp4', '.avi', '.m2ts', '.ts', '.mov', '.wmv'}
+# One video extension set, shared with Backfill (`arr.VIDEO_EXTENSIONS`). This was
+# a narrower local copy, and `_classify_triage_junk` calls anything outside it a
+# sidecar — so a `.m4v` film was offered as "`.m4v` files", one click from hiding it.
+_VIDEO_EXTS = VIDEO_EXTENSIONS
 _TRIAGE_GROUP_CAP = 500
 # Hard cap per /triage/verify request. The client sends smaller batches
 # sequentially, so the per-torrent tracker fan-out (8-wide pools in sources/)
@@ -1569,68 +1572,243 @@ def workflows_exclude():
     })
 
 
-def _partition_removal_by_file_sharing(cfg, items):
-    """Split a removal set by whether each torrent's files survive its removal.
+# Candidate searches a removal resolution runs before it stops and calls itself
+# bounded. Each round searches near every member found so far; the second round
+# almost always finds nothing new, so this only guards a pathological chain.
+_REMOVAL_ROUNDS = 5
+# A client can drop a torrent a moment after its API returns, so a removal still
+# listed on the first look is looked at once more before it is reported as such.
+_REMOVAL_RECHECK_SECS = 2
 
-    A cross-seed can share its files with another torrent in one of two ways:
-      - shared path (one file, several registrations): deleting the file breaks
-        every other torrent pointing at it → those files must be KEPT.
-      - distinct hardlink (own path, shared inode): deleting drops only this
-        torrent's link; the library and sibling hardlinks survive → safe to
-        DELETE, and deleting avoids leaving an orphaned file behind.
 
-    The deciding question is per torrent: is any of its files also owned by a
-    torrent that is NOT being removed? If so, keep files; otherwise delete them.
-    Only same-size torrents can share a file, so the live path lookup is bounded
-    to that candidate set (mirrors the Trumped group resolver).
+def _removal_ownership(cfg, rows, seed_hashes):
+    """Everything removing these torrents could touch, and who else holds each file (S01).
 
-    Returns (delete_items, keep_items).
+    The question Trumped answers before a trump, asked with Trumped's primitives
+    rather than a third copy of them: `_trump_candidates` for the pre-filter
+    (overlapping content roots, or size within 1% — **never exact size**, TR2)
+    and `_cross_seed_group` for membership, the closure over shared file paths.
+
+    One thing is added. Candidates are searched near **every member found so
+    far**, round after round, not only near the seeds. A sidecar-only torrent
+    sharing a file with a seed's cross-seed need share nothing with the seed —
+    its root sits inside the cross-seed's, not the seed's, and its size is
+    nowhere near — so a single search from the seeds never meets it, and
+    removing that cross-seed with its files breaks it (the outside review's
+    design amendment 2). The rounds stop when a search finds nobody new, which
+    is the second round on any ordinary library.
+
+    Returns `{by_hash, paths, holders, groups, unknown, bounded}`: `paths` is
+    `{hash: [paths] | None}` for every torrent asked, `holders` is
+    `{path: {hashes}}`, `groups` is `{seed hash: [member rows]}`, `unknown`
+    counts asked torrents outside every group whose listing is `None` (a torrent
+    that may share a file and could not say), and `bounded` is true when the
+    search was cut short. `_removal_file_decision` reads all of it.
     """
-    remove_hashes = {i['hash'] for i in items if i.get('hash')}
-    rows      = sources.list_torrents(cfg)
-    by_hash   = {r['hash']: r for r in rows}
-    seeds     = [by_hash[i['hash']] for i in items if i.get('hash') in by_hash]
-    sizes     = {s['size'] for s in seeds}
-    # Removed torrents + any same-size torrent that could share a path with them.
-    candidates = [r for r in rows if r['size'] in sizes]
-    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
+    by_hash = {r['hash']: r for r in rows}
+    seeds = [by_hash[h] for h in dict.fromkeys(seed_hashes) if h in by_hash]
+    paths, bounded, members = {}, False, list(seeds)
+    for _ in range(_REMOVAL_ROUNDS):
+        candidates, prefilter = _trump_candidates(rows, members)
+        bounded = bounded or prefilter['bounded']
+        fresh = [c for c in candidates if c['hash'] not in paths]
+        room = _TRUMP_CANDIDATE_BOUND - len(paths)
+        if len(fresh) > room:
+            bounded, fresh = True, fresh[:max(room, 0)]
+        if not fresh:
+            break
+        got = sources.fetch_torrent_file_paths(cfg, fresh)
+        for c in fresh:
+            paths[c['hash']] = got.get(c['hash'])
+        members, _, _ = _cross_seed_group([by_hash[h] for h in paths], paths, seeds)
+    else:
+        bounded = True
 
-    # `fetch_torrent_file_paths` returns None for a torrent it could not ask
-    # about (vs [] for one the client says holds no files). Treated as "no known
-    # paths" here, which is what it has always been — reporting the difference
-    # to the user is the Cleanup/Trumped re-verify work, not this function's.
-    owners = {}  # path -> set(hashes referencing it)
-    for h, paths in paths_map.items():
-        for p in (paths or []):
-            owners.setdefault(p, set()).add(h)
+    holders = {}
+    for h, listing in paths.items():
+        for p in listing or ():
+            holders.setdefault(p, set()).add(h)
+    asked = [by_hash[h] for h in paths]
+    groups = {}
+    for s in seeds:
+        group, _, _ = _cross_seed_group(asked, paths, s)
+        groups[s['hash']] = group or [{**s, 'paths': []}]
+    in_groups = {g['hash'] for group in groups.values() for g in group}
+    unknown = sum(1 for h, listing in paths.items() if listing is None and h not in in_groups)
+    return {'by_hash': by_hash, 'paths': paths, 'holders': holders, 'groups': groups,
+            'unknown': unknown, 'bounded': bounded}
 
-    delete_items, keep_items = [], []
-    for it in items:
-        h = it.get('hash')
-        if not h:
-            continue
-        my_paths = paths_map.get(h) or []
-        shared = any(any(o not in remove_hashes for o in owners.get(p, ()))
-                     for p in my_paths)
-        (keep_items if shared else delete_items).append(it)
-    return delete_items, keep_items
+
+def _removal_file_decision(own, h, removal):
+    """`('delete' | 'keep', reason)` for one torrent of a removal set (S01).
+
+    Files are deleted only when ownership is **established**: the torrent's own
+    listing is usable, no torrent that survives the removal holds any of its
+    paths, and nothing about the answer is unknown. Anything else keeps them —
+    the user's decision (a), 2026-09-15: a registration-only removal harms
+    nothing, and its worst case is an orphan, which Cleanup re-verifies against
+    the client before it will delete anything.
+
+    The reasons, in the order they are checked:
+
+    * `not_in_client` — the torrent is not in the listing at all.
+    * `unusable_listing` — its own listing is `None` *or* `[]`. `[]` is an
+      honest answer for a candidate (it holds nothing to share) but not for the
+      torrent being removed: its files are exactly what the listing failed to
+      name. Trumped's seed rule.
+    * `shared` — a survivor holds one of its paths. A survivor holding a
+      *different path to the same inode* (a distinct hardlink) does not count:
+      deleting this torrent drops only its own link.
+    * `unknown` — a candidate's listing could not be read, or the search was
+      bounded. Either could be a survivor this answer cannot see.
+    * `requested` — none of the above; the files go, as asked.
+    """
+    if h not in own['by_hash']:
+        return 'keep', 'not_in_client'
+    listing = own['paths'].get(h)
+    if not listing:
+        return 'keep', 'unusable_listing'
+    if any(o not in removal for p in listing for o in own['holders'].get(p, ())):
+        return 'keep', 'shared'
+    if own['unknown'] or own['bounded']:
+        return 'keep', 'unknown'
+    return 'delete', 'requested'
+
+
+def _keeps_files(mode):
+    """True when a removal request asked to keep every file.
+
+    Only an explicit no keeps them. `auto`, `true` and an **omitted** value all
+    take the ownership-checked path. An omitted value used to default to `True`
+    and delete with no check at all, and the only caller in auditorr sends
+    `auto` — decided by the user, 2026-09-15, so no unchecked delete mode
+    survives as an API affordance.
+    """
+    if mode is None or mode is False:
+        return True
+    if isinstance(mode, str):
+        return mode.strip().lower() in ('false', 'keep', 'no', '0')
+    return mode == 0
+
+
+def _removal_plan_refusal(own, plan, decisions):
+    """None when the confirmed plan still holds, else a 409 `plan_changed`.
+
+    **The confirmed plan binds** — the user's TR5 decision for Trumped
+    ("grown ⇒ refuse", 2026-09-13), and the outside review's design amendment 2
+    for any destructive group. The modal posts what it showed: each group's
+    members and each removed torrent's file decision. The server has just
+    re-resolved, and refuses when:
+
+    * a group gained or lost a member — new information about what is touched;
+    * a torrent shown **keeping** its files would now have them deleted. A
+      decision the plan does not name was never shown going, so it counts as
+      shown kept.
+
+    A flip the other way — shown deleted, now kept — is the safe direction and
+    goes ahead; the route reports it.
+    """
+    posted_groups = plan.get('groups') if isinstance(plan.get('groups'), dict) else {}
+    posted_files = plan.get('files') if isinstance(plan.get('files'), dict) else {}
+    added = lost = 0
+    for seed, shown in posted_groups.items():
+        shown = {str(h) for h in (shown if isinstance(shown, list) else [])}
+        now = {g['hash'] for g in own['groups'].get(str(seed), [])}
+        added += len(now - shown)
+        lost += len(shown - now)
+    now_deleting = sum(1 for h, (files, _) in decisions.items()
+                       if files == 'delete' and posted_files.get(h) != 'delete')
+    if not (added or lost or now_deleting):
+        return None
+    log.warning("Client delete: refusing — the plan changed since it was shown "
+                "(%d added, %d gone, %d would now delete files)", added, lost, now_deleting)
+    parts = ([f"{added} more torrent{'s' if added != 1 else ''} share these files"] if added else []) + \
+            ([f"{lost} no longer {'do' if lost != 1 else 'does'}"] if lost else []) + \
+            ([f"{now_deleting} would now have files deleted that were shown as kept"] if now_deleting else [])
+    return jsonify({
+        "status": "error", "code": "plan_changed",
+        "added": added, "lost": lost, "now_deleting": now_deleting,
+        "message": f"What this removal would do has changed since the dialog opened — {'; '.join(parts)}. "
+                   "Nothing was removed. Review it and confirm again.",
+    }), 409
+
+
+def _removal_outcomes(cfg, hashes, before):
+    """`{hash: outcome}` — what the client lists after a removal (S09).
+
+    `sources.remove_torrents` reports what it *submitted*: qui counts what it
+    posted (and a later instance's `raise_for_status` loses the earlier
+    instances' outcomes with the request), qbit counts hashes that existed.
+    Neither says what left. Rather than rewrite both backends' return contract,
+    this looks — one `list_torrents_detailed` — and answers per hash:
+
+    * `removed` — listed before, absent now, from an instance that answered;
+    * `already_gone` — not listed before either;
+    * `still_listed` — still there. Looked at once more after
+      `_REMOVAL_RECHECK_SECS`, since a client can drop a torrent a moment
+      after its API returns; **not verified against a live qui bulk action**,
+      which may apply asynchronously — the re-check is the allowance for it;
+    * `unknown` — its instance did not answer, so absence means nothing.
+
+    The page dismisses only `removed` and `already_gone` rows and names the rest.
+    """
+    instance_of = {r['hash']: r.get('instance_name') for r in before}
+
+    def _look():
+        try:
+            rows, report = sources.list_torrents_detailed(cfg)
+        except Exception as e:
+            log.warning("Client delete: could not list the client afterwards (%s)", type(e).__name__)
+            return None
+        failed = {str(f.get('name')) for f in report.get('instances_failed') or []}
+        listed = {r['hash'] for r in rows}
+        out = {}
+        for h in hashes:
+            inst = instance_of.get(h)
+            if failed and (inst is None or str(inst) in failed):
+                out[h] = 'unknown'
+            elif h in listed:
+                out[h] = 'still_listed'
+            else:
+                out[h] = 'removed' if h in instance_of else 'already_gone'
+        return out
+
+    out = _look() or {h: 'unknown' for h in hashes}
+    lingering = [h for h in hashes if out[h] == 'still_listed']
+    if lingering:
+        time.sleep(_REMOVAL_RECHECK_SECS)
+        again = _look()
+        if again:
+            for h in lingering:
+                out[h] = again[h]
+    return out
 
 
 @app.route('/api/workflows/remove_torrents', methods=['POST'])
 @require_auth
 def workflows_remove_torrents():
-    """Remove selected torrents from the client, optionally deleting their files.
+    """Remove selected torrents from the client, deleting files only where it is established safe.
 
-    `delete_files` accepts true / false / "auto":
-      true  — delete each torrent's files (caller asserts it is safe)
-      false — remove the registration only, keep every file
-      auto  — per torrent, delete files only when they are not shared with a
-              surviving torrent (cross-seed safe across every topology); files
-              shared with a still-seeding sibling are kept so it is never broken.
+    `delete_files` is `false` (keep every file) or anything else — `auto`,
+    `true`, or omitted — which takes the ownership-checked path: per torrent,
+    files go only when no surviving torrent holds them and nothing about that
+    answer is unknown (`_removal_file_decision`). `auto` used to delete whenever
+    it *found* no survivor, and a listing it could not read, a survivor it could
+    not list and a survivor one `.nfo` larger all found none (S01).
+
+    `plan` — `{seeds, groups: {seed: [hashes]}, files: {hash: keep|delete}}`,
+    what the confirm modal showed — binds: the group is re-resolved here, once,
+    and a change refuses with 409 `plan_changed` (`_removal_plan_refusal`).
+    Without a plan the checks still run; there is just nothing to hold them to.
+
+    The response says, per torrent, what happened to its files and why, and
+    whether it actually left the client (`_removal_outcomes`) — including on a
+    502, where a removal that failed part-way still reports what it removed.
 
     Destructive — gated behind the ALLOW_CLIENT_DELETE config flag (off by
     default) so conservative users can keep auditorr strictly read-only
-    against their client.
+    against their client. A failed instance refuses a checked removal: its
+    torrents are invisible to the ownership check, not merely uncounted.
     """
     cfg = db_load_config()
     if not cfg.get('ALLOW_CLIENT_DELETE'):
@@ -1639,37 +1817,79 @@ def workflows_remove_torrents():
             "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
         }), 403
     data  = request.json or {}
-    items = [
-        {'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
-        for i in (data.get('items') or []) if i.get('hash')
-    ]
+    items = list({str(i.get('hash')): {'hash': str(i.get('hash')), 'instance_id': i.get('instance_id')}
+                  for i in (data.get('items') or []) if isinstance(i, dict) and i.get('hash')}.values())
     if not items:
         return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
 
-    mode = data.get('delete_files', True)
+    keep_files = _keeps_files(data.get('delete_files', True))
+    plan = data.get('plan') if isinstance(data.get('plan'), dict) else None
+    hashes = [i['hash'] for i in items]
     try:
-        if mode == 'auto':
-            delete_items, keep_items = _partition_removal_by_file_sharing(cfg, items)
-            removed  = sources.remove_torrents(cfg, delete_items, delete_files=True) if delete_items else 0
-            removed += sources.remove_torrents(cfg, keep_items, delete_files=False) if keep_items else 0
-            files_deleted, files_kept = len(delete_items), len(keep_items)
-        else:
-            removed = sources.remove_torrents(cfg, items, delete_files=bool(mode))
-            files_deleted = removed if bool(mode) else 0
-            files_kept    = 0 if bool(mode) else removed
+        # Keeping files needs no ownership answer, so a listing short of an
+        # instance is still good enough to report outcomes against.
+        before = sources.list_torrents_detailed(cfg)[0] if keep_files else sources.list_torrents(cfg)
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
-    log.info("Client delete: removed %d/%d torrent(s) (mode=%s, files_deleted=%d, files_kept=%d)",
-             removed, len(items), mode, files_deleted, files_kept)
+
+    flipped = 0
+    if keep_files:
+        decisions = {h: ('keep', 'requested') for h in hashes}
+    else:
+        seeds = [*(str(s) for s in ((plan or {}).get('seeds') or [])),
+                 *(str(s) for s in (((plan or {}).get('groups') or {}) if isinstance((plan or {}).get('groups'), dict) else {})),
+                 *hashes]
+        own = _removal_ownership(cfg, before, seeds)
+        removal = set(hashes)
+        decisions = {h: _removal_file_decision(own, h, removal) for h in hashes}
+        if plan is not None:
+            refusal = _removal_plan_refusal(own, plan, decisions)
+            if refusal is not None:
+                return refusal
+            posted = plan.get('files') if isinstance(plan.get('files'), dict) else {}
+            flipped = sum(1 for h, (files, _) in decisions.items()
+                          if files == 'keep' and posted.get(h) == 'delete')
+        kept = [r for f, r in decisions.values() if f == 'keep']
+        if kept:
+            log.info("Client delete: keeping files for %d of %d torrent(s) — %d shared, %d unknown, "
+                     "%d unusable listing, %d not in client",
+                     len(kept), len(hashes), kept.count('shared'), kept.count('unknown'),
+                     kept.count('unusable_listing'), kept.count('not_in_client'))
+
+    delete_items = [i for i in items if decisions[i['hash']][0] == 'delete']
+    keep_items   = [i for i in items if decisions[i['hash']][0] != 'delete']
+    submitted, error = 0, None
+    try:
+        if delete_items:
+            submitted += sources.remove_torrents(cfg, delete_items, delete_files=True)
+        if keep_items:
+            submitted += sources.remove_torrents(cfg, keep_items, delete_files=False)
+    except sources.SourceConnectionError as e:
+        error = str(e)
+
+    outcomes = _removal_outcomes(cfg, hashes, before)
+    torrents = [{'hash': h, 'files': decisions[h][0], 'reason': decisions[h][1], 'outcome': outcomes[h]}
+                for h in hashes]
+    removed = sum(1 for t in torrents if t['outcome'] == 'removed')
+    files_deleted = sum(1 for t in torrents if t['outcome'] == 'removed' and t['files'] == 'delete')
+    log.info("Client delete: %d/%d torrent(s) left the client (%d with files deleted, %d submitted, "
+             "%d still listed, %d unknown, %d kept files where deletion was shown)",
+             removed, len(items), files_deleted, submitted,
+             sum(1 for t in torrents if t['outcome'] == 'still_listed'),
+             sum(1 for t in torrents if t['outcome'] == 'unknown'), flipped)
     # A keep-files removal touches the client and nothing else, so there is no
     # filesystem event for the watcher to see — yet the torrent is gone and
     # every count that mentions it is now wrong. Even a delete-files removal is
     # worth nudging: it makes the audit start from the last *action* rather than
     # from whichever inotify event happened to arrive last.
-    if removed:
+    if removed or submitted:
         nudge_watchdog('torrents removed via the client')
-    return jsonify({"status": "success", "removed": removed, "requested": len(items),
-                    "files_deleted": files_deleted, "files_kept": files_kept})
+    body = {"removed": removed, "requested": len(items), "submitted": submitted,
+            "files_deleted": files_deleted, "files_kept": removed - files_deleted,
+            "flipped_to_keep": flipped, "torrents": torrents, "outcomes": outcomes}
+    if error is not None:
+        return jsonify({"status": "error", "message": error, **body}), 502
+    return jsonify({"status": "success", **body})
 
 
 @app.route('/api/workflows/force_import', methods=['POST'])
@@ -1736,13 +1956,30 @@ def workflows_import_check():
     for the same reason — the arr's command status is not trustworthy, but its
     own file id is. Stateless: the caller holds the baseline, so nothing here
     has to be remembered between requests.
+
+    Two rules, each a Phase 9 fix:
+
+    * **S08 — only a read that happened is `checked`.** The file id comes from
+      `read_arr_file_id`, which raises on a failed read, rather than
+      `get_arr_file_id`, which answered `None` — so a timeout used to come back
+      `checked: true, file_id: null` and read as an import.
+    * **T11 — a Sonarr row watches its own episodes, not the series.** The
+      series' file ids move whenever Sonarr imports *any* episode of it, and a
+      busy series retired a row whose file never landed. An item carrying
+      `season` (and `episode`, or `episodes` for a multi-episode row; neither
+      for a season pack) is answered with the file ids of those episodes,
+      joined through `sonarr_episodes_by_file` once per series per request;
+      a `None` join is `checked: false`. An item with no `season` — a browser
+      bundle older than this — gets the series-wide reading it always did.
+
+    Each result carries `scope`: `movie`, `episode`, `season` or `series`.
     """
     cfg   = db_load_config()
     items = (request.json or {}).get('items') or []
     if not items:
         return jsonify({"status": "error", "message": "No items provided"}), 400
 
-    results = []
+    results, episode_lists = [], {}
     for item in items[:_IMPORT_CHECK_MAX]:
         key     = str(item.get('key') or '')
         service = str(item.get('service') or '')
@@ -1752,39 +1989,82 @@ def workflows_import_check():
             # showing it until an audit clears it.
             results.append({"key": key, "file_id": None, "checked": False})
             continue
+        season = item.get('season')
+        by_episode = service == 'sonarr' and isinstance(season, int) and not isinstance(season, bool)
         try:
-            fid = get_arr_file_id(cfg, service, item['connection_id'], item['arr_id'])
-            results.append({"key": key, "file_id": fid, "checked": True})
+            if by_episode:
+                fid, scope = _import_check_episode_files(cfg, item, episode_lists)
+            else:
+                fid = read_arr_file_id(cfg, service, item['connection_id'], item['arr_id'])
+                scope = 'movie' if service == 'radarr' else 'series'
+            results.append({"key": key, "file_id": fid, "checked": True, "scope": scope})
         except Exception as e:
             # `checked: false` is not `file_id: null` — one means "could not
             # ask", the other means "asked, and it holds no file". Collapsing
             # them would read an unreachable arr as a successful import.
-            log.warning("Import check failed for %s %s: %s", service, item.get('arr_id'), e)
+            log.warning("Import check failed for a %s item (%s)", service, type(e).__name__)
             results.append({"key": key, "file_id": None, "checked": False})
 
     return jsonify({"status": "success", "results": results})
 
 
+def _import_check_episode_files(cfg, item, episode_lists):
+    """`(sorted episode-file ids, scope)` for the episodes one Sonarr row is about (T11).
+
+    `episode_lists` caches `sonarr_episodes_by_file` per `(connection, series)`
+    for the request. Raises when the series' episode list could not be read, so
+    the caller reports `checked: false` rather than an empty answer.
+    """
+    series = (item['connection_id'], item['arr_id'])
+    if series not in episode_lists:
+        episode_lists[series] = sonarr_episodes_by_file(cfg, *series)
+    by_file = episode_lists[series]
+    if by_file is None:
+        raise LookupError('episode list unavailable')
+    season = item['season']
+    listed = item.get('episodes')
+    if isinstance(listed, list):
+        wanted = {e for e in listed if isinstance(e, int) and not isinstance(e, bool)} or None
+    elif isinstance(item.get('episode'), int) and not isinstance(item.get('episode'), bool):
+        wanted = {item['episode']}
+    else:
+        wanted = None
+    ids = sorted(fid for fid, eps in by_file.items()
+                 if any(s == season and (wanted is None or e in wanted) for _, s, e in eps))
+    return ids, ('season' if wanted is None else 'episode')
+
+
 @app.route('/api/workflows/triage/resolve_groups', methods=['POST'])
 @require_auth
 def workflows_triage_resolve_groups():
-    """Resolve each selected Triage torrent to its full live cross-seed group.
+    """Resolve each selected Triage torrent to everything its removal touches, live.
 
-    Triage records keep one hash per path (the healthiest claimant), so the
-    sibling cross-seeds are invisible in the report. This queries the client
-    directly so the delete modal can offer 'this torrent only' vs 'all N
-    cross-seeds'.
+    Triage records keep one hash per path (the healthiest claimant), so sibling
+    cross-seeds are invisible in the report and have to be asked of the client.
+    The answer is `_removal_ownership`'s — **the same resolution the removal
+    route re-runs at confirm** — so the modal shows exactly the decisions the
+    server will hold it to.
 
-    Cross-seed file topology is NOT uniform: siblings may each hold a distinct
-    hardlink to a shared inode (deleting one's files is safe), OR several may
-    register against one shared file at the same path (deleting that file breaks
-    the others). Each member therefore carries `shares_path` — true when it
-    shares a content path with another member — so the UI can warn, and the
-    server's delete_files='auto' mode keeps shared files while dropping
-    distinct-hardlink ones.
+    Per group member:
+
+    * `shares_path` / `shares_with` — which other members hold one of its paths.
+      Cross-seed topology is not uniform: a shared path (one file, several
+      registrations) is broken by deleting it, a distinct hardlink is not.
+    * `files` / `reason` — the server's file decision under "this torrent only"
+      (the seed alone; `None` for other members, which that scope does not
+      remove) and under "the whole group" (`_removal_file_decision`).
+
+    And for the request: `checked` (false when a candidate's listing could not be
+    read or the search was bounded — every decision then keeps files, and the
+    modal says so before confirm), `unknown_listings`, `bounded`, and `missing`
+    (selected hashes no longer in the client, which get an empty group).
+
+    This returned HTTP 500 on every call with a seed in the client from `a96bb15`
+    to Phase 9: Phase 7 changed `_cross_seed_group` to return a tuple and this
+    caller, which no test called, kept iterating it.
     """
     data   = request.json or {}
-    hashes = [str(h) for h in (data.get('hashes') or []) if h]
+    hashes = list(dict.fromkeys(str(h) for h in (data.get('hashes') or []) if h))
     if not hashes:
         return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
     cfg = db_load_config()
@@ -1793,59 +2073,67 @@ def workflows_triage_resolve_groups():
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
 
-    by_hash    = {r['hash']: r for r in rows}
-    seeds      = [by_hash[h] for h in hashes if h in by_hash]
-    sizes      = {s['size'] for s in seeds}
-    candidates = [r for r in rows if r['size'] in sizes]
-    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
-
-    groups = {s['hash']: _cross_seed_group(candidates, paths_map, s) for s in seeds}
+    own = _removal_ownership(cfg, rows, hashes)
+    checked = not (own['unknown'] or own['bounded'])
+    if not checked:
+        log.warning("Triage resolve_groups: ownership not established — %d candidate listing(s) "
+                    "unknown, search bounded: %s", own['unknown'], own['bounded'])
 
     # Enrich every unique group member with live details (seeding time, tracker
     # health) — one batched call across all resolved groups.
     seen, members_in = set(), []
-    for g in groups.values():
+    for g in own['groups'].values():
         for t in g:
             if t['hash'] not in seen:
                 seen.add(t['hash'])
                 members_in.append({'hash': t['hash'], 'instance_id': t.get('instance_id')})
     try:
-        details = sources.fetch_torrent_details(cfg, members_in)
+        details = sources.fetch_torrent_details(cfg, members_in) if members_in else {}
     except Exception as e:
-        log.warning("Triage resolve_groups: detail fetch failed: %s", e)
+        log.warning("Triage resolve_groups: detail fetch failed: %s", type(e).__name__)
         details = {}
 
     out = {}
-    for h, g in groups.items():
+    for h in hashes:
+        group = own['groups'].get(h)
+        if not group:
+            out[h] = []
+            continue
+        everyone = {g['hash'] for g in group}
         members = []
-        for t in g:
+        for t in group:
             det = details.get(t['hash'], {})
-            t_paths = set(t.get('paths') or [])
-            # Does this member share a content path with another group member?
-            # If so, deleting its files would break that sibling (shared file);
-            # if not, its files are its own distinct hardlink (safe to delete).
-            shares_path = any(o is not t and t_paths and t_paths & set(o.get('paths') or [])
-                              for o in g)
+            listing = own['paths'].get(t['hash']) or []
+            shares_with = sorted({o for p in listing for o in own['holders'].get(p, ())} - {t['hash']})
+            one = _removal_file_decision(own, t['hash'], {h}) if t['hash'] == h else (None, None)
+            whole = _removal_file_decision(own, t['hash'], everyone)
             members.append({
                 'hash':           t['hash'],
                 'instance_id':    t.get('instance_id'),
-                'name':           t['name'],
+                'instance_name':  t.get('instance_name'),
+                'name':           t.get('name') or '',
                 'tracker':        t.get('tracker') or '',
-                'size':           t['size'],
+                'size':           t.get('size') or 0,
                 'seeding_time':   det.get('seeding_time'),
                 'uploaded':       det.get('uploaded'),
                 'tracker_health': det.get('tracker_health', 'unknown'),
                 'tracker_msg':    det.get('tracker_msg', ''),
-                'shares_path':    shares_path,
+                'shares_path':    bool(shares_with),
+                'shares_with':    shares_with,
+                'files':          {'one': one[0], 'all': whole[0]},
+                'reason':         {'one': one[1], 'all': whole[1]},
             })
         members.sort(key=lambda m: m['name'])
         out[h] = members
 
-    # Hashes not found in the client get an empty group → the modal falls back
-    # to a single-torrent delete for them.
-    for h in hashes:
-        out.setdefault(h, [])
-    return jsonify({"status": "success", "groups": out})
+    return jsonify({
+        "status":           "success",
+        "groups":           out,
+        "missing":          [h for h in hashes if h not in own['by_hash']],
+        "checked":          checked,
+        "unknown_listings": own['unknown'],
+        "bounded":          own['bounded'],
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1974,8 +2262,9 @@ def _trump_items_from_paths(cfg, group_paths, parsed):
     if not inodes:
         return {'status': 'group_unreadable', 'items': [], 'errors': []}
     try:
-        index  = fetch_arr_media_index(cfg)
-        errors = arr_media_index_errors()
+        # Rows and errors from one snapshot (S11): the accessor reads whichever
+        # fetch landed last, which under concurrent requests need not be this one.
+        index, errors = fetch_arr_media_index_result(cfg)
     except Exception as e:
         log.warning("Trump: media index unavailable for the path lookup: %s", e)
         return {'status': 'index_unavailable', 'items': [], 'errors': []}
@@ -2427,11 +2716,10 @@ def workflows_trump_search_release():
         return jsonify({"status": "error", "message": "new_title is required"}), 400
     cfg    = db_load_config()
     parsed = parse_release_info_for_path(new_title)
-    # Fetch, then read the errors accessor, in that order and in this request:
-    # the title cache is 120s, so the accessor describes the list just handed
-    # back and nothing else.
-    titles     = fetch_arr_all_titles(cfg)
-    arr_errors = arr_titles_errors()
+    # The titles and their errors from one snapshot (S11). "Fetch, then read the
+    # accessor, in this request" was a sequential contract; another request's
+    # refresh could land between the two and describe a list nobody received.
+    titles, arr_errors = fetch_arr_all_titles_result(cfg)
     title_item = _trump_find_arr_item(cfg, parsed, titles=titles, name=new_title)
 
     group_paths = [p for p in (data.get('group_paths') or []) if isinstance(p, str) and p]
@@ -2739,6 +3027,49 @@ def workflows_trump_execute():
                     "queue_checked": queue_checked, "watch_job_id": watch_job_id})
 
 
+# T5's ordering. When a torrent's files earn different verdicts the row takes the
+# one whose action deletes least: `library_unknown` says "do not act on this until
+# the arr answers", `import_pending` says "rescan", `superseded` offers a delete for
+# a copy the library already beats, and `not_in_library` is the bucket that invites
+# one. A season pack with one episode the arr is waiting to import is not junk
+# because its other nine are unmatched.
+_TRIAGE_LEAST_DESTRUCTIVE = ('library_unknown', 'import_pending', 'superseded', 'not_in_library')
+
+
+def _triage_pick_instance(rows, parsed):
+    """`(winner, rivals)` among ranked arr rows for one release (T2).
+
+    `rows` come ranked by `rank_arr_candidates`. The winner is the first, except
+    where another **instance** ties it on that ranking and holds a file of the
+    same quality as the release while the first does not: a 1080p and a 4K
+    Sonarr both hold the episode, and the honest comparison — and the right
+    place to send a rescan or a force import — is the instance whose file
+    matches. That is TRIAGE T2's third ranking criterion ("prefer the instance
+    whose file most closely matches"). Rows from the winner's own instance never
+    reorder, so a single-instance install gets the ranker's answer unchanged.
+
+    `rivals` is the first row from each *other* instance that also matched — the
+    ambiguity the row says out loud rather than resolving silently.
+    """
+    if not rows:
+        return None, []
+    winner = rows[0]
+    if 'file_quality_name' in winner and \
+            compare_release_quality(parsed, winner.get('file_quality_name') or '') != 'same':
+        top = _arr_candidate_score(winner, parsed)
+        winner = next((r for r in rows[1:]
+                       if r.get('connection_id') != winner.get('connection_id')
+                       and _arr_candidate_score(r, parsed) == top
+                       and compare_release_quality(parsed, r.get('file_quality_name') or '') == 'same'),
+                      winner)
+    rivals, seen = [], {winner.get('connection_id')}
+    for r in rows:
+        if r.get('connection_id') not in seen:
+            seen.add(r.get('connection_id'))
+            rivals.append(r)
+    return winner, rivals
+
+
 @app.route('/api/workflows/triage')
 @require_auth
 def workflows_triage():
@@ -2822,13 +3153,53 @@ def workflows_triage():
         g['total_size'] += f['size']
         g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
 
-    group_list = sorted(groups.values(), key=lambda g: -g['total_size'])
-    truncated  = len(group_list) > _TRIAGE_GROUP_CAP
-    group_list = group_list[:_TRIAGE_GROUP_CAP]
+    # Dead registrations: torrents the tracker dropped whose payload is still
+    # alive — on a working cross-seed sibling and/or the hardlinked library copy.
+    # The audit merge keeps the healthy claimant per inode and stashes the dead
+    # ones in `dead_siblings`; they are invisible everywhere else. Surface each
+    # as its own removable registration. Collected before the cap so one cap
+    # covers both kinds of row (T8), and against every listed hash rather than
+    # only those the cap keeps — a torrent the cap cut is still not also a dead
+    # registration, which is how `count_triage_items` counts.
+    listed_hashes = {g['hash'] for g in groups.values() if g['hash']}
+    dead_reg = {}
+    for f in torrent_files:
+        if f.get('excluded') or not f.get('dead_siblings'):
+            continue
+        for s in f['dead_siblings']:
+            h = s.get('hash')
+            if not h or h in listed_hashes:
+                continue
+            g = dead_reg.setdefault(h, {
+                'hash': h, 'instance_id': s.get('instance_id'),
+                'files': [], 'total_size': 0, 'trackers': set(),
+                'stored_msg': s.get('tracker_msg') or '',
+                'alive_library': False, 'alive_sibling': False,
+            })
+            g['files'].append(f)
+            g['total_size'] += f['size']
+            g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
+            if f.get('imported'):
+                g['alive_library'] = True
+            if f.get('tracker_health') == 'working':
+                g['alive_sibling'] = True
 
-    # Both fetches are followed *immediately* by their errors accessor, in the
-    # same request: each accessor is cached alongside its data (120s TTL) and
-    # its contract is that it describes the list the caller just received.
+    # T8 — one cap, on the combined list, largest first. It used to be applied to
+    # the torrent rows and again to the dead registrations, so a page could hold
+    # twice the cap while `truncated` reflected only the first, and the banner
+    # said "500" whatever the cap was. The badge (`count_triage_items`) still
+    # counts everything.
+    listing = sorted([('torrent', g) for g in groups.values()] +
+                     [('dead_registration', g) for g in dead_reg.values()],
+                     key=lambda kind_group: -kind_group[1]['total_size'])
+    total = len(listing)
+    listing = listing[:_TRIAGE_GROUP_CAP]
+
+    # S11 — each fetch hands back its rows and its errors from **one** snapshot.
+    # This used to call the fetch and then its errors accessor, which reads
+    # whichever fetch landed last: under eight gthreads another request's refresh
+    # could land in between, leaving this request `[]` rows and no errors, and
+    # the gate below reading that silence as a healthy arr.
     #
     # An arr that did not answer contributes no rows, which is the same empty
     # list as an arr that manages nothing — and Triage turns that silence into a
@@ -2837,19 +3208,18 @@ def workflows_triage():
     # banner never fires.
     arr_errors = []
     try:
-        media_index = fetch_arr_media_index(cfg)
-        arr_errors.extend(arr_media_index_errors())
+        media_index, index_errors = fetch_arr_media_index_result(cfg)
+        arr_errors.extend(index_errors)
     except Exception as e:
         log.warning("Triage: media index fetch failed: %s", e)
         media_index = []
         # The per-connection loop inside has its own try, so reaching here means
-        # the whole call failed and the cache was never written — the accessor
-        # would describe a previous fetch. Synthesize instead.
+        # the whole call failed and no snapshot was published. Synthesize.
         arr_errors.append({'connection_id': '', 'name': 'Sonarr/Radarr library',
                            'service': '', 'partial': False, 'message': str(e)})
     try:
-        all_titles = fetch_arr_all_titles(cfg)
-        arr_errors.extend(arr_titles_errors())
+        all_titles, title_errors = fetch_arr_all_titles_result(cfg)
+        arr_errors.extend(title_errors)
     except Exception as e:
         log.warning("Triage: title list fetch failed: %s", e)
         all_titles = []
@@ -2886,74 +3256,59 @@ def workflows_triage():
         slug = entry.get('title_slug') or ''
         return link_base(conn) + prefix + (slug or str(entry.get('arr_id') or ''))
 
-    items = []
-    for g in group_list:
-        videos = [f for f in g['files']
-                  if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
-        rep = max(videos or g['files'], key=lambda f: f['size'])
-        parsed = parse_release_info_for_path(rep['path'])
+    def _conn_name(row):
+        return (row.get('connection_name')
+                or (conn_by_id.get(row.get('connection_id')) or {}).get('name') or '')
 
-        tracker_health = g.get('stored_health') or 'unknown'
+    def _classify(path):
+        """One file's library match and its verdict when the tracker has not dropped it.
+
+        Library rows with files are gated to the service that fits the content
+        type. A *gate*, not a tiebreak: this used to end `... or lib_rows`, which
+        fell back to the wrong-type rows whenever the right type had none, so a
+        TV episode of a same-titled series absent from Sonarr matched the film in
+        Radarr (Fargo, Hannibal, Dune, Shōgun — the collisions are not exotic).
+        That produced quality_cmp 'same', which is exactly what renders the Force
+        import button, and force_import_files then posts replaceExistingFiles
+        against the movie's id: one episode deliberately written over a library
+        film, past every rejection spec (T1).
+
+        Within the gate the rows are **ranked** (T2, `rank_arr_candidates`) —
+        they are pooled across every connection under one title key, so `[0]`
+        was whichever instance answered first — and the title list gets the
+        same gate, which it never had. The year gate is the shared `arr_year_ok`
+        (Radarr ±1, Sonarr one-sided), replacing an endpoint-local copy that was
+        Radarr ±1 and blind to a title that is itself a year. Ranking happens
+        within the rows a title match produced, aliases included; it never opens
+        a second matching path.
+        """
+        parsed = parse_release_info_for_path(path)
         # Canonical keys first, then the arrs' alternate titles — an exact match
         # always wins, an alias only rescues what would otherwise match nothing.
-        parsed_keys    = with_title_aliases(title_match_keys(parsed['title']), title_aliases)
-        is_episode     = parsed['season'] is not None
-
-        # Same-title remakes ("The Smashing Machine" 2002 vs 2025) must not
-        # match each other: when the release name carries a year, a radarr
-        # candidate with a different year is rejected. Only enforced for
-        # movies — TV release names often carry air dates, not series years.
-        def _year_ok(entry):
-            if parsed['year'] is None or entry.get('service') != 'radarr':
-                return True
-            if not entry.get('year'):
-                return True
-            return abs(int(entry['year']) - parsed['year']) <= 1
-
-        # Library rows with files, gated to the service that fits the content
-        # type. A *gate*, not a tiebreak: this used to end `... or lib_rows`,
-        # which fell back to the wrong-type rows whenever the right type had
-        # none, so a TV episode of a same-titled series absent from Sonarr
-        # matched the film in Radarr (Fargo, Hannibal, Dune, Shōgun — the
-        # collisions are not exotic). That produced quality_cmp 'same', which is
-        # exactly what renders the Force import button, and force_import_files
-        # then posts replaceExistingFiles against the movie's id: one episode
-        # deliberately written over a library film, past every rejection spec.
-        # With no row of the right type the item correctly falls through to
-        # import_pending / not_in_library.
+        keys = with_title_aliases(title_match_keys(parsed['title']), title_aliases)
+        is_episode = parsed['season'] is not None
         preferred = 'sonarr' if is_episode else 'radarr'
-        lib_rows = next((lib_by_title[k] for k in parsed_keys if k in lib_by_title), [])
-        lib_rows = [r for r in lib_rows if _year_ok(r) and r.get('service') == preferred]
+        lib_rows = rank_arr_candidates(
+            next((lib_by_title[k] for k in keys if k in lib_by_title), []), parsed, service=preferred)
+        if is_episode:
+            # Same episode, or any episode of the same season for season packs
+            se_tag = (f"s{parsed['season']:02d}e{parsed['episode']:02d}" if parsed['episode'] is not None
+                      else f"s{parsed['season']:02d}e")
+            matches = [r for r in lib_rows
+                       if se_tag in os.path.basename(r.get('relative_path') or r.get('path') or '').lower()]
+        else:
+            matches = lib_rows
+        library_match, library_rivals = _triage_pick_instance(matches, parsed)
+        title_rows = next((ranked for ranked in
+                           (rank_arr_candidates(titles_by_norm.get(k, []), parsed, service=preferred)
+                            for k in keys)
+                           if ranked), [])
+        title_hit, title_rivals = _triage_pick_instance(title_rows, parsed)
 
-        library_match = None
-        if lib_rows:
-            if is_episode:
-                # Same episode, or any episode of the same season for season packs
-                if parsed['episode'] is not None:
-                    se_tag = f"s{parsed['season']:02d}e{parsed['episode']:02d}"
-                else:
-                    se_tag = f"s{parsed['season']:02d}e"
-                for r in lib_rows:
-                    base = os.path.basename(r.get('relative_path') or r.get('path') or '').lower()
-                    if se_tag in base:
-                        library_match = r
-                        break
-            else:
-                library_match = lib_rows[0]
-
-        arr_title_hit = next(
-            (t for k in parsed_keys for t in titles_by_norm.get(k, []) if _year_ok(t)),
-            None)
-        in_arr = arr_title_hit is not None
-
-        # What this torrent is when the tracker doesn't say 'unregistered' —
-        # health is the only live input to classification, so precomputing the
-        # verdict under every health outcome lets the client apply the live
-        # answer without re-running any of this.
         if library_match:
-            fallback = 'superseded'
-        elif in_arr or lib_rows:
-            fallback = 'import_pending'
+            verdict = 'superseded'
+        elif title_hit or lib_rows:
+            verdict = 'import_pending'
         elif arr_degraded:
             # `not_in_library` means "no arr has ever heard of this", and its
             # copy ends "junk can be deleted" — a not-imported torrent has no
@@ -2963,10 +3318,148 @@ def workflows_triage():
             # source guard applies to the torrent client). `superseded` and
             # `import_pending` are positive matches and stand on their own; only
             # the verdict derived purely from silence is suppressed.
-            fallback = 'library_unknown'
+            verdict = 'library_unknown'
         else:
-            fallback = 'not_in_library'
+            verdict = 'not_in_library'
+        return {'parsed': parsed, 'verdict': verdict,
+                'match': library_match, 'match_rivals': library_rivals,
+                'title': title_hit, 'title_rivals': title_rivals}
 
+    def _library_payload(c):
+        parsed = c['parsed']
+        if c['match']:
+            row, rivals = c['match'], c['match_rivals']
+            quality = row.get('file_quality_name') or ''
+            payload = {
+                'title':        row.get('title') or '',
+                'year':         row.get('year'),
+                'service':      row.get('service') or '',
+                'quality_name': quality,
+                'hdr':          row.get('file_hdr') or '',
+                'filename':     os.path.basename(row.get('path') or ''),
+                'arr_url':      _arr_url(row),
+                'quality_cmp':  compare_release_quality(parsed, quality),
+                # Addressing for force-import: the arr already holds a file for
+                # this title, so replacing it needs the item's own id, not a path.
+                'arr_id':        row.get('arr_id'),
+                'connection_id': row.get('connection_id'),
+            }
+        elif c['title']:
+            row, rivals = c['title'], c['title_rivals']
+            payload = {
+                'title':        row.get('title') or '',
+                'year':         row.get('year'),
+                'service':      row.get('service') or '',
+                'quality_name': '',
+                'hdr':          '',
+                'filename':     '',
+                'arr_url':      _arr_url(row),
+                'quality_cmp':  'unknown',
+                'arr_id':        row.get('arr_id'),
+                'connection_id': row.get('connection_id'),
+            }
+        else:
+            return None
+        # T2 — the instance a rescan and a force import go to, and every other
+        # instance that also holds the title. Two instances holding one title is
+        # a legitimate configuration (1080p + 4K), and "your library already has
+        # this" is true of both, so the row says so rather than picking silently.
+        payload['connection_name'] = _conn_name(row)
+        payload['others'] = [{
+            'connection_id': r.get('connection_id'),
+            'name':          _conn_name(r),
+            'quality_name':  r.get('file_quality_name') or '',
+            'quality_cmp':   (compare_release_quality(parsed, r['file_quality_name'])
+                              if r.get('file_quality_name') else 'unknown'),
+        } for r in rivals]
+        return payload
+
+    def _dead_registration_item(g):
+        videos = [f for f in g['files']
+                  if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
+        rep = max(videos or g['files'], key=lambda f: f['size'])
+        return {
+            'hash':           g['hash'],
+            'instance_id':    g['instance_id'],
+            'rep_path':       rep['path'],
+            'paths':          [f['path'] for f in g['files']],
+            'file_count':     len(g['files']),
+            'total_size':     g['total_size'],
+            'trackers':       sorted(g['trackers']),
+            'verdict':        'dead_registration',
+            # Live re-verify happens client-side: a registration the tracker
+            # answers for again has recovered — drop it, exactly like dead_seed.
+            'verdict_alternatives': {'working': None,
+                                     'unregistered': 'dead_registration',
+                                     'other': 'dead_registration'},
+            'verdict_spread': None,
+            # Deliberately empty, and the UI renders no Exclude action for these
+            # rows (T6). These `paths` are the **healthy carrier's** — a file a
+            # working cross-seed is seeding right now. Excluding one hides a live
+            # file from the walk while the dead registration it was meant to
+            # address is still sitting in the client. Exclusion is not a
+            # meaningful answer to this row at all; removing the registration is.
+            'exclusion_patterns': [],
+            'is_duplicate':   False,
+            'parsed':         parse_release_info_for_path(rep['path']),
+            'episodes':       None,
+            'library':        None,
+            'tracker_health': 'unregistered',
+            'tracker_msg':    g['stored_msg'],
+            'status':             rep.get('status') or '',
+            'completion_unknown': bool(rep.get('completion_unknown')),
+            # The files are the carrier's, so neither count describes this
+            # registration's own torrent.
+            'torrent_files':  None,
+            'torrent_size':   None,
+            'uploaded':       None,
+            'ratio':          None,
+            'seeding_time':   None,
+            'added_on':       None,
+            # The evidence the row's copy asserts — the page renders which (T9).
+            'alive_library':  g['alive_library'],
+            'alive_sibling':  g['alive_sibling'],
+        }
+
+    items = []
+    for kind, g in listing:
+        if kind == 'dead_registration':
+            items.append(_dead_registration_item(g))
+            continue
+        # Largest first, so the representative is the largest video, as it was.
+        videos = sorted((f for f in g['files'] if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS),
+                        key=lambda f: -f['size'])
+        rep = videos[0] if videos else max(g['files'], key=lambda f: f['size'])
+
+        # T5 — one verdict per torrent, earned by every video in it rather than
+        # by the largest. A season pack is one decision, so rows stay per torrent,
+        # but a pack where one episode is superseded and nine are not in the
+        # library used to read as superseded-lower — the state that pre-selected
+        # a delete of the whole cross-seed group. Every video is judged, the row
+        # takes the verdict that deletes least, and a disagreement ships as
+        # `verdict_spread`. An imported dead seed's verdict does not depend on the
+        # library, so it is judged on its representative as before.
+        voters = videos if videos and not g['imported'] else [rep]
+        judged = [_classify(f['path']) for f in voters]
+        spread = {}
+        for c in judged:
+            spread[c['verdict']] = spread.get(c['verdict'], 0) + 1
+        fallback = min(spread, key=_TRIAGE_LEAST_DESTRUCTIVE.index)
+        chosen = next(c for c in judged if c['verdict'] == fallback)
+        parsed = chosen['parsed']
+        # The episodes this row covers, for the rescan watch (T11): every video's,
+        # when each names an episode of the row's season; otherwise the season.
+        episodes = None
+        if parsed['season'] is not None:
+            numbers = {c['parsed']['episode'] for c in judged}
+            if None not in numbers and all(c['parsed']['season'] == parsed['season'] for c in judged):
+                episodes = sorted(numbers)
+
+        tracker_health = g.get('stored_health') or 'unknown'
+        # What this torrent is when the tracker doesn't say 'unregistered' —
+        # health is the only live input to classification, so precomputing the
+        # verdict under every health outcome lets the client apply the live
+        # answer without re-running any of this.
         if g['imported']:
             # 'working' → None: a torrent the tracker answers for again has
             # recovered (re-registered) — the row disappears on live verify.
@@ -2977,38 +3470,6 @@ def workflows_triage():
         verdict = _triage_verdict_under(alternatives, tracker_health)
         if verdict is None:
             continue
-
-        lib_payload = None
-        if library_match:
-            lib_quality = library_match.get('file_quality_name') or ''
-            lib_payload = {
-                'title':        library_match.get('title') or '',
-                'year':         library_match.get('year'),
-                'service':      library_match.get('service') or '',
-                'quality_name': lib_quality,
-                'hdr':          library_match.get('file_hdr') or '',
-                'filename':     os.path.basename(library_match.get('path') or ''),
-                'arr_url':      _arr_url(library_match),
-                'quality_cmp':  compare_release_quality(parsed, lib_quality),
-                # Addressing for force-import: the arr already holds a file for
-                # this title, so replacing it needs the item's own id, not a path.
-                'arr_id':        library_match.get('arr_id'),
-                'connection_id': library_match.get('connection_id'),
-            }
-        elif in_arr:
-            t = arr_title_hit
-            lib_payload = {
-                'title':        t.get('title') or '',
-                'year':         t.get('year'),
-                'service':      t.get('service') or '',
-                'quality_name': '',
-                'hdr':          '',
-                'filename':     '',
-                'arr_url':      _arr_url(t),
-                'quality_cmp':  'unknown',
-                'arr_id':        t.get('arr_id'),
-                'connection_id': t.get('connection_id'),
-            }
 
         # A byte-identical copy of this torrent's data already exists on disk
         # (audit duplicate detection) but isn't hardlinked — a lossless Dedupe
@@ -3025,6 +3486,7 @@ def workflows_triage():
             'trackers':       sorted(g['trackers']),
             'verdict':        verdict,
             'verdict_alternatives': alternatives,
+            'verdict_spread': spread if len(spread) > 1 else None,
             # Built here, not in the browser — and the safe folder comes off the
             # audit's own stamp, because deciding it needs the whole torrent,
             # every other torrent's paths and the media tree.
@@ -3032,7 +3494,8 @@ def workflows_triage():
                 [f['path'] for f in g['files']], _excl_folder(g['files'])),
             'is_duplicate':   is_duplicate,
             'parsed':         parsed,
-            'library':        lib_payload,
+            'episodes':       episodes,
+            'library':        _library_payload(chosen),
             'tracker_health': tracker_health,
             'tracker_msg':    g['stored_msg'],
             # What the client is doing, and whether the payload is whole. The
@@ -3042,6 +3505,12 @@ def workflows_triage():
             # ones do, and say so rather than vanishing.
             'status':             rep.get('status') or '',
             'completion_unknown': bool(rep.get('completion_unknown')),
+            # T5 — what a delete touches is the whole torrent, and this row may
+            # list a subset (a partly imported torrent, an excluded file). The
+            # file count is the audit's (`_stamp_torrent_files`, sparse); the size
+            # arrives from /triage/verify, which has the torrent's own row.
+            'torrent_files':  max((f.get('torrent_files') or 0) for f in g['files']) or None,
+            'torrent_size':   None,
             # Live-only fields — filled in by /triage/verify
             'uploaded':       None,
             'ratio':          None,
@@ -3049,91 +3518,22 @@ def workflows_triage():
             'added_on':       None,
         })
 
-    # Dead registrations: torrents the tracker dropped whose payload is still
-    # alive — on a working cross-seed sibling and/or the hardlinked library copy.
-    # The audit merge keeps the healthy claimant per inode and stashes the dead
-    # ones in `dead_siblings`; they are invisible everywhere else. Surface each
-    # as its own removable registration (delete_files='auto' keeps shared files,
-    # drops a distinct hardlink's own file so nothing is orphaned).
-    seen_hashes  = {i['hash'] for i in items if i['hash']}
-    dead_reg = {}
-    for f in torrent_files:
-        if f.get('excluded') or not f.get('dead_siblings'):
-            continue
-        for s in f['dead_siblings']:
-            h = s.get('hash')
-            if not h or h in seen_hashes:
-                continue
-            g = dead_reg.setdefault(h, {
-                'hash': h, 'instance_id': s.get('instance_id'),
-                'files': [], 'total_size': 0, 'trackers': set(),
-                'stored_msg': s.get('tracker_msg') or '',
-                'alive_library': False, 'alive_sibling': False,
-            })
-            g['files'].append(f)
-            g['total_size'] += f['size']
-            g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
-            if f.get('imported'):
-                g['alive_library'] = True
-            if f.get('tracker_health') == 'working':
-                g['alive_sibling'] = True
-
-    dead_reg_list = sorted(dead_reg.values(), key=lambda g: -g['total_size'])[:_TRIAGE_GROUP_CAP]
-    for g in dead_reg_list:
-        videos = [f for f in g['files']
-                  if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
-        rep = max(videos or g['files'], key=lambda f: f['size'])
-        items.append({
-            'hash':           g['hash'],
-            'instance_id':    g['instance_id'],
-            'rep_path':       rep['path'],
-            'paths':          [f['path'] for f in g['files']],
-            'file_count':     len(g['files']),
-            'total_size':     g['total_size'],
-            'trackers':       sorted(g['trackers']),
-            'verdict':        'dead_registration',
-            # Live re-verify happens client-side: a registration the tracker
-            # answers for again has recovered — drop it, exactly like dead_seed.
-            'verdict_alternatives': {'working': None,
-                                     'unregistered': 'dead_registration',
-                                     'other': 'dead_registration'},
-            # Deliberately empty, and the UI renders no Exclude action for these
-            # rows (T6). These `paths` are the **healthy carrier's** — a file a
-            # working cross-seed is seeding right now. Excluding one hides a live
-            # file from the walk while the dead registration it was meant to
-            # address is still sitting in the client. Exclusion is not a
-            # meaningful answer to this row at all; removing the registration is.
-            'exclusion_patterns': [],
-            'is_duplicate':   False,
-            'parsed':         parse_release_info_for_path(rep['path']),
-            'library':        None,
-            'tracker_health': 'unregistered',
-            'tracker_msg':    g['stored_msg'],
-            'status':             rep.get('status') or '',
-            'completion_unknown': bool(rep.get('completion_unknown')),
-            'uploaded':       None,
-            'ratio':          None,
-            'seeding_time':   None,
-            'added_on':       None,
-            'alive_library':  g['alive_library'],
-            'alive_sibling':  g['alive_sibling'],
-        })
-
     verdict_order = {'dead_seed': 0, 'dead_registration': 1, 'unregistered': 2,
                      'superseded': 3, 'import_pending': 4, 'library_unknown': 5,
                      'not_in_library': 6}
     items.sort(key=lambda i: (verdict_order.get(i['verdict'], 9), -i['total_size']))
-    counts = {}
-    for i in items:
-        counts[i['verdict']] = counts.get(i['verdict'], 0) + 1
 
     suggestions = _triage_exclusion_suggestions(items)
 
+    # `counts` is gone (T9): nothing read it, and the badge and the Rounds card
+    # read `details.triage_counts` off the audit. `shown` / `total` replace a
+    # banner that hardcoded "500" (T8); `truncated` stays for an older bundle.
     return jsonify({
         "status":         "success",
         "items":          items,
-        "counts":         counts,
-        "truncated":      truncated,
+        "shown":          len(listing),
+        "total":          total,
+        "truncated":      total > len(listing),
         "arr_configured": bool(conn_by_id),
         "arr_errors":     arr_errors,
         "suggestions":    suggestions,

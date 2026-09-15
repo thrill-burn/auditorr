@@ -338,6 +338,29 @@ released as `No.tengo.miedo.S01…` resolves to the series Sonarr calls *I'm Not
 Afraid*, and reads as *Import pending* rather than *Not in library*. An exact
 title match always takes priority.
 
+**One verdict per torrent, earned by all of its files.** A season pack is one
+decision, but its episodes don't always agree — one may already be in your
+library while another is still waiting to import. Every video file is judged,
+and the row takes the verdict whose action deletes least (*Could not check*,
+then *Import pending*, then *Superseded*, then *Not in library*). A row whose
+files disagree says so: `18 files · 3 verdicts`.
+
+**A row shows the whole torrent.** A row can list only part of its torrent — a
+partly imported season shows the episodes that didn't import — while removing
+it removes everything. Where the two differ the row says
+`10 of 18 files · 40 GB of 72 GB`, and the size beside the row (and in the
+selection bar) is the torrent's.
+
+**Two instances holding the same title.** If a 1080p and a 4K Sonarr both have
+the episode, the row names both — `on TV · also TV 4K` — and says which one a
+rescan or a force import goes to: the instance whose file is the same quality as
+the torrent, when there is one. A row like that never pre-selects a whole
+cross-seed group for removal.
+
+Each row also shows when your client added the torrent, and **Dead
+Registration** rows say where the data is still alive: your library, a seeding
+cross-seed, or both.
+
 ### How Triage loads
 
 The page renders immediately from data captured during the last audit, making
@@ -349,6 +372,13 @@ snapshot (a torrent that was dead last night may be fine now), while everything
 else can. Recovered torrents disappear from the list as their batch confirms
 them. If verification fails you get an explicit "showing audit-time data" notice
 and a Retry button, never a quiet guess.
+
+A torrent you've removed from your client since the last scan drops out the same
+way, as soon as its batch answers. On qui, a torrent whose instance didn't answer
+is left as it was, never treated as gone.
+
+The page lists the largest torrents first, up to a limit; past it, a banner says
+how many are shown out of how many.
 
 ### Rescan vs force import
 
@@ -369,6 +399,11 @@ whether they imported everything or nothing. auditorr now asks what the arr
 decided and tells you in plain words:
 
 > Nothing will import — Not a quality revision upgrade for existing movie file(s)
+
+After a rescan the row watches Sonarr/Radarr for the file to land, and clears
+the moment it does. A TV row watches the episodes it is for, not the whole series
+— Sonarr importing some other episode of a busy show doesn't count — and a check
+that can't reach the arr never counts as the file landing.
 
 **Force import** is the way past it. It uses the arr's own *Import Anyway*,
 replacing the library file with this release. It appears on superseded items
@@ -534,11 +569,31 @@ Cross-seeding comes in two shapes, and they behave differently:
 - **Distinct hardlinks** — each torrent has its own path, all pointing at the
   same data. Delete one link and the others are fine.
 
-The default file handling is **auto**, which resolves the live paths and deletes
-a torrent's files only where no *surviving* torrent still references them. A
-shared-path cross-seed keeps its file; a distinct-hardlink cross-seed drops only
-its own link; nothing is left orphaned either way.
+auditorr resolves every torrent's live file list and deletes a torrent's files
+only where it has **established** that nothing staying in your client uses them:
 
-The confirmation dialog shows every torrent's hash, tracker, seeding time, size,
-and file paths, and marks which members share a path — so "deleting one is
-always safe for the others" is never something you have to assume.
+- torrents are compared by the files they hold, never by size — a cross-seed
+  carrying one extra `.nfo` counts — and a cross-seed of a cross-seed counts too;
+- a shared-path cross-seed that stays keeps its file; a distinct-hardlink one
+  drops only its own link;
+- wherever auditorr **couldn't check** — a torrent's file list didn't load, a
+  neighbouring torrent's didn't, or there were more near matches than it checks
+  at once — the torrent is removed and **its files are kept**. The dialog says so
+  before you confirm. The worst that can leave is an orphaned file, and Cleanup
+  checks your client again before it will delete one.
+
+**What the dialog shows is what happens.** When you confirm, auditorr checks the
+groups again. If a cross-seed joined or left, or a torrent shown keeping its
+files would now have them deleted, nothing is removed and the dialog shows you
+the new answer. A change towards keeping files goes ahead, and the result says
+so. The **Remove** button itself states the outcome — *keep files*, *and their
+files*, or *delete files of N*.
+
+Afterwards auditorr looks at your client again. Rows whose torrent is gone
+clear; a torrent that is still listed, or sits on an instance that didn't answer,
+stays, marked **removal unconfirmed**, until the next scan.
+
+The confirmation dialog shows every torrent's hash, tracker, seeding time, size
+and file paths, and marks each one's files as deleted or kept, with the reason —
+so "deleting one is always safe for the others" is never something you have to
+assume.

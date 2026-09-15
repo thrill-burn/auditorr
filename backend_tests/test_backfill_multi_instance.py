@@ -34,7 +34,7 @@ def _two_sonarrs():
 
 
 def _clear_index_cache():
-    arr._arr_media_index_cache.update({'data': None, 'ts': 0, 'errors': [], 'roots': {}})
+    arr._arr_media_index_cache.update({'data': None, 'ts': 0, 'errors': [], 'roots': {}, 'snapshot': None})
 
 
 # ── Series-id collision ───────────────────────────────────────────────────────

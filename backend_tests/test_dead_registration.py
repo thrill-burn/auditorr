@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from audit import _assemble_records
+from sources import new_source_report
 import app
 
 
@@ -76,20 +77,51 @@ class AssembleDeadSiblingsTests(unittest.TestCase):
 
 
 class PartitionRemovalTests(unittest.TestCase):
-    """delete_files='auto' partitioning: keep files shared with a survivor,
-    delete files unique to the removed torrent."""
+    """delete_files='auto': keep files a survivor still holds, delete files unique
+    to the removed torrent.
+
+    **Rewritten deliberately in Phase 9, every fixture kept.** These four used to
+    call `_partition_removal_by_file_sharing` with a *static* paths map, which
+    answers for torrents the code never asked about — so the exact-size
+    pre-filter they sat behind (S01) could never show in them. They now drive the
+    route with a listing that answers only what it is asked, and assert on what
+    `sources.remove_torrents` is called with. The rows carry no `save_path` or
+    `name`, so the content-root rule is inert and the size rule decides; the
+    shapes S01 is about live in `test_triage_removal.py`.
+    """
 
     def _run(self, rows, paths_map, items):
-        with patch.object(app.sources, 'list_torrents', return_value=rows), \
-             patch.object(app.sources, 'fetch_torrent_file_paths', return_value=paths_map):
-            return app._partition_removal_by_file_sharing({}, items)
+        removals = []
+
+        def fetch(_cfg, asked):
+            return {i['hash']: paths_map.get(i['hash']) for i in asked}
+
+        def remove(_cfg, removing, delete_files=True):
+            removals.append(([i['hash'] for i in removing], delete_files))
+            return len(removing)
+
+        report = new_source_report('qbit')
+        report.update(instances_total=1, instances_ok=1)
+        with patch.object(app, 'db_load_config', return_value={'ALLOW_CLIENT_DELETE': True}), \
+             patch.object(app.sources, 'list_torrents', return_value=rows), \
+             patch.object(app.sources, 'list_torrents_detailed', return_value=([], report)), \
+             patch.object(app.sources, 'fetch_torrent_file_paths', side_effect=fetch), \
+             patch.object(app.sources, 'remove_torrents', side_effect=remove), \
+             patch.object(app, 'nudge_watchdog'), \
+             patch.object(app.time, 'sleep'):
+            resp = app.app.test_client().post('/api/workflows/remove_torrents', json={
+                'items': items, 'delete_files': 'auto'})
+        self.assertEqual(resp.status_code, 200)
+        delete = sorted(h for hashes, d in removals if d for h in hashes)
+        keep = sorted(h for hashes, d in removals if not d for h in hashes)
+        return delete, keep
 
     def test_shared_path_keeps_files(self):
         # Topology A: dead AITHER + working HAWKE point at the SAME file.
         rows = [{'hash': 'AITHER', 'size': 100}, {'hash': 'HAWKE', 'size': 100}]
         paths = {'AITHER': ['/d/Movie.mkv'], 'HAWKE': ['/d/Movie.mkv']}
         delete, keep = self._run(rows, paths, [{'hash': 'AITHER'}])
-        self.assertEqual([i['hash'] for i in keep], ['AITHER'])
+        self.assertEqual(keep, ['AITHER'])
         self.assertEqual(delete, [])
 
     def test_distinct_hardlink_deletes_files(self):
@@ -97,14 +129,14 @@ class PartitionRemovalTests(unittest.TestCase):
         rows = [{'hash': 'AITHER', 'size': 100}, {'hash': 'HAWKE', 'size': 100}]
         paths = {'AITHER': ['/d/a/Movie.mkv'], 'HAWKE': ['/d/h/Movie.mkv']}
         delete, keep = self._run(rows, paths, [{'hash': 'AITHER'}])
-        self.assertEqual([i['hash'] for i in delete], ['AITHER'])
+        self.assertEqual(delete, ['AITHER'])
         self.assertEqual(keep, [])
 
     def test_standalone_deletes_files(self):
         rows = [{'hash': 'SOLO', 'size': 100}]
         paths = {'SOLO': ['/d/Movie.mkv']}
         delete, keep = self._run(rows, paths, [{'hash': 'SOLO'}])
-        self.assertEqual([i['hash'] for i in delete], ['SOLO'])
+        self.assertEqual(delete, ['SOLO'])
         self.assertEqual(keep, [])
 
     def test_removing_whole_shared_group_deletes_files(self):
@@ -112,7 +144,7 @@ class PartitionRemovalTests(unittest.TestCase):
         rows = [{'hash': 'AITHER', 'size': 100}, {'hash': 'HAWKE', 'size': 100}]
         paths = {'AITHER': ['/d/Movie.mkv'], 'HAWKE': ['/d/Movie.mkv']}
         delete, keep = self._run(rows, paths, [{'hash': 'AITHER'}, {'hash': 'HAWKE'}])
-        self.assertEqual(sorted(i['hash'] for i in delete), ['AITHER', 'HAWKE'])
+        self.assertEqual(delete, ['AITHER', 'HAWKE'])
         self.assertEqual(keep, [])
 
 

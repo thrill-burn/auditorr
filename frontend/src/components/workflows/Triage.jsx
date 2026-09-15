@@ -16,7 +16,7 @@ const VERDICTS = [
   },
   {
     key: 'dead_registration', label: 'Dead Registration — payload alive', color: 'var(--green)',
-    desc: 'The tracker dropped this torrent, but its data is still alive — seeding on a working cross-seed and/or hardlinked in your library. Remove just the dead registration: auditorr keeps the file when a live seed shares it, and deletes it only when it is this torrent’s own hardlink, so nothing is ever orphaned or broken.',
+    desc: 'The tracker dropped this torrent, but its data is still alive — seeding on a working cross-seed and/or hardlinked in your library, and each row says which. Remove just the dead registration: auditorr deletes its files only when nothing that stays in your client uses them, and keeps them whenever it cannot check — so a live seed is never broken.',
   },
   {
     key: 'unregistered', label: 'Unregistered — not imported', color: 'var(--red)',
@@ -39,6 +39,8 @@ const VERDICTS = [
     desc: 'No matching title in any Sonarr/Radarr instance, alternate titles included. Nothing in your library holds this, so these files are the only copy — deleting loses them. Manual downloads belong in your exclusions.',
   },
 ]
+
+const VERDICT_LABEL = Object.fromEntries(VERDICTS.map(v => [v.key, v.label]))
 
 // Superseded sub-buckets — what to do depends on how the orphaned torrent's
 // quality compares to the library file it duplicates. The 'duplicate' bucket
@@ -96,9 +98,61 @@ function qualityBucket(item) {
 
 // Default delete scope: a superseded torrent whose library copy is the better
 // one is dead weight → remove the whole cross-seed group. Everything else
-// defaults to the single recorded torrent.
+// defaults to the single recorded torrent — and so does a row that is itself
+// unsure what it is: a title two instances hold (T2 — a wrong-instance `lower`
+// is exactly what used to pre-select a whole group) or a torrent whose files
+// earned different verdicts (T5).
 function defaultScope(item) {
-  return (item.verdict === 'superseded' && item.library?.quality_cmp === 'lower') ? 'all' : 'one'
+  if (item.verdict !== 'superseded' || item.library?.quality_cmp !== 'lower') return 'one'
+  if ((item.library.others || []).length > 0 || item.verdict_spread) return 'one'
+  return 'all'
+}
+
+// When the client added the torrent, as an age — how long a row has been a
+// problem is the cheapest context there is (T9). Live-only: verify fills it in.
+function addedAgeLabel(addedOn) {
+  if (!addedOn) return null
+  const days = Math.floor((Date.now() / 1000 - addedOn) / 86400)
+  if (days < 1) return 'added today'
+  if (days < 30) return `added ${days}d ago`
+  if (days < 365) return `added ${Math.floor(days / 30)}mo ago`
+  return `added ${Math.floor(days / 365)}y ago`
+}
+
+// Why a removal keeps or deletes a torrent's files, in the server's terms.
+const FILE_REASON = {
+  requested:        'nothing that stays in the client uses these files',
+  shared:           'a torrent that stays shares these files',
+  unknown:          'auditorr could not check what else uses them',
+  unusable_listing: 'auditorr could not read this torrent’s file list',
+  not_in_client:    'it is no longer in the client',
+}
+
+// The file decision the server will make for one torrent of this removal —
+// `_removal_file_decision` in app.py, applied to the removal set the modal is
+// about to post, from what `resolve_groups` returned. The server resolves again
+// at confirm and refuses (409 plan_changed) anything shown here keeping its
+// files that it would now delete, so a disagreement between the two can only
+// ever fail safe.
+function fileDecision(member, removal, checked) {
+  const own = member?.reason?.all
+  if (own === 'unusable_listing' || own === 'not_in_client') return { files: 'keep', reason: own }
+  if ((member?.shares_with || []).some(h => !removal.has(h))) return { files: 'keep', reason: 'shared' }
+  if (!checked) return { files: 'keep', reason: 'unknown' }
+  return { files: 'delete', reason: 'requested' }
+}
+
+// "10 of 18 files · 40 GB of 72 GB" — a row can list a subset of its torrent (a
+// partly imported torrent, an excluded file) while a delete removes all of it
+// (T5). The file total comes from the audit; the size arrives with verify.
+function subsetLabel(item) {
+  const filesDiffer = item.torrent_files > item.file_count
+  const sizeDiffers = item.torrent_size > item.total_size
+  if (!filesDiffer && !sizeDiffers) return item.file_count > 1 ? `${item.file_count} files` : null
+  const files = filesDiffer
+    ? `${item.file_count} of ${item.torrent_files} files`
+    : `${item.file_count} file${item.file_count !== 1 ? 's' : ''}`
+  return sizeDiffers ? `${files} · ${formatBytes(item.total_size)} of ${formatBytes(item.torrent_size)}` : files
 }
 
 // Compact duration for seeding time — the hit-and-run tiebreaker, so days
@@ -195,7 +249,7 @@ function QualityChip({ label, hdr, dim }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending, rescanned }) {
+function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending, rescanned, unconfirmed }) {
   const p = item.parsed || {}
   const seTag = p.season != null
     ? ` · S${String(p.season).padStart(2, '0')}${p.episode != null ? 'E' + String(p.episode).padStart(2, '0') : ' pack'}`
@@ -221,9 +275,37 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {p.title || filename}{p.year ? ` (${p.year})` : ''}{seTag}
           </span>
-          {item.file_count > 1 && (
-            <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-              {item.file_count} files
+          {subsetLabel(item) && (
+            <span
+              title={item.torrent_files > item.file_count || item.torrent_size > item.total_size
+                ? 'This row lists the files that need a verdict. Removing the torrent removes all of it — the second figure.'
+                : undefined}
+              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}
+            >
+              {subsetLabel(item)}
+            </span>
+          )}
+          {/* T5 — the files of this torrent did not agree. The row shows the
+              verdict whose action deletes least, and says it is a summary. */}
+          {item.verdict_spread && (
+            <span
+              title={`These files earned different verdicts — ${Object.entries(item.verdict_spread).map(([v, n]) => `${n} ${VERDICT_LABEL[v] || v}`).join(', ')}. The row takes the one whose action deletes least.`}
+              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0 }}
+            >
+              {Object.values(item.verdict_spread).reduce((a, b) => a + b, 0)} files · {Object.keys(item.verdict_spread).length} verdicts
+            </span>
+          )}
+          {unconfirmed && (
+            <span
+              title={unconfirmed === 'unknown'
+                ? `The ${client?.name || 'client'} instance holding this torrent did not answer after the removal, so auditorr cannot say whether it left. It stays here until the next scan.`
+                : `auditorr asked ${client?.name || 'the client'} to remove this torrent and it was still listed a moment later. It stays here until the next scan shows what happened.`}
+              style={{
+                fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0,
+                border: '1px solid var(--yellow)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
+              }}
+            >
+              removal unconfirmed
             </span>
           )}
           {rescanned && (
@@ -255,6 +337,26 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               </span>
               <QualityChip label={lib.quality_name} hdr={lib.hdr} dim />
             </>
+          )}
+          {/* T2 — more than one instance holds this title. The row names them and
+              says which one a rescan or force import goes to, rather than
+              picking silently. */}
+          {lib?.others?.length > 0 && (
+            <span
+              title={`${lib.others.length + 1} ${lib.service} instances hold this title. Rescan and force import go to ${lib.connection_name || 'the best match'}${lib.quality_name ? ` (${lib.quality_name})` : ''}. ${lib.others.map(o => `${o.name || o.connection_id} ${o.quality_name ? `holds ${o.quality_name}` : 'holds it too'}`).join('; ')}.`}
+              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
+            >
+              on {lib.connection_name || lib.service} · also {lib.others.map(o => o.name || o.connection_id).join(', ')}
+            </span>
+          )}
+          {/* T9 — the evidence this verdict's copy asserts as a generality. */}
+          {item.verdict === 'dead_registration' && (item.alive_library || item.alive_sibling) && (
+            <span
+              title="Where this registration's data is still alive — why removing just the registration loses nothing"
+              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--green)', opacity: 0.9 }}
+            >
+              alive in {[item.alive_library && 'your library', item.alive_sibling && 'a seeding cross-seed'].filter(Boolean).join(' and ')}
+            </span>
           )}
           {item.tracker_msg && (
             <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--red)', opacity: 0.9 }}>
@@ -317,7 +419,8 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           no minWidth stretching, and the arr-link slot is always rendered
           even when empty. */}
       <div style={{ flexShrink: 0, textAlign: 'right', width: 110 }}>
-        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.total_size)}</div>
+        {/* The number a delete touches: the whole torrent once verify knows it (T5). */}
+        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.torrent_size ?? item.total_size)}</div>
         <div title={(item.trackers || []).join(', ')} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {(item.trackers || [])[0] || 'no tracker'}{item.trackers?.length > 1 ? ` +${item.trackers.length - 1}` : ''}
         </div>
@@ -342,6 +445,12 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               <div title="Total time seeding — check your tracker's hit-and-run rules before deleting"
                 style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
                 seeded {formatDuration(item.seeding_time)}
+              </div>
+            )}
+            {addedAgeLabel(item.added_on) && (
+              <div title="When your client added this torrent"
+                style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+                {addedAgeLabel(item.added_on)}
               </div>
             )}
           </>
@@ -419,6 +528,12 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const [scopes,    setScopes]    = useState({})   // itemKey → 'one' | 'all'
   const [resolving, setResolving] = useState(false)
   const [resolveError, setResolveError] = useState(null)
+  // What resolve_groups said about the answer as a whole:
+  // { checked, unknown_listings, bounded, missing }.
+  const [groupsMeta, setGroupsMeta] = useState(null)
+  // Rows a removal could not confirm left the client, by item key →
+  // 'still_listed' | 'unknown' (S09). They stay, and say so, until the audit.
+  const [unconfirmed, setUnconfirmed] = useState({})
 
   const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui', url }
   const [clientDeleteAllowed, setClientDeleteAllowed] = useState(false)
@@ -434,10 +549,18 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // verdicts re-resolve via their phase-1 alternatives, live stats fill in.
   // Returns the keys of dropped (recovered) rows — computed purely from the
   // batch inputs so the state updater stays side-effect free.
+  //
+  // T10 — `found: false` is the client saying the torrent is gone since the
+  // audit, and the row drops. **No entry at all is "could not ask"**: the row
+  // keeps its audit-time verdict, re-resolved as it always was, but is not
+  // marked verified — it used to be, which told the user a torrent the client
+  // no longer held had been checked.
   const applyDetails = useCallback((batchItems, details) => {
-    const droppedKeys = new Set(
+    const goneKeys = new Set(batchItems.filter(it => details[it.hash]?.found === false).map(itemKey))
+    const recoveredKeys = new Set(
       batchItems
-        .filter(it => verdictUnder(it, (details[it.hash] || {}).tracker_health || 'unknown') == null)
+        .filter(it => !goneKeys.has(itemKey(it))
+          && verdictUnder(it, (details[it.hash] || {}).tracker_health || 'unknown') == null)
         .map(itemKey)
     )
     const batchHashes = new Set(batchItems.map(it => it.hash))
@@ -446,24 +569,27 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       const items = []
       for (const it of r.items) {
         if (!it.hash || !batchHashes.has(it.hash)) { items.push(it); continue }
-        const det = details[it.hash] || {}
-        const health = det.tracker_health || 'unknown'
+        const det = details[it.hash]
+        if (det?.found === false) continue   // gone from the client since the audit
+        const health = det?.tracker_health || 'unknown'
         const verdict = verdictUnder(it, health)
         if (verdict == null) continue   // recovered — re-registered on its tracker
         items.push({
           ...it,
           verdict,
-          verified:       true,
+          verified:       !!det,
           tracker_health: health,
-          tracker_msg:    det.tracker_msg || it.tracker_msg,
-          uploaded:       det.uploaded ?? null,
-          ratio:          det.ratio ?? null,
-          seeding_time:   det.seeding_time ?? null,
-          added_on:       det.added_on ?? null,
+          tracker_msg:    det?.tracker_msg || it.tracker_msg,
+          uploaded:       det?.uploaded ?? null,
+          ratio:          det?.ratio ?? null,
+          seeding_time:   det?.seeding_time ?? null,
+          added_on:       det?.added_on ?? null,
+          torrent_size:   det?.size ?? it.torrent_size ?? null,
         })
       }
       return { ...r, items }
     })
+    const droppedKeys = new Set([...goneKeys, ...recoveredKeys])
     if (droppedKeys.size > 0) {
       setSelected(prev => {
         if (![...droppedKeys].some(k => prev.has(k))) return prev
@@ -472,7 +598,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
         return next
       })
     }
-    return droppedKeys.size
+    return { recovered: recoveredKeys.size, gone: goneKeys.size }
   }, [])
 
   const runVerify = useCallback(async (targets) => {
@@ -480,7 +606,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     targets = (targets || []).filter(i => i.hash)
     if (targets.length === 0) { setVerify(null); return }
     setVerify({ running: true, done: 0, total: targets.length, removed: 0, failed: null })
-    let removed = 0
+    let removed = 0, gone = 0
     for (let off = 0; off < targets.length; off += VERIFY_CHUNK) {
       const batch = targets.slice(off, off + VERIFY_CHUNK)
       let resp
@@ -492,12 +618,17 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
         return
       }
       if (gen !== verifyGen.current) return   // superseded by a refresh/unmount
-      removed += applyDetails(batch, resp.details || {})
+      const outcome = applyDetails(batch, resp.details || {})
+      removed += outcome.recovered
+      gone += outcome.gone
       const done = Math.min(off + batch.length, targets.length)
       setVerify({ running: done < targets.length, done, total: targets.length, removed, failed: null })
     }
     if (removed > 0) {
       toast(`${removed} torrent${removed !== 1 ? 's' : ''} re-registered on its tracker since the last audit — removed from the list`, 'info')
+    }
+    if (gone > 0) {
+      toast(`${gone} torrent${gone !== 1 ? 's are' : ' is'} no longer in your client since the last audit — removed from the list`, 'info')
     }
   }, [applyDetails, toast])
 
@@ -507,6 +638,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     setSelected(new Set())
     setVerify(null)
     setRescanned(new Set())
+    setUnconfirmed({})
     verifyGen.current++   // cancel any in-flight verification
     api.triageReport()
       .then(r => {
@@ -570,8 +702,10 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   }, [items])
 
   const selectedItems = useMemo(() => items.filter(i => selected.has(itemKey(i))), [items, selected])
-  const selectedSize  = selectedItems.reduce((s, i) => s + i.total_size, 0)
-  const selectedPaths = selectedItems.flatMap(i => i.paths || [])
+  // What an action on the selection touches: each torrent in full where the row
+  // knows it (T5) — `torrent_size` arrives with verify, `torrent_files` with the audit.
+  const selectedSize  = selectedItems.reduce((s, i) => s + (i.torrent_size ?? i.total_size), 0)
+  const selectedFiles = selectedItems.reduce((s, i) => s + Math.max(i.torrent_files || 0, i.file_count || 0), 0)
 
   const toggle = useCallback(key => {
     setSelected(prev => {
@@ -619,27 +753,37 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       : `${lead}.`
   }, [selectedItems])
 
-  // Open the confirm modal and resolve each selected torrent's live cross-seed
-  // group so the user can choose per-item: delete just this torrent, or the
-  // whole hardlinked group. Deletion is hardlink-safe either way.
-  const openConfirm = useCallback(async () => {
-    setConfirmOpen(true)
+  // Resolve each selected torrent's live cross-seed group — everything removing
+  // it touches, and who else holds each file — so the modal can offer "this
+  // torrent only" or the whole group and show, per torrent, the file decision
+  // the server will hold the removal to.
+  const resolveGroups = useCallback(async () => {
     setResolveError(null)
     setResolving(true)
+    try {
+      const resp = await api.triageResolveGroups(deletableItems.map(i => i.hash))
+      setGroups(resp.groups || {})
+      setGroupsMeta({ checked: resp.checked !== false, unknown_listings: resp.unknown_listings || 0,
+                      bounded: !!resp.bounded, missing: resp.missing || [] })
+    } catch (e) {
+      setResolveError(e.message)
+      setGroups({})
+      setGroupsMeta(null)
+    }
+    setResolving(false)
+  }, [deletableItems])
+
+  const openConfirm = useCallback(() => {
+    setConfirmOpen(true)
+    setGroups({})
+    setGroupsMeta(null)
     setScopes(() => {
       const m = {}
       for (const i of deletableItems) m[itemKey(i)] = defaultScope(i)
       return m
     })
-    try {
-      const resp = await api.triageResolveGroups(deletableItems.map(i => i.hash))
-      setGroups(resp.groups || {})
-    } catch (e) {
-      setResolveError(e.message)
-      setGroups({})
-    }
-    setResolving(false)
-  }, [deletableItems])
+    resolveGroups()
+  }, [deletableItems, resolveGroups])
 
   const setItemScope = useCallback((key, scope) => {
     setScopes(prev => ({ ...prev, [key]: scope }))
@@ -653,21 +797,32 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     })
   }, [deletableItems])
 
-  // Flatten the selection into a deduped removal set, honoring each item's
-  // scope: 'all' pulls every hash in its cross-seed group, 'one' just the
-  // recorded torrent.
-  const buildRemovalItems = useCallback(() => {
-    const byHash = new Map()
+  // The removal the modal is about to post, and everything it shows: the deduped
+  // torrents honouring each row's scope ('all' pulls the whole group, 'one' the
+  // recorded torrent), each one's file decision, and the groups as shown — which
+  // the server binds the removal to. A torrent no longer in the client has
+  // nothing to remove. A resolve that failed keeps every file.
+  const removalPlan = useMemo(() => {
+    const checked = !resolveError && groupsMeta?.checked !== false
+    const byHash = new Map(), members = new Map(), shown = {}
     for (const item of deletableItems) {
       const grp = groups[item.hash] || []
+      if (!resolveError && grp.length === 0) continue
+      shown[item.hash] = grp.map(m => m.hash)
+      grp.forEach(m => members.set(m.hash, m))
       if ((scopes[itemKey(item)] || 'one') === 'all' && grp.length > 0) {
         for (const m of grp) byHash.set(m.hash, { hash: m.hash, instance_id: m.instance_id })
       } else {
         byHash.set(item.hash, { hash: item.hash, instance_id: item.instance_id })
       }
     }
-    return [...byHash.values()]
-  }, [deletableItems, groups, scopes])
+    const removal = new Set(byHash.keys())
+    const files = {}
+    for (const h of removal) {
+      files[h] = resolveError ? { files: 'keep', reason: 'unknown' } : fileDecision(members.get(h), removal, checked)
+    }
+    return { items: [...byHash.values()], removal, files, groups: shown, checked }
+  }, [deletableItems, groups, groupsMeta, scopes, resolveError])
 
   // ── Rescan follow-through ──────────────────────────────────────────────────
   //
@@ -681,10 +836,20 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // and it stops the moment every row has answered.
   const importGen = useRef(0)
 
-  const descriptorsFor = items => items.map(i => ({
-    key: itemKey(i), service: i.library.service,
-    connection_id: i.library.connection_id, arr_id: i.library.arr_id,
-  }))
+  //
+  // T11 — a Sonarr row is watched by its own episodes, not the whole series: the
+  // series' file ids move whenever Sonarr imports any episode of it, so a busy
+  // series used to retire rows whose file never landed. `episodes` is every
+  // video's episode when they all name one; without it the row's season is watched.
+  const descriptorsFor = items => items.map(i => {
+    const d = { key: itemKey(i), service: i.library.service,
+                connection_id: i.library.connection_id, arr_id: i.library.arr_id }
+    if (i.library.service === 'sonarr' && i.parsed?.season != null) {
+      d.season = i.parsed.season
+      if (i.episodes?.length) d.episodes = i.episodes
+    }
+    return d
+  })
 
   const snapshotFileIds = useCallback(async items => {
     try {
@@ -721,24 +886,57 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     }
   }, [toast])
 
+  // S09 — only rows whose own torrent the client no longer lists leave the page.
+  // A removal reports what it *submitted*; the server looks afterwards and says
+  // per torrent `removed`, `already_gone`, `still_listed`, or `unknown` (its
+  // instance did not answer). The rest stay, with a chip, until the audit lands.
+  // A row removed as another row's cross-seed leaves too.
+  const finishRemoval = (resp, failure) => {
+    const outcomes = resp.outcomes || {}
+    const left = new Set(Object.keys(outcomes).filter(h => outcomes[h] === 'removed' || outcomes[h] === 'already_gone'))
+    const keys = new Set((report?.items || []).filter(i => i.hash && left.has(i.hash)).map(itemKey))
+    keys.forEach(k => DISMISSED.add(k))
+    setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
+    setSelected(prev => new Set([...prev].filter(k => !keys.has(k))))
+    const stuck = deletableItems.filter(i => outcomes[i.hash] === 'still_listed' || outcomes[i.hash] === 'unknown')
+    if (stuck.length) {
+      setUnconfirmed(prev => ({ ...prev, ...Object.fromEntries(stuck.map(i => [itemKey(i), outcomes[i.hash]])) }))
+    }
+    const parts = [`${resp.removed ?? 0} torrent${resp.removed !== 1 ? 's' : ''} removed from ${client?.name || 'the client'}`]
+    if (resp.files_deleted) parts.push(`${resp.files_deleted} with files deleted`)
+    if (resp.files_kept)    parts.push(`${resp.files_kept} with files kept`)
+    if (stuck.length)       parts.push(`${stuck.length} not confirmed`)
+    toast(failure ? `${failure} — ${parts.join(' · ')}` : parts.join(' · '),
+          failure ? 'error' : stuck.length ? 'warning' : 'success')
+  }
+
   const handleClientDelete = async () => {
     setBusy('delete')
+    const plan = removalPlan
     try {
-      // 'auto': the server deletes each torrent's files only when no surviving
-      // torrent shares them, so a live cross-seed sibling is never broken and a
-      // distinct hardlink is never left orphaned — safe across every topology.
-      const resp = await api.removeTorrents(buildRemovalItems(), 'auto')
-      const parts = [`Removed ${resp.removed} torrent${resp.removed !== 1 ? 's' : ''} via ${client?.name || 'the client'}`]
-      if (resp.files_deleted) parts.push(`${resp.files_deleted} with files deleted`)
-      if (resp.files_kept)    parts.push(`${resp.files_kept} kept (still seeded elsewhere)`)
-      toast(parts.join(' · '), 'success')
-      const keys = new Set(deletableItems.map(itemKey))
-      keys.forEach(k => DISMISSED.add(k))
-      setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
-      setSelected(new Set())
+      // A resolve that failed could not check what else uses these files, so the
+      // removal keeps every one of them, as the modal said before confirm.
+      // Otherwise the plan binds: the server resolves again and refuses
+      // (409 plan_changed) if a group or a file decision moved towards deleting.
+      const resp = resolveError
+        ? await api.removeTorrents(plan.items, false)
+        : await api.removeTorrents(plan.items, 'auto', {
+            seeds:  Object.keys(plan.groups),
+            groups: plan.groups,
+            files:  Object.fromEntries(Object.entries(plan.files).map(([h, d]) => [h, d.files])),
+          })
+      finishRemoval(resp)
       setConfirmOpen(false)
     } catch (e) {
-      toast(e.message, 'error')
+      if (e.code === 'plan_changed') {
+        // Re-show: the modal stays open on a fresh answer, with the scopes kept.
+        toast(e.message, 'warning')
+        setBusy(null)
+        resolveGroups()
+        return
+      }
+      if (e.data?.outcomes) finishRemoval(e.data, e.message)
+      else toast(e.message, 'error')
     }
     setBusy(null)
   }
@@ -939,7 +1137,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
         <>
           {report?.truncated && (
             <div style={{ fontSize: 12, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
-              Showing the 500 largest torrents — resolve some to see the rest.
+              {report.total != null
+                ? `Showing the ${report.shown} largest of ${report.total} torrents — resolve some to see the rest.`
+                : 'Showing the largest torrents — resolve some to see the rest.'}
             </div>
           )}
           {!report?.arr_configured && (
@@ -1005,6 +1205,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     onNavigate={onNavigate}
                     pending={!!verify?.running && !!item.hash && !item.verified}
                     rescanned={rescanned.has(itemKey(item))}
+                    unconfirmed={unconfirmed[itemKey(item)]}
                   />
                 ))}
               </div>
@@ -1053,7 +1254,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
           })}
 
           {selectedItems.length > 0 && (
-            <ActionBar summary={`${selectedItems.length} torrent${selectedItems.length !== 1 ? 's' : ''} selected · ${selectedPaths.length} file${selectedPaths.length !== 1 ? 's' : ''} · ${formatBytes(selectedSize)}`}>
+            <ActionBar summary={`${selectedItems.length} torrent${selectedItems.length !== 1 ? 's' : ''} selected · ${selectedFiles} file${selectedFiles !== 1 ? 's' : ''} · ${formatBytes(selectedSize)}`}>
               <ActionButton onClick={handleRescan} disabled={busy != null} title="Tell Sonarr/Radarr to rescan these folders and retry the import">
                 {busy === 'rescan' ? 'Rescanning…' : 'Trigger Rescan'}
               </ActionButton>
@@ -1108,6 +1309,8 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             <ConfirmDeleteModal
               items={deletableItems}
               groups={groups}
+              plan={removalPlan}
+              meta={groupsMeta}
               scopes={scopes}
               resolving={resolving}
               resolveError={resolveError}
@@ -1160,29 +1363,45 @@ function ScopeSwitch({ scope, groupSize, onChange }) {
 }
 
 function ConfirmDeleteModal({
-  items, groups, scopes, resolving, resolveError,
+  items, groups, plan, meta, scopes, resolving, resolveError,
   onSetItemScope, onSetAllScopes, skippedCount, clientName, busy, onCancel, onConfirm,
 }) {
-  const totalSize = items.reduce((s, i) => s + i.total_size, 0)
+  const settled   = !resolving && !resolveError
+  const missing   = settled ? items.filter(i => (groups[i.hash] || []).length === 0) : []
+  const totalSize = items.filter(i => !missing.includes(i))
+                         .reduce((s, i) => s + (i.torrent_size ?? i.total_size), 0)
   const anyGroups = items.some(i => (groups[i.hash] || []).length > 1)
+  const unchecked = settled && meta && !meta.checked
 
-  // Deduped set of every torrent hash that will actually be removed.
-  const removalHashes = new Set()
-  for (const item of items) {
-    const grp = groups[item.hash] || []
-    if ((scopes[itemKey(item)] || 'one') === 'all' && grp.length > 0) {
-      grp.forEach(m => removalHashes.add(m.hash))
-    } else {
-      removalHashes.add(item.hash)
-    }
-  }
-  const torrentCount = removalHashes.size
+  const torrentCount = plan.items.length
+  const deleting = Object.values(plan.files).filter(d => d.files === 'delete').length
+  // Remove's label states the file outcome, so the button is never the first
+  // place a user learns which files go.
+  const confirmLabel = busy ? 'Removing…'
+    : `Remove ${torrentCount} torrent${torrentCount !== 1 ? 's' : ''}${
+        deleting === 0 ? ' · keep files'
+          : deleting === torrentCount ? ' and their files'
+          : ` · delete files of ${deleting}`}`
 
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onCancel() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel])
+
+  // One torrent's file decision, with the reason on hover.
+  const decisionTag = h => {
+    const d = plan.files[h]
+    if (!d) return null
+    const kept = d.files === 'keep'
+    const unsure = d.reason === 'unknown' || d.reason === 'unusable_listing'
+    return (
+      <span title={`${kept ? 'Files kept' : 'Files deleted'} — ${FILE_REASON[d.reason] || d.reason}`}
+            style={{ flexShrink: 0, color: kept ? (unsure ? 'var(--yellow)' : 'var(--text-dim)') : 'var(--red)' }}>
+        {kept ? (unsure ? 'files kept — not checked' : 'files kept') : 'files deleted'}
+      </span>
+    )
+  }
 
   // Portal to <body>: the page container's fade-in animation leaves a
   // persistent transform, which makes position:fixed resolve against the
@@ -1210,22 +1429,38 @@ function ConfirmDeleteModal({
           <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>Remove from {clientName}</div>
           <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
             Removes <b>{torrentCount} torrent{torrentCount !== 1 ? 's' : ''}</b> (<b>{formatBytes(totalSize)}</b>) from {clientName}.
-            Each torrent’s files are deleted <b>only</b> where no surviving torrent still shares them — any file still
-            seeded by a cross-seed sibling is kept, so no live seed is broken. {clientName} reports the split afterwards. There is no undo.
+            A torrent’s files are deleted <b>only</b> where auditorr established that nothing staying in {clientName} uses
+            them; files a remaining torrent shares, and files it could not check, are kept. Each torrent below says which. There is no undo.
           </p>
           {skippedCount > 0 && (
             <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0' }}>
               {skippedCount} selected item{skippedCount !== 1 ? 's have' : ' has'} no torrent hash and will be skipped.
             </p>
           )}
+          {/* A failed resolve never reads as "no cross-seeds": it is "could not
+              check", and removing then keeps every file (S01, decision a). */}
           {resolveError && (
-            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0' }}>
-              Couldn’t resolve cross-seed groups ({resolveError}) — only the listed torrents will be deleted.
+            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
+              Couldn’t check for cross-seeds ({resolveError}), so auditorr can’t tell what else uses these files.
+              Removing keeps every file: the torrents leave {clientName} and their files stay on disk, where Cleanup can check them later.
+            </p>
+          )}
+          {unchecked && (
+            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
+              {meta.unknown_listings > 0
+                ? `${meta.unknown_listings} torrent${meta.unknown_listings !== 1 ? 's' : ''} in ${clientName} did not return a file list${meta.bounded ? ', and the search stopped at its limit' : ''}`
+                : `${clientName} holds more near matches than auditorr checks at once`}
+              , so any of them could be using these files. Files are kept for every torrent here.
+            </p>
+          )}
+          {missing.length > 0 && (
+            <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0' }}>
+              {missing.length} selected torrent{missing.length !== 1 ? 's are' : ' is'} no longer in {clientName} — nothing to remove.
             </p>
           )}
           {anyGroups && !resolving && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 0', fontSize: 11.5, color: 'var(--text-dim)' }}>
-              <span>Choose how much of each cross-seed group to remove (files are kept or dropped automatically per torrent). Apply to all:</span>
+              <span>Choose how much of each cross-seed group to remove. Apply to all:</span>
               <button onClick={() => onSetAllScopes('one')} style={miniBtn}>This torrent only</button>
               <button onClick={() => onSetAllScopes('all')} style={miniBtn}>All cross-seeds</button>
             </div>
@@ -1241,10 +1476,11 @@ function ConfirmDeleteModal({
             const grp   = groups[item.hash] || []
             const scope = scopes[itemKey(item)] || 'one'
             const hasGroup = grp.length > 1
+            const gone = settled && grp.length === 0
             const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
             const shownPaths = paths.slice(0, 6)
             return (
-              <div key={itemKey(item)} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+              <div key={itemKey(item)} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: gone ? 0.6 : 1 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.parsed?.title || (item.rep_path || '').replace(/\\/g, '/').split('/').pop()}
@@ -1256,7 +1492,7 @@ function ConfirmDeleteModal({
                     </span>
                   )}
                   <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', flexShrink: 0 }}>
-                    {formatBytes(item.total_size)}
+                    {formatBytes(item.torrent_size ?? item.total_size)}
                   </span>
                 </div>
 
@@ -1267,11 +1503,9 @@ function ConfirmDeleteModal({
                     </div>
                     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
                       {grp.map(m => {
-                        const willRemove = scope === 'all' || m.hash === item.hash
-                        // Files survive removal when a kept sibling shares them.
-                        // scope 'all' leaves no kept member → files are deleted;
-                        // scope 'one' keeps the rest → a shared path is kept.
-                        const fileKept = willRemove && scope === 'one' && m.shares_path
+                        // Straight off the plan the page will post: a member another
+                        // selected row removes is removed here too.
+                        const willRemove = plan.removal.has(m.hash)
                         return (
                           <div key={m.hash} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 10, fontFamily: 'var(--mono)' }}>
                             <span style={{
@@ -1283,12 +1517,7 @@ function ConfirmDeleteModal({
                             <span style={{ flex: 1, minWidth: 0, color: willRemove ? 'var(--text)' : 'var(--text-dim)', opacity: willRemove ? 1 : 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {m.name}
                             </span>
-                            {willRemove && (
-                              <span title={fileKept ? 'A surviving cross-seed shares this file — it is kept' : 'No surviving torrent shares this file — it is deleted'}
-                                    style={{ flexShrink: 0, color: fileKept ? 'var(--text-dim)' : 'var(--red)' }}>
-                                {fileKept ? 'file kept' : 'file deleted'}
-                              </span>
-                            )}
+                            {willRemove && decisionTag(m.hash)}
                             {m.tracker && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{m.tracker}</span>}
                             {m.seeding_time != null && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{formatDuration(m.seeding_time)}</span>}
                           </div>
@@ -1301,7 +1530,15 @@ function ConfirmDeleteModal({
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 3, fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
                       <span title={item.hash} style={{ flexShrink: 0 }}>hash {String(item.hash).slice(0, 12)}…</span>
                       {(item.trackers || [])[0] && <span style={{ flexShrink: 0 }}>{item.trackers[0]}</span>}
-                      {!resolving && <span style={{ flexShrink: 0 }}>no cross-seeds</span>}
+                      {!resolving && (
+                        <span style={{ flexShrink: 0 }}>
+                          {gone ? `no longer in ${clientName}`
+                            : resolveError ? 'cross-seeds not checked'
+                            : unchecked ? 'no cross-seeds found'
+                            : 'no cross-seeds'}
+                        </span>
+                      )}
+                      {!resolving && plan.removal.has(item.hash) && decisionTag(item.hash)}
                     </div>
                     <div style={{ marginTop: 4 }}>
                       {shownPaths.map(p => (
@@ -1329,8 +1566,8 @@ function ConfirmDeleteModal({
           )}
           <span style={{ flex: 1 }} />
           <ActionButton onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</ActionButton>
-          <ActionButton danger onClick={onConfirm} disabled={busy || resolving}>
-            {busy ? 'Removing…' : `Remove ${torrentCount} torrent${torrentCount !== 1 ? 's' : ''}`}
+          <ActionButton danger onClick={onConfirm} disabled={busy || resolving || torrentCount === 0}>
+            {confirmLabel}
           </ActionButton>
         </div>
       </div>

@@ -313,11 +313,9 @@ def _triage(records):
     with patch.object(app, 'db_load_config', return_value={}), \
          patch.object(app, 'db_has_file_results', return_value=True), \
          patch.object(app, 'db_load_file_results', return_value=records), \
-         patch.object(app, 'fetch_arr_media_index', return_value=[]), \
-         patch.object(app, 'fetch_arr_all_titles', return_value=[]), \
-         patch.object(app, 'normalize_arr_connections', return_value=[]), \
-         patch.object(app, 'arr_media_index_errors', return_value=[]), \
-         patch.object(app, 'arr_titles_errors', return_value=[]):
+         patch.object(app, 'fetch_arr_media_index_result', return_value=([], [])), \
+         patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
+         patch.object(app, 'normalize_arr_connections', return_value=[]):
         return app.app.test_client().get('/api/workflows/triage').get_json()
 
 

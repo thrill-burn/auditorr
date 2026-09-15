@@ -173,7 +173,7 @@ def test_a_run_filters_on_the_labels_the_page_shows():
 
 
 def _clear_index_cache():
-    arr._arr_media_index_cache.update({'data': None, 'ts': 0, 'errors': [], 'roots': {}})
+    arr._arr_media_index_cache.update({'data': None, 'ts': 0, 'errors': [], 'roots': {}, 'snapshot': None})
 
 
 def test_root_folders_ride_the_index_fetch_and_their_failure_does_not_fail_it():

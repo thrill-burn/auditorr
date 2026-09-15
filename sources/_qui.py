@@ -37,8 +37,10 @@ Public interface:
 """
 
 import os
+import time
 import socket
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 import requests
@@ -649,6 +651,55 @@ def _fetch_inner(cfg, unresolved_roots=None):
 # fetch_torrent_details
 # ---------------------------------------------------------------------------
 
+# T7 — Triage verifies a page in batches of 150, and every batch used to list each
+# involved instance in full: a page at the cap issued seven full listings of a
+# 20k-torrent instance where one would do. qBittorrent filters server-side
+# (`torrents_info(torrent_hashes=…)`) and never had the problem. Each instance's
+# listing is kept briefly — only the per-hash fields `fetch_torrent_details`
+# returns, never the raw torrent JSON — and forgotten by any removal, or T10 would
+# report a removed torrent as still there. The tracker fan-out is not cached and
+# stays 8-wide.
+_DETAIL_LISTING_TTL = 60
+_detail_listings = {}            # (base, instance id) -> (monotonic ts, {hash: fields})
+_detail_listings_lock = threading.Lock()
+
+
+def _forget_detail_listings():
+    """Drop every cached instance listing (any removal; tests)."""
+    with _detail_listings_lock:
+        _detail_listings.clear()
+
+
+def _instance_detail_listing(sess, base, inst_id, fresh=False):
+    """`(fields by hash, listed_now)` for one instance. Raises when the listing fails.
+
+    `size` is `_norm_torrent`'s — qBittorrent's `size`, the files selected for
+    download, before `total_size` (T5; see `_qbit.fetch_torrent_details`).
+    `added_on` is read raw, as it always was: `_norm_torrent` carries it in
+    neither spelling, and the probe's `phase9` section measures its presence.
+    """
+    key = (base, inst_id)
+    if not fresh:
+        with _detail_listings_lock:
+            hit = _detail_listings.get(key)
+        if hit is not None and time.monotonic() - hit[0] < _DETAIL_LISTING_TTL:
+            return hit[1], False
+    listing = {}
+    for t in _fetch_all_torrents(sess, base, inst_id):
+        nt = _norm_torrent(t)
+        if nt['hash'] and nt['hash'] not in listing:
+            listing[nt['hash']] = {
+                'uploaded':     nt['uploaded'],
+                'ratio':        round(float(t.get('ratio') or 0), 3),
+                'seeding_time': t.get('seeding_time') or t.get('seedingTime'),
+                'added_on':     t.get('added_on') or t.get('addedOn'),
+                'size':         nt['size'],
+            }
+    with _detail_listings_lock:
+        _detail_listings[key] = (time.monotonic(), listing)
+    return listing, True
+
+
 def fetch_torrent_details(cfg, items):
     """Live lookup of upload stats + tracker health for specific torrents.
 
@@ -656,6 +707,13 @@ def fetch_torrent_details(cfg, items):
     instance_id only query that instance; hashes without one are looked up on
     every eligible instance. Returns {hash: details}; failures are best-effort
     (missing entries, never an exception).
+
+    **`{'found': False}` only where the listing that would hold the hash
+    answered** (T10) — its own instance, or with no instance id every eligible
+    instance. This backend logs and carries on when an instance's listing fails
+    and swallows a total failure, so a hash with no entry is "could not ask",
+    never "gone". A hash missing from a *cached* listing is listed again before
+    it is called gone: the torrent may simply be newer than the listing.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
@@ -683,28 +741,37 @@ def fetch_torrent_details(cfg, items):
             return {}
 
         # Upload stats come from the per-instance torrent lists (no single-hash
-        # endpoint is documented) — fetch each involved instance's list once.
+        # endpoint is documented) — each involved instance's list, once.
         involved_ids = {inst_id for inst_id in wanted.values() if inst_id in eligible}
         if any(inst_id not in eligible for inst_id in wanted.values()):
             involved_ids = set(eligible)  # unknown instance — search everywhere
-        hash_to_instance = {}
-        for inst_id in involved_ids:
+        hash_to_instance, listed_ok, listed_now = {}, set(), set()
+
+        def _list(inst_id, fresh):
             try:
-                for t in _fetch_all_torrents(sess, base, inst_id):
-                    nt = _norm_torrent(t)
-                    th = nt['hash']
-                    if th in wanted and th not in details:
-                        details[th] = {
-                            'uploaded':       nt['uploaded'],
-                            'ratio':          round(float(t.get('ratio') or 0), 3),
-                            'seeding_time':   t.get('seeding_time') or t.get('seedingTime'),
-                            'added_on':       t.get('added_on') or t.get('addedOn'),
-                            'tracker_health': 'unknown',
-                            'tracker_msg':    '',
-                        }
-                        hash_to_instance[th] = inst_id
+                listing, now = _instance_detail_listing(sess, base, inst_id, fresh=fresh)
             except Exception as e:
                 log.warning('qui: torrent detail list failed for instance %s: %s', inst_id, e)
+                listed_ok.discard(inst_id)
+                return
+            listed_ok.add(inst_id)
+            if now:
+                listed_now.add(inst_id)
+            for th in wanted:
+                if th not in details and th in listing:
+                    details[th] = {**listing[th], 'tracker_health': 'unknown', 'tracker_msg': ''}
+                    hash_to_instance[th] = inst_id
+
+        for inst_id in involved_ids:
+            _list(inst_id, fresh=False)
+        if any(th not in details for th in wanted):
+            for inst_id in [i for i in involved_ids if i in listed_ok and i not in listed_now]:
+                _list(inst_id, fresh=True)
+        for th, inst_id in wanted.items():
+            if th not in details:
+                asked = [inst_id] if inst_id in eligible else list(eligible)
+                if all(i in listed_ok for i in asked):
+                    details[th] = {'found': False}
 
         def _fetch_health(torrent_hash, inst_id):
             try:
@@ -959,6 +1026,9 @@ def remove_torrents(cfg, items, delete_files=True):
         raise SourceConnectionError(f"qui error: {e}") from e
     finally:
         socket.setdefaulttimeout(None)
+        # Forgotten after the removal, not before: a verify batch could cache a
+        # pre-removal listing while the bulk action is still in flight (T7/T10).
+        _forget_detail_listings()
 
 
 # ---------------------------------------------------------------------------

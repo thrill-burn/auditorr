@@ -12,7 +12,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
 
-_arr_media_index_cache = {'data': None, 'ts': 0, 'errors': []}
+# One immutable snapshot, `(ts, rows, errors, roots)`, published in a single
+# assignment — never four (S11). See `fetch_arr_media_index_result`.
+_arr_media_index_cache = {'snapshot': None}
 _ARR_MEDIA_INDEX_TTL = 120
 # Bulk list endpoints (/api/v3/movie, /api/v3/series) return the entire library
 # in one response — seconds of JSON on a large instance, where the 10s default
@@ -156,15 +158,17 @@ def _fetch_root_folders(conn):
     return sorted((p for p in paths if p), key=lambda p: (-len(p), p))
 
 
-def fetch_arr_media_index(cfg, force=False):
-    """Fetch managed media-file paths from every configured Arr instance.
+def _arr_media_index_snapshot(cfg, force=False):
+    """`(ts, rows, errors, roots)` — the media index as one immutable snapshot (S11).
 
-    Results are cached for _ARR_MEDIA_INDEX_TTL seconds. Pass force=True to bypass.
+    Built from every configured arr and published with **one** assignment.
+    Results are cached for _ARR_MEDIA_INDEX_TTL seconds; force=True bypasses.
     Each instance's root folders are read alongside (`arr_root_folders`).
     """
     now = time.monotonic()
-    if not force and _arr_media_index_cache['data'] is not None and (now - _arr_media_index_cache['ts']) < _ARR_MEDIA_INDEX_TTL:
-        return _arr_media_index_cache['data']
+    snap = _arr_media_index_cache.get('snapshot')
+    if not force and snap is not None and (now - snap[0]) < _ARR_MEDIA_INDEX_TTL:
+        return snap
     media = []
     errors = []
     roots = {}
@@ -193,44 +197,76 @@ def fetch_arr_media_index(cfg, force=False):
             errors.append({'connection_id': conn['id'], 'name': conn['name'],
                            'service': conn['service'], 'partial': False,
                            'message': str(e)})
-    _arr_media_index_cache['data'] = media
-    _arr_media_index_cache['errors'] = errors
-    _arr_media_index_cache['roots'] = roots
-    _arr_media_index_cache['ts'] = now
-    return media
+    snap = (now, media, tuple(errors), roots)
+    _arr_media_index_cache['snapshot'] = snap
+    return snap
 
 
-def arr_root_folders():
-    """`{connection_id: [root, ...] | None}` for the most recent index fetch (B10).
+def fetch_arr_media_index(cfg, force=False):
+    """Managed media-file rows from every configured Arr instance (cached 120s).
 
-    Arr-side paths as configured in Sonarr/Radarr, longest first. `None` for an
-    instance whose root folders could not be read; an instance whose media index
-    failed has no entry at all. Same contract as `arr_media_index_errors`: it
-    describes the list the caller just received, so call the fetch and then
-    this, in that order, in the same request.
+    Rows only. **A caller that reports this fetch's failures uses
+    `fetch_arr_media_index_result`**, which returns the rows and their errors
+    from one snapshot.
     """
-    return dict(_arr_media_index_cache.get('roots') or {})
+    return _arr_media_index_snapshot(cfg, force)[1]
 
 
-def arr_media_index_errors():
-    """Connections whose media index failed or came back partial, most recent fetch.
+def fetch_arr_media_index_result(cfg, force=False):
+    """`(rows, errors)` for the media index, **from one snapshot** (S11).
 
-    The index is a flat list of rows, so an instance that errored is
-    indistinguishable from one that manages nothing — its files just stop
-    resolving. Anything that presents resolution results to the user reads this
-    so a failure is reported rather than left to be inferred from an
-    unexplained gap. Cached alongside the data, so it describes the list the
-    caller just received — which is why a consumer must call
-    `fetch_arr_media_index` and then this, in that order, in the same request:
-    the index cache is 120s, so reading this against an older fetch describes a
-    list nobody received.
+    The accessors below read the *most recent* snapshot, which is not
+    necessarily the one a caller received. auditorr runs one gunicorn worker
+    with eight threads, so another request's successful refresh can land
+    between a failed fetch and its `arr_media_index_errors()` read. That request
+    then holds `[]` rows and **no errors** — the state Triage's `library_unknown`
+    gate exists to catch, read as healthy, and `not_in_library` reachable from
+    silence again. The old contract ("call the fetch, then the accessor, in the
+    same request") was sequential, and said nothing about another request. The
+    snapshot is a tuple published in one assignment, so rows and errors taken
+    from it cannot come from two fetches.
 
-    Entries carry `partial`: False is "this instance answered with nothing",
+    Errors carry `partial`: False is "this instance answered with nothing",
     True is "this instance answered with some of its library" (`failed`/`total`
     series). Both leave the same hole; only the second is recoverable by
     retrying a moment later.
     """
-    return list(_arr_media_index_cache.get('errors') or [])
+    snap = _arr_media_index_snapshot(cfg, force)
+    return snap[1], list(snap[2])
+
+
+def arr_root_folders():
+    """`{connection_id: [root, ...] | None}` from the most recent index snapshot (B10).
+
+    Arr-side paths as configured in Sonarr/Radarr, longest first. `None` for an
+    instance whose root folders could not be read; an instance whose media index
+    failed has no entry at all. **The most recent snapshot**, which under
+    concurrent requests need not be the one the caller's own fetch returned —
+    see `fetch_arr_media_index_result`. Backfill still reads it straight after
+    its fetch; an interleaving costs it a folder chip, never a verdict.
+    """
+    snap = _arr_media_index_cache.get('snapshot')
+    return dict(snap[3]) if snap else {}
+
+
+def arr_media_index_errors():
+    """Connections whose media index failed or came back partial, **most recent snapshot**.
+
+    The index is a flat list of rows, so an instance that errored is
+    indistinguishable from one that manages nothing — its files just stop
+    resolving. Anything that presents resolution results reads the failures so
+    they are reported rather than inferred from an unexplained gap.
+
+    **This reads whichever fetch landed last**, and under concurrent requests
+    that need not be the caller's (S11). Anything that turns these errors into
+    a verdict takes them from `fetch_arr_media_index_result` instead — Triage
+    and Trumped do. Backfill still reads this straight after its fetch, where
+    an interleaving can hide a warning banner and nothing more; switching it was
+    not mechanical (the fetch sits inside `_resolve_backfill`, read by two
+    callers) and is recorded rather than done.
+    """
+    snap = _arr_media_index_cache.get('snapshot')
+    return list(snap[2]) if snap else []
 
 
 def fetch_arr_indexers(cfg):
@@ -1269,12 +1305,16 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         raise
 
 
-def get_arr_file_id(cfg, service, connection_id, arr_id):
-    """Return the current file ID for a Radarr movie or Sonarr series episode files.
+def read_arr_file_id(cfg, service, connection_id, arr_id):
+    """The current file id for a Radarr movie, or a Sonarr series' episode file ids.
 
-    Used to detect whether a ManualImport command actually replaced the file,
-    since the command endpoint may report status='failed' even on success.
-    Returns None if unavailable.
+    **Raises when the read fails** — an unknown connection, a timeout, an error
+    status. That is the whole difference from `get_arr_file_id` below, and it is
+    load-bearing for `/api/workflows/import_check` (S08): that helper swallowed
+    every exception and answered `None`, so a timed-out read reached the page as
+    `checked: true, file_id: null`, which differs from any baseline holding a
+    file and was taken for a landed import. "Asked, and it holds no file" is a
+    return value here; "could not ask" is an exception.
 
     Sonarr's answer is a *sorted list*, not a set: every consumer only ever
     compares two readings with `!=`, and sorting makes that comparison as exact
@@ -1287,16 +1327,28 @@ def get_arr_file_id(cfg, service, connection_id, arr_id):
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
-        return None
+        raise LookupError(f"Arr connection '{connection_id}' not found for service '{service}'")
+    if service == 'radarr':
+        info = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}', timeout=10)
+        return info.get('movieFileId')
+    # For Sonarr track the episode file IDs as a sorted snapshot
+    eps = _arr_get(conn['base_url'], conn['api_key'],
+                   f'/api/v3/episodefile?seriesId={arr_id}', timeout=10)
+    return sorted({e['id'] for e in eps if e.get('id')})
+
+
+def get_arr_file_id(cfg, service, connection_id, arr_id):
+    """`read_arr_file_id`, or None when it could not be read.
+
+    Used to detect whether a ManualImport command actually replaced the file,
+    since the command endpoint may report status='failed' even on success.
+    `force_import_files` treats a `None` baseline as "could not verify", which
+    is right for it — it compares a reading taken before its own command with
+    one taken after, and says so when either is missing. A caller that has to
+    tell a failed read from an empty one uses `read_arr_file_id`.
+    """
     try:
-        if service == 'radarr':
-            info = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}', timeout=10)
-            return info.get('movieFileId')
-        else:
-            # For Sonarr track the episode file IDs as a sorted snapshot
-            eps = _arr_get(conn['base_url'], conn['api_key'],
-                           f'/api/v3/episodefile?seriesId={arr_id}', timeout=10)
-            return sorted({e['id'] for e in eps if e.get('id')})
+        return read_arr_file_id(cfg, service, connection_id, arr_id)
     except Exception:
         return None
 
@@ -1758,16 +1810,17 @@ def parse_release_info_for_path(rel_path):
     return parsed
 
 
-_arr_titles_cache = {'data': None, 'ts': 0, 'errors': []}
+# One immutable snapshot, `(ts, rows, errors)`, published in one assignment (S11).
+_arr_titles_cache = {'snapshot': None}
 _ARR_TITLES_TTL = 120
 
 
-def fetch_arr_all_titles(cfg, force=False):
-    """Every managed title across all Arr instances, including items without files.
+def _arr_titles_snapshot(cfg, force=False):
+    """`(ts, rows, errors)` — every managed title, as one immutable snapshot (S11).
 
     The media index only contains items that HAVE files — this list is what lets
     Triage distinguish "in the library but never imported" from "not in the
-    library at all". Returns [{service, connection_id, arr_id, title,
+    library at all". Rows are [{service, connection_id, arr_id, title,
     title_slug, year, has_file, alt_titles}].
 
     `alt_titles` is the arr's own `alternateTitles` — see `title_alias_keys`.
@@ -1776,8 +1829,9 @@ def fetch_arr_all_titles(cfg, force=False):
     every region it knows about.
     """
     now = time.monotonic()
-    if not force and _arr_titles_cache['data'] is not None and (now - _arr_titles_cache['ts']) < _ARR_TITLES_TTL:
-        return _arr_titles_cache['data']
+    snap = _arr_titles_cache.get('snapshot')
+    if not force and snap is not None and (now - snap[0]) < _ARR_TITLES_TTL:
+        return snap
     rows = []
     errors = []
     for conn in normalize_arr_connections(cfg):
@@ -1812,22 +1866,38 @@ def fetch_arr_all_titles(cfg, force=False):
             errors.append({'connection_id': conn['id'], 'name': conn['name'],
                            'service': conn['service'], 'partial': False,
                            'message': str(e)})
-    _arr_titles_cache['data'] = rows
-    _arr_titles_cache['errors'] = errors
-    _arr_titles_cache['ts'] = now
-    return rows
+    snap = (now, rows, tuple(errors))
+    _arr_titles_cache['snapshot'] = snap
+    return snap
+
+
+def fetch_arr_all_titles(cfg, force=False):
+    """Every managed title across all Arr instances (cached 120s) — rows only.
+
+    See `_arr_titles_snapshot` for the row shape. A caller that reports this
+    fetch's failures uses `fetch_arr_all_titles_result`.
+    """
+    return _arr_titles_snapshot(cfg, force)[1]
+
+
+def fetch_arr_all_titles_result(cfg, force=False):
+    """`(rows, errors)` for the title list, from one snapshot — see `fetch_arr_media_index_result` (S11)."""
+    snap = _arr_titles_snapshot(cfg, force)
+    return snap[1], list(snap[2])
 
 
 def arr_titles_errors():
-    """Connections whose title list failed on the most recent fetch.
+    """Connections whose title list failed, **most recent snapshot**.
 
     The mirror of `arr_media_index_errors`, and it matters for the same reason:
     this list is what answers "does any arr know this title at all", so an
     instance that is merely unreachable would otherwise be indistinguishable
-    from one that has never heard of the release. Same ordering contract —
-    call `fetch_arr_all_titles` and then this, in the same request.
+    from one that has never heard of the release. It reads whichever fetch
+    landed last, so a caller that turns it into a verdict takes the errors from
+    `fetch_arr_all_titles_result` instead.
     """
-    return list(_arr_titles_cache.get('errors') or [])
+    snap = _arr_titles_cache.get('snapshot')
+    return list(snap[2]) if snap else []
 
 
 def _detect_hdr(title):

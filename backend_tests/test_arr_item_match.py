@@ -185,8 +185,7 @@ class TrumpSearchReleaseArrErrorTests(unittest.TestCase):
 
     def _post(self, titles, errors):
         with patch.object(app, 'db_load_config', return_value={}), \
-             patch.object(app, 'fetch_arr_all_titles', return_value=titles), \
-             patch.object(app, 'arr_titles_errors', return_value=errors), \
+             patch.object(app, 'fetch_arr_all_titles_result', return_value=(titles, errors)), \
              patch.object(app, 'normalize_arr_connections', return_value=[]):
             return app.app.test_client().post(
                 '/api/workflows/trump/search_release',

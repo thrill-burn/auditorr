@@ -573,6 +573,32 @@ def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
             r["excl_refused"] = reason
 
 
+def _stamp_torrent_files(row_records, files_of):
+    """`torrent_files` — how many files a torrent has, where its Triage row shows fewer (T5).
+
+    A Triage row lists a subset: a partially imported torrent contributes only
+    its not-imported files, and an excluded file never appears. The delete
+    beside the row removes the whole torrent, so the row says "10 of 18 files".
+    Counted here because only the audit sees every record of a hash — the
+    compact `triage` row does not carry the rest. The torrent's *size* comes
+    live from verify instead (`sources.fetch_torrent_details`' `size`).
+
+    **Sparse**: written only on row records whose torrent has more files than
+    the row shows — a fraction of the Triage pile, which is itself a fraction
+    of the library. "Files" is what the audit walked for that hash, so a path a
+    healthier cross-seed claims is counted on that torrent, not this one.
+    """
+    not_imported, dead_seed = {}, {}
+    for r in row_records:
+        bucket = not_imported if _is_not_imported_torrent(r) else dead_seed
+        bucket[r['hash']] = bucket.get(r['hash'], 0) + 1
+    for r in row_records:
+        h = r['hash']
+        shown = not_imported.get(h) or dead_seed.get(h, 0)
+        if files_of.get(h, 0) > shown:
+            r['torrent_files'] = files_of[h]
+
+
 def _mark_whole_torrents(torrent_files_data, media_files_data):
     """Stamp the two facts Triage needs to build a folder exclusion safely (T6).
 
@@ -622,15 +648,22 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
       accumulation, so this stays O(files x depth) in time and O(pile) in space
       on a library where the pile is a fraction of a percent of the records.
     """
-    # Pass 1 — homogeneity, and which hashes Triage can act on at all.
+    # Pass 1 — homogeneity, which hashes Triage can act on at all, and how many
+    # files each torrent has against how many its Triage row will show.
     imported_states, relevant = {}, set()
+    files_of, row_records = {}, []
     for r in torrent_files_data:
         h = r.get('hash')
         if not h:
             continue
         imported_states.setdefault(h, set()).add(bool(r.get('imported')))
+        files_of[h] = files_of.get(h, 0) + 1
         if _is_triage_relevant(r):
             relevant.add(h)
+            if _is_not_imported_torrent(r) or _is_dead_seed_torrent(r):
+                row_records.append(r)
+    _stamp_torrent_files(row_records, files_of)
+    del row_records, files_of
     whole = {h for h in relevant if len(imported_states[h]) == 1}
     if not whole:
         return

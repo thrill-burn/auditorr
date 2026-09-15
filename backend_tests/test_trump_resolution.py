@@ -129,8 +129,7 @@ class TestAlreadyRight:
         ]
         matrix = MagicMock(return_value=[])
         with patch.object(app, 'db_load_config', return_value={}), \
-             patch.object(app, 'fetch_arr_all_titles', return_value=titles), \
-             patch.object(app, 'arr_titles_errors', return_value=[]), \
+             patch.object(app, 'fetch_arr_all_titles_result', return_value=(titles, [])), \
              patch.object(app, 'normalize_arr_connections', return_value=[]), \
              patch.object(app, 'fetch_release_matrix', matrix):
             resp = app.app.test_client().post('/api/workflows/trump/search_release',
@@ -540,10 +539,8 @@ def _title(arr_id, title='Rel', year=2020, service='radarr', conn='r1'):
 def _search(tree, index, titles, **extra):
     matrix = MagicMock(return_value=[])
     with patch.object(app, 'db_load_config', return_value=dict(tree.cfg)), \
-         patch.object(app, 'fetch_arr_all_titles', return_value=titles), \
-         patch.object(app, 'arr_titles_errors', return_value=[]), \
-         patch.object(app, 'fetch_arr_media_index', return_value=index), \
-         patch.object(app, 'arr_media_index_errors', return_value=[]), \
+         patch.object(app, 'fetch_arr_all_titles_result', return_value=(titles, [])), \
+         patch.object(app, 'fetch_arr_media_index_result', return_value=(index, [])), \
          patch.object(app, 'normalize_arr_connections', return_value=[]), \
          patch.object(app, 'fetch_release_matrix', matrix):
         resp = app.app.test_client().post('/api/workflows/trump/search_release', json={
