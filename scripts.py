@@ -296,13 +296,6 @@ def _mount_of(path, mounts):
     return fstype
 
 
-def _pooled(fstype):
-    """Unraid's `fuse.shfs`, `fuse.mergerfs`, and every other FUSE filesystem:
-    each can report one `st_dev` for files on different drives (F4 — measured
-    on the reference box: one device across three branches)."""
-    return bool(fstype) and (fstype == 'fuse' or fstype.startswith('fuse.'))
-
-
 def _classify(group, mounts):
     """`status`, `reason`, `selectable` and `facts` for one group.
 
@@ -311,6 +304,14 @@ def _classify(group, mounts):
     the script checks the device, the bytes and the link count itself when it
     runs (Principle 1), so `cross_device` and `unverifiable` set expectations
     rather than blocking. Only `stale` blocks — a copy has gone since the scan.
+
+    The mount type is recorded and changes nothing. A pooled filesystem
+    (`fuse.shfs`, `fuse.mergerfs`) reports one `st_dev` for every drive (F4),
+    and this used to read `unverifiable` (`pooled_mount`). The reference box
+    then showed shfs making every cross-disk link it was asked for, and the
+    script reports a refused link when it runs — so on the commonest install
+    that status put a caution on every group for normal operation, and it was
+    removed (2026-09-15, the user's call).
     """
     devices, fstypes = set(), set()
     missing = failed = outside = False
@@ -330,15 +331,12 @@ def _classify(group, mounts):
             if mounts:
                 fstypes.add(_mount_of(p['_abs'], mounts))
     fstypes.discard(None)
-    pooled = sorted(t for t in fstypes if _pooled(t))
     if missing:
         status, reason = 'stale', 'missing'
     elif outside:
         status, reason = 'unverifiable', 'outside_script_root'
     elif failed:
         status, reason = 'unverifiable', 'stat_failed'
-    elif pooled:
-        status, reason = 'unverifiable', 'pooled_mount'
     elif len(devices) > 1:
         status, reason = 'cross_device', 'different_devices'
     else:
@@ -347,7 +345,7 @@ def _classify(group, mounts):
         'status': status, 'reason': reason, 'selectable': status != 'stale',
         'facts': {
             'devices': len(devices),
-            'fstype': pooled[0] if pooled else (', '.join(sorted(fstypes)) or None),
+            'fstype': ', '.join(sorted(fstypes)) or None,
             'mount_checked': mounts is not None,
         },
     }
@@ -810,7 +808,8 @@ _drop_staged() {
   STAGED=()
 }
 trap '_drop_staged' EXIT
-trap '_drop_staged; printf "\nInterrupted. Every path is still a whole file. Run the script again to finish.\n"; trap - EXIT; exit 130' INT TERM HUP
+# A dry run has nothing to finish, so it does not say to run it again.
+trap '_drop_staged; if [ "$DRY_RUN" -eq 1 ]; then printf "\nInterrupted. Nothing was changed.\n"; else printf "\nInterrupted. Every path is still a whole file. Run the script again to finish.\n"; fi; trap - EXIT; exit 130' INT TERM HUP
 
 # The copy to keep: the owner and permissions most copies share, then the most
 # hardlinks (the fewest replacements), then the first listed.
@@ -908,6 +907,16 @@ link_one() {
       return
     fi
     STAGED+=("$tmp")
+    # A pooled filesystem can answer a link with a copy or a symlink (mergerfs's
+    # link-exdev modes). Renamed over the file, either would replace it, so the
+    # new name must be the kept copy itself before anything is renamed.
+    line=$(stat -c '%d %i' -- "$tmp" 2>/dev/null) || line=''
+    if [ -L "$tmp" ] || [ "$line" != "${U_DEV[$c]} ${U_INO[$c]}" ]; then
+      _drop_staged
+      printf '  the filesystem answered the link with something other than a hardlink (a copy or a symlink), so it was removed: %s\n' "$label"
+      LINK_RESULT=aside
+      return
+    fi
   done
 
   # One rename replaces one path atomically, so a path is never missing and a
@@ -969,7 +978,7 @@ link_bucket() {
       return
     fi
     if [ "${#ASIDE[@]}" -eq 1 ]; then
-      printf '  left alone — could not be linked to any other copy (on a pooled share it is probably on another drive; otherwise check permissions): %s\n' "$(_label "${ASIDE[0]}")"
+      printf '  left alone — could not be linked to any other copy (a pooled filesystem can refuse a link between two of its drives; otherwise check permissions): %s\n' "$(_label "${ASIDE[0]}")"
       SKIPPED=$((SKIPPED + 1))
       return
     fi
@@ -1106,7 +1115,11 @@ echo "Dedupe complete."
 echo "  Linked:           $LINKED file(s) now share a copy ($LINKED_PATHS path(s) replaced)"
 echo "  Space freed:      $(_fmt_bytes "$FREED_BYTES") — counted only where every link to a copy was replaced"
 echo "  Already linked:   $ALREADY"
-echo "  Left alone:       $SKIPPED (each with its reason, above)"
+if [ "$SKIPPED" -gt 0 ]; then
+  echo "  Left alone:       $SKIPPED (each with its reason, above)"
+else
+  echo "  Left alone:       0"
+fi
 if [ "$FAILED" -gt 0 ]; then
   echo "  FAILED:           $FAILED — a file is only partly linked. Nothing is missing."
   echo "                    Run the script again: it finishes what it started."

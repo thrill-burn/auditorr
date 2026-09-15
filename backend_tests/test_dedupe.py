@@ -689,6 +689,7 @@ class TestScriptRun:
         assert lib.ino('torrents/o/1.bin') == lib.ino('torrents/o/2.bin')
         assert lib.ino('torrents/nobody/3.bin') == before
         assert 'owner' in out
+        assert 'each with its reason' in out
 
     def test_a_symlink_is_never_replaced(self, tmp_path):
         """F16. `os.stat` follows a symlinked file, so the walk records the
@@ -790,6 +791,76 @@ class TestScriptRun:
         proc = subprocess.run([_bash(), '-n'], input=resp.get_data(), capture_output=True)
         assert proc.returncode == 0, proc.stderr
         assert 'ln -f' not in _text(resp)
+
+    def test_a_staged_link_that_is_not_a_hardlink_is_never_renamed(self, tmp_path):
+        """A pooled filesystem can answer a link with something else: mergerfs's
+        `link-exdev` symlink modes make a symlink, and a FUSE filesystem could
+        make a copy. Checked only after the rename, the path would already be
+        that copy or symlink. The shim copies (this machine cannot make a
+        symlink); the staged link must be checked before anything is renamed."""
+        lib = Lib(tmp_path)
+        paths = _pack(lib, 2, 'two', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        before = [lib.ino(p) for p in paths]
+        real_cp, real_ln = _tool('cp'), _tool('ln')
+        shim = _shim(tmp_path, 'ln', f'''last=""
+src=""
+for a in "$@"; do
+  if [ "$a" != "--" ]; then src=$last; last=$a; fi
+done
+case "$last" in
+  *.auditorr-dedupe-*) exec "{real_cp}" -- "$src" "$last" ;;
+esac
+exec "{real_ln}" "$@"
+''')
+        code, out = _run(text, lib.root, path_prefix=shim)
+        assert [lib.ino(p) for p in paths] == before, out
+        assert code == 0, out
+        assert not list(Path(lib.root).rglob('.auditorr-dedupe-*')), out
+        assert 'other than a hardlink' in out
+
+    def test_an_interrupted_run_leaves_every_path_whole(self, tmp_path):
+        """QA-7 at the compare, where the first interruption on a real box
+        landed. The `cmp` shim is Ctrl+C: it signals the script comparing with
+        it, which is its parent with or without `pv`."""
+        lib = Lib(tmp_path)
+        paths = _pack(lib, 3, 'three', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        before = [lib.ino(p) for p in paths]
+        shim = _shim(tmp_path, 'cmp', 'kill -INT "$PPID"\nexit 0\n')
+        code, out = _run(text, lib.root, path_prefix=shim)
+        assert code == 130, out
+        assert [lib.ino(p) for p in paths] == before, out
+        assert not list(Path(lib.root).rglob('.auditorr-dedupe-*')), out
+        assert 'Run the script again' in out
+
+    def test_an_interrupted_dry_run_says_nothing_changed(self, tmp_path):
+        """A dry run has nothing to finish, so it must not say to run it again."""
+        lib = Lib(tmp_path)
+        _pack(lib, 3, 'three', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        shim = _shim(tmp_path, 'cmp', 'kill -INT "$PPID"\nexit 0\n')
+        code, out = _run(text, lib.root, '--dry-run', path_prefix=shim)
+        assert code == 130, out
+        assert 'Nothing was changed' in out
+        assert 'Run the script again' not in out
+
+    def test_left_alone_gives_a_reason_only_when_something_was(self, tmp_path):
+        lib = Lib(tmp_path)
+        paths = _pack(lib, 2, 'two', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        code, out = _run(text, lib.root)
+        assert code == 0, out
+        assert lib.ino(paths[0]) == lib.ino(paths[1])
+        assert re.search(r'^\s*Left alone:\s+0\s*$', out, re.M), out
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -920,9 +991,14 @@ def _mount_point(path):
 
 class TestClassification:
 
-    def test_a_fuse_mount_reads_unverifiable(self, tmp_path):
+    def test_a_fuse_mount_is_recorded_and_changes_nothing(self, tmp_path):
         """§5.3 / F4 (their half: essentrix83). SHFS and mergerfs report one
-        `st_dev` for every branch, so a device comparison says nothing there."""
+        `st_dev` for every branch, so a device comparison says nothing there. It
+        used to make a group `unverifiable` (`pooled_mount`); then the box showed
+        shfs making every cross-disk link it was asked for, and the script finds
+        out about a refused one when it runs. On the commonest install that
+        status put "could not check" on every group, so it was removed
+        (2026-09-15, the user's call): the fstype is recorded and nothing else."""
         lib = Lib(tmp_path)
         _f1(lib)
         t, m = lib.audit()
@@ -935,7 +1011,7 @@ class TestClassification:
             info = _mountinfo(tmp_path, ext4_root, decoy,
                               f'98 22 0:44 / {root} rw,nosuid,nodev shared:40 - {fstype} shfs rw')
             g = _report(t, m, lib.cfg(), tmp_path, mountinfo=info)['groups'][0]
-            assert (g['status'], g['reason']) == ('unverifiable', 'pooled_mount'), g
+            assert (g['status'], g['reason']) == ('linkable', None), g
             assert g['facts']['fstype'] == fstype
 
         info = _mountinfo(tmp_path, ext4_root, decoy)

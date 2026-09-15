@@ -456,14 +456,15 @@ can see and undo it. Subtitles and Extras are deliberately never suggested.
 **Targets duplicate files**: bit-for-bit identical files that don't share an
 inode, i.e. two real copies burning two lots of disk space.
 
-Often one copy is in your torrent folder and the other in your library, because
-Sonarr or Radarr copied the file instead of hardlinking it (hardlinks turned off,
-or an import that crossed a filesystem). Linking those two repairs the import as
-well as freeing the space: the torrent reads as imported again, the library file
-stops counting as unseeded, and your health score rises. Each group says which
-kind it is — **missing hardlink**, or **duplicate copies** (the same bytes twice
-in one folder). auditorr doesn't claim either kind is the common one in your
-library.
+Where one copy is in your torrent folder and the other in your library, the two
+were never hardlinked: Sonarr or Radarr copied the file when it imported it
+(hardlinks turned off, or an import that crossed a filesystem), or it was copied
+by hand — to make an upload torrent, say. Linking those two frees the space and
+makes the torrent read as imported: the library file stops counting as unseeded,
+and your health score rises. Each group says which shape it is — **missing
+hardlink**, or **duplicate copies** (the same bytes twice in one folder) — but
+not who made the copy, and auditorr doesn't claim either shape is the common one
+in your library.
 
 A group is a set of identical files. Every path of each file is listed, so a
 file already hardlinked into your library shows its torrent path and its library
@@ -476,13 +477,15 @@ that holds the files, can tell whether two copies really share a disk and
 whether a file has hardlinks auditorr doesn't know about. Nothing is selected
 for you.
 
-Each group also says what auditorr could check:
+Most groups carry no label: the script checks every copy when it runs. On a
+pooled share (an Unraid share, mergerfs) that includes copies on different
+drives — the share makes the link if it can, and the script leaves alone any it
+refuses. A group that needs a word says so:
 
 | | What it means | Selectable |
 | --- | --- | --- |
-| **same disk** | Every copy reports the same disk. | yes |
-| **different disks** | The script links the copies that share a disk and leaves the rest alone. | yes |
-| **could not check** | The files are on a pooled filesystem (an Unraid share, mergerfs), where every drive reports the same disk; or a file couldn't be read; or one copy sits outside the folder the script runs from, and is left out of it. | yes |
+| **different disks** | The copies are on separate filesystems. The script links the copies that share one and leaves the rest alone. | yes |
+| **could not check** | A file couldn't be read, or one copy sits outside the folder the script runs from and is left out of it. | yes |
 | **changed since the scan** | A copy has gone since the last scan. Scan again. | no |
 
 <p><img src="workflow-dedupe.png" alt="Dedupe workflow" width="100%" /></p>
@@ -496,7 +499,8 @@ from the folder it names at the top. For each group it:
    a file whose size changed, or a file that looks unfinished (sparse — on a
    compressed filesystem, where a finished file can look like that, pass
    `--allow-sparse`);
-2. groups the copies by disk, and only ever links copies on the same one;
+2. groups the copies by the disk they report, and never tries a link between two
+   (a pooled share reports one disk for all its drives — see below);
 3. keeps the copy whose owner and permissions most copies share, then the one
    with the most hardlinks. A copy with a different owner or permissions is left
    alone, because every path of a linked file takes the kept copy's;
@@ -504,13 +508,21 @@ from the folder it names at the top. For each group it:
    some of a file's paths frees nothing, and would split a torrent file from its
    library copy;
 5. compares each copy with the kept one byte for byte (`cmp`);
-6. makes the new hardlink under a temporary name beside the file, then renames it
-   over the original. Nothing is removed before its replacement exists, and no
-   path is ever missing, so a seeding torrent never sees a gap.
+6. makes the new hardlink under a temporary name beside the file, checks that it
+   really is a hardlink of the kept copy, then renames it over the original.
+   Nothing is removed before its replacement exists, and no path is ever
+   missing, so a seeding torrent never sees a gap.
 
-On a pooled share, a link between two drives fails even though both report the
-same disk. The script then tries the copies that failed against each other, so
-copies that share a drive still get linked, and leaves alone whatever is left.
+A pooled share (an Unraid share, mergerfs) reports one disk for all its drives,
+so the script tries those links and lets the filesystem answer. An Unraid share
+can simply make one: it puts the link on the kept copy's drive — creating the
+folder there if that drive doesn't have it — and the rename removes the other
+drive's copy, leaving that drive's folder behind, empty. Your files look the same
+through the share; only which drive holds them changes. Where the filesystem refuses one (a mergerfs pool
+can, depending on how it is set up), the script tries the copies that failed against each other, so copies
+that share a drive still get linked, and leaves alone whatever is left. A
+filesystem that answers a link with a copy or a symlink changes nothing: the
+check in step 6 catches it before the rename.
 
 Every file gets an outcome — linked, already linked, left alone (with the
 reason), or **FAILED** — and space counts as freed only once every link to a copy

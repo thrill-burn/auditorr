@@ -17,12 +17,14 @@ import {
 //
 // Status and cause are computed server-side (`scripts.build_dedupe_report`) and
 // never re-derived here. Ration colour: status is a dot and its text, never a
-// fill; the cause is plain dim text.
+// fill; the cause is plain dim text. A group with nothing to say carries no
+// status at all.
 const STATUS = {
-  linkable: {
-    label: 'same disk', color: 'var(--green)',
-    title: 'Every copy reports the same disk. The script still checks each one before linking it.',
-  },
+  // No label. On a pooled share (Unraid, mergerfs) every copy reports one disk
+  // whichever drive it is on, so "same disk" would be a claim — and the script
+  // checks each link itself when it runs. A caution here was on every group of
+  // the commonest install, for normal operation (removed 2026-09-15).
+  linkable: { label: null },
   cross_device: {
     label: 'different disks', color: 'var(--blue)',
     note: () => 'These copies report different disks. The script links the copies that share a disk and leaves the rest alone.',
@@ -38,18 +40,18 @@ const STATUS = {
 }
 
 const UNVERIFIABLE = {
-  pooled_mount: g => `These files are on a pooled filesystem (${g.facts?.fstype || 'FUSE'}), which reports one disk for all of its drives, so auditorr cannot tell whether they share one. The script tries each link and leaves alone any that cross drives.`,
   stat_failed: () => 'auditorr could not read one of these files just now. The script checks every file itself before touching it.',
   outside_script_root: () => 'One copy is outside the folder the script runs from, so the script leaves that copy out and links the rest.',
 }
 
 // Decision 2 (a), 2026-09-15: the cause is stated from the group's own paths,
 // and the page makes no claim about which kind dominates a library (QA-11 is
-// unmeasured).
+// unmeasured). The paths say where the copies sit, never who made them: a copy
+// made by hand for an upload has the same shape as an import that copied.
 const CAUSE = {
   missing_hardlink: {
     label: 'missing hardlink',
-    title: 'A torrent file and a library file holding the same bytes, never hardlinked — the arr copied instead. Linking them repairs the import as well as freeing the space.',
+    title: 'A torrent file and a library file holding the same bytes, never hardlinked — an import that copied, or a copy made by hand. Linking them frees the space and makes the torrent read as imported.',
   },
   copies: {
     label: 'duplicate copies',
@@ -107,9 +109,11 @@ function DupGroup({ group, checked, onToggle }) {
           {cause.label}
         </span>
         <span style={{ flex: 1 }} />
-        <span title={status.title || note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontFamily: 'var(--mono)', color: status.color, flexShrink: 0 }}>
-          <Dot color={status.color} />{status.label}
-        </span>
+        {status.label && (
+          <span title={note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontFamily: 'var(--mono)', color: status.color, flexShrink: 0 }}>
+            <Dot color={status.color} />{status.label}
+          </span>
+        )}
         <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
           {group.file_count} copies
         </span>
@@ -211,7 +215,7 @@ export default function Dedupe({ onNavigate, onScript }) {
       <WorkflowHeader
         title="Dedupe"
         accent="var(--purple)"
-        blurb="Identical files stored as separate copies. Where one sits in your torrent folder and the other in your library, the arr copied instead of hardlinking, and linking them repairs the import as well as freeing the space. The script checks every file again before touching it — same disk, same bytes, no hardlinks it can't see — links only what passes, and chooses the copy to keep when it runs."
+        blurb="Identical files stored as separate copies. Where one sits in your torrent folder and the other in your library, linking them also makes the torrent read as imported. The script checks every file again before touching it — same disk, same bytes, no hardlinks it can't see — links only what passes, and chooses the copy to keep when it runs."
         /* Re-reads itself when an audit lands — see `useAuditComplete`. */
       />
 
@@ -240,12 +244,6 @@ export default function Dedupe({ onNavigate, onScript }) {
               <StatBox label="Excluded" value={report.excluded_count} sub="hidden by your exclusion rules" />
             )}
           </div>
-
-          {report.mount && report.mount.checked === false && (
-            <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: 0, lineHeight: 1.5 }}>
-              auditorr could not read this system’s mount table, so a pooled filesystem (an Unraid share, mergerfs) would not be recognised here. The script checks every link itself either way.
-            </p>
-          )}
 
           {choosable.length > 0 && (
             <div>
