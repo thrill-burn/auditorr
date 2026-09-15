@@ -329,19 +329,51 @@ def _handle_aborted_scan():
     return streak
 
 
+# A startup scan refused because a root was missing or could not be listed waits
+# this long before each retry (Phase 12, S03). The single 60 s retry below was
+# written for a client still loading its session, which answers within seconds;
+# an array or a network share still mounting takes minutes. And the watchdog
+# starts after the startup audit and watches only the roots that exist then, so
+# without these the next scan would be the scheduled one, hours later — while the
+# longer wait also gives the watchdog a mounted root to watch.
+_STARTUP_ROOT_RETRY_DELAYS = (60, 120, 300)
+_ROOT_ANOMALY_CODES = frozenset({'root_missing', 'root_unlistable'})
+
+
+def _startup_scan_failed():
+    state = get_state()
+    return (state.get('last_scan_status') == 'error'
+            and _is_source_error_status(state.get('status_message', ''))), state
+
+
 def _run_startup_audit():
-    """Run the startup audit, retrying once after 60s on connection errors (other containers may not be ready)."""
+    """Run the startup audit, retrying when a source is not ready yet.
+
+    A connection error or a client anomaly retries once after 60 s (other
+    containers may not be ready). A missing or unlistable root retries at 1, 2
+    and 5 minutes. Only the last attempt records a failed run.
+    """
     if not _torrent_source_configured(db_load_config()):
         log.info("Torrent source not configured, skipping startup audit.")
         return
     if try_start_scanning("startup"):
         run_audit_process("startup", persist_source_errors=False)
-    state = get_state()
-    if state.get('last_scan_status') == 'error' and _is_source_error_status(state.get('status_message', '')):
-        log.warning("Startup audit failed with connection error, retrying in 60s before recording a failure...")
-        time.sleep(60)
+    failed, state = _startup_scan_failed()
+    if not failed:
+        return
+    delays = (_STARTUP_ROOT_RETRY_DELAYS if state.get('anomaly_code') in _ROOT_ANOMALY_CODES
+              else (60,))
+    for attempt, delay in enumerate(delays, start=1):
+        last = attempt == len(delays)
+        log.warning("Startup audit failed (%s), retrying in %ds%s...",
+                    state.get('anomaly_code') or 'connection error', delay,
+                    ' before recording a failure' if last else '')
+        time.sleep(delay)
         if try_start_scanning("startup"):
-            run_audit_process("startup", persist_source_errors=True)
+            run_audit_process("startup", persist_source_errors=last)
+        failed, state = _startup_scan_failed()
+        if not failed:
+            return
 
 
 def _startup_sequence():
@@ -2900,7 +2932,12 @@ def workflows_trump_search_release():
 
 
 def _trump_reverify(cfg, items, data):
-    """Re-resolve the posted group and compare. None to proceed, else a response.
+    """Re-resolve the posted group and compare. None to proceed, else `(payload, status)`.
+
+    `execute` runs it twice when it grabs (Phase 12): before the grab, so a
+    refused group grabs nothing, and again before the removal, because the
+    replacement is now in the client and one saved on the old torrents' paths
+    joins the group.
 
     * **Identical** — proceed.
     * **Shrunk, or a hash the client no longer holds** — 409 `group_changed`.
@@ -2925,15 +2962,15 @@ def _trump_reverify(cfg, items, data):
     try:
         rows = sources.list_torrents(cfg)
     except sources.SourceConnectionError as e:
-        return jsonify({"status": "error", "message": str(e)}), 502
+        return {"status": "error", "message": str(e)}, 502
     res = _trump_resolve_group(cfg, rows, seeds or sorted(posted))
     if res['status'] == 'seed_unknown':
-        return jsonify({
+        return {
             "status": "error",
             "message": "Could not re-read the file list of the selected torrent(s) just before "
                        "removing them, so nothing was removed. Check that the torrent client is "
                        "reachable and try again.",
-        }), 502
+        }, 502
 
     group = {g['hash'] for g in res.get('group') or []}
     added, missing = len(group - posted), len(posted - group)
@@ -2942,23 +2979,23 @@ def _trump_reverify(cfg, items, data):
                     "(%d added, %d gone)", added, missing)
         parts = ([f"{added} torrent{'s' if added != 1 else ''} joined it"] if added else []) + \
                 ([f"{missing} {'are' if missing != 1 else 'is'} no longer part of it"] if missing else [])
-        return jsonify({
+        return {
             "status": "error", "code": "group_changed", "added": added, "missing": missing,
             "message": f"The cross-seed group changed since you confirmed it — {' and '.join(parts)}. "
                        "Nothing was removed. Go back to step 3 and confirm the group again.",
-        }), 409
+        }, 409
 
     if res['partial'] and not data.get('acknowledge_partial'):
-        return jsonify({
+        return {
             "status": "error", "code": "partial",
             "unknown_listings": res['unknown_listings'], "prefilter": res['prefilter'],
             "message": "The group could not be fully checked just now, so a cross-seed sharing "
                        "these files may be missing from it. Nothing was removed.",
-        }), 409
+        }, 409
 
     only = [g for g in res['group'] if g.get('hardlinked') is False]
     if only and not data.get('acknowledge_only_copy'):
-        return jsonify({
+        return {
             "status": "error", "code": "only_copy",
             "only_copy_bytes": res['link_check']['only_copy_bytes'],
             "only_copy_files": res['link_check']['only_copy_files'],
@@ -2966,14 +3003,58 @@ def _trump_reverify(cfg, items, data):
                           'only_copy_bytes': g.get('only_copy_bytes') or 0} for g in only],
             "message": "Nothing outside this group holds some of these files — removing it "
                        "destroys the only copy. Nothing was removed.",
-        }), 409
+        }, 409
     return None
+
+
+# S09 (the 2026-09-10 outside review), Trumped's half — an execute is one
+# operation. Recorded here before anything acts, on `_gen_jobs`' pattern: in
+# memory, swept by age and count. It outlives nothing but the process, which is
+# enough for what it is for: a double submit, and a retry of a request whose
+# answer never arrived.
+_trump_operations = {}
+_trump_operations_lock = threading.Lock()
+_TRUMP_OP_TTL = 3600      # a finished operation replays for an hour
+_TRUMP_OPS_KEPT = 20      # and at most this many finished ones are kept, newest first
+
+
+def _sweep_trump_operations(now):
+    """Callers hold `_trump_operations_lock`. A running operation is never swept."""
+    finished = sorted((op for op in list(_trump_operations.values()) if op.get('finished_at')),
+                      key=lambda op: op['finished_at'], reverse=True)
+    for i, op in enumerate(finished):
+        if i >= _TRUMP_OPS_KEPT or now - op['finished_at'] > _TRUMP_OP_TTL:
+            _trump_operations.pop(op['id'], None)
+
+
+def _clean_token(value, limit=64):
+    """A client-sent id: letters, digits, `-` and `_`, at most `limit`; else None."""
+    s = str(value or '').strip()
+    return s if re.fullmatch(rf'[A-Za-z0-9_-]{{1,{limit}}}', s) else None
+
+
+class _TrumpStages:
+    """What an execute did, stage by stage, for the page to render (S09)."""
+    ORDER = ('reverify', 'queue_check', 'grab', 'remove', 'watch')
+
+    def __init__(self):
+        self._by_stage = {}
+        self.acted = False   # a grab or a removal was attempted
+
+    def set(self, stage, status, message, **extra):
+        self._by_stage[stage] = {'stage': stage, 'status': status, 'message': message, **extra}
+
+    def failed(self):
+        return any(s['status'] == 'failed' for s in self._by_stage.values())
+
+    def as_list(self):
+        return [self._by_stage[s] for s in self.ORDER if s in self._by_stage]
 
 
 @app.route('/api/workflows/trump/execute', methods=['POST'])
 @require_auth
 def workflows_trump_execute():
-    """Remove the confirmed group via the client, and grab the replacement.
+    """Grab the replacement, then remove the confirmed group via the client.
 
     Either half may be absent. With no release, this only removes and the user
     grabs through the arr deep link. **With no `hashes`, this is a grab** (TR4),
@@ -2981,6 +3062,30 @@ def workflows_trump_execute():
     request. It used to gate everything, so in the default configuration a user
     could run all four steps, watch the wizard find the exact release, and get
     a 403 — while Backfill grabs freely, because grabbing is not destructive.
+
+    **Grab first, then remove** — the user's decision 3 (a), 2026-09-15. The
+    order was remove, then grab, and a grab that failed after the delete
+    answered 200 with `removed 3, grabbed false`: the old payload gone and
+    nothing on its way (S09). Both arrs' `ReleaseController` await
+    `DownloadReport` before answering, so a grab that returned has been handed to
+    the download client. A failed grab removes nothing; a removal that fails
+    after a good grab is reported with the old torrents still in the client —
+    the safe failure. The group is resolved again between the two, because a
+    replacement saved on the old torrents' paths joins the group, and removing
+    it with its files would delete the replacement.
+
+    **An execute is one operation** (S09). The page mints `operation_id` when the
+    user confirms and resends it on a retry, and it is recorded before anything
+    acts. The same id while it runs is 409 `in_progress`; once the operation has
+    acted, its stored answer comes back with `replayed: true` and nothing acts
+    again — B12's queue check sees only a download the arr has already queued,
+    so two submits inside that window grabbed twice. A refusal before anything
+    acted frees the id, since answering it (acknowledging a partial group)
+    carries the same confirmation forward. A request with no id — a page from
+    before it — proceeds as it always did.
+
+    Every answer that acted carries `stages` — reverify, queue_check, grab,
+    remove, watch — each `done`, `failed` or `skipped` with its message.
     """
     cfg   = db_load_config()
     data  = request.json or {}
@@ -2997,58 +3102,139 @@ def workflows_trump_execute():
             "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
         }), 403
 
-    # TR5 — the last honest verification point is here, server-side, immediately
-    # before the delete. The wizard's group can be minutes old: a tab left open,
-    # a cross-seed script adding a registration, a torrent rechecked into a
+    op_id = _clean_token(data.get('operation_id'))
+    if op_id is None:
+        log.info("Trump execute: no operation id (a page from before it existed) — not replay-protected")
+    else:
+        now = time.time()
+        with _trump_operations_lock:
+            _sweep_trump_operations(now)
+            op = _trump_operations.get(op_id)
+            if op and op['status'] == 'running':
+                return jsonify({"status": "error", "code": "in_progress", "operation_id": op_id,
+                                "message": "This swap is already running — its result will show "
+                                           "here when it finishes. Nothing was done twice."}), 409
+            if op:
+                log.info("Trump execute: operation replayed, nothing acted again")
+                payload, code = op['response']
+                return jsonify({**payload, "replayed": True}), code
+            _trump_operations[op_id] = {'id': op_id, 'status': 'running', 'started_at': now}
+
+    stages = _TrumpStages()
+    try:
+        payload, code = _trump_execute(cfg, data, items, release, grabbing, stages)
+    except Exception as e:
+        log.exception("Trump execute stopped part-way")
+        payload, code = ({"status": "error", "message": f"The swap stopped part-way: {e}",
+                          "stages": stages.as_list()}, 500)
+    payload = {**payload, "operation_id": op_id}
+    if op_id is not None:
+        with _trump_operations_lock:
+            if stages.acted:
+                _trump_operations[op_id] = {'id': op_id, 'status': 'finished',
+                                            'finished_at': time.time(), 'response': (payload, code)}
+            else:
+                _trump_operations.pop(op_id, None)
+    return jsonify({**payload, "replayed": False}), code
+
+
+def _trump_execute(cfg, data, items, release, grabbing, stages):
+    """The stages of one execute, in order. Returns `(payload, status)`."""
+    service = data.get('service')
+    arr_id = data.get('arr_id')
+    arr_id = arr_id if isinstance(arr_id, int) and not isinstance(arr_id, bool) else None
+    arr_name = 'Sonarr' if service == 'sonarr' else 'Radarr'
+
+    # TR5 — the last honest verification point is server-side, immediately before
+    # anything acts. The wizard's group can be minutes old: a tab left open, a
+    # cross-seed script adding a registration, a torrent rechecked into a
     # different path. The expansion is re-run from the confirmed seeds and must
-    # land on exactly the posted set.
+    # land on exactly the posted set — before the grab, so a refused group grabs
+    # nothing.
     if items:
         refusal = _trump_reverify(cfg, items, data)
         if refusal is not None:
             return refusal
+        stages.set('reverify', 'done', f"The group of {len(items)} torrent(s) is as you confirmed it")
+    else:
+        stages.set('reverify', 'skipped', "Nothing to remove")
 
-    # With the grab no longer behind the delete flag, a double submit is a real
-    # second download. Backfill's advisory queue check (B12), not an idempotency
-    # key: the replacement already sitting in the arr's queue — a second click,
-    # or the arr having grabbed it from RSS on its own — is refused unless
-    # `force`, and **before** anything is deleted. A queue that cannot be read
-    # does not block; the answer says it was not checked.
+    # B12's advisory queue check, before anything acts: the replacement already
+    # in the arr's queue — the arr having grabbed it from RSS on its own, or a
+    # submit from another tab — is refused unless `force`. A queue that cannot be
+    # read does not block, and the answer says it was not checked.
     queue_checked = None
-    arr_id = data.get('arr_id')
-    if grabbing and isinstance(arr_id, int) and not isinstance(arr_id, bool) and not data.get('force'):
+    if grabbing and arr_id is not None and not data.get('force'):
         season = data.get('season_number')
         queued = queue_records_for_item(
-            cfg, data['service'], data.get('connection_id'), arr_id,
+            cfg, service, data.get('connection_id'), arr_id,
             season_number=season if isinstance(season, int) else None)
         queue_checked = queued is not None
         if queued:
             titles = [q.get('title') for q in queued if q.get('title')]
-            name = 'Sonarr' if data['service'] == 'sonarr' else 'Radarr'
-            return jsonify({"status": "error", "code": "already_queued", "titles": titles[:5],
-                            "message": f"Already in {name}'s queue: {titles[0] if titles else 'this item'}. "
-                                       "Nothing was removed or grabbed."}), 409
+            return {"status": "error", "code": "already_queued", "titles": titles[:5],
+                    "message": f"Already in {arr_name}'s queue: {titles[0] if titles else 'this item'}. "
+                               "Nothing was removed or grabbed."}, 409
+        stages.set('queue_check', 'done' if queue_checked else 'skipped',
+                   f"Not already in {arr_name}'s queue" if queue_checked
+                   else f"Could not read {arr_name}'s queue, so it was not checked")
+    else:
+        stages.set('queue_check', 'skipped', "Grab anyway" if grabbing and data.get('force')
+                   else "Nothing to check")
 
-    removed = 0
-    if items:
-        try:
-            removed = sources.remove_torrents(cfg, items, delete_files=True)
-        except sources.SourceConnectionError as e:
-            return jsonify({"status": "error", "message": str(e)}), 502
-
+    # The grab. Its answer echoes the posted release and carries no download id
+    # (`ReleaseResource`, both arrs); the download's identity is the search
+    # result's `infoHash`, which the page sends and the import watch uses.
     grabbed, grab_error = None, ''
     if grabbing:
+        stages.acted = True
         try:
-            grab_release(cfg, data['service'], data.get('connection_id'),
+            grab_release(cfg, service, data.get('connection_id'),
                          release['guid'], release.get('indexer_id'))
             grabbed = True
+            stages.set('grab', 'done', "The replacement was handed to the download client")
         except Exception as e:
-            grabbed = False
-            grab_error = str(e)
+            grabbed, grab_error = False, str(e)
+            stages.set('grab', 'failed', f"The grab failed: {grab_error}")
+    else:
+        stages.set('grab', 'skipped', "No replacement was chosen")
+
+    removed, removal_error = 0, ''
+    if items and grabbed is False:
+        stages.set('remove', 'skipped', "Nothing was removed, because the grab failed — the old "
+                                        "torrents and their files are untouched.")
+    elif items:
+        # Resolved again after the grab: the replacement is in the client now.
+        refusal = _trump_reverify(cfg, items, data) if grabbed else None
+        if refusal is not None:
+            body, _status = refusal
+            if body.get('code') == 'group_changed':
+                removal_error = ("The group changed after the grab — a replacement saved on the old "
+                                 "torrents' files joins it, and removing them with their files would "
+                                 "delete it.")
+            else:
+                removal_error = body.get('message') or 'The group could not be checked again.'
+            stages.set('remove', 'failed',
+                       f"{removal_error} The old torrents are still in your client — remove them "
+                       "there, keeping their files if the replacement shares them.",
+                       code=body.get('code'))
+        else:
+            stages.acted = True
+            try:
+                removed = sources.remove_torrents(cfg, items, delete_files=True)
+                stages.set('remove', 'done', f"Removed {removed} torrent(s) and their files")
+            except sources.SourceConnectionError as e:
+                removal_error = str(e)
+                stages.set('remove', 'failed', f"Could not remove the old torrents ({e}). They are "
+                                               "still in your client — remove them there.")
+    else:
+        stages.set('remove', 'skipped', "Nothing to remove")
 
     # Credit the swap on the Rounds prize layer. Trumped is counted at execute
     # time: the swap trades one release for another, so the audit that follows
     # the import sees a library in much the same shape and has nothing to infer
-    # the action from. A grab with nothing removed is not a swap and pays nothing.
+    # the action from. A grab with nothing removed is not a swap and pays nothing,
+    # and a replayed operation never reaches here.
     if removed:
         try:
             db_update_meta('ns_progress',
@@ -3056,28 +3242,32 @@ def workflows_trump_execute():
         except Exception as e:
             log.warning("Could not record trump on Rounds progress: %s", e)
 
-    # TR9 — the old payload is gone before the new one exists, so the user is
-    # unprotected for the whole download window, and the grab used to be fired
-    # and abandoned. It is followed by the same import watch Backfill uses —
-    # scoped to the library files the trumped release was imported as, which
-    # only the path lookup knows (`library_file_ids`) — and the re-audit waits
-    # for the import (TR10) instead of recording the hole left by the delete.
+    # TR9 — the grab is followed by the same import watch Backfill uses, scoped
+    # to the library files the trumped release was imported as, which only the
+    # path lookup knows (`library_file_ids`), and correlated by the release's
+    # info hash (S07). The re-audit waits for an observed import (TR10).
     watch_job_id = None
-    arr_id = data.get('arr_id')
-    if grabbed and isinstance(arr_id, int) and not isinstance(arr_id, bool) and data.get('connection_id'):
+    if grabbed and arr_id is not None and data.get('connection_id'):
         watch_job_id = _start_import_watch(
-            cfg, data['service'], data['connection_id'], arr_id,
+            cfg, service, data['connection_id'], arr_id,
             title=str(data.get('arr_title') or ''),
-            file_ids=_int_list(data.get('library_file_ids')), source='trump')
-    elif removed:
-        # Nothing to follow: the watchdog's entry point, not a direct scan, so
-        # the deferral and debounce every other client action gets apply here.
-        nudge_watchdog('trumped torrents removed via the client')
-    log.info("Trump execute: removed %d/%d torrent(s), grabbed=%s, watching import=%s",
-             removed, len(items), grabbed, bool(watch_job_id))
-    return jsonify({"status": "success", "removed": removed, "requested": len(items),
-                    "grabbed": grabbed, "grab_error": grab_error,
-                    "queue_checked": queue_checked, "watch_job_id": watch_job_id})
+            file_ids=_int_list(data.get('library_file_ids')), source='trump',
+            info_hash=_clean_token(release.get('info_hash'), limit=128))
+        stages.set('watch', 'done', f"Following the download into {arr_name}")
+    else:
+        stages.set('watch', 'skipped', "Nothing to follow" if not grabbed
+                   else f"No {arr_name} item to follow the download into")
+        if removed:
+            # Nothing to follow: the watchdog's entry point, not a direct scan, so
+            # the deferral and debounce every other client action gets apply here.
+            nudge_watchdog('trumped torrents removed via the client')
+    log.info("Trump execute: grabbed=%s, removed %d/%d torrent(s), watching import=%s",
+             grabbed, removed, len(items), bool(watch_job_id))
+    status = 'success' if not stages.failed() else ('partial' if grabbed or removed else 'failed')
+    return {"status": status, "removed": removed, "requested": len(items),
+            "grabbed": grabbed, "grab_error": grab_error, "removal_error": removal_error,
+            "queue_checked": queue_checked, "watch_job_id": watch_job_id,
+            "stages": stages.as_list()}, 200
 
 
 # T5's ordering. When a torrent's files earn different verdicts the row takes the
@@ -4748,6 +4938,9 @@ def workflows_watch_import():
     # Which workflow the grab belongs to. Anything but an explicit 'trump' is a
     # Backfill — that is what every bundle that predates the field sends.
     source        = 'trump' if data.get('source') == 'trump' else 'backfill'
+    # The grabbed release's info hash, when its indexer supplied one — what the
+    # watch tells this download apart from another of the same title by (S07).
+    info_hash     = _clean_token(data.get('info_hash'), limit=128)
     if not service or not connection_id or arr_id is None:
         return jsonify({'status': 'error', 'message': 'Missing parameters'}), 400
 
@@ -4761,7 +4954,8 @@ def workflows_watch_import():
     if source == 'backfill':
         _record_backfill_credit(files)
     return jsonify({'job_id': _start_import_watch(db_load_config(), service, connection_id,
-                                                  arr_id, title, file_ids, source)})
+                                                  arr_id, title, file_ids, source,
+                                                  info_hash=info_hash)})
 
 
 def _trump_rescan():
@@ -4777,7 +4971,68 @@ def _trump_rescan():
         threading.Thread(target=run_audit_process, args=("trump",), daemon=True).start()
 
 
-def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, source='backfill'):
+# A watch's reading of its target's file could not be taken.
+_UNREADABLE = object()
+
+# Terminal watch statuses. `done` is the only success, and it needs an
+# observation: the arr's file for this target changed (S07). The panel renders
+# `error`, `failed` and `unreadable` red, the rest dim.
+WATCH_TERMINAL = frozenset({'done', 'error', 'failed', 'unreadable', 'unobserved',
+                            'no_new_file', 'timed_out', 'unconfirmed'})
+
+
+def _read_target_files(cfg, service, connection_id, arr_id, episode_ids):
+    """The arr's file for a watch's target, or `_UNREADABLE`.
+
+    Radarr: the movie's file id. Sonarr: `[episode_id, file_id]` for each scoped
+    episode — never the series' ids, which move whenever Sonarr imports *any*
+    episode of it (T11's lesson, one workflow over). A Sonarr watch with no scope
+    has no target to read. Through the raising reader, so a failed read is never
+    a reading of "no file" (S08's lesson).
+    """
+    if service == 'sonarr' and not episode_ids:
+        return _UNREADABLE
+    try:
+        return read_arr_file_id(cfg, service, connection_id, arr_id,
+                                episode_ids=episode_ids if service == 'sonarr' else None)
+    except Exception as e:
+        log.info("Import watch: could not read the %s file of item %s (%s)",
+                 service, arr_id, type(e).__name__)
+        return _UNREADABLE
+
+
+def _target_landed(service, before, after):
+    """Did the target get a new file between two readings? Only if both were read,
+    and every part of it — the movie, or each scoped episode — now holds a real
+    file with a different id."""
+    if before is _UNREADABLE or after is _UNREADABLE:
+        return False
+    if service == 'radarr':
+        return bool(after) and after != before
+    old, new = dict(before or []), dict(after or [])
+    return bool(old) and all(new.get(ep) and new[ep] != old.get(ep) for ep in old)
+
+
+def _await_landing(cfg, service, connection_id, arr_id, episode_ids, baseline, reads=3, gap=10):
+    """True once the target's file is seen to change; False if it was read and had
+    not; None if it could not be told — no baseline, or no reading at all. A few
+    reads apart, because an arr drops a queue record as it imports."""
+    if baseline is _UNREADABLE:
+        return None
+    read_any = False
+    for i in range(reads):
+        current = _read_target_files(cfg, service, connection_id, arr_id, episode_ids)
+        if current is not _UNREADABLE:
+            read_any = True
+            if _target_landed(service, baseline, current):
+                return True
+        if i < reads - 1:
+            time.sleep(gap)
+    return False if read_any else None
+
+
+def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, source='backfill',
+                        info_hash=None):
     """Follow a grab into the library, on a daemon thread. Returns the job id.
 
     Shared by Backfill (through `/api/workflows/watch_import`) and Trumped
@@ -4785,12 +5040,28 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
     bottom-right import panel every page polls. `file_ids` scopes a Sonarr force
     import to those library files' episodes — the files a backfill is for, or
     the ones a trumped release was imported as; with none, a Sonarr watch
-    force-imports nothing (B11). A trump watch that confirms its import starts
-    the re-audit (`_trump_rescan`); a Backfill one leaves that to the watchdog,
-    as it always has.
+    force-imports nothing (B11).
+
+    **A success needs an observation** (S07, the 2026-09-10 outside review). The
+    watch used to turn every empty queue answer into "Imported successfully" —
+    an unreadable queue, a failed download, one never seen — and force-imported a
+    download still in progress once its two-hour wait ran out. It reaches `done`
+    only when the arr's file for this target changed from the reading taken
+    before the wait (`_target_landed`); everything else ends in a status of its
+    own that is not success (`WATCH_TERMINAL`). Only an `import_pending` outcome
+    — the download finished and the arr holding its import — is ever
+    force-imported. The download is told apart from another of the same title by
+    `info_hash` when the grabbed release carried one, else by Sonarr's episodes,
+    else by the movie or series — where two download ids mean a guess, and
+    nothing is force-imported.
+
+    A trump watch that observes its import starts the re-audit (`_trump_rescan`,
+    TR10); one that ends any other way nudges the watchdog instead. A Backfill
+    watch leaves the scan to the watchdog, as it always has.
     """
     arr_name = 'Sonarr' if service == 'sonarr' else 'Radarr'
     what     = 'trump' if source == 'trump' else 'backfill'
+    item     = 'series' if service == 'sonarr' else 'movie'
     job_id = secrets.token_hex(8)
     watch  = {
         'status':       'queued',
@@ -4803,17 +5074,19 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
     _import_watches[job_id] = watch
 
     def do_watch():
-        def mark_done():
-            watch['status']       = 'done'
-            watch['message']      = 'Imported successfully'
-            watch['completed_at'] = time.time()
-            if source == 'trump':
-                _trump_rescan()
-
-        def fail(message):
-            watch['status']       = 'error'
+        def finish(status, message):
+            watch['status']       = status
             watch['message']      = message
             watch['completed_at'] = time.time()
+            if source != 'trump':
+                return
+            if status == 'done':
+                _trump_rescan()
+            else:
+                nudge_watchdog(f'a trump import watch that ended {status}')
+
+        def mark_done():
+            finish('done', 'Imported successfully')
 
         try:
             # Joined first, long before the import can land: the join runs from
@@ -4821,67 +5094,93 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
             # retires their ids.
             scope = (_watch_episode_scope(cfg, connection_id, arr_id, file_ids)
                      if service == 'sonarr' else None)
+            correlate = {'download_id': info_hash, 'episode_ids': None if info_hash else scope}
             # Brief delay so qBit + Sonarr/Radarr have time to register the grab before we poll
             time.sleep(8)
             def on_downloading():
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — verifying in qBittorrent'
 
-            # Snapshot the current file ID so we can confirm import even when the
-            # ManualImport command reports status='failed' internally (Radarr quirk)
-            original_file_id = get_arr_file_id(cfg, service, connection_id, arr_id)
+            # The target's file before the wait: what success is measured against.
+            # A baseline that could not be read means this watch can never say done.
+            baseline = _read_target_files(cfg, service, connection_id, arr_id, scope)
 
-            last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, on_downloading=on_downloading)
-
-            if not last_active:
-                # Queue cleared naturally (standard quality upgrade auto-imported)
-                mark_done()
-                return
-
-            # If the item is still downloading (not yet importPending), the 300 s poll
-            # timed out before the download finished — extend the wait instead of
-            # firing force import against an incomplete file (which causes a 500 error).
-            if not any(r.get('trackedDownloadState') == 'importPending' for r in last_active):
+            res = poll_queue_until_clear(cfg, service, connection_id, arr_id,
+                                         on_downloading=on_downloading, **correlate)
+            if res['outcome'] == 'downloading':
+                # The 300 s poll ran out mid-download: wait longer, never force.
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — waiting for completion'
-                last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=7200)
-                if not last_active:
-                    mark_done()
-                    return
+                res = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=7200,
+                                             seen=True, **correlate)
 
-            # Queue didn't clear — extract context for manual import
-            rec             = last_active[0]
+            outcome = res['outcome']
+            if outcome == 'no_connection':
+                return finish('error', f"The {arr_name} connection this grab was made on is not configured")
+            if outcome == 'unreadable':
+                return finish('unreadable', f"Could not read {arr_name}'s queue, so auditorr cannot "
+                                            f"tell what happened to this grab — check Activity → Queue "
+                                            f"in {arr_name}")
+            if outcome == 'failed':
+                detail = '; '.join(res['messages'])
+                return finish('failed', f"The download failed in {arr_name}" + (f": {detail}" if detail else ''))
+            if outcome == 'downloading':
+                return finish('timed_out', f"Still downloading after two hours — {arr_name} will "
+                                           f"import it when it finishes")
+            if outcome in ('cleared', 'unobserved'):
+                landed = _await_landing(cfg, service, connection_id, arr_id, scope, baseline)
+                if landed:
+                    return mark_done()
+                if outcome == 'unobserved':
+                    return finish('unobserved', f"Never appeared in {arr_name}'s queue — check that "
+                                                f"the grab reached your download client")
+                if landed is None:
+                    return finish('unconfirmed', f"Left {arr_name}'s queue, but auditorr could not "
+                                                 f"read the {item}'s file to confirm an import — "
+                                                 f"check it in {arr_name}")
+                return finish('no_new_file', f"Left {arr_name}'s queue without a new file — it may "
+                                             f"have been removed or blocklisted in {arr_name}")
+
+            # import_pending: the download is finished and the arr is holding its
+            # import. The only outcome that is ever force-imported.
+            records = res['records']
+            download_ids = {str(r.get('downloadId') or '').upper() for r in records if r.get('downloadId')}
+            if not info_hash and len(download_ids) > 1:
+                return finish('error', f"More than one download for this {item} is waiting in "
+                                       f"{arr_name}'s queue, and auditorr cannot tell which is this "
+                                       f"{what}, so nothing was force-imported — finish it from "
+                                       f"Activity → Queue in {arr_name}")
+            rec             = records[0]
             download_id     = rec.get('downloadId') or ''
             output_path     = rec.get('outputPath') or ''
             download_folder = None
             if output_path:
-                import os as _os
-                download_folder = _os.path.dirname(output_path) if '.' in _os.path.basename(output_path) else output_path
+                download_folder = os.path.dirname(output_path) if '.' in os.path.basename(output_path) else output_path
             if download_id:
                 log.info("Manual import will use downloadId %s", download_id)
             elif download_folder:
-                log.info("Manual import will use download folder %s", download_folder)
+                log.info("Manual import will use the download's folder")
             else:
                 # The arr's library folder used to stand in here, and its listing
                 # is the library file itself — a force import from it re-imports
                 # the file it is replacing (B11). Say so instead.
-                fail(f"{arr_name} did not report where this download is, so nothing was "
-                     f"force-imported — finish it from Activity → Queue in {arr_name}")
-                return
+                return finish('error', f"{arr_name} did not report where this download is, so "
+                                       f"nothing was force-imported — finish it from Activity → "
+                                       f"Queue in {arr_name}")
             if service == 'sonarr' and not scope:
                 # Unknown episodes are not every episode. A pack forced in whole
                 # replaces files other torrents are hardlinked to (B1).
-                fail(f"Could not tell which episodes this {what} was for, so nothing was "
-                     "force-imported over your library — finish it from Activity → Queue in Sonarr")
-                return
+                return finish('error', f"Could not tell which episodes this {what} was for, so "
+                                       "nothing was force-imported over your library — finish it "
+                                       "from Activity → Queue in Sonarr")
 
             watch['status']  = 'importing'
             watch['message'] = 'Importing — triggering manual import'
 
-            # Retry loop: fire the command up to 3 times, confirming via both queue state
-            # and a direct Arr API check (file ID change) after each attempt.
-            still_active = last_active
-            scope_error  = None
+            # Fire the command up to 3 times. The command's own status is not
+            # trustworthy (Radarr reports `failed` on replacements that succeeded);
+            # the arr's file id is, so that is what each attempt is judged by.
+            scope_error, after = None, res
             for attempt in range(3):
                 try:
                     force_manual_import_by_id(cfg, service, connection_id, arr_id,
@@ -4891,32 +5190,31 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
                     # Typically: nothing in scope is importable any more — the arr
                     # took those episodes itself, and what is left is out of scope.
                     scope_error = str(e)
-                still_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=60)
-                if not still_active:
-                    break
-                # Verify directly with Arr — command may have imported even if queue
-                # hasn't reflected it yet or command reported 'failed' internally
-                current_file_id = get_arr_file_id(cfg, service, connection_id, arr_id)
-                if current_file_id is not None and current_file_id != original_file_id:
-                    still_active = []
+                after = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=60,
+                                               seen=True, **correlate)
+                if _await_landing(cfg, service, connection_id, arr_id, scope, baseline, reads=1):
+                    return mark_done()
+                if after['outcome'] != 'import_pending':
                     break
                 if attempt < 2:
                     watch['message'] = f'Importing — retrying ({attempt + 2}/3)'
                     time.sleep(20)
 
-            if still_active:
-                stuck_rec = still_active[0]
-                msgs = [m for msg in stuck_rec.get('statusMessages', []) for m in msg.get('messages', [])]
-                watch['status']  = 'error'
-                watch['message'] = 'Import stalled: ' + ('; '.join(msgs) or scope_error or 'queue item remained')
-                watch['completed_at'] = time.time()
-            else:
-                mark_done()
+            if after['outcome'] == 'cleared':
+                landed = _await_landing(cfg, service, connection_id, arr_id, scope, baseline)
+                if landed:
+                    return mark_done()
+                if landed is None:
+                    return finish('unconfirmed', f"Left {arr_name}'s queue after the import, but "
+                                                 f"auditorr could not read the {item}'s file to "
+                                                 f"confirm it — check it in {arr_name}")
+                return finish('no_new_file', f"Left {arr_name}'s queue after the import without a "
+                                             f"new file — check it in {arr_name}")
+            msgs = after.get('messages') or res['messages']
+            return finish('error', 'Import stalled: ' + ('; '.join(msgs) or scope_error or 'queue item remained'))
         except Exception as e:
             log.warning("Auto-import failed for %s/%s: %s", service, arr_id, e)
-            watch['status']       = 'error'
-            watch['message']      = str(e)
-            watch['completed_at'] = time.time()
+            finish('error', str(e))
 
     threading.Thread(target=do_watch, daemon=True).start()
     return job_id
@@ -4943,11 +5241,13 @@ def workflows_watch_import_active():
     expired = [k for k, v in _import_watches.items() if v.get('completed_at') and now - v['completed_at'] > 300]
     for k in expired:
         del _import_watches[k]
-    # Return active jobs + jobs completed within the last 60s (so Done/Error states are briefly visible)
+    # Return active jobs + jobs completed within the last 60s (so their end states
+    # are briefly visible). Keyed on `completed_at`, not on a list of statuses: a
+    # watch has more ways to end than done and error since Phase 12 (S07).
     jobs = []
-    for job_id, watch in _import_watches.items():
+    for job_id, watch in list(_import_watches.items()):
         ct = watch.get('completed_at')
-        if watch['status'] not in ('done', 'error') or (ct and now - ct < 60):
+        if not ct or now - ct < 60:
             jobs.append({'job_id': job_id, **{k: v for k, v in watch.items() if k != 'completed_at'}})
     return jsonify({'jobs': jobs})
 

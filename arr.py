@@ -411,6 +411,11 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'leechers':            r.get('leechers', 0),
             'size':                r.get('size', 0),
             'guid':                guid,
+            # The download's identity, when the indexer supplies one: both arrs'
+            # `ReleaseResource.InfoHash` (from `TorrentInfo.InfoHash`). The grab's
+            # own response echoes the posted release and carries no download id,
+            # so this is what the import watch correlates the queue by (S07).
+            'info_hash':           r.get('infoHash') or '',
             'info_url':            r.get('infoUrl') or (guid if str(guid).startswith('http') else ''),
             'quality_name':        q_inner.get('name', ''),
             'resolution':          q_inner.get('resolution', 0),
@@ -1025,6 +1030,92 @@ def grab_release(cfg, service, connection_id, guid, indexer_id):
         return json.loads(raw) if raw.strip() else {}
 
 
+_QUEUE_PAGE_SIZE = 200
+_QUEUE_MAX_PAGES = 50
+
+# Finished downloads the arr is holding the import of. `importPending` on older
+# arrs; Sonarr v4 and Radarr v5 park a *rejected* import — not an upgrade, a
+# backfill's usual case — as `importBlocked` (both arrs' `TrackedDownloadState`
+# and `CompletedDownloadService`, checked 2026-09-15). Compared lower-cased: the
+# API serialises enums camelCase.
+_IMPORT_WAITING_STATES = frozenset({'importpending', 'importblocked'})
+_FAILED_DOWNLOAD_STATES = frozenset({'failed', 'failedpending'})
+
+
+def _read_queue(conn, service, arr_id=None):
+    """Every record of the arr's queue — or only `arr_id`'s. Raises on a failed read.
+
+    `?pageSize=500` on one page is not the queue (S07). `/api/v3/queue` pages —
+    `page`, `pageSize` and `totalRecords` on `PagingResource` — and both arrs
+    filter it by `movieIds` / `seriesIds` (`QueueController` on Sonarr's and
+    Radarr's `develop`, checked 2026-09-15). The filter is passed and applied
+    again here, because an arr that predates it returns the whole queue. An
+    answer with no `totalRecords` — a bare list, or a shape from before paging —
+    is taken as everything there is.
+    """
+    id_field = 'movieId' if service == 'radarr' else 'seriesId'
+    filt = ''
+    if arr_id is not None:
+        filt = f"&{'movieIds' if service == 'radarr' else 'seriesIds'}={arr_id}"
+    records, seen_ids = [], set()
+    for page in range(1, _QUEUE_MAX_PAGES + 1):
+        result = _arr_get(conn['base_url'], conn['api_key'],
+                          f'/api/v3/queue?page={page}&pageSize={_QUEUE_PAGE_SIZE}{filt}',
+                          timeout=10)
+        if not isinstance(result, dict):
+            records.extend(r for r in (result or []) if isinstance(r, dict))
+            break
+        batch = [r for r in (result.get('records') or []) if isinstance(r, dict)]
+        fresh = [r for r in batch if r.get('id') is None or r['id'] not in seen_ids]
+        seen_ids.update(r['id'] for r in batch if r.get('id') is not None)
+        records.extend(fresh)
+        total = result.get('totalRecords')
+        if not isinstance(total, int) or isinstance(total, bool) or not fresh or len(records) >= total:
+            break
+    else:
+        raise LookupError(f"the {service} queue did not end within {_QUEUE_MAX_PAGES} pages")
+    if arr_id is not None:
+        records = [r for r in records if r.get(id_field) == arr_id]
+    return records
+
+
+def _queue_record_failed(record):
+    return (str(record.get('status') or '').lower() in ('failed', 'error')
+            or str(record.get('trackedDownloadState') or '').lower() in _FAILED_DOWNLOAD_STATES)
+
+
+def _queue_messages(records):
+    """The arr's own words about these records, de-duplicated, at most five."""
+    msgs = []
+    for r in records:
+        for sm in r.get('statusMessages') or []:
+            msgs.extend(m for m in (sm.get('messages') or []) if m)
+        if r.get('errorMessage'):
+            msgs.append(r['errorMessage'])
+    return list(dict.fromkeys(msgs))[:5]
+
+
+def correlate_queue_records(records, download_id=None, episode_ids=None):
+    """The queue records that are *this* grab (S07).
+
+    By the download's identity when there is one: a search result's `infoHash`,
+    which the queue spells `downloadId` — upper-cased for qBittorrent, whose
+    Sonarr/Radarr client sets `DownloadId = torrent.Hash.ToUpper()` — so it is
+    compared case-insensitively, and a record with another id is another
+    download. Failing that, by Sonarr's episodes: a record naming an episode
+    outside `episode_ids` is another download of the series. Failing both,
+    every record already matched on the movie or series — which is a guess when
+    they carry more than one download id, and the watch says so.
+    """
+    if download_id:
+        want = str(download_id).upper()
+        return [r for r in records if str(r.get('downloadId') or '').upper() == want]
+    if episode_ids:
+        scope = set(episode_ids)
+        return [r for r in records if r.get('episodeId') is None or r.get('episodeId') in scope]
+    return list(records)
+
+
 def queue_records_for_item(cfg, service, connection_id, arr_id, episode_ids=None, season_number=None):
     """The arr's live queue entries for one Backfill candidate, or None if unreadable.
 
@@ -1043,11 +1134,10 @@ def queue_records_for_item(cfg, service, connection_id, arr_id, episode_ids=None
     if conn is None:
         return None
     try:
-        result = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/queue?pageSize=500', timeout=10)
+        records = _read_queue(conn, service, arr_id)
     except Exception as e:
         log.warning("Could not read the %s queue on %s: %s", service, connection_id, e)
         return None
-    records = result.get('records', []) if isinstance(result, dict) else (result or [])
     live = [r for r in records if isinstance(r, dict) and r.get('status') not in ('failed', 'error')]
     if service == 'radarr':
         return [r for r in live if r.get('movieId') == arr_id]
@@ -1060,70 +1150,86 @@ def queue_records_for_item(cfg, service, connection_id, arr_id, episode_ids=None
     return mine
 
 
-def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None):
-    """Poll Sonarr/Radarr queue for arr_id until the item clears or timeout (seconds).
+def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None,
+                           download_id=None, episode_ids=None, seen=False):
+    """Follow one grab through the arr's queue. Returns `{'outcome', 'records', 'messages'}`.
 
-    Returns the last seen list of active queue records so the caller can extract
-    outputPath for a manual import when the timeout expires with items still present.
-    Returns [] when the item cleared cleanly or was never seen.
+    S07 (the 2026-09-10 outside review): this returned a list, and `[]` meant
+    five different things — no connection, a failed download, a download that
+    cleared, one never seen, and a window in which every read failed (the
+    exceptions were swallowed) — each of which the watch turned into "Imported
+    successfully". The outcomes:
 
-    Returns early (before timeout) when all active items are in importPending state —
-    the download is complete and Radarr is blocking the import; force import is needed
-    immediately rather than after a full 300 s wait.
+      no_connection   the connection id is not configured
+      import_pending  every record of this grab is finished and waiting on an
+                      import (`_IMPORT_WAITING_STATES`), for three reads (~15 s)
+      failed          only failed records remain; `messages` carries the arr's
+      cleared         seen, then gone — **not** an import: the caller asks the
+                      arr's file ids whether anything landed
+      unobserved      never seen, through ~2 minutes of reads that succeeded
+                      (the arr's download-client check runs about once a minute)
+      downloading     the wait ran out with the download still in the queue
+      unreadable      the wait ran out and the last read had failed — which
+                      includes a window in which every read failed
+
+    The queue is read in full (`_read_queue`) and narrowed to this grab by
+    `correlate_queue_records`. `seen` carries "already observed" into a later
+    wait, so a download finishing during it is `cleared` rather than
+    `unobserved`. A read that failed is never absence.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
-        return []
-    # Fetch the full queue and filter client-side — the ?movieId= URL param is unreliable
-    # across Radarr versions and may silently return empty rather than the full list
-    id_field             = 'movieId' if service == 'radarr' else 'seriesId'
-    deadline             = time.monotonic() + timeout
-    notified             = False
-    ever_seen            = False   # did we ever find this item in the queue?
-    not_found_ticks      = 0       # consecutive polls with item absent
-    import_pending_ticks = 0       # consecutive polls with all items importPending
-    last_active          = []      # last snapshot of active records (for outputPath extraction)
+        return {'outcome': 'no_connection', 'records': [], 'messages': []}
+    deadline        = time.monotonic() + timeout
+    notified        = False
+    ever_seen       = bool(seen)
+    not_found_ticks = 0        # consecutive successful reads with this grab absent
+    waiting_ticks   = 0        # consecutive reads with every record waiting on an import
+    last_active     = []
+    last_read_ok    = None     # None: nothing read yet in this window
     while time.monotonic() < deadline:
         try:
-            result   = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/queue?pageSize=500', timeout=10)
-            records  = result.get('records', result) if isinstance(result, dict) else result
-            relevant = [r for r in records if r.get(id_field) == arr_id]
-            # 'completed' means download done but import not yet processed — keep polling
-            # until the item fully disappears or hits a hard terminal state.
-            # 'warning' is transient (download client temporarily unreachable, etc.)
-            # and must NOT be treated as terminal.
-            active   = [r for r in relevant if r.get('status') not in ('error', 'failed')]
-            if active:
-                ever_seen            = True
-                last_active          = active
-                not_found_ticks      = 0
-                if not notified and on_downloading:
-                    on_downloading()
-                    notified = True
-                # If all items are importPending the download is done but Radarr is
-                # blocking the import — return early so force import fires immediately
-                # instead of waiting the full timeout.
-                if all(r.get('trackedDownloadState') == 'importPending' for r in active):
-                    import_pending_ticks += 1
-                    if import_pending_ticks >= 3:  # ~15 s of confirmed importPending
-                        return last_active
-                else:
-                    import_pending_ticks = 0
-            elif relevant:
-                return []  # item is only in hard terminal states (error/failed)
+            mine = correlate_queue_records(_read_queue(conn, service, arr_id),
+                                           download_id=download_id, episode_ids=episode_ids)
+            last_read_ok = True
+        except Exception as e:
+            last_read_ok = False
+            log.debug("Could not read the %s queue on %s: %s", service, connection_id, e)
+            time.sleep(5)
+            continue
+        # 'completed' means the download is done but not yet imported, and
+        # 'warning' is transient (the download client briefly unreachable):
+        # neither is terminal.
+        active = [r for r in mine if not _queue_record_failed(r)]
+        if active:
+            ever_seen, last_active, not_found_ticks = True, active, 0
+            if not notified and on_downloading:
+                on_downloading()
+                notified = True
+            if all(str(r.get('trackedDownloadState') or '').lower() in _IMPORT_WAITING_STATES
+                   for r in active):
+                waiting_ticks += 1
+                if waiting_ticks >= 3:
+                    return {'outcome': 'import_pending', 'records': active,
+                            'messages': _queue_messages(active)}
             else:
-                not_found_ticks += 1
-                # Radarr's download-client check interval defaults to ~60 s, so the
-                # queue entry may not appear until a full minute after the grab.
-                # Wait up to 24 consecutive empty polls (~120 s) before concluding the
-                # item was never registered.  Once seen, its absence means processed.
-                if ever_seen or not_found_ticks >= 24:
-                    return []
-        except Exception:
-            pass
+                waiting_ticks = 0
+        elif mine:
+            return {'outcome': 'failed', 'records': mine, 'messages': _queue_messages(mine)}
+        else:
+            not_found_ticks += 1
+            if ever_seen:
+                return {'outcome': 'cleared', 'records': last_active, 'messages': []}
+            if not_found_ticks >= 24:
+                return {'outcome': 'unobserved', 'records': [], 'messages': []}
         time.sleep(5)
-    return last_active  # timeout — caller can use outputPath to locate the download
+    if last_read_ok is not True:
+        return {'outcome': 'unreadable', 'records': last_active, 'messages': []}
+    if not ever_seen:
+        return {'outcome': 'unobserved', 'records': [], 'messages': []}
+    return {'outcome': 'downloading', 'records': last_active,
+            'messages': _queue_messages(last_active)}
 
 
 def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=None,
@@ -1305,8 +1411,14 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         raise
 
 
-def read_arr_file_id(cfg, service, connection_id, arr_id):
+def read_arr_file_id(cfg, service, connection_id, arr_id, episode_ids=None):
     """The current file id for a Radarr movie, or a Sonarr series' episode file ids.
+
+    With `episode_ids` (Sonarr), the reading is scoped to those episodes: a sorted
+    list of `[episode_id, episode_file_id]` pairs, `0` for an episode holding no
+    file, joined from `/api/v3/episode` because `/api/v3/episodefile` carries no
+    episode ids. The import watch confirms a grab by it (S07) — a series' file
+    ids move whenever Sonarr imports *any* episode of it.
 
     **Raises when the read fails** — an unknown connection, a timeout, an error
     status. That is the whole difference from `get_arr_file_id` below, and it is
@@ -1331,6 +1443,12 @@ def read_arr_file_id(cfg, service, connection_id, arr_id):
     if service == 'radarr':
         info = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}', timeout=10)
         return info.get('movieFileId')
+    if episode_ids is not None:
+        wanted = set(episode_ids)
+        eps = _arr_get(conn['base_url'], conn['api_key'],
+                       f'/api/v3/episode?seriesId={arr_id}', timeout=10)
+        return sorted([ep['id'], ep.get('episodeFileId') or 0]
+                      for ep in eps or [] if ep.get('id') in wanted)
     # For Sonarr track the episode file IDs as a sorted snapshot
     eps = _arr_get(conn['base_url'], conn['api_key'],
                    f'/api/v3/episodefile?seriesId={arr_id}', timeout=10)

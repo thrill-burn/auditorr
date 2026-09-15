@@ -164,6 +164,19 @@ nothing is moved out from under a seeding torrent. If the arr doesn't say where
 the download is, or auditorr can't tell which episodes the row covered, it stops
 and asks you to finish the import in Sonarr/Radarr rather than guessing.
 
+auditorr follows the download in the **Import Jobs** panel at the bottom right,
+and says **Imported** only when the arr's file for that movie — or for those
+episodes — actually changed. Everything else gets its own answer rather than a
+green tick: *Download failed* (the arr says so, with its reason), *Never queued*,
+*No new file* (it left the queue without one — removed or blocklisted in the
+arr), *Could not check* (the queue couldn't be read), *Still downloading* (after
+two hours; the arr will import it when it finishes — auditorr never forces an
+import of a file still being written), and *Unconfirmed* (it imported, but the
+arr's file couldn't be read to prove it). Where the indexer gives one, the
+release's info hash is used to tell this download apart from another of the same
+title in the queue; with two indistinguishable downloads for one item, auditorr
+won't force either.
+
 A grab that fails because the release has dropped out of the arr's cache is
 searched again and retried once. Any other failure is shown as it is — a
 timeout may be a grab that actually went through, and retrying it would
@@ -583,10 +596,14 @@ through it:
    files the group is hardlinked to, falling back to the new release's name,
    and searches it. The exact replacement on the PM's tracker is shown as
    **Grab this one**; the rest are folded under *Other releases*.
-5. **Execute.** The old group is removed via the client, the replacement is
-   grabbed through Sonarr/Radarr, and auditorr follows the download into your
-   library — it shows up in the **Import Jobs** panel at the bottom right, like
-   a Backfill grab — then re-audits once it imports.
+5. **Execute.** The replacement is grabbed through Sonarr/Radarr **first**, and
+   the old group is removed via the client only once the arr has accepted it —
+   so a grab that fails leaves your files exactly where they were. auditorr then
+   follows the download into your library — it shows up in the **Import Jobs**
+   panel at the bottom right, like a Backfill grab — and re-audits once it
+   actually imports. Every step is reported: if the grab succeeds and the
+   removal doesn't, you're told the replacement is on its way and the old
+   torrents are still in your client.
 
 ### What the confirm step tells you
 
@@ -608,9 +625,15 @@ through it:
   on a tracker that hasn't trumped the release, remove the others in your client
   and use **Grab only**.
 
-Right before deleting, auditorr resolves the group **again**. If a torrent has
+Right before deleting, auditorr resolves the group **again** — and once more
+after the grab, because a replacement saved onto the same files joins the group,
+and removing it with its files would delete the replacement. If a torrent has
 gone, stopped sharing the files, or joined the group since you confirmed it,
-nothing is removed and you're sent back to confirm it.
+nothing is removed and you're told the old torrents are still in your client.
+
+Clicking **Execute** twice, or retrying a request that never answered, runs the
+swap once: the page stamps each confirmation with an id, and the server replays
+the first answer instead of grabbing a second copy.
 
 **Grab only** works without
 [Workflow torrent deletion](configuration.md#workflow-torrent-deletion-allow_client_delete)

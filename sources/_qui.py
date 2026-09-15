@@ -179,11 +179,35 @@ def _get_version(sess, base, eligible_instances):
 # Per-instance helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_all_torrents(session, base, inst_id):
-    """Fetch all torrents for one instance.
+class ListingIncomplete(Exception):
+    """An instance's torrent listing could not be shown to be complete."""
 
-    Uses hash-deduplication so the loop terminates even if the API ignores
-    the offset parameter and returns the same page on every request.
+
+_LISTING_MAX_PAGES = 10000  # safety cap
+
+
+def _fetch_all_torrents(session, base, inst_id):
+    """Every torrent on one instance, or raise `ListingIncomplete`.
+
+    S02 (the 2026-09-10 outside review): a successful response is not a complete
+    snapshot. The loop stopped on a short page, an empty page or a page of
+    repeats and never compared what it had with the `total` the first page
+    advertised — it only logged it — so a listing that stopped short came back
+    as complete and the instance counted as answered. Raising puts it on the
+    channel every consumer already refuses on: `fetch_file_map` and
+    `list_torrents` record a failed instance (the guard's
+    `instances_unavailable`, Cleanup's re-verify, `sources.list_torrents`), and
+    `fetch_torrent_details` treats it as a listing that did not answer (T10).
+
+    Complete means, with a `total`: at least that many distinct torrents,
+    measured against the *first* page's total — a torrent added mid-listing
+    cannot fail it, and one removed mid-listing fails toward refusing. With no
+    `total`: a page shorter than the limit is the last page, by the API's own
+    convention and the only evidence there is; a full page of nothing but
+    repeats means the API is ignoring `page`, and nothing shows the list ends
+    there, so that fails. Hash de-duplication still guarantees termination.
+    qbit has no equivalent — `torrents_info()` is one call that returns every
+    torrent or raises.
     """
     # qui uses page-based pagination (0-indexed), max limit=2000 per page
     all_torrents = []
@@ -192,7 +216,7 @@ def _fetch_all_torrents(session, base, inst_id):
     limit        = 2000
     total_hint   = None  # populated from first response's 'total' field
 
-    for _ in range(10000):  # safety cap
+    for _ in range(_LISTING_MAX_PAGES):
         resp = session.get(
             f'{base}/api/instances/{inst_id}/torrents',
             params={'limit': limit, 'page': page},
@@ -203,14 +227,12 @@ def _fetch_all_torrents(session, base, inst_id):
 
         # Extract total count from envelope if present
         if isinstance(raw, dict) and 'total' in raw and total_hint is None:
-            total_hint = raw['total']
+            try:
+                total_hint = int(raw['total'])
+            except (TypeError, ValueError):
+                total_hint = None
 
         batch = _unwrap(raw)
-
-        if not batch:
-            log.info('qui: instance %s page %d: empty — done. total=%d (expected=%s)',
-                     inst_id, page, len(all_torrents), total_hint)
-            break
 
         new_items = []
         for t in batch:
@@ -225,19 +247,24 @@ def _fetch_all_torrents(session, base, inst_id):
                  inst_id, page, len(batch), len(new_items), len(all_torrents), total_hint)
         page += 1
 
-        # Done if: last page, all caught up, or API looping
-        if len(batch) < limit:
-            break
         if total_hint is not None and len(all_torrents) >= total_hint:
-            break
+            return all_torrents
+        if not batch or len(batch) < limit:
+            break  # the API's last page
         if not new_items:
-            log.warning(
-                'qui: instance %s returned all-duplicate hashes on page %d — '
-                'stopping. Got %d/%s unique torrents.',
-                inst_id, page, len(all_torrents), total_hint,
-            )
+            if total_hint is None:
+                raise ListingIncomplete(
+                    f"listed {len(all_torrents)} torrents and then the same page again, with no "
+                    f"total to show the list ends there")
             break
+    else:
+        raise ListingIncomplete(f"listed {len(all_torrents)} torrents and hit the page cap")
 
+    if total_hint is not None and len(all_torrents) < total_hint:
+        log.warning('qui: instance %s listed %d of %d torrents — the listing stopped short',
+                    inst_id, len(all_torrents), total_hint)
+        raise ListingIncomplete(
+            f"listed {len(all_torrents)} of {total_hint} torrents — the listing stopped short")
     return all_torrents
 
 

@@ -13,7 +13,7 @@ import Cleanup      from './components/workflows/Cleanup'
 import Dedupe       from './components/workflows/Dedupe'
 import Trumped      from './components/workflows/Trumped'
 import ScanProgress    from './components/ScanProgress'
-import ImportProgress  from './components/ImportProgress'
+import ImportProgress, { WATCH_ACTIVE } from './components/ImportProgress'
 import ErrorBanner  from './components/ErrorBanner'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
@@ -491,7 +491,7 @@ function AppInner() {
         statusMessage={scanState.status_message}
         score={results?.dashboard?.score}
         crossSeedMultiplier={crossSeedMultiplier}
-        activeImportCount={activeImports.filter(j => !['done', 'error'].includes(j.status)).length}
+        activeImportCount={activeImports.filter(j => WATCH_ACTIVE.includes(j.status)).length}
         onOpenImportPanel={() => setImportPanelOpen(true)}
         workflowCounts={(() => {
           const det = results?.dashboard?.current?.details

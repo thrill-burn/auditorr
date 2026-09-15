@@ -71,7 +71,13 @@ def _is_excluded(rel_path, filename, patterns):
     return is_excluded(rel_path, rel_path, filename, patterns)
 
 
-def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None):
+_ROOT_NAMES = {'Torrent': 'torrents', 'Media': 'media'}
+# A directory this many segments or fewer below a root is a category or a release
+# folder, and one that cannot be listed hides whole releases (S03).
+_UNLISTABLE_SHALLOW_DEPTH = 2
+
+
+def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None, walk_report=None):
     # Returns an ordered list of file_keys (one per filesystem entry, including
     # cross-seed duplicates) instead of full record dicts. Per-file metadata
     # (rel_path, size, excluded) is folded directly into inode_map to
@@ -85,10 +91,37 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
     # inode_map entry is ~8 bytes x every file in the library, which is the
     # known RAM hotspot. A scalar costs nothing.
     oldest_mtime = None
-    if not os.path.exists(base_path):
-        log.warning(f"Path does not exist, skipping: {base_path}")
+    # S03 (the 2026-09-10 outside review) — what this walk could not see. A root
+    # that did not exist returned an empty walk with zero stat errors, and
+    # `os.walk` had no `onerror`, so a directory that could not be listed dropped
+    # everything beneath it without a word. `walk_report`, when a dict, is filled
+    # in place — an out-parameter like `fetch_file_map`'s `unresolved_roots`, so
+    # the four values every caller unpacks stay as they were. Counts and
+    # booleans only: the audit persists it, and it reaches /api/debug/report.
+    walk = walk_report if walk_report is not None else {}
+    root_name = _ROOT_NAMES.get(source_label, source_label)
+    walk.update(configured=bool(base_path), exists=bool(base_path) and os.path.isdir(base_path),
+                files=0, stat_errors=0, unlistable=0, unlistable_shallow=0)
+    if not walk['exists']:
+        if base_path:
+            log.warning("The %s root is not a directory inside the container — skipping its walk",
+                        root_name)
         return key_order, scanned, stat_errors, oldest_mtime
-    for root, _, files in os.walk(base_path):
+
+    def _unlistable(err):
+        walk['unlistable'] += 1
+        where = getattr(err, 'filename', None)
+        try:
+            rel = os.path.relpath(os.fspath(where), base_path) if where else '.'
+            depth = len([s for s in rel.replace('\\', '/').split('/') if s not in ('', '.')])
+        except (TypeError, ValueError):
+            depth = 0
+        if depth <= _UNLISTABLE_SHALLOW_DEPTH:
+            walk['unlistable_shallow'] += 1
+        log.warning("Could not list a directory %d level(s) below the %s root (%s)",
+                    depth, root_name, type(err).__name__)
+
+    for root, _, files in os.walk(base_path, onerror=_unlistable):
         for filename in files:
             full_path = os.path.join(root, filename)
             try:
@@ -170,11 +203,13 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 log.warning(f"Could not stat {full_path}: {e}")
                 stat_errors += 1
             scanned += 1
+            walk['files'] += 1
             if total_ref is not None:
                 total_ref[0] += 1
                 if total_ref[0] % 500 == 0:
                     set_state(total_files=total_ref[0])
             update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
+    walk['stat_errors'] = stat_errors
     return key_order, scanned, stat_errors, oldest_mtime
 
 
@@ -1491,6 +1526,20 @@ _GUARD_DROP_FRACTION = 0.5
 # Torrents whose file listing failed *and* whose payload could not be found on
 # disk. These are the ones with no evidence either way.
 _GUARD_UNRESOLVED_FRACTION = 0.25
+# S02, the user's decision 2 (a) in Phase 12 (2026-09-15). A collapse is measured
+# against the largest count persisted in this many days, not only against the
+# last scan that persisted — or a client losing torrents in instalments, or a
+# pruning script run twice, passes each time: 100 → 60 → 36 is two 40% drops.
+_GUARD_REFERENCE_DAYS = 7
+_REFERENCE_FIELDS = ('torrent_count', 'file_map_size', 'torrent_files', 'media_files')
+
+# Decision 1 (a): what a manual scan may accept. A change in what the client or
+# the disk holds can be real — a library really does shrink — and accepting it
+# stays one click away. Every other code is a read that failed, and asking for a
+# scan is not authority to believe one: those refuse on every trigger.
+_ACCEPTABLE_BY_HAND = frozenset({
+    'torrent_count_collapse', 'file_map_collapse', 'client_blackout', 'disk_collapse',
+})
 
 
 def _pct(part, whole):
@@ -1508,7 +1557,8 @@ def source_plausibility(report, baseline, disk_file_count=None):
     The three rules, in the order they are cheapest to evaluate:
 
       collapse   the client answered, but with far fewer torrents or files than
-                 the last scan that persisted
+                 `baseline` — the reference, the largest counts persisted in
+                 the last `_GUARD_REFERENCE_DAYS` days (`reference_counts`)
       blind      too much of the client could not be asked at all
       blackout   the client claims nothing while the disk holds files
 
@@ -1529,8 +1579,9 @@ def source_plausibility(report, baseline, disk_file_count=None):
         return {
             'code': 'instances_unavailable',
             'message': (f"{len(failed_instances)} of {report.get('instances_total', '?')} "
-                        f"torrent-client instance(s) did not answer ({names}). Every torrent "
-                        f"they manage would have been classified as orphaned."),
+                        f"torrent-client instance(s) did not answer, or listed only part of "
+                        f"their torrents ({names}). Every torrent missing from the answer "
+                        f"would have been classified as orphaned."),
             'detail': {'instances_failed': failed_instances},
         }
 
@@ -1539,7 +1590,8 @@ def source_plausibility(report, baseline, disk_file_count=None):
         return {
             'code': 'torrent_count_collapse',
             'message': (f"The torrent client reported {torrents} torrent(s), down from "
-                        f"{prev_torrents} on the last scan — a {_pct(prev_torrents - torrents, prev_torrents)}% drop."),
+                        f"{prev_torrents} (the most in the last {_GUARD_REFERENCE_DAYS} days) — "
+                        f"a {_pct(prev_torrents - torrents, prev_torrents)}% drop."),
             'detail': {'torrent_count': torrents, 'previous': prev_torrents},
         }
 
@@ -1548,7 +1600,8 @@ def source_plausibility(report, baseline, disk_file_count=None):
         return {
             'code': 'file_map_collapse',
             'message': (f"The torrent client accounted for {mapped} file(s), down from "
-                        f"{prev_mapped} on the last scan — a {_pct(prev_mapped - mapped, prev_mapped)}% drop."),
+                        f"{prev_mapped} (the most in the last {_GUARD_REFERENCE_DAYS} days) — "
+                        f"a {_pct(prev_mapped - mapped, prev_mapped)}% drop."),
             'detail': {'file_map_size': mapped, 'previous': prev_mapped},
         }
 
@@ -1571,6 +1624,115 @@ def source_plausibility(report, baseline, disk_file_count=None):
             'detail': {'disk_file_count': disk_file_count, 'torrent_count': torrents},
         }
 
+    return None
+
+
+def _reference_cutoff(now=None):
+    return ((now or datetime.now()) - timedelta(days=_GUARD_REFERENCE_DAYS)).date().isoformat()
+
+
+def reference_counts(points, baseline, now=None):
+    """The counts a scan is measured against (S02, decision 2 (a)).
+
+    The largest of each field persisted in the last `_GUARD_REFERENCE_DAYS`
+    days, and the last persisted `baseline`. The baseline is folded in because
+    every install upgrading into this has one and no points yet, and its first
+    scan must not be waved through for want of them. A missing field reads 0,
+    which no rule measures against.
+    """
+    cutoff = _reference_cutoff(now)
+    ref = {f: int((baseline or {}).get(f) or 0) for f in _REFERENCE_FIELDS}
+    for point in points or []:
+        if str(point.get('day') or '') >= cutoff:
+            for f in _REFERENCE_FIELDS:
+                ref[f] = max(ref[f], int(point.get(f) or 0))
+    return ref
+
+
+def advance_reference(points, counts, now=None, reset=False):
+    """`points` with a persisted scan's `counts` folded in.
+
+    One point a day holding that day's largest counts, pruned to the window, so
+    the stored row is at most `_GUARD_REFERENCE_DAYS + 1` small dicts — never
+    per-file data. `reset`: a manual scan accepted a change, and the window
+    restarts from this scan, or the next scheduled scan would refuse the same
+    drop again.
+    """
+    day = counts.get('day') or (now or datetime.now()).date().isoformat()
+    cutoff = _reference_cutoff(now)
+    earlier = [] if reset else [p for p in points or [] if str(p.get('day') or '') >= cutoff]
+    today = {'day': day}
+    for f in _REFERENCE_FIELDS:
+        today[f] = max([int(counts.get(f) or 0)] +
+                       [int(p.get(f) or 0) for p in earlier if p.get('day') == day])
+    return sorted([p for p in earlier if p.get('day') != day] + [today], key=lambda p: p['day'])
+
+
+def _root_state(path):
+    """A root before its walk: configured, and a directory. No walk counts yet."""
+    return {'configured': bool(path), 'exists': bool(path) and os.path.isdir(path)}
+
+
+def filesystem_plausibility(root, block, reference, file_map_size=0):
+    """S03 — can one root's walk be believed? None, or an anomaly shaped like
+    `source_plausibility`'s.
+
+    `root` is 'torrents' or 'media', and is all that is said about where: the
+    anomaly is persisted and reaches /api/debug/report, so it carries a root's
+    name and counts, never its path.
+
+      root_missing     a configured root that is not a directory inside the
+                       container — walked, it read as an empty tree
+      root_unlistable  a directory within `_UNLISTABLE_SHALLOW_DEPTH` segments of
+                       the root could not be listed: at a category or release
+                       depth it hides whole releases. Deeper ones are counted on
+                       the report and in the status line, not refused
+      disk_collapse    the walk found far fewer files than the reference; or the
+                       torrent folder is empty while the client accounts for
+                       files in it, which needs no baseline for the reason
+                       `client_blackout` needs none — the worst case, a first
+                       scan landing on an empty bind mount, has none
+
+    A block with no walk counts yet (the check before the walks) runs only the
+    first rule. An unconfigured root is not a missing one.
+    """
+    block = block or {}
+    label = 'torrent' if root == 'torrents' else 'media'
+    if block.get('configured') and not block.get('exists'):
+        return {
+            'code': 'root_missing',
+            'message': (f"The {label} folder is not there — it does not exist inside the "
+                        f"container, or is not a folder. Walked, it would have read as empty."),
+            'detail': {'root': root},
+        }
+    if 'files' not in block:
+        return None
+    if block.get('unlistable_shallow'):
+        return {
+            'code': 'root_unlistable',
+            'message': (f"{block['unlistable_shallow']} folder(s) at a category or release "
+                        f"level in the {label} folder could not be listed. Everything under "
+                        f"them would have been missing from the scan."),
+            'detail': {'root': root, 'unlistable': block.get('unlistable', 0),
+                       'unlistable_shallow': block['unlistable_shallow'],
+                       'files': block.get('files', 0)},
+        }
+    files = int(block.get('files') or 0)
+    ref = int((reference or {}).get('torrent_files' if root == 'torrents' else 'media_files') or 0)
+    if ref >= _GUARD_MIN_BASELINE and files < ref * (1 - _GUARD_DROP_FRACTION):
+        return {
+            'code': 'disk_collapse',
+            'message': (f"The {label} folder holds {files} file(s), down from {ref} (the most "
+                        f"in the last {_GUARD_REFERENCE_DAYS} days) — a {_pct(ref - files, ref)}% drop."),
+            'detail': {'root': root, 'files': files, 'previous': ref},
+        }
+    if root == 'torrents' and files == 0 and file_map_size >= _GUARD_MIN_BASELINE:
+        return {
+            'code': 'disk_collapse',
+            'message': (f"The torrent folder is empty, while the torrent client accounts for "
+                        f"{file_map_size} file(s) in it."),
+            'detail': {'root': root, 'files': 0, 'file_map_size': file_map_size},
+        }
     return None
 
 
@@ -1668,29 +1830,65 @@ class _SourceAnomaly(Exception):
         self.anomaly = anomaly
 
 
-def _guard_scan(report, baseline, trigger, disk_file_count=None):
-    """Raise `_SourceAnomaly` if this scan must not persist. Manual overrides.
-
-    A manual scan is the override, on the watchdog's own precedent: explicit
-    intent wins. Startup deliberately is **not** — a startup scan following a
-    container rebuild is exactly the case the guard exists for (fresh session
-    directory, client answers zero), so treating it as intent would wave through
-    the very scenario it was written against.
-    """
-    anomaly = source_plausibility(report, baseline, disk_file_count)
-    if anomaly and trigger != 'manual':
+def _accept_or_refuse(anomaly, trigger):
+    """Raise `_SourceAnomaly` unless there is none, or a manual scan may accept it."""
+    if not anomaly:
+        return None
+    if trigger != 'manual' or anomaly['code'] not in _ACCEPTABLE_BY_HAND:
         raise _SourceAnomaly(anomaly)
-    if anomaly:
-        log.warning("Source anomaly on a manual scan — persisting anyway "
-                    "(explicit intent): %s", anomaly['message'])
+    log.warning("Source anomaly on a manual scan, accepted as a real change: %s",
+                anomaly['message'])
     return anomaly
+
+
+def _guard_scan(report, baseline, trigger, disk_file_count=None):
+    """Raise `_SourceAnomaly` if this scan must not persist; else return an
+    anomaly a manual scan accepted, or None.
+
+    The user's decision 1 (a) in Phase 12 (2026-09-15). A manual scan used to be
+    the override for every rule, on the watchdog's precedent that explicit intent
+    wins — a failed instance included, so Triage, Backfill, the health score and
+    the change log read a scan missing a whole instance as the truth (S02). It
+    still accepts a change in what the client or the disk holds
+    (`_ACCEPTABLE_BY_HAND`), and never a read that failed: an instance that did
+    not answer or listed short, listings that could not be read, a root that is
+    missing or could not be listed. Startup accepts nothing — a startup scan
+    following a container rebuild is exactly the case the guard exists for.
+    """
+    return _accept_or_refuse(source_plausibility(report, baseline, disk_file_count), trigger)
+
+
+def _guard_filesystem(root, block, reference, trigger, file_map_size=0):
+    """`_guard_scan` for one root's walk (S03), with the same exit."""
+    return _accept_or_refuse(
+        filesystem_plausibility(root, block, reference, file_map_size), trigger)
+
+
+# What a refusal tells the user to do. A change a manual scan may accept says so;
+# a failed read says what to fix instead, because a manual scan will not accept
+# it (decision 1 (a)) and "run a scan manually" would not help.
+_ACCEPT_BY_HAND_TEXT = "If this is expected, run a scan manually to accept it."
+_ANOMALY_FIXES = {
+    'instances_unavailable': ("Check that every qui instance is connected and answering, then "
+                              "scan again. A manual scan will not accept a listing that failed."),
+    'listings_unavailable':  ("Check the torrent path mapping (Remote and Local torrent path) and "
+                              "that the client is answering, then scan again. A manual scan will "
+                              "not accept listings that failed."),
+    'root_missing':          ("Check that the folder is mounted into the container — an array or a "
+                              "network share that has not finished mounting looks like this — then "
+                              "scan again. A manual scan will not accept a missing folder."),
+    'root_unlistable':       ("Check that the user auditorr runs as can read the folder, then scan "
+                              "again. A manual scan will not accept a folder it could not list."),
+}
 
 
 def _record_source_anomaly(anomaly, trigger, cfg, scan_start, persist=True):
     """Report a refused scan and leave every stored figure as it was."""
+    fix = (_ACCEPT_BY_HAND_TEXT if anomaly['code'] in _ACCEPTABLE_BY_HAND
+           else _ANOMALY_FIXES.get(anomaly['code'], "Fix the cause, then scan again."))
     msg = (f"Source anomaly: {anomaly['message']} Nothing from this scan was saved — "
            f"the file lists, health score and change log still describe the last "
-           f"scan that completed. If this is expected, run a scan manually to accept it.")
+           f"scan that completed. {fix}")
     log.warning(msg)
     try:
         db_set_meta('last_source_anomaly', {
@@ -1714,7 +1912,9 @@ def _record_source_anomaly(anomaly, trigger, cfg, scan_start, persist=True):
         db_set_meta('consecutive_aborted_scans', 0)
     except Exception:
         pass
-    set_state(status_message=msg, last_scan_status="error")
+    # The code rides the state so the startup retry can tell a missing root
+    # (minutes to mount) from a client still loading its session (seconds).
+    set_state(status_message=msg, last_scan_status="error", anomaly_code=anomaly['code'])
 
 
 def run_audit_process(trigger=None, persist_source_errors=True):
@@ -1726,7 +1926,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     scan_start = time.time()
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
               status_message="Connecting to torrent source...", last_scan_status="running",
-              phase="connecting", phase_history=[])
+              phase="connecting", phase_history=[], anomaly_code=None)
     try:
         db_set_meta('scan_marker', {
             'started_at': datetime.now().isoformat(timespec='seconds'),
@@ -1747,11 +1947,22 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             cfg, unresolved_roots=unresolved_roots)
         set_state(source_file_count=len(qbit_file_map))
         # Everything downstream treats "no client entry for this path" as proof
-        # of orphanhood. Check the client's answer against the last one that was
+        # of orphanhood. Check the client's answer against the counts last
         # believed *before* paying for two full filesystem walks — the collapse
         # and blind rules need neither.
-        source_baseline = db_get_meta('source_baseline')
-        _guard_scan(source_report, source_baseline, trigger)
+        source_baseline  = db_get_meta('source_baseline')
+        reference_points = db_get_meta('source_reference')
+        reference        = reference_counts(reference_points, source_baseline)
+        # Anomalies a manual scan accepted. Any one restarts the reference window
+        # from this scan once it persists (decision 2 (a)).
+        accepted = [_guard_scan(source_report, reference, trigger)]
+        # S03 — the filesystem half of R1. A root that is not there is free to
+        # check, so both are checked before either walk: a hopeless scan pays for
+        # neither, and a missing root never walks as an empty tree.
+        filesystem = {'torrents': _root_state(cfg.get('LOCAL_PATH', '')),
+                      'media':    _root_state(cfg.get('MEDIA_PATH', ''))}
+        for root in ('torrents', 'media'):
+            _guard_filesystem(root, filesystem[root], reference, trigger)
         total_ref = [0]
         set_state(total_files=0)
         _enter_phase("disk", "Scanning torrent directory...")
@@ -1761,19 +1972,29 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         torrent_key_order, scanned, torrent_errors, _ = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
-            compiled_exclusions=compiled_excl)
+            compiled_exclusions=compiled_excl, walk_report=filesystem['torrents'])
         # The blackout rule needs the disk side — "the client claims nothing
         # while LOCAL_PATH holds files" — so it runs at the first point that
         # number exists, and before the media walk, the assemble phase and every
-        # write. On a manual scan this re-reports the same anomaly the pre-walk
-        # call already waved through; the second line carries the disk count.
-        _guard_scan(source_report, source_baseline, trigger,
-                    disk_file_count=len(torrent_key_order))
+        # write. On a manual scan this re-reports an anomaly the pre-walk call
+        # already accepted; the second line carries the disk count. The torrent
+        # root's own checks run here too, for the same reason.
+        accepted.append(_guard_scan(source_report, reference, trigger,
+                                    disk_file_count=len(torrent_key_order)))
+        accepted.append(_guard_filesystem(
+            'torrents', filesystem['torrents'], reference, trigger,
+            file_map_size=int(source_report.get('file_map_size') or 0)))
         _enter_phase("disk", "Scanning media directory...")
         media_key_order, _, media_errors, oldest_media_mtime = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
-            compiled_exclusions=compiled_excl)
+            compiled_exclusions=compiled_excl, walk_report=filesystem['media'])
+        # The media root's checks: after its walk, before the assemble phase and
+        # every write.
+        accepted.append(_guard_filesystem('media', filesystem['media'], reference, trigger))
+        # Counts and booleans per root, named — never a path: the report is
+        # persisted and reaches /api/debug/report.
+        source_report['filesystem'] = filesystem
         stat_errors = torrent_errors + media_errors
         # The source file map is only consulted during the walks — release it
         # (~300 MB at 650K files) before the memory-heavy assemble/save phases.
@@ -1949,18 +2170,27 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                            lambda latest: rounds.merge_event_counters(_ns_next, latest))
         except Exception as e:
             log.warning(f"Could not update Next steps progress: {e}")
-        # This scan's view of the client is now the one every stored figure is
-        # built from, so it becomes what the next scan is measured against.
-        # Advanced **only** here, on a scan that actually persisted: an anomalous
-        # scan must not move the mark, or two 40% declines in a row would each
-        # stay under the threshold and the collapse would arrive in instalments.
+        # This scan's view of the client and the disk is now the one every stored
+        # figure is built from, so it becomes what the next scan is measured
+        # against — advanced **only** here, on a scan that persisted, so a
+        # refused collapse never becomes the next scan's baseline. That alone did
+        # nothing about two *accepted* 40% declines, each of which passed against
+        # the scan before it (100 → 60 → 36). This comment used to claim it did;
+        # the 2026-09-10 outside review's S02 showed otherwise. The reference is
+        # what catches instalments — the largest counts persisted in the last
+        # `_GUARD_REFERENCE_DAYS` days — and a manual scan that accepted a change
+        # restarts it from itself (decisions 1 and 2 (a), 2026-09-15).
         try:
-            db_set_meta('source_baseline', {
-                'at':            ran_at,
-                'source':        source_report.get('source'),
+            counts = {
                 'torrent_count': source_report.get('torrent_count', 0),
                 'file_map_size': source_report.get('file_map_size', 0),
-            })
+                'torrent_files': filesystem['torrents'].get('files', 0),
+                'media_files':   filesystem['media'].get('files', 0),
+            }
+            db_set_meta('source_baseline', {
+                'at': ran_at, 'source': source_report.get('source'), **counts})
+            db_set_meta('source_reference', advance_reference(
+                reference_points, counts, reset=any(accepted)))
             db_set_meta('last_source_report', source_report)
             if not source_report.get('partial'):
                 db_delete_meta('last_source_anomaly')
@@ -1978,7 +2208,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                  + (f", rss={rss} MB" if rss is not None else ""))
         if stat_errors:
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")
-        status_msg = f"Audit complete. {stat_errors} file(s) could not be read — check logs." if stat_errors else "Audit complete."
+        # Folders deeper than a release folder that could not be listed: counted
+        # and shown, not refused (S03 refuses only near the root).
+        unlistable = sum(block.get('unlistable', 0) for block in filesystem.values())
+        if unlistable:
+            log.warning("Audit complete with %d folder(s) that could not be listed — "
+                        "check earlier warnings.", unlistable)
+        problems = ([f"{stat_errors} file(s) could not be read"] if stat_errors else []) + \
+                   ([f"{unlistable} folder(s) could not be listed"] if unlistable else [])
+        status_msg = (f"Audit complete. {' and '.join(problems)} — check logs." if problems
+                      else "Audit complete.")
         set_state(status_message=status_msg, last_scan_status="ok")
     except _SourceAnomaly as e:
         # Not an error path: the scan ran, decided its own inputs were not

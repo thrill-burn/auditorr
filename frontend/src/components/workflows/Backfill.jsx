@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from '../../api'
 import { formatBytes } from '../../utils'
+import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
   LabeledChips, IndexerChips, FolderChips, SortPicker, CountPicker,
   SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError, ArrErrorsWarning,
@@ -17,6 +18,15 @@ import {
 // copy here could only ever disagree with the search it is counting (B1).
 
 const pad2 = n => String(n).padStart(2, '0')
+
+// How a row says what became of its grab. Only `done` is an import auditorr
+// watched happen; the rest are the other ways a watch can end (Phase 12, S07).
+const IMPORT_LABEL = {
+  queued: 'Queued…', downloading: 'Downloading…', importing: 'Importing…',
+  done: '✓ Imported', error: 'Import failed', failed: 'Download failed',
+  unreadable: 'Could not check', unobserved: 'Never queued',
+  no_new_file: 'No new file', timed_out: 'Still downloading', unconfirmed: 'Unconfirmed',
+}
 
 // What the row searches for, said on the row. A pack and an episode are two
 // different actions and must not share a label: "S01 · 10 ep" used to mean
@@ -197,7 +207,7 @@ function ResultItem({ item }) {
     if (message !== undefined) setGrabErrors(s => ({ ...s, [key]: message }))
   }, [])
 
-  const startImportWatch = useCallback(async () => {
+  const startImportWatch = useCallback(async (release) => {
     if (importStartedRef.current || !item.arr_id) return
     importStartedRef.current = true
     try {
@@ -214,6 +224,10 @@ function ResultItem({ item }) {
         // scopes a force import to their episodes, so a download can never be
         // forced in over files other torrents are hardlinked to (B11).
         file_ids:      item.file_ids || [],
+        // The grabbed release's info hash, when its indexer gave one. It is how
+        // the watch tells this download from another of the same title in the
+        // arr's queue — the grab's own answer carries no download id (S07).
+        info_hash:     release?.info_hash || undefined,
       })
       window.dispatchEvent(new CustomEvent('auditorr:import_started'))
       if (!mountedRef.current) return
@@ -224,7 +238,7 @@ function ResultItem({ item }) {
           if (!mountedRef.current) return
           setImportStatus(data.status)
           setImportMessage(data.message)
-          if (['queued', 'downloading', 'importing'].includes(data.status)) {
+          if (WATCH_ACTIVE.includes(data.status)) {
             importPollRef.current = setTimeout(poll, 3000)
           }
         } catch (_) {}
@@ -280,7 +294,7 @@ function ResultItem({ item }) {
           try {
             await api.grabRelease(grabBody(fresh, false))
             setGrab(key, 'grabbed')
-            startImportWatch()
+            startImportWatch(fresh)
           } catch (err2) {
             // Never a second automatic retry.
             if (mountedRef.current) grabFailed(key, err2)
@@ -304,7 +318,7 @@ function ResultItem({ item }) {
     try {
       await api.grabRelease(grabBody(release, force))
       setGrab(key, 'grabbed')
-      startImportWatch()
+      startImportWatch(release)
     } catch (err) {
       // Only a stale guid is re-searched: it is the one failure a fresh search
       // fixes. Anything else is shown as it is — a timeout may be a grab the
@@ -450,17 +464,11 @@ function ResultItem({ item }) {
         {/* Import status (auto-starts after any grab) */}
         {importStatus && (
           <span style={{ fontSize: 10, fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {['queued', 'downloading', 'importing'].includes(importStatus) && (
+            {WATCH_ACTIVE.includes(importStatus) && (
               <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
             )}
-            <span style={{
-              color: importStatus === 'done' ? 'var(--green)' : importStatus === 'error' ? 'var(--red)' : 'var(--text-dim)',
-            }} title={importMessage}>
-              {importStatus === 'queued'      && 'Queued…'}
-              {importStatus === 'downloading' && 'Downloading…'}
-              {importStatus === 'importing'   && 'Importing…'}
-              {importStatus === 'done'        && '✓ Imported'}
-              {importStatus === 'error'       && 'Import failed'}
+            <span style={{ color: watchColor(importStatus) }} title={importMessage}>
+              {IMPORT_LABEL[importStatus] || importStatus}
             </span>
           </span>
         )}

@@ -110,6 +110,51 @@ over it.
 
 ---
 
+## A scan refused to save its results
+
+**Symptom:** the status message starts with *Source anomaly*, Audit History shows
+a run marked `anomaly`, and every figure still describes the last scan that
+completed.
+
+That is deliberate. "Orphaned" is not something auditorr reads off a file — it
+means *no torrent in your client claims this path*, worked out by joining your
+client's answer to what is on disk. A scan whose view of either is implausible
+would rewrite your file lists, health score and change log with a fiction, and
+some of that can't be taken back. So auditorr keeps the last good scan and tells
+you which check failed:
+
+| The message says | What it means | What to do |
+|---|---|---|
+| …instance(s) did not answer, or listed only part of their torrents | a qui instance failed, or its listing stopped short of the total it advertised | get every instance connected and answering, then scan again |
+| …would not report their files, and their payload could not be found on disk | more than a quarter of your torrents' file listings failed | check [Path Mappings](configuration.md#path-mappings), and that the client is answering |
+| The torrent client reported N torrent(s), down from… | far fewer torrents than lately — a real removal, or a client that lost its session | if the drop is real, run a **manual scan** to accept it |
+| The torrent client accounted for no files at all… | the client answered with nothing while your torrent folder is full | as above |
+| The torrent/media folder is not there | the folder isn't mounted into the container | fix the mount, then scan again |
+| …folder(s) at a category or release level could not be listed | a permissions problem | give the user auditorr runs as read access to it |
+| The torrent/media folder holds N file(s), down from… | far fewer files than lately — a real deletion, or a mount that came back empty | if it's real, run a **manual scan** to accept it |
+
+**A manual scan accepts a change; it never accepts a failed read.** A library
+really can shrink, and a manual scan is how you say so. But asking for a refresh
+doesn't make an unanswered instance, an incomplete listing or a missing folder
+any more readable, so those refuse however the scan was started, and the message
+says what to fix instead.
+
+Counts are compared against the **largest of the last seven days**, not just
+against the previous scan, so a client losing torrents in instalments is caught
+rather than accepted 40% at a time. Accepting a drop by hand restarts that
+window from the scan you accepted.
+
+**If a folder wasn't mounted yet at startup**, auditorr retries at one, two and
+five minutes before recording a failure — an array or a network share can take
+that long. A scan is otherwise next attempted on the scheduled interval, so if
+you fixed a mount, start a scan yourself rather than waiting for it.
+
+The debug report's `source_health` section carries the last report (including how
+many files were walked per root and any folders that couldn't be listed), the
+reference counts and the last refusal.
+
+---
+
 ## Memory usage stays high after a scan
 
 This is expected and is not a leak.

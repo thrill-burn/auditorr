@@ -31,6 +31,7 @@ import pytest
 
 import app
 from arr import parse_release_info_for_path, rank_arr_candidates
+from backend_tests.test_backfill_import_scope import _watch as _watch_import
 
 NAME = 'Rel.2020.1080p.WEB-DL-GRP'
 SP = '/data/torrents/movies'
@@ -291,15 +292,23 @@ class _Thread:
         _Thread.started.append(self.target)
 
 
-def _execute(body, rows=ROWS3, paths=SHARED3, cfg=None, queue=None, thread=_Thread, list_error=None):
+def _execute(body, rows=ROWS3, paths=SHARED3, cfg=None, queue=None, thread=_Thread, list_error=None,
+             grab=None, remove_error=None, listings=None):
+    """`listings`, when given, answers successive client listings in turn (the
+    last one repeats) — what the group looks like before the grab, then after."""
     cfg = {'ALLOW_CLIENT_DELETE': True, **(cfg or {})}
     _Thread.started = []
-    remove = MagicMock(side_effect=lambda _c, items, delete_files=True: len(items))
-    grab = MagicMock(return_value={})
+    remove = MagicMock(side_effect=remove_error if remove_error
+                       else (lambda _c, items, delete_files=True: len(items)))
+    grab = grab or MagicMock(return_value={})
     fetch = MagicMock(side_effect=lambda _c, items: {i['hash']: paths.get(i['hash'])
                                                      for i in items if i['hash'] in paths})
-    listing = (MagicMock(side_effect=list_error) if list_error
-               else MagicMock(return_value=list(rows)))
+    if listings:
+        answers = [list(r) for r in listings]
+        listing = MagicMock(side_effect=lambda _c: answers.pop(0) if len(answers) > 1 else list(answers[0]))
+    else:
+        listing = (MagicMock(side_effect=list_error) if list_error
+                   else MagicMock(return_value=list(rows)))
     with patch.object(app, 'db_load_config', return_value=cfg), \
          patch.object(app.sources, 'list_torrents', listing), \
          patch.object(app.sources, 'fetch_torrent_file_paths', fetch), \
@@ -431,6 +440,139 @@ class TestGrabWithoutDeleting:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# S09, Trumped's half (the 2026-09-10 outside review) — execute is one
+# operation, and a failed stage leaves the user holding something
+# ═════════════════════════════════════════════════════════════════════════════
+
+SWAP = dict(RELEASE, hashes=_items('aaa', 'bbb', 'ccc'), seed_hashes=['aaa'])
+
+
+def _stages(resp):
+    return {s['stage']: s for s in resp.get_json().get('stages') or []}
+
+
+def _kingmaker_paid(m):
+    return bool([c for c in m.meta.call_args_list if c[0][0] == 'ns_progress'])
+
+
+class TestExecuteIsOneOperation:
+
+    def test_the_same_operation_id_grabs_once(self):
+        """B12's queue check only sees a download the arr has already queued, so
+        two submits inside that window both went through: 200, 200, two grabs.
+        The page mints an operation id when the user confirms, and one id is one
+        operation however many times it arrives."""
+        body = dict(RELEASE, operation_id='s09-grab-once')
+        first, m1 = _execute(body)
+        second, m2 = _execute(body)
+
+        assert first.status_code == 200 and second.status_code == 200
+        assert m1.grab.call_count + m2.grab.call_count == 1
+        assert second.get_json()['replayed'] is True
+
+    def test_a_replayed_operation_returns_its_result_and_acts_again_never(self):
+        body = dict(SWAP, operation_id='s09-replay')
+        first, _m1 = _execute(body)
+        second, m2 = _execute(body)
+
+        m2.remove.assert_not_called()
+        m2.grab.assert_not_called()
+        assert not _kingmaker_paid(m2), 'Kingmaker is paid once per operation'
+        replay, original = second.get_json(), first.get_json()
+        assert replay['replayed'] is True and not original.get('replayed')
+        assert replay['removed'] == original['removed'] == 3
+        assert replay['watch_job_id'] == original['watch_job_id']
+
+    def test_an_operation_still_running_is_not_started_twice(self):
+        client = app.app.test_client()
+        nested = []
+
+        def grab_and_resubmit(*_a, **_k):
+            if not nested:
+                nested.append(client.post('/api/workflows/trump/execute',
+                                          json=dict(RELEASE, operation_id='s09-busy')))
+            return {}
+
+        resp, _m = _execute(dict(RELEASE, operation_id='s09-busy'),
+                            grab=MagicMock(side_effect=grab_and_resubmit))
+        assert resp.status_code == 200
+        assert nested[0].status_code == 409
+        assert nested[0].get_json()['code'] == 'in_progress'
+
+    def test_a_request_with_no_operation_id_proceeds_as_before(self):
+        """A page from before the id existed. Nothing to replay it against."""
+        _r1, m1 = _execute(dict(RELEASE))
+        _r2, m2 = _execute(dict(RELEASE))
+        assert m1.grab.call_count == m2.grab.call_count == 1
+
+    def test_a_refusal_before_anything_acts_does_not_use_up_the_id(self):
+        """A 409 the user answers — acknowledging a partial group — is the same
+        confirmation carried forward, and must not replay the refusal."""
+        paths = dict(SHARED3, ccc=None)
+        body = {'hashes': _items('aaa', 'bbb'), 'seed_hashes': ['aaa'], 'operation_id': 's09-ack'}
+        refused, _m = _execute(body, paths=paths)
+        accepted, m = _execute(dict(body, acknowledge_partial=True), paths=paths)
+        assert refused.status_code == 409
+        assert accepted.status_code == 200
+        m.remove.assert_called_once()
+
+
+class TestGrabFirst:
+    """The user's decision 3 (a), 2026-09-15: grab, and remove only once the arr
+    has accepted the grab. Its POST returns only after the torrent is handed to
+    the download client (checked against both arrs' ReleaseController)."""
+
+    def test_a_failed_grab_removes_nothing(self):
+        """The old order removed the payload with its files, then grabbed; a grab
+        that raised after the delete answered 200 with `removed 3, grabbed false`
+        — the old files gone and nothing on its way."""
+        resp, m = _execute(dict(SWAP), grab=MagicMock(side_effect=RuntimeError('indexer down')))
+
+        m.remove.assert_not_called()
+        body, stages = resp.get_json(), _stages(resp)
+        assert body['grabbed'] is False and body['removed'] == 0
+        assert stages['grab']['status'] == 'failed'
+        assert stages['remove']['status'] == 'skipped'
+        assert not _kingmaker_paid(m)
+
+    def test_a_failed_removal_after_a_grab_is_reported_not_hidden(self):
+        """The safe failure of the new order: the replacement is on its way and
+        the old torrents are still in the client, and the answer says both."""
+        resp, m = _execute(dict(SWAP),
+                           remove_error=app.sources.SourceConnectionError('qui went away'))
+
+        m.grab.assert_called_once()
+        assert resp.status_code == 200
+        body, stages = resp.get_json(), _stages(resp)
+        assert body['grabbed'] is True and body['removed'] == 0
+        assert stages['remove']['status'] == 'failed'
+        assert 'still in' in stages['remove']['message']
+        assert body['watch_job_id'], 'the grab is still followed into the library'
+        assert not _kingmaker_paid(m)
+
+    def test_a_replacement_that_joins_the_group_is_not_removed_with_it(self):
+        """Grab-first's one new risk. A replacement saved on the same paths as the
+        trumped torrents — a re-upload under the same name — shares their files,
+        so removing them with their files would delete it. The group is resolved
+        again after the grab, and a group the replacement joined is not removed."""
+        joined = list(ROWS3) + [_row('ddd', tracker='aither.cc')]
+        resp, m = _execute(dict(SWAP), paths=dict(SHARED3, ddd=[SHARED]),
+                           listings=[ROWS3, joined])
+
+        m.grab.assert_called_once()
+        m.remove.assert_not_called()
+        remove = _stages(resp)['remove']
+        assert remove['status'] == 'failed' and remove['code'] == 'group_changed'
+        assert 'still in' in remove['message']
+
+    def test_the_stages_say_what_happened_on_a_clean_swap(self):
+        resp, _m = _execute(dict(SWAP))
+        assert {k: v['status'] for k, v in _stages(resp).items()} == {
+            'reverify': 'done', 'queue_check': 'done', 'grab': 'done',
+            'remove': 'done', 'watch': 'done'}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # TR9 + TR10 — follow the grab to the import, then scan
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -474,51 +616,24 @@ class TestFollowThrough:
         assert resp.status_code == 200
         assert 'backfilled' not in (store.get('ns_progress') or {})
 
-    def _run_watch(self, body, source):
-        """Drive the watch thread inline; the audit thread it may start is recorded, not run."""
-        scans = []
-
-        class _Sync:
-            def __init__(self, target=None, args=(), **_kw):
-                self.target = target
-
-            def start(self):
-                if self.target is app.run_audit_process:
-                    scans.append(self.target)
-                else:
-                    self.target()
-
-        fmi = MagicMock()
-        polls = iter([[{'trackedDownloadState': 'importPending', 'downloadId': 'HASH',
-                        'outputPath': '/downloads/Show.S01', 'statusMessages': []}], [], [], []])
-        with patch.object(app, 'db_load_config', return_value={}), \
-             patch.object(app, 'db_update_meta'), \
-             patch.object(app.threading, 'Thread', _Sync), \
-             patch.object(app.time, 'sleep'), \
-             patch.object(app, 'get_arr_file_id', return_value=[1]), \
-             patch.object(app, 'poll_queue_until_clear', side_effect=lambda *a, **k: next(polls)), \
-             patch.object(app, 'sonarr_episodes_by_file', return_value={501: [(101, 1, 1)]}), \
-             patch.object(app, 'force_manual_import_by_id', fmi), \
-             patch.object(app, 'try_start_scanning', return_value=True) as scan:
-            resp = app.app.test_client().post('/api/workflows/watch_import',
-                                              json=dict(body, source=source))
-        return resp, fmi, scan, scans
+    # The shared watch, against the arr `test_backfill_import_scope` fakes only at
+    # `arr._arr_get` (Phase 12, S07) — so the queue poll and the file-id reader
+    # are the real ones. These two used to mock the poll with lists; their
+    # scenario is kept, on that file's connection ids.
+    _SHOW = {'service': 'sonarr', 'connection_id': 'sonarr-tv', 'arr_id': 1,
+             'title': 'Show', 'file_ids': [501]}
 
     def test_a_trump_import_scopes_to_the_trumped_files_and_then_scans(self):
-        body = {'service': 'sonarr', 'connection_id': 's1', 'arr_id': 5,
-                'title': 'Show', 'file_ids': [501]}
-        resp, fmi, scan, scans = self._run_watch(body, 'trump')
-        assert resp.status_code == 200
-        assert fmi.call_args.kwargs['only_episode_ids'] == [101]
-        scan.assert_called_once_with('trump')
-        assert scans == [app.run_audit_process]
+        out = _watch_import(dict(self._SHOW, source='trump'))
+        assert out.force.call_args.kwargs['only_episode_ids'] == [101]
+        out.scan.assert_called_once_with('trump')
+        assert out.scans == [app.run_audit_process]
 
     def test_a_backfill_import_still_leaves_the_scan_to_the_watchdog(self):
-        body = {'service': 'sonarr', 'connection_id': 's1', 'arr_id': 5,
-                'title': 'Show', 'file_ids': [501]}
-        resp, fmi, scan, scans = self._run_watch(body, 'backfill')
-        scan.assert_not_called()
-        assert scans == []
+        out = _watch_import(dict(self._SHOW, source='backfill'))
+        assert out.watch['status'] == 'done'
+        out.scan.assert_not_called()
+        assert out.scans == []
 
 
 # ═════════════════════════════════════════════════════════════════════════════

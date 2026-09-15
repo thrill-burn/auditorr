@@ -618,12 +618,16 @@ def build_debug_report(version):
         # so they go through the same sanitizer as every other path in here.
         'source_health': {
             '_readme': (
-                'baseline: the client figures the next scan is measured against — '
-                'advanced only by a scan that persisted. last_report: completeness '
-                'of the last scan that persisted. last_anomaly: why a scan refused '
-                'to persist its orphan classification (cleared by a clean scan).'
+                'baseline: the client and disk counts of the last scan that '
+                'persisted. reference: one point a day, the largest counts persisted '
+                'that day, for the last 7 days — a collapse is measured against the '
+                'largest of them. last_report: completeness of the last scan that '
+                'persisted, with a filesystem block per root (files walked, folders '
+                'that could not be listed). last_anomaly: why a scan refused to '
+                'persist (cleared by a clean scan).'
             ),
             'baseline':    db_get_meta('source_baseline'),
+            'reference':   db_get_meta('source_reference'),
             'last_report': (lambda r: {
                 **r, 'notes': [sanitize_text(n) for n in (r.get('notes') or [])],
                 'instances_failed': [

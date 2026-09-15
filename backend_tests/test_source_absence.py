@@ -14,7 +14,9 @@ uncovered was every line that decides what gets deleted.
 
 import os
 import sys
+import tempfile
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -249,6 +251,96 @@ class QuiFilePathsTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# S02 (the 2026-09-10 outside review) — a successful response is not a complete
+# snapshot. qui pages its listing, and the loop stopped on a short page without
+# comparing what it had against the `total` the first page advertised.
+# qbit has no equivalent: `torrents_info()` is one call that returns every
+# torrent or raises.
+# ---------------------------------------------------------------------------
+
+class QuiShortListingTests(unittest.TestCase):
+    CFG = {'QUI_HOST': 'http://qui:7476', 'QUI_API_KEY': 'k', 'TORRENT_SOURCE': 'qui',
+           'LOCAL_PATH': '/data/torrents', 'REMOTE_PATH': '/data/torrents'}
+
+    @staticmethod
+    def _torrent(h):
+        return {'hash': h, 'name': h, 'save_path': '/data/torrents/movies', 'size': 1,
+                'state': 'uploading', 'progress': 1.0, 'completion_on': 1789000000}
+
+    def _session(self, pages, total=None):
+        """`pages[n]` answers page n; a page past the end is empty."""
+        class _Resp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        class _Sess:
+            headers = {}
+
+            def get(_self, url, **kw):
+                if url.endswith('/api/instances'):
+                    return _Resp([{'id': 1, 'name': 'main', 'connected': True,
+                                   'hasLocalFilesystemAccess': True}])
+                if url.endswith('/torrents'):
+                    page = (kw.get('params') or {}).get('page', 0)
+                    body = {'torrents': pages[page] if page < len(pages) else []}
+                    if total is not None:
+                        body['total'] = total
+                    return _Resp(body)
+                return _Resp([])
+
+        return _Sess()
+
+    def test_a_short_qui_page_short_of_total_is_a_failed_listing(self):
+        """The first page advertised three torrents and carried one. The loop
+        stopped on the short page and the instance was counted as answered —
+        `instances_ok 1`, `partial false` — so a scan built on it read two live
+        torrents' files as orphans, and Trumped and Cleanup's re-verify took the
+        short list for the client's whole answer."""
+        sess = self._session([[self._torrent('aaa')]], total=3)
+        with patch.object(_qui, '_session', return_value=sess):
+            _rows, report = _qui.list_torrents(self.CFG)
+            _map, _t, _s, scan_report = _qui.fetch_file_map(self.CFG)
+        self.assertEqual(report['instances_ok'], 0)
+        self.assertEqual(len(report['instances_failed']), 1)
+        self.assertIn('1 of 3', report['instances_failed'][0]['reason'])
+        self.assertEqual(len(scan_report['instances_failed']), 1)
+        self.assertEqual(source_plausibility(scan_report, None)['code'], 'instances_unavailable')
+        with patch.object(_qui, '_session', return_value=sess), \
+                self.assertRaises(sources.SourceConnectionError):
+            sources.list_torrents(self.CFG)
+
+    def test_a_listing_that_reaches_its_total_is_complete(self):
+        sess = self._session([[self._torrent(h) for h in ('aaa', 'bbb', 'ccc')]], total=3)
+        with patch.object(_qui, '_session', return_value=sess):
+            rows, report = _qui.list_torrents(self.CFG)
+        self.assertEqual((len(rows), report['instances_ok'], report['instances_failed']), (3, 1, []))
+
+    def test_with_no_total_a_short_page_ends_the_listing(self):
+        """Where the API omits `total`, a page shorter than the limit is the last
+        page by the API's own convention — the only evidence there is."""
+        sess = self._session([[self._torrent('aaa')]])
+        with patch.object(_qui, '_session', return_value=sess):
+            rows, report = _qui.list_torrents(self.CFG)
+        self.assertEqual((len(rows), report['instances_ok']), (1, 1))
+
+    def test_with_no_total_a_full_page_of_repeats_is_not_complete(self):
+        """A full page followed by the same page again: the API is ignoring the
+        page parameter, and nothing shows the list stops at one page."""
+        page = [self._torrent(f'h{i:04d}') for i in range(2000)]
+        sess = self._session([page, page])
+        with patch.object(_qui, '_session', return_value=sess):
+            _rows, report = _qui.list_torrents(self.CFG)
+        self.assertEqual(report['instances_ok'], 0)
+        self.assertEqual(len(report['instances_failed']), 1)
+
+
+# ---------------------------------------------------------------------------
 # TR1b — list_torrents polarity. qbit raises, qui logged and carried on.
 # ---------------------------------------------------------------------------
 
@@ -364,6 +456,93 @@ class PlausibilityGuardTests(unittest.TestCase):
             {'torrent_count': 1000, 'file_map_size': 5000}, disk_file_count=4900))
 
 
+class ReferenceBaselineTests(unittest.TestCase):
+    """S02, decision 2 (a): collapse is measured against the largest count
+    persisted in a window, not only against the scan before — or a client losing
+    torrents in instalments, or a pruning script run twice, passes each time."""
+    NOW = datetime(2026, 9, 15, 12, 0)
+
+    def _point(self, days_ago, torrents, files=100):
+        return {'day': (self.NOW - timedelta(days=days_ago)).date().isoformat(),
+                'torrent_count': torrents, 'file_map_size': torrents,
+                'torrent_files': files, 'media_files': files}
+
+    def test_the_reference_is_the_largest_count_in_the_window(self):
+        points = [self._point(3, 100), self._point(1, 60)]
+        ref = audit.reference_counts(points, {'torrent_count': 60, 'file_map_size': 60}, now=self.NOW)
+        self.assertEqual(ref['torrent_count'], 100)
+        self.assertEqual(source_plausibility(_report(torrent_count=36, file_map_size=36),
+                                             ref)['code'], 'torrent_count_collapse')
+
+    def test_a_point_older_than_the_window_is_forgotten(self):
+        points = [self._point(audit._GUARD_REFERENCE_DAYS + 1, 1000), self._point(0, 60)]
+        ref = audit.reference_counts(points, None, now=self.NOW)
+        self.assertEqual(ref['torrent_count'], 60)
+        kept = audit.advance_reference(points, self._point(0, 60), now=self.NOW)
+        self.assertEqual([p['torrent_count'] for p in kept], [60])
+
+    def test_one_point_a_day_holding_the_days_largest_counts(self):
+        points = audit.advance_reference([], self._point(0, 100), now=self.NOW)
+        points = audit.advance_reference(points, self._point(0, 60), now=self.NOW)
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]['torrent_count'], 100)
+
+    def test_an_accepted_drop_resets_the_reference(self):
+        points = [self._point(2, 100)]
+        points = audit.advance_reference(points, self._point(0, 40), now=self.NOW, reset=True)
+        self.assertEqual(audit.reference_counts(points, None, now=self.NOW)['torrent_count'], 40)
+
+    def test_an_install_with_only_the_old_baseline_is_still_measured(self):
+        """Every install upgrading into Phase 12 has a `source_baseline` and no
+        points yet; the first scan must not be waved through for want of them."""
+        ref = audit.reference_counts(None, {'torrent_count': 1000, 'file_map_size': 5000}, now=self.NOW)
+        self.assertEqual((ref['torrent_count'], ref['file_map_size']), (1000, 5000))
+
+
+class FilesystemPlausibilityTests(unittest.TestCase):
+    """S03 — the filesystem half of R1. Codes and counts only, never a path."""
+
+    def test_a_configured_root_that_is_not_there_is_missing(self):
+        anomaly = audit.filesystem_plausibility(
+            'media', {'configured': True, 'exists': False}, None)
+        self.assertEqual((anomaly['code'], anomaly['detail']['root']), ('root_missing', 'media'))
+
+    def test_an_unconfigured_root_is_not_missing(self):
+        self.assertIsNone(audit.filesystem_plausibility(
+            'media', {'configured': False, 'exists': False}, None))
+
+    def test_an_unlistable_folder_near_the_root_refuses_and_a_deep_one_is_only_counted(self):
+        shallow = {'configured': True, 'exists': True, 'files': 50,
+                   'unlistable': 1, 'unlistable_shallow': 1}
+        deep = dict(shallow, unlistable_shallow=0)
+        self.assertEqual(audit.filesystem_plausibility('torrents', shallow, None)['code'],
+                         'root_unlistable')
+        self.assertIsNone(audit.filesystem_plausibility('torrents', deep, None))
+
+    def test_a_walk_far_below_the_reference_is_a_collapse(self):
+        block = {'configured': True, 'exists': True, 'files': 0, 'unlistable': 0,
+                 'unlistable_shallow': 0}
+        anomaly = audit.filesystem_plausibility('media', block, {'media_files': 400})
+        self.assertEqual(anomaly['code'], 'disk_collapse')
+
+    def test_a_tiny_or_growing_tree_is_not_held_to_the_percentages(self):
+        block = {'configured': True, 'exists': True, 'files': 1, 'unlistable': 0,
+                 'unlistable_shallow': 0}
+        self.assertIsNone(audit.filesystem_plausibility('media', block, {'media_files': 4}))
+        self.assertIsNone(audit.filesystem_plausibility(
+            'media', dict(block, files=900), {'media_files': 400}))
+
+    def test_a_client_holding_files_over_an_empty_torrent_folder_needs_no_baseline(self):
+        """`client_blackout`'s mirror, and for the same reason: the worst case —
+        a first scan landing on an empty bind mount — has no baseline to compare
+        against. The client says these files are under the torrent folder."""
+        block = {'configured': True, 'exists': True, 'files': 0, 'unlistable': 0,
+                 'unlistable_shallow': 0}
+        anomaly = audit.filesystem_plausibility('torrents', block, None, file_map_size=40)
+        self.assertEqual(anomaly['code'], 'disk_collapse')
+        self.assertIsNone(audit.filesystem_plausibility('torrents', block, None, file_map_size=0))
+
+
 class GuardOverrideTests(unittest.TestCase):
     BAD = dict(torrent_count=0, file_map_size=0)
     PREV = {'torrent_count': 1000, 'file_map_size': 5000}
@@ -379,9 +558,32 @@ class GuardOverrideTests(unittest.TestCase):
         with self.assertRaises(_SourceAnomaly):
             _guard_scan(_report(**self.BAD), self.PREV, 'startup', disk_file_count=5000)
 
-    def test_a_manual_scan_is_the_override(self):
+    def test_a_manual_scan_accepts_a_change_in_what_the_client_holds(self):
+        """Rewritten in Phase 12 under the user's decision 1 (a), fixture kept.
+        This was `test_a_manual_scan_is_the_override`, for every rule. A client
+        that really holds fewer torrents is accepted by hand; the two tests below
+        are the reads that never are."""
         anomaly = _guard_scan(_report(**self.BAD), self.PREV, 'manual', disk_file_count=5000)
-        self.assertIsNotNone(anomaly)
+        self.assertEqual(anomaly['code'], 'torrent_count_collapse')
+
+    def test_a_manual_scan_never_accepts_an_instance_that_did_not_answer(self):
+        report = _report(torrent_count=600, file_map_size=3000, instances_total=2)
+        sources.report_instance_failure(report, 'second', 'timed out')
+        with self.assertRaises(_SourceAnomaly):
+            _guard_scan(report, self.PREV, 'manual', disk_file_count=5000)
+
+    def test_a_manual_scan_never_accepts_listings_that_could_not_be_read(self):
+        report = _report(torrent_count=1000, listing_failures=400, listing_unresolved=400,
+                         file_map_size=4800)
+        with self.assertRaises(_SourceAnomaly):
+            _guard_scan(report, self.PREV, 'manual', disk_file_count=5000)
+
+    def test_a_blackout_is_a_change_a_manual_scan_may_accept(self):
+        """The client answered, with nothing — which a user who emptied their
+        client really can have. It is the no-baseline form of the collapse rules,
+        and is classified with them."""
+        anomaly = _guard_scan(_report(**self.BAD), None, 'manual', disk_file_count=5000)
+        self.assertEqual(anomaly['code'], 'client_blackout')
 
 
 # ---------------------------------------------------------------------------
@@ -755,13 +957,56 @@ class WalkCarriesCompletionTests(unittest.TestCase):
                            'tracker_msg': '', 'incomplete': True}}
         inode_map = {}
         st = os.stat_result((0o100644, 42, 1, 1, 0, 0, 100, 0, 0, 0))
-        with patch.object(audit.os.path, 'exists', lambda p: True), \
+        # `isdir` and an `onerror`-accepting walk since Phase 12 (S03): the walk
+        # checks its root is a directory, and reports what it could not list.
+        with patch.object(audit.os.path, 'isdir', lambda p: True), \
              patch.object(audit.os, 'walk',
-                          lambda p: [(os.path.join(base, 'movies'), [], ['b.mkv'])]), \
+                          lambda p, **kw: [(os.path.join(base, 'movies'), [], ['b.mkv'])]), \
              patch.object(audit.os, 'stat', lambda p: st):
             _walk_directory(base, 'Torrent', inode_map, file_map, 0, 0,
                             exclusion_patterns=[], total_ref=[0])
         self.assertTrue(inode_map[(st.st_dev, st.st_ino)]['incomplete'])
+
+
+class WalkReportsWhatItCouldNotSeeTests(unittest.TestCase):
+    """S03. The walk returned an empty result with zero stat errors for a root
+    that does not exist, and `os.walk` ran with no `onerror`, so a directory that
+    could not be listed dropped everything beneath it without a word."""
+
+    def _tree(self, base):
+        for rel in ('movies/Rel/a.mkv', 'movies/Rel/Subs/a.srt', 'tv/Show/S01/e1.mkv'):
+            path = os.path.join(base, *rel.split('/'))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb') as fh:
+                fh.write(b'x')
+
+    def test_an_unlistable_directory_is_counted_not_silent(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._tree(base)
+            refused = {os.path.normcase(os.path.join(base, 'movies', 'Rel', 'Subs')),   # depth 3
+                       os.path.normcase(os.path.join(base, 'tv', 'Show'))}              # depth 2
+            real_scandir = os.scandir
+
+            def scandir(path='.'):
+                if os.path.normcase(os.path.normpath(os.fspath(path))) in refused:
+                    raise PermissionError(13, 'Permission denied', os.fspath(path))
+                return real_scandir(path)
+
+            walk = {}
+            with patch('os.scandir', scandir):
+                _walk_directory(base, 'Torrent', {}, {}, 0, 0, exclusion_patterns=[],
+                                total_ref=[0], walk_report=walk)
+        self.assertEqual(walk['files'], 1)
+        self.assertEqual(walk['unlistable'], 2)
+        self.assertEqual(walk['unlistable_shallow'], 1)
+        self.assertTrue(walk['exists'])
+
+    def test_a_root_that_is_not_there_says_so(self):
+        walk = {}
+        with tempfile.TemporaryDirectory() as base:
+            _walk_directory(os.path.join(base, 'gone'), 'Media', {}, {}, 0, 0,
+                            exclusion_patterns=[], total_ref=[0], walk_report=walk)
+        self.assertEqual((walk['configured'], walk['exists'], walk['files']), (True, False, 0))
 
 
 class TriageCompletionTests(unittest.TestCase):

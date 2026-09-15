@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
+import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
   WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
   Checkbox, Spinner, SpinKeyframes, ActionButton, HDR_STYLE,
@@ -29,7 +30,14 @@ The General 1926 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes.
 
 Reason: DV/HDR replacing HDR`
 
-const WATCH_ACTIVE = ['queued', 'downloading', 'importing']
+// One confirmation is one operation (S09): the server records this id before it
+// acts, refuses a second request carrying it while the first runs, and replays
+// the first one's answer afterwards rather than grabbing again. `randomUUID` is
+// missing outside a secure context, which a LAN install over http is.
+const newOperationId = () => (
+  (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
+).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)
 
 // ── Step scaffold ─────────────────────────────────────────────────────────────
 function StepShell({ n, active, done, title, children }) {
@@ -389,6 +397,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
 
   const mountedRef   = useRef(true)
   const watchPollRef = useRef(null)
+  const operationRef = useRef(null)   // this confirmation's operation id (S09)
   useEffect(() => () => { mountedRef.current = false; clearTimeout(watchPollRef.current) }, [])
 
   useEffect(() => {
@@ -412,6 +421,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
     setIndexer(''); setPicks(null); setSelected({}); setGroup(null)
     setSearch(null); setConflict(null); setChosenRelease(null); setError(null); setResult(null)
     setOnlyCopy(null); setQueued(null); setWatch(null); clearTimeout(watchPollRef.current)
+    operationRef.current = null
   }, [])
 
   const handleParse = async () => {
@@ -503,13 +513,18 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
 
   const handleExecute = async ({ remove, ackOnlyCopy = false, force = false }) => {
     setBusy('execute'); setError(null); setQueued(null)
+    // Minted on the confirmation and kept until an answer arrives, so a retry of
+    // a request whose answer never came resends it rather than grabbing twice.
+    if (!operationRef.current) operationRef.current = newOperationId()
     try {
       const r = await api.trumpExecute({
+        operation_id: operationRef.current,
         hashes: remove ? group.torrents.map(t => ({ hash: t.hash, instance_id: t.instance_id })) : [],
         seed_hashes: remove ? group.seed_hashes : undefined,
         acknowledge_partial: remove && ackPartial,
         acknowledge_only_copy: remove && ackOnlyCopy,
-        release: chosenRelease ? { guid: chosenRelease.guid, indexer_id: chosenRelease.indexer_id } : null,
+        release: chosenRelease ? { guid: chosenRelease.guid, indexer_id: chosenRelease.indexer_id,
+                                   info_hash: chosenRelease.info_hash || undefined } : null,
         service: search?.service,
         connection_id: search?.connection_id,
         arr_id: search?.arr_id,
@@ -517,16 +532,25 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
         library_file_ids: search?.library_file_ids || [],
         force: force || undefined,
       })
+      operationRef.current = null
       setResult(r)
       setOnlyCopy(null)
       if (r.watch_job_id) followImport(r.watch_job_id)
       const parts = []
-      if (r.removed) parts.push(`Removed ${r.removed} torrent${r.removed !== 1 ? 's' : ''}`)
-      if (r.grabbed === true) parts.push(r.removed ? 'grabbed the replacement' : 'Grabbed the replacement')
-      if (r.grabbed === false) parts.push(`the grab failed (${r.grab_error})`)
-      toast(parts.join(' and ') || 'Done', r.grabbed === false ? 'error' : 'success')
+      if (r.grabbed === true) parts.push('Grabbed the replacement')
+      if (r.grabbed === false) parts.push(`The grab failed (${r.grab_error}) — nothing was removed`)
+      if (r.removed) parts.push(`removed ${r.removed} torrent${r.removed !== 1 ? 's' : ''}`)
+      if (r.removal_error) parts.push('but the old torrents are still in your client')
+      toast(parts.join(' and ') || 'Done',
+            r.grabbed === false || r.removal_error ? 'error' : 'success')
     } catch (e) {
-      if (e.code === 'only_copy') {
+      // An answer arrived, whatever it said, so this confirmation is spent: the
+      // next attempt is a new operation. Only a request that got no answer at
+      // all keeps its id, which is what makes a retry safe.
+      if (e.data) operationRef.current = null
+      if (e.code === 'in_progress') {
+        setError(e.message)
+      } else if (e.code === 'only_copy') {
         setOnlyCopy(e.data)
       } else if (e.code === 'group_changed') {
         // Back to step 3: the picks stay, the group is re-resolved on one click.
@@ -801,17 +825,27 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
         </StepShell>
 
         {/* Step 5 — execute */}
-        <StepShell n={5} active={step5 && result == null} done={result != null} title="Remove the group & grab the replacement">
+        <StepShell n={5} active={step5 && result == null} done={result != null} title="Grab the replacement & remove the group">
           {result ? (
             <div style={{ fontSize: 12, color: 'var(--text)', lineHeight: 1.7 }}>
-              {result.removed > 0 && <>✓ Removed <b>{result.removed}</b> torrent{result.removed !== 1 ? 's' : ''} and their files.{' '}</>}
-              {result.grabbed === true && (result.removed > 0
-                ? <>Replacement grabbed.</>
-                : <>✓ Replacement grabbed. The trumped torrents are still in {clientName} — remove them there.</>)}
-              {result.grabbed === false && <span style={{ color: 'var(--red)' }}>Grab failed: {result.grab_error}. Grab manually in the arr.</span>}
-              {result.grabbed == null && <>No release was grabbed (grab it manually if you haven't).</>}
+              {/* Stage by stage, in the order they ran (S09) — so a swap that
+                  stopped half way says which half, and what is left to do. */}
+              {(result.stages || []).filter(s => s.status !== 'skipped').map(s => (
+                <div key={s.stage} style={{ display: 'flex', gap: 6, alignItems: 'flex-start',
+                                            color: s.status === 'failed' ? 'var(--red)' : 'var(--text)' }}>
+                  <span style={{ flexShrink: 0 }}>{s.status === 'failed' ? '✗' : '✓'}</span>
+                  <span>{s.message}</span>
+                </div>
+              ))}
+              {!result.stages && <>
+                {result.grabbed === true && <>✓ Replacement grabbed.{' '}</>}
+                {result.removed > 0 && <>✓ Removed <b>{result.removed}</b> torrent{result.removed !== 1 ? 's' : ''} and their files.</>}
+              </>}
+              {result.grabbed === true && !result.removed && !result.removal_error && (
+                <div style={{ color: 'var(--text-dim)' }}>The trumped torrents are still in {clientName} — remove them there.</div>
+              )}
               {watch && (
-                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, color: watch.status === 'error' ? 'var(--red)' : watch.status === 'done' ? 'var(--green)' : 'var(--text-dim)' }}>
+                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, color: watchColor(watch.status) }}>
                   {WATCH_ACTIVE.includes(watch.status) && <Spinner size={10} />}
                   <span>Import: {watch.message}</span>
                 </div>
@@ -839,13 +873,15 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                 </WorkflowWarning>
               )}
               <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                This removes <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b> ({formatBytes(group.total_size)} payload) from {clientName} with their files
-                {chosenRelease ? ', then grabs the replacement.' : '.'} There is no undo.
+                {chosenRelease
+                  ? <>This grabs the replacement first, and removes <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b> ({formatBytes(group.total_size)} payload) from {clientName} with their files only once Sonarr/Radarr has accepted it — so a grab that fails leaves your files alone.</>
+                  : <>This removes <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b> ({formatBytes(group.total_size)} payload) from {clientName} with their files.</>}
+                {' '}There is no undo.
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <ActionButton danger onClick={handleRemove} disabled={busy != null || removeBlocked}
                   title={group?.partial && !ackPartial ? 'Acknowledge the incomplete group above first' : undefined}>
-                  {busy === 'execute' ? 'Executing…' : (chosenRelease ? 'Remove group + grab replacement' : 'Remove group')}
+                  {busy === 'execute' ? 'Executing…' : (chosenRelease ? 'Grab replacement + remove group' : 'Remove group')}
                 </ActionButton>
                 {chosenRelease && (
                   <ActionButton onClick={() => handleExecute({ remove: false })} disabled={busy != null}>
