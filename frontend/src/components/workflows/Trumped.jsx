@@ -47,7 +47,7 @@ function StepShell({ n, active, done, title, children }) {
       <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
         <span style={{
           width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 12, fontWeight: 700, fontFamily: 'var(--mono)',
+          fontSize: 'var(--font-sm)', fontWeight: 700, fontFamily: 'var(--mono)',
           border: `1.5px solid ${done || active ? ACCENT : 'var(--border2)'}`,
           background: done ? ACCENT : 'transparent',
           color: done ? '#fff' : active ? ACCENT : 'var(--text-dim)',
@@ -57,7 +57,7 @@ function StepShell({ n, active, done, title, children }) {
         <span style={{ flex: 1, width: 1.5, background: 'var(--border2)' }} />
       </div>
       <div style={{ flex: 1, minWidth: 0, paddingBottom: 22 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color, marginBottom: 10 }}>{title}</div>
+        <div style={{ fontSize: 'var(--font-md)', fontWeight: 700, color, marginBottom: 10 }}>{title}</div>
         {(active || done) && children}
       </div>
     </div>
@@ -67,13 +67,13 @@ function StepShell({ n, active, done, title, children }) {
 function Field({ label, value, onChange, mono }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 }}>
-      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{label}</span>
+      <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{label}</span>
       <input
         value={value} onChange={e => onChange(e.target.value)}
         style={{
           padding: '7px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)',
           background: 'var(--surface2)', color: 'var(--text)',
-          fontFamily: mono ? 'var(--mono)' : 'inherit', fontSize: 12,
+          fontFamily: mono ? 'var(--mono)' : 'inherit', fontSize: 'var(--font-base)',
         }}
       />
     </label>
@@ -86,10 +86,10 @@ function QualityChip({ label, hdr }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
       {label && (
-        <span style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, background: 'var(--surface3)', border: '1px solid var(--border2)', color: 'var(--text)' }}>{label}</span>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, background: 'var(--surface3)', border: '1px solid var(--border2)', color: 'var(--text)' }}>{label}</span>
       )}
       {hdrInfo && (
-        <span style={{ fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color }}>{hdr}</span>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color }}>{hdr}</span>
       )}
     </span>
   )
@@ -111,7 +111,7 @@ function MatchChips({ match }) {
     <span style={{ display: 'inline-flex', gap: 7, flexShrink: 0 }}>
       {items.map(([k, label]) => (
         <span key={k} title={`${label}: ${match[k]}`} style={{
-          fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
+          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
           color: MATCH_COLOR[match[k]] || 'var(--text-dim)',
         }}>{label}{MATCH_MARK[match[k]] || ''}</span>
       ))}
@@ -123,7 +123,7 @@ function ScoreBadge({ score }) {
   if (score == null) return null
   const pct = Math.round(score * 100)
   const color = score >= 0.8 ? 'var(--green)' : score >= 0.5 ? 'var(--text-dim)' : 'var(--red)'
-  return <span style={{ fontSize: 10, fontFamily: 'var(--mono)', fontWeight: 700, color, flexShrink: 0, width: 34, textAlign: 'right' }}>{pct}%</span>
+  return <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, color, flexShrink: 0, width: 34, textAlign: 'right' }}>{pct}%</span>
 }
 
 // A selectable candidate row — works for both client torrents (name/tracker) and
@@ -140,12 +140,12 @@ function CandidateRow({ cand, selected, onSelect }) {
     }}>
       <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
       {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
-      <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
       {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
       <MatchChips match={cand.match} />
-      {sub && <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)', flexShrink: 0 }}>{sub}</span>}
-      {cand.seeders != null && <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{cand.seeders}S</span>}
-      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(cand.size)}</span>
+      {sub && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)', flexShrink: 0 }}>{sub}</span>}
+      {cand.seeders != null && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{cand.seeders}S</span>}
+      <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(cand.size)}</span>
       <ScoreBadge score={cand.match_score} />
     </div>
   )
@@ -159,7 +159,7 @@ function NoneRow({ selected, onSelect, label }) {
       borderLeft: `2px solid ${selected ? 'var(--text-dim)' : 'transparent'}`,
     }}>
       <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? 'var(--text-dim)' : 'var(--border2)'}`, background: selected ? 'var(--text-dim)' : 'transparent' }} />
-      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{label}</span>
+      <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{label}</span>
     </div>
   )
 }
@@ -184,18 +184,18 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <span style={{ width: 14, height: 14, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>Grab this one</span>
-        <span style={{ fontSize: 11, color: where.color }}>· {where.text}</span>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Grab this one</span>
+        <span style={{ fontSize: 'var(--font-sm)', color: where.color }}>· {where.text}</span>
       </div>
-      <div style={{ fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere', marginBottom: 8 }}>
+      <div style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere', marginBottom: 8 }}>
         {cand.title}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
         <MatchChips match={cand.match} />
-        {cand.indexer && <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{cand.indexer}</span>}
-        {cand.seeders != null && <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders} seeders</span>}
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{formatBytes(cand.size)}</span>
+        {cand.indexer && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{cand.indexer}</span>}
+        {cand.seeders != null && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders} seeders</span>}
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{formatBytes(cand.size)}</span>
       </div>
     </div>
   )
@@ -217,7 +217,7 @@ const HEALTH = {
   working:      { text: 'working', color: 'var(--text-dim)' },
 }
 
-const cell = { fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }
+const cell = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }
 
 function GroupTable({ torrents }) {
   const showInstance = torrents.some(t => t.instance_name)
@@ -236,11 +236,11 @@ function GroupTable({ torrents }) {
         return (
           <div key={regKey(t)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
             <span title={t.hardlinked === false && t.only_copy_bytes ? `${link.title} (${formatBytes(t.only_copy_bytes)})` : link.title}
-              style={{ ...cell, width: 84, fontSize: 11, fontWeight: 700, color: link.color }}>
+              style={{ ...cell, width: 84, fontSize: 'var(--font-sm)', fontWeight: 700, color: link.color }}>
               {link.mark}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.name}</div>
+              <div style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.name}</div>
               <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
                 <span title={t.hash} style={cell}>hash {String(t.hash).slice(0, 12)}…</span>
                 {showInstance && t.instance_name && <span style={cell}>on {t.instance_name}</span>}
@@ -256,7 +256,7 @@ function GroupTable({ torrents }) {
                 </div>
               )}
             </div>
-            <span style={{ ...cell, width: 64, textAlign: 'right', fontSize: 11 }}>{formatBytes(t.size)}</span>
+            <span style={{ ...cell, width: 64, textAlign: 'right', fontSize: 'var(--font-sm)' }}>{formatBytes(t.size)}</span>
             <div style={{ width: 96, textAlign: 'right', flexShrink: 0 }}>
               <div style={cell}>{t.seeding_time != null ? formatDuration(t.seeding_time) : '—'}</div>
               <div style={{ ...cell, marginTop: 2, color: t.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>{t.uploaded != null ? `↑ ${formatBytes(t.uploaded)}` : '—'}</div>
@@ -308,13 +308,13 @@ function OnlyCopyModal({ info, clientName, busy, onCancel, onConfirm }) {
         background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 12, boxShadow: '0 16px 60px rgba(0,0,0,0.5)',
       }}>
         <div style={{ padding: '18px 20px 0' }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>This destroys the only copy of {bytes}</div>
-          <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
+          <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--red)' }}>This destroys the only copy of {bytes}</div>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
             Nothing outside this group links to <b>{info.only_copy_files} file{info.only_copy_files !== 1 ? 's' : ''}</b> ({bytes}) —
             no library copy, no other cross-seed. Removing the group from {clientName} with its files deletes them for good.
             The replacement grab downloads a <b>different</b> release; it does not bring these back.
           </p>
-          <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0', lineHeight: 1.5 }}>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '8px 0 0', lineHeight: 1.5 }}>
             Usually this means the trumped release was never imported, was imported by copy, or has since been upgraded in
             Sonarr/Radarr. If you want to keep it, cancel and use <b>Grab only</b>.
           </p>
@@ -322,8 +322,8 @@ function OnlyCopyModal({ info, clientName, busy, onCancel, onConfirm }) {
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
           {(info.torrents || []).map(t => (
             <div key={regKey(t)} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ flex: 1, minWidth: 0, fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflowWrap: 'anywhere' }}>{t.name}</span>
-              <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--red)', flexShrink: 0 }}>{formatBytes(t.only_copy_bytes || 0)}</span>
+              <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', overflowWrap: 'anywhere' }}>{t.name}</span>
+              <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--red)', flexShrink: 0 }}>{formatBytes(t.only_copy_bytes || 0)}</span>
             </div>
           ))}
         </div>
@@ -345,7 +345,7 @@ function LinkSummary({ group }) {
   const lc = group.link_check || {}
   if (t.some(m => m.hardlinked === false)) {
     return (
-      <div style={{ fontSize: 12, color: 'var(--red)', lineHeight: 1.6 }}>
+      <div style={{ fontSize: 'var(--font-base)', color: 'var(--red)', lineHeight: 1.6 }}>
         <b>{lc.only_copy_files} file{lc.only_copy_files !== 1 ? 's' : ''} ({formatBytes(lc.only_copy_bytes || 0)})</b> ha{lc.only_copy_files !== 1 ? 've' : 's'} no
         link anywhere outside this group — removing it destroys the only copy.
       </div>
@@ -353,13 +353,13 @@ function LinkSummary({ group }) {
   }
   if (t.some(m => m.hardlinked == null)) {
     return (
-      <div style={{ fontSize: 12, color: 'var(--yellow)', lineHeight: 1.6 }}>
+      <div style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', lineHeight: 1.6 }}>
         auditorr could not check {lc.unchecked_files || 'some'} file{lc.unchecked_files !== 1 ? 's' : ''} — make sure your library holds a copy before removing.
       </div>
     )
   }
   return (
-    <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
       Every file has a link outside this group — normally your library copy — so it survives until Sonarr/Radarr imports the replacement.
     </div>
   )
@@ -608,7 +608,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
         accent={ACCENT}
         blurb="When a tracker trumps one of your releases, paste the PM here: auditorr finds the whole hardlink group (every cross-seed), removes it from the client with its files, and grabs the replacement through Sonarr/Radarr — the manual multi-step swap, automated and confirmed at every step."
         right={(parsed || picks) && (
-          <button onClick={reset} style={{ fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)' }}>
+          <button onClick={reset} style={{ fontSize: 'var(--font-base)', padding: '6px 16px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)' }}>
             ↺ Start over
           </button>
         )}
@@ -636,7 +636,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                 style={{
                   width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 'var(--r)',
                   border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-                  fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 1.5, resize: 'vertical',
+                  fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', lineHeight: 1.5, resize: 'vertical',
                 }}
               />
               <div style={{ display: 'flex', gap: 8 }}>
@@ -651,7 +651,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
                   Trumped (old) release{oldTitles.length > 1 ? `s — ${oldTitles.length} torrents, one per line` : ' — one per line'}
                 </span>
                 <textarea
@@ -661,7 +661,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   style={{
                     width: '100%', boxSizing: 'border-box', padding: '7px 10px', borderRadius: 'var(--r)',
                     border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-                    fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 1.5, resize: 'vertical',
+                    fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', lineHeight: 1.5, resize: 'vertical',
                   }}
                 />
               </label>
@@ -674,10 +674,10 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
         <StepShell n={2} active={step2} done={picks != null} title="Which tracker sent the PM?">
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Indexer (optional — its torrents and its copy of the replacement come first)</span>
+              <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Indexer (optional — its torrents and its copy of the replacement come first)</span>
               <select
                 value={indexer} onChange={e => setIndexer(e.target.value)}
-                style={{ padding: '7px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 12, minWidth: 220 }}
+                style={{ padding: '7px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 'var(--font-base)', minWidth: 220 }}
               >
                 <option value="">Any indexer</option>
                 {indexers.map(name => <option key={name} value={name}>{name}</option>)}
@@ -695,14 +695,14 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
         <StepShell n={3} active={step3} done={search != null} title="Confirm the hardlink group to remove">
           {picks && !group && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
                 Pick the torrent that matches each trumped release — the best match is pre-selected. Once you confirm, every cross-seed of the chosen torrents is added automatically.
               </div>
               {picks.map((p, i) => (
                 <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', wordBreak: 'break-all' }}>{p.title}</div>
+                  <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', wordBreak: 'break-all' }}>{p.title}</div>
                   {p.candidates.length === 0 ? (
-                    <div style={{ fontSize: 11, color: 'var(--yellow)' }}>No match found in {clientName} — this release will be skipped.</div>
+                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)' }}>No match found in {clientName} — this release will be skipped.</div>
                   ) : (
                     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
                       {p.candidates.map(c => (
@@ -725,7 +725,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
 
           {group && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
                 <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b>
                 {' '}— the selected releases plus every cross-seed sharing their files — will be removed from {clientName} <b>with their files</b>.
                 {' '}Cross-seeds sharing a path point at the same files, so the payload is <b style={{ color: 'var(--text)' }}>{formatBytes(group.total_size)}</b> once, not once per torrent.
@@ -733,7 +733,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               <LinkSummary group={group} />
               <PartialWarning group={group} ack={ackPartial} onAck={() => setAckPartial(a => !a)} />
               {skippedTitles.length > 0 && (
-                <div style={{ fontSize: 11, color: 'var(--yellow)', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
+                <div style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
                   Skipped (no torrent selected):
                   <div style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 4 }}>
                     {skippedTitles.map((t, i) => <div key={i}>{t}</div>)}
@@ -741,7 +741,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                 </div>
               )}
               <GroupTable torrents={group.torrents} />
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
                 Rows can’t be deselected: a cross-seed sharing a path with this group uses the same files, so removing any member
                 with its files breaks the rest. A cross-seed with its own hardlinks isn’t listed — it keeps its files. To keep a
                 registration on a tracker that hasn’t trumped this release, remove the others by hand in {clientName} and use
@@ -752,7 +752,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   <ActionButton primary onClick={() => handleSearch()} disabled={busy != null}>
                     {busy === 'search' ? 'Searching…' : 'Find replacement release →'}
                   </ActionButton>
-                  <button onClick={() => setGroup(null)} disabled={busy != null} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text-dim)' }}>
+                  <button onClick={() => setGroup(null)} disabled={busy != null} style={{ fontSize: 'var(--font-base)', padding: '6px 14px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text-dim)' }}>
                     ← Change selection
                   </button>
                 </div>
@@ -782,7 +782,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               <ArrErrorsWarning errors={search.arr_errors}
                 extra="A release or library item on an instance that did not answer is not shown here." />
               {search.arr_title && (
-                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
                   Searching <span style={{ color: 'var(--text)' }}>{search.arr_title}{search.arr_year ? ` (${search.arr_year})` : ''}</span>
                   {search.resolved_by === 'path' && ' — matched by the library files this group is hardlinked to'}
                   {search.resolved_by === 'title' && ' — matched by title (no library file of this group was found in Sonarr/Radarr)'}
@@ -795,7 +795,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               {search.arr_item_ambiguous && search.arr_item_others?.length > 0 && (
                 <span
                   title={`${search.arr_item_others.length + 1} ${search.service === 'radarr' ? 'Radarr' : 'Sonarr'} instances hold the files of this group. The search and the grab go to ${search.connection_name || search.connection_id}. ${search.arr_item_others.map(o => `${o.connection_name || o.connection_id} holds ${o.title || 'it'} too`).join('; ')}.`}
-                  style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9, alignSelf: 'flex-start' }}
+                  style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9, alignSelf: 'flex-start' }}
                 >
                   on {search.connection_name || search.connection_id} · also {search.arr_item_others.map(o => o.connection_name || o.connection_id).join(', ')}
                 </span>
@@ -812,7 +812,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   </div>
                 </>
               ) : (
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
                   No exact match for the new release name in {search.candidate_count ?? 0} release{search.candidate_count !== 1 ? 's' : ''}
                   {others.length > 0 ? ' — the closest are below; nothing is selected for you.' : '.'}
                   {search.fallback_url && <> Or grab it manually in <a href={search.fallback_url} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT }}>Sonarr/Radarr ↗</a>.</>}
@@ -821,7 +821,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               {others.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {recommended && (
-                    <button onClick={() => setShowOthers(s => !s)} style={{ alignSelf: 'flex-start', fontSize: 11, padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}>
+                    <button onClick={() => setShowOthers(s => !s)} style={{ alignSelf: 'flex-start', fontSize: 'var(--font-base)', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}>
                       {showOthers ? '▾' : '▸'} Other releases ({others.length}) — for edge cases
                     </button>
                   )}
@@ -848,7 +848,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
         {/* Step 5 — execute */}
         <StepShell n={5} active={step5 && result == null} done={result != null} title="Grab the replacement & remove the group">
           {result ? (
-            <div style={{ fontSize: 12, color: 'var(--text)', lineHeight: 1.7 }}>
+            <div style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.7 }}>
               {/* Stage by stage, in the order they ran (S09) — so a swap that
                   stopped half way says which half, and what is left to do. */}
               {(result.stages || []).filter(s => s.status !== 'skipped').map(s => (
@@ -880,7 +880,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           ) : step5 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {!clientDeleteAllowed && (
-                <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, color: 'var(--yellow)', fontSize: 12 }}>
+                <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, color: 'var(--yellow)', fontSize: 'var(--font-base)' }}>
                   Client deletion is disabled, so the group can’t be removed from here. Enable “Workflow torrent deletion” in <a onClick={() => onNavigate && onNavigate({ tab: 'config' })} style={{ color: 'var(--yellow)', cursor: 'pointer', textDecoration: 'underline' }}>Config → Torrent Source</a> — or grab the replacement only, and remove the torrents in {clientName} yourself.
                 </div>
               )}
@@ -893,7 +893,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   </div>
                 </WorkflowWarning>
               )}
-              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
                 {chosenRelease
                   ? <>This grabs the replacement first, and removes <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b> ({formatBytes(group.total_size)} payload) from {clientName} with their files only once Sonarr/Radarr has accepted it — so a grab that fails leaves your files alone.</>
                   : <>This removes <b style={{ color: 'var(--text)' }}>{group.torrents.length} torrent{group.torrents.length !== 1 ? 's' : ''}</b> ({formatBytes(group.total_size)} payload) from {clientName} with their files.</>}
@@ -914,7 +914,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           )}
         </StepShell>
       </div>
-      {busy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--text-dim)' }}><Spinner /> Working…</div>}
+      {busy && <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}><Spinner /> Working…</div>}
       {onlyCopy && (
         <OnlyCopyModal info={onlyCopy} clientName={clientName} busy={busy === 'execute'}
           onCancel={() => setOnlyCopy(null)}

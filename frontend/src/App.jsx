@@ -23,7 +23,7 @@ import { formatBytes } from './utils'
 
 // ── Script Modal ──────────────────────────────────────────────────────────────
 function _btnStyle(bg, color) {
-  return { padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border2)', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+  return { padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border2)', background: bg, color, fontSize: 'var(--font-base)', fontWeight: 600, cursor: 'pointer' }
 }
 
 // What the server says about a script it just built. Cleanup's delete script
@@ -138,13 +138,13 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
       >
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</div>
-            {shownSubtitle && !error && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>{shownSubtitle}</div>}
+            <div style={{ fontSize: 'var(--font-lg)', fontWeight: 600, color: 'var(--text)' }}>{title}</div>
+            {shownSubtitle && !error && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>{shownSubtitle}</div>}
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
         </div>
         {!error && (
-          <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 12, color: 'var(--text-dim)', flexShrink: 0 }}>
+          <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 'var(--font-base)', color: 'var(--text-dim)', flexShrink: 0 }}>
             ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
             {meta && (
               <div style={{ marginTop: 6 }}>
@@ -160,14 +160,14 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
         )}
         <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
           {loading ? (
-            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Checking…</div>
+            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>Checking…</div>
           ) : error ? (
-            <div style={{ padding: '12px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', fontSize: 13, lineHeight: 1.6 }}>
+            <div style={{ padding: '12px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', fontSize: 'var(--font-base)', lineHeight: 1.6 }}>
               <div style={{ color: 'var(--red)', fontWeight: 600, marginBottom: 4 }}>No script was built</div>
               <div style={{ color: 'var(--text)' }}>{error}</div>
             </div>
           ) : (
-            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
+            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
           )}
         </div>
         <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
@@ -452,7 +452,7 @@ function AppInner() {
   // answers again (secret set + restart).
   if (authBlocked) {
     const envChip = {
-      fontFamily: 'var(--mono)', fontSize: 12, background: 'var(--surface2)',
+      fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', background: 'var(--surface2)',
       border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px',
     }
     return (
@@ -463,9 +463,9 @@ function AppInner() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--red)', flexShrink: 0 }} />
-            <span style={{ fontSize: 15, fontWeight: 600 }}>Access key required</span>
+            <span style={{ fontSize: 'var(--font-lg)', fontWeight: 600 }}>Access key required</span>
           </div>
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.6, margin: 0 }}>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6, margin: 0 }}>
             <code style={envChip}>AUDITORR_REQUIRE_AUTH</code> is set, but no access key is
             configured. Set <code style={envChip}>AUDITORR_SECRET</code> in the container
             environment and restart — this page will pick it up automatically and ask for

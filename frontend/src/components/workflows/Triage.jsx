@@ -228,13 +228,13 @@ function rejectionSummary(rejected) {
 const canExclude = item => (item.exclusion_patterns || []).length > 0
 
 function QualityChip({ label, hdr, dim }) {
-  if (!label && !hdr) return <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.5 }}>unknown</span>
+  if (!label && !hdr) return <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.5 }}>unknown</span>
   const hdrInfo = HDR_STYLE[hdr]
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
       {label && (
         <span style={{
-          fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4,
+          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4,
           background: dim ? 'var(--surface2)' : 'var(--surface3)',
           border: '1px solid var(--border2)',
           color: dim ? 'var(--text-dim)' : 'var(--text)', whiteSpace: 'nowrap',
@@ -243,7 +243,7 @@ function QualityChip({ label, hdr, dim }) {
         </span>
       )}
       {hdrInfo && (
-        <span style={{ fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color, whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color, whiteSpace: 'nowrap' }}>
           {hdr}
         </span>
       )}
@@ -274,7 +274,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {p.title || filename}{p.year ? ` (${p.year})` : ''}{seTag}
           </span>
           {subsetLabel(item) && (
@@ -282,7 +282,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               title={item.torrent_files > item.file_count || item.torrent_size > item.total_size
                 ? 'This row lists the files that need a verdict. Removing the torrent removes all of it — the second figure.'
                 : undefined}
-              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}
             >
               {subsetLabel(item)}
             </span>
@@ -292,7 +292,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {item.verdict_spread && (
             <span
               title={`These files earned different verdicts — ${Object.entries(item.verdict_spread).map(([v, n]) => `${n} ${VERDICT_LABEL[v] || v}`).join(', ')}. The row takes the one whose action deletes least.`}
-              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0 }}
             >
               {Object.values(item.verdict_spread).reduce((a, b) => a + b, 0)} files · {Object.keys(item.verdict_spread).length} verdicts
             </span>
@@ -303,7 +303,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
                 ? `The ${client?.name || 'client'} instance holding this torrent did not answer after the removal, so auditorr cannot say whether it left. It stays here until the next scan.`
                 : `auditorr asked ${client?.name || 'the client'} to remove this torrent and it was still listed a moment later. It stays here until the next scan shows what happened.`}
               style={{
-                fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0,
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0,
                 border: '1px solid var(--yellow)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
               }}
             >
@@ -314,7 +314,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
             <span
               title="Handed to Sonarr/Radarr. The arr imports on its own schedule, and this row is built from the last audit — it clears once a scan has seen the result."
               style={{
-                fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0,
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0,
                 border: '1px solid var(--blue)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
               }}
             >
@@ -322,7 +322,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
             </span>
           )}
         </div>
-        <div title={item.rep_path} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
+        <div title={item.rep_path} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
           {filename}
         </div>
 
@@ -333,7 +333,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
             <>
               <span
                 title={`${lib.title}${lib.year ? ` (${lib.year})` : ''}${lib.filename ? ' — ' + lib.filename : ''}`}
-                style={{ fontSize: 10, color: 'var(--text-dim)' }}
+                style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}
               >
                 vs library{lib.year ? ` (${lib.year})` : ''}
               </span>
@@ -346,7 +346,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {lib?.others?.length > 0 && (
             <span
               title={`${lib.others.length + 1} ${lib.service} instances hold this title. Rescan and force import go to ${lib.connection_name || 'the best match'}${lib.quality_name ? ` (${lib.quality_name})` : ''}. ${lib.others.map(o => `${o.name || o.connection_id} ${o.quality_name ? `holds ${o.quality_name}` : 'holds it too'}`).join('; ')}.`}
-              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
             >
               on {lib.connection_name || lib.service} · also {lib.others.map(o => o.name || o.connection_id).join(', ')}
             </span>
@@ -355,18 +355,18 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {item.verdict === 'dead_registration' && (item.alive_library || item.alive_sibling) && (
             <span
               title="Where this registration's data is still alive — why removing just the registration loses nothing"
-              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--green)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--green)', opacity: 0.9 }}
             >
               alive in {[item.alive_library && 'your library', item.alive_sibling && 'a seeding cross-seed'].filter(Boolean).join(' and ')}
             </span>
           )}
           {item.tracker_msg && (
-            <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--red)', opacity: 0.9 }}>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--red)', opacity: 0.9 }}>
               “{item.tracker_msg}”
             </span>
           )}
           {item.tracker_health === 'not_working' && !item.tracker_msg && (
-            <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.8 }}>tracker not responding</span>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.8 }}>tracker not responding</span>
           )}
           {/* An unfinished download is not-imported by definition, so it used
               to sit here as junk. Known-incomplete torrents are filtered out
@@ -375,7 +375,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {item.completion_unknown && (
             <span
               title="The torrent client exposed no completion field for this torrent, so auditorr cannot tell whether the payload is finished. Check it in the client before deleting anything."
-              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
             >
               completion unknown
             </span>
@@ -383,7 +383,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {item.status === 'Downloading' && !item.completion_unknown && (
             <span
               title="Still downloading — the files are incomplete and will grow. Nothing here needs a verdict yet."
-              style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--blue)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', opacity: 0.9 }}
             >
               downloading
             </span>
@@ -393,7 +393,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               onClick={e => { e.stopPropagation(); onNavigate && onNavigate({ tab: 'dedupe' }) }}
               title="A byte-identical copy exists on disk — open the Dedupe workflow to hardlink it and reclaim the space (lossless)"
               style={{
-                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
                 background: 'var(--purple)18', color: 'var(--purple)', border: '1px solid var(--purple)40',
               }}
             >
@@ -407,7 +407,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               onClick={e => { e.stopPropagation(); onNavigate && onNavigate({ tab: 'trumped', oldTitle: item.name || torrentSearchName(item) }) }}
               title="If the tracker trumped this release, the Trumped workflow removes every cross-seed of it and grabs the replacement"
               style={{
-                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
                 background: 'var(--green)18', color: 'var(--green)', border: '1px solid var(--green)40',
               }}
             >
@@ -422,8 +422,8 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           even when empty. */}
       <div style={{ flexShrink: 0, textAlign: 'right', width: 110 }}>
         {/* The number a delete touches: the whole torrent once verify knows it (T5). */}
-        <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.torrent_size ?? item.total_size)}</div>
-        <div title={(item.trackers || []).join(', ')} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.torrent_size ?? item.total_size)}</div>
+        <div title={(item.trackers || []).join(', ')} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {(item.trackers || [])[0] || 'no tracker'}{item.trackers?.length > 1 ? ` +${item.trackers.length - 1}` : ''}
         </div>
       </div>
@@ -435,23 +435,23 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
       <div style={{ flexShrink: 0, textAlign: 'right', width: 100 }}>
         {pending ? (
           <div title="Verifying with the torrent client…"
-            style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)', animation: 'triagePulse 1.4s ease-in-out infinite' }}>
+            style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', animation: 'triagePulse 1.4s ease-in-out infinite' }}>
             ···
           </div>
         ) : (
           <>
-            <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: item.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
+            <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: item.uploaded > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
               {item.uploaded != null ? `↑ ${formatBytes(item.uploaded)}` : '—'}
             </div>
             {item.seeding_time != null && (
               <div title="Total time seeding — check your tracker's hit-and-run rules before deleting"
-                style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+                style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
                 seeded {formatDuration(item.seeding_time)}
               </div>
             )}
             {addedAgeLabel(item.added_on) && (
               <div title="When your client added this torrent"
-                style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+                style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
                 {addedAgeLabel(item.added_on)}
               </div>
             )}
@@ -466,7 +466,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
             onClick={e => e.stopPropagation()}
             title={`Open in ${lib.service}`}
             style={{
-              fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+              fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
               textDecoration: 'none', marginTop: 2, alignSelf: 'flex-start',
               background: lib.service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
               color:      lib.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
@@ -488,7 +488,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
             ? 'Open this torrent in qui'
             : `Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find this torrent`}
           style={{
-            fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+            fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
             cursor: 'pointer', marginTop: 2,
             background: item.verdict === 'unregistered' ? 'var(--red)18' : 'var(--surface2)',
             color:      item.verdict === 'unregistered' ? 'var(--red)'   : 'var(--text-dim)',
@@ -1119,24 +1119,24 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
           {verify.running ? (
             <>
               <Spinner />
-              <span style={{ fontSize: 12.5, color: 'var(--text)' }}>Verifying live tracker status…</span>
-              <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+              <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>Verifying live tracker status…</span>
+              <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
                 {verify.done}/{verify.total} checked{verify.removed > 0 ? ` · ${verify.removed} recovered` : ''}
               </span>
-              <span style={{ fontSize: 11, color: 'var(--text-dim)', marginLeft: 'auto' }}>
+              <span style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginLeft: 'auto' }}>
                 Showing audit-time data meanwhile — rows may move or drop as trackers answer
               </span>
             </>
           ) : (
             <>
-              <span style={{ fontSize: 12, color: 'var(--yellow)' }}>
+              <span style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)' }}>
                 Live tracker verification failed ({verify.failed}) — showing audit-time tracker data
                 {verify.done > 0 ? ` (${verify.done}/${verify.total} verified before the error)` : ''}.
               </span>
               <button
                 onClick={() => runVerify(items.filter(i => i.hash && !i.verified))}
                 style={{
-                  fontSize: 11, fontFamily: 'var(--mono)', padding: '2px 10px', borderRadius: 5, cursor: 'pointer',
+                  fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', padding: '2px 10px', borderRadius: 5, cursor: 'pointer',
                   border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
                 }}
               >
@@ -1157,14 +1157,14 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       {!loading && items.length > 0 && (
         <>
           {report?.truncated && (
-            <div style={{ fontSize: 12, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
+            <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
               {report.total != null
                 ? `Showing the ${report.shown} largest of ${report.total} torrents — resolve some to see the rest.`
                 : 'Showing the largest torrents — resolve some to see the rest.'}
             </div>
           )}
           {!report?.arr_configured && (
-            <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, color: 'var(--yellow)', fontSize: 12.5 }}>
+            <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, color: 'var(--yellow)', fontSize: 'var(--font-base)' }}>
               No Sonarr/Radarr connection configured — library matching is disabled, so most items fall into “Not in Library”.
             </div>
           )}
@@ -1177,7 +1177,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
 
           {report?.suggestions?.length > 0 && (
             <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 12.5, color: 'var(--text)' }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>
                 <span style={{ fontWeight: 600 }}>Tidy up Triage</span>
                 <span style={{ color: 'var(--text-dim)' }}> — some torrents only linger here because of files Sonarr/Radarr never import. Exclude them in one click (saved to Config → Excluded Files, editable there):</span>
               </div>
@@ -1190,12 +1190,12 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     title={`${s.detail} — adds ${s.patterns.join(', ')}`}
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 7,
-                      fontSize: 12, cursor: busy != null ? 'not-allowed' : 'pointer', opacity: busy != null ? 0.5 : 1,
+                      fontSize: 'var(--font-base)', cursor: busy != null ? 'not-allowed' : 'pointer', opacity: busy != null ? 0.5 : 1,
                       border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
                     }}
                   >
                     <span>Exclude <span style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>{s.label}</span></span>
-                    <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                    <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
                       {s.count} · {formatBytes(s.size)}
                     </span>
                   </button>
@@ -1237,12 +1237,12 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                   <Checkbox checked={allChecked} indeterminate={someChecked} onChange={() => toggleSection(sectionItems)} />
                   <span style={{ width: 9, height: 9, borderRadius: 3, background: v.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{v.label}</span>
-                  <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                  <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{v.label}</span>
+                  <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
                     {sectionItems.length} · {formatBytes(sectionSize)}
                   </span>
                 </div>
-                <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 10px 34px', lineHeight: 1.5, maxWidth: 960 }}>
+                <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '0 0 10px 34px', lineHeight: 1.5, maxWidth: 960 }}>
                   {v.desc}
                 </p>
                 {v.key !== 'superseded' ? renderRows(sectionItems) : (
@@ -1257,12 +1257,12 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                       <div key={b.key} style={{ marginLeft: 34, marginBottom: 16 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                           <Checkbox checked={bAll} indeterminate={bSome} onChange={() => toggleSection(bucketItems)} />
-                          <span style={{ fontSize: 12.5, fontWeight: 600, color: b.color }}>{b.label}</span>
-                          <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                          <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: b.color }}>{b.label}</span>
+                          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
                             {bucketItems.length} · {formatBytes(bSize)}
                           </span>
                         </div>
-                        <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '0 0 8px 25px', lineHeight: 1.5, maxWidth: 960 }}>
+                        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '0 0 8px 25px', lineHeight: 1.5, maxWidth: 960 }}>
                           {b.desc}
                         </p>
                         {renderRows(bucketItems)}
@@ -1301,7 +1301,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                 // Deletion is off: show the action greyed out (so users know it
                 // exists) with a one-click path to enable it, mirroring Trumped.
                 <>
-                  <span style={{ fontSize: 11, color: 'var(--text-dim)', alignSelf: 'center' }}>
+                  <span style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', alignSelf: 'center' }}>
                     Deleting via {client.name} is off —{' '}
                     <a onClick={() => onNavigate && onNavigate({ tab: 'config' })}
                       style={{ color: 'var(--yellow)', cursor: 'pointer', textDecoration: 'underline' }}>enable in Config</a>
@@ -1369,7 +1369,7 @@ function ScopeSwitch({ scope, groupSize, onChange }) {
             key={o.key}
             onClick={() => onChange(o.key)}
             style={{
-              fontSize: 10.5, fontFamily: 'var(--mono)', padding: '3px 9px', cursor: 'pointer',
+              fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', padding: '3px 9px', cursor: 'pointer',
               border: 'none', borderLeft: idx ? '1px solid var(--border2)' : 'none',
               background: active ? (o.key === 'all' ? 'var(--red)20' : 'var(--surface3)') : 'transparent',
               color: active ? (o.key === 'all' ? 'var(--red)' : 'var(--text)') : 'var(--text-dim)',
@@ -1448,14 +1448,14 @@ function ConfirmDeleteModal({
         }}
       >
         <div style={{ padding: '18px 20px 0' }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>Remove from {clientName}</div>
-          <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
+          <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--red)' }}>Remove from {clientName}</div>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
             Removes <b>{torrentCount} torrent{torrentCount !== 1 ? 's' : ''}</b> (<b>{formatBytes(totalSize)}</b>) from {clientName}.
             A torrent’s files are deleted <b>only</b> where auditorr established that nothing staying in {clientName} uses
             them; files a remaining torrent shares, and files it could not check, are kept. Each torrent below says which. There is no undo.
           </p>
           {skippedCount > 0 && (
-            <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0' }}>
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '8px 0 0' }}>
               {skippedCount} selected item{skippedCount !== 1 ? 's have' : ' has'} no torrent hash and will be skipped.
             </p>
           )}
@@ -1465,13 +1465,13 @@ function ConfirmDeleteModal({
             <div style={{ margin: '8px 0 0' }}><RegistrationWarning refusal={ambiguity} /></div>
           )}
           {resolveError && !ambiguity && (
-            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
               Couldn’t check for cross-seeds ({resolveError}), so auditorr can’t tell what else uses these files.
               Removing keeps every file: the torrents leave {clientName} and their files stay on disk, where Cleanup can check them later.
             </p>
           )}
           {unchecked && (
-            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
               {meta.unknown_listings > 0
                 ? `${meta.unknown_listings} torrent${meta.unknown_listings !== 1 ? 's' : ''} in ${clientName} did not return a file list${meta.bounded ? ', and the search stopped at its limit' : ''}`
                 : `${clientName} holds more near matches than auditorr checks at once`}
@@ -1479,12 +1479,12 @@ function ConfirmDeleteModal({
             </p>
           )}
           {missing.length > 0 && (
-            <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0' }}>
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '8px 0 0' }}>
               {missing.length} selected torrent{missing.length !== 1 ? 's are' : ' is'} no longer in {clientName} — nothing to remove.
             </p>
           )}
           {anyGroups && !resolving && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 0', fontSize: 11.5, color: 'var(--text-dim)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 0', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
               <span>Choose how much of each cross-seed group to remove. Apply to all:</span>
               <button onClick={() => onSetAllScopes('one')} style={miniBtn}>This torrent only</button>
               <button onClick={() => onSetAllScopes('all')} style={miniBtn}>All cross-seeds</button>
@@ -1493,7 +1493,7 @@ function ConfirmDeleteModal({
         </div>
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
           {resolving && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
               <Spinner /> Finding cross-seeds in {clientName}…
             </div>
           )}
@@ -1510,16 +1510,16 @@ function ConfirmDeleteModal({
             return (
               <div key={itemKey(item)} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: gone ? 0.6 : 1 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.parsed?.title || (item.rep_path || '').replace(/\\/g, '/').split('/').pop()}
                     {item.parsed?.year ? ` (${item.parsed.year})` : ''}
                   </span>
                   {item.seeding_time != null && (
-                    <span title="Total time seeding" style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+                    <span title="Total time seeding" style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
                       seeded {formatDuration(item.seeding_time)}
                     </span>
                   )}
-                  <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', flexShrink: 0 }}>
+                  <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)', flexShrink: 0 }}>
                     {formatBytes(item.torrent_size ?? item.total_size)}
                   </span>
                 </div>
@@ -1535,7 +1535,7 @@ function ConfirmDeleteModal({
                         // selected row removes is removed here too.
                         const willRemove = plan.removal.has(regKey(m))
                         return (
-                          <div key={regKey(m)} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 10, fontFamily: 'var(--mono)' }}>
+                          <div key={regKey(m)} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)' }}>
                             <span style={{
                               flexShrink: 0, width: 48, color: willRemove ? 'var(--red)' : 'var(--text-dim)',
                               fontWeight: willRemove ? 700 : 400,
@@ -1556,7 +1556,7 @@ function ConfirmDeleteModal({
                   </>
                 ) : (
                   <>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 3, fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 3, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
                       <span title={item.hash} style={{ flexShrink: 0 }}>hash {String(item.hash).slice(0, 12)}…</span>
                       {(item.trackers || [])[0] && <span style={{ flexShrink: 0 }}>{item.trackers[0]}</span>}
                       {!resolving && (
@@ -1571,12 +1571,12 @@ function ConfirmDeleteModal({
                     </div>
                     <div style={{ marginTop: 4 }}>
                       {shownPaths.map(p => (
-                        <div key={p} title={p} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div key={p} title={p} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {p}
                         </div>
                       ))}
                       {paths.length > shownPaths.length && (
-                        <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.6 }}>
+                        <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.6 }}>
                           +{paths.length - shownPaths.length} more files
                         </div>
                       )}
@@ -1589,7 +1589,7 @@ function ConfirmDeleteModal({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
           {busy && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
               <Spinner /> Removing via {clientName}…
             </span>
           )}
@@ -1606,6 +1606,6 @@ function ConfirmDeleteModal({
 }
 
 const miniBtn = {
-  fontSize: 10.5, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
+  fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
   border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
 }

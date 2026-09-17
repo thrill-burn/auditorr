@@ -72,11 +72,11 @@ function StatBox({ label, value, sub }) {
       padding: '12px 16px', borderRadius: 9, flex: 1, minWidth: 140,
       background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
     }}>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
         {label}
       </div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
     </div>
   )
 }
@@ -102,29 +102,29 @@ function DupGroup({ group, checked, onToggle }) {
         ) : (
           <span title={note || ''} style={{ width: 15, height: 15, borderRadius: 'var(--r-sm)', border: '1.5px dashed var(--border2)', flexShrink: 0, cursor: 'not-allowed' }} />
         )}
-        <span title={group.id} style={{ minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span title={group.id} style={{ minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {name}
         </span>
-        <span title={cause.title} style={{ fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>
+        <span title={cause.title} style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>
           {cause.label}
         </span>
         <span style={{ flex: 1 }} />
         {status.label && (
-          <span title={note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontFamily: 'var(--mono)', color: status.color, flexShrink: 0 }}>
+          <span title={note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: status.color, flexShrink: 0 }}>
             <Dot color={status.color} />{status.label}
           </span>
         )}
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
           {group.file_count} copies
         </span>
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 96, textAlign: 'right' }}>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 96, textAlign: 'right' }}>
           frees up to {formatBytes(group.frees_up_to)}
         </span>
       </div>
 
       {/* Every group that is not plainly linkable says what to expect, inline. */}
       {note && (
-        <div style={{ padding: '6px 14px 6px 36px', borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+        <div style={{ padding: '6px 14px 6px 36px', borderTop: '1px solid var(--border)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
           {note}
         </div>
       )}
@@ -134,21 +134,21 @@ function DupGroup({ group, checked, onToggle }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             {m.paths.map(p => (
               <div key={p.path} style={{ display: 'flex', alignItems: 'center', gap: 8, lineHeight: '16px' }}>
-                <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 48 }}>
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 48 }}>
                   {p.tree === 'media' ? 'library' : 'torrent'}
                 </span>
-                <span title={p.path} style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span title={p.path} style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {p.path}
                 </span>
               </div>
             ))}
             {m.paths.length > 1 && (
-              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+              <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>
                 One file at {m.paths.length} paths — the script replaces all of them together, or none.
               </div>
             )}
           </div>
-          <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, lineHeight: '16px' }}>
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, lineHeight: '16px' }}>
             {formatBytes(m.size)}
           </span>
         </div>
@@ -248,7 +248,7 @@ export default function Dedupe({ onNavigate, onScript }) {
           {choosable.length > 0 && (
             <div>
               <button onClick={toggleAll} style={{
-                fontSize: 12, padding: '5px 14px', borderRadius: 99, cursor: 'pointer',
+                fontSize: 'var(--font-base)', padding: '5px 14px', borderRadius: 99, cursor: 'pointer',
                 border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)',
               }}>
                 {allChosen ? 'Deselect all' : `Select all (${choosable.length})`}

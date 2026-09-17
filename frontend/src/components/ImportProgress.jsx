@@ -43,9 +43,9 @@ function StageIcon({ type, color }) {
       background: color, animation: 'importPulse 1.4s ease-in-out infinite',
     }} />
   )
-  if (type === 'check') return <span style={{ color, fontSize: 10, lineHeight: 1, flexShrink: 0 }}>✓</span>
-  if (type === 'dash') return <span style={{ color, fontSize: 10, lineHeight: 1, flexShrink: 0 }}>–</span>
-  return <span style={{ color, fontSize: 10, lineHeight: 1, flexShrink: 0 }}>✗</span>
+  if (type === 'check') return <span style={{ color, fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>✓</span>
+  if (type === 'dash') return <span style={{ color, fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>–</span>
+  return <span style={{ color, fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>✗</span>
 }
 
 export default function ImportProgress({ open, jobs, onClose }) {
@@ -77,10 +77,10 @@ export default function ImportProgress({ open, jobs, onClose }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* Backfill and Trumped grabs share one watch and one panel. */}
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>Import Jobs</span>
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)' }}>Import Jobs</span>
           {activeCount > 0 && (
             <span style={{
-              fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
+              fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
               background: 'var(--accent)18', color: 'var(--accent)', border: '1px solid var(--accent)30',
             }}>
               {activeCount} active
@@ -96,7 +96,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
       {/* Job list */}
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {jobs.length === 0 && (
-          <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 12, fontFamily: 'var(--mono)' }}>
+          <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-base)', fontFamily: 'var(--mono)' }}>
             No active import jobs
           </div>
         )}
@@ -111,7 +111,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
             }}>
               {/* Service badge */}
               <span style={{
-                fontSize: 9, fontFamily: 'var(--mono)', padding: '2px 5px', borderRadius: 3,
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 5px', borderRadius: 3,
                 flexShrink: 0, marginTop: 1,
                 background: job.service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
                 color:      job.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
@@ -123,7 +123,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
               {/* Title + stage */}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
-                  fontSize: 12, fontWeight: 500, color: 'var(--text)',
+                  fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }} title={job.title}>
                   {job.title || 'Unknown'}
@@ -131,7 +131,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3 }}>
                   <StageIcon type={cfg.icon} color={cfg.color} />
                   <span style={{
-                    fontSize: 10, fontFamily: 'var(--mono)', color: cfg.color,
+                    fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cfg.color,
                   }} title={ended ? job.message : undefined}>
                     {cfg.label}
                     {ended && ' — ' + job.message.slice(0, 40)}

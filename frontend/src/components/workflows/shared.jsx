@@ -69,7 +69,7 @@ export function Chip({ active, onClick, children }) {
     <button
       onClick={onClick}
       style={{
-        padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 12, cursor: 'pointer',
+        padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 'var(--font-base)', cursor: 'pointer',
         border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
         background: active ? 'var(--accent)18' : 'transparent',
         color: active ? 'var(--accent)' : 'var(--text-dim)',
@@ -154,8 +154,8 @@ export function SortPicker({ options, value, onChange }) {
               boxShadow: 'var(--elev-1)',
             }}
           >
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{opt.label}</span>
-            <span style={{ fontSize: 11, marginTop: 2, opacity: 0.6, fontFamily: 'var(--mono)' }}>{opt.sub}</span>
+            <span style={{ fontSize: 'var(--font-base)', fontWeight: 600 }}>{opt.label}</span>
+            <span style={{ fontSize: 'var(--font-sm)', marginTop: 2, opacity: 0.6, fontFamily: 'var(--mono)' }}>{opt.sub}</span>
           </button>
         )
       })}
@@ -203,12 +203,12 @@ export function CountPicker({ value, onChange, max }) {
   })
 
   const numStyle = (active) => ({
-    fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: '26px',
-    height: 26, display: 'flex', alignItems: 'center',
+    fontSize: 'var(--font-xl)', fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: '24px',
+    height: 24, display: 'flex', alignItems: 'center',
     color: 'var(--text)',
   })
 
-  const subStyle = { fontSize: 11, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }
+  const subStyle = { fontSize: 'var(--font-sm)', marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }
 
   return (
     <div style={{ display: 'flex', gap: 10 }}>
@@ -257,7 +257,7 @@ export function CountPicker({ value, onChange, max }) {
 // ── Section label ─────────────────────────────────────────────────────────────
 export function SectionLabel({ children }) {
   return (
-    <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
       {children}
     </div>
   )
@@ -268,12 +268,12 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'left', marginBottom: 4 }}>Workflows</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'left', marginBottom: 4 }}>Workflows</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>
+          <span style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>
         </div>
         {blurb && (
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 960 }}>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 960 }}>
             {blurb}
           </p>
         )}
@@ -291,7 +291,7 @@ export function WorkflowCrossLink({ text, linkLabel, count, onClick }) {
       onClick={onClick}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-        padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12, cursor: 'pointer',
+        padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 'var(--font-base)', cursor: 'pointer',
         border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-dim)',
         transition: 'all 0.12s',
       }}
@@ -309,8 +309,8 @@ export function EmptyState({ emoji = '🎉', title, sub }) {
   return (
     <div style={{ padding: '64px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
       <div style={{ fontSize: 40, lineHeight: 1 }}>{emoji}</div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginTop: 6 }}>{title}</div>
-      {sub && <div style={{ fontSize: 12.5, color: 'var(--text-dim)', maxWidth: 420, lineHeight: 1.6 }}>{sub}</div>}
+      <div style={{ fontSize: 'var(--font-lg)', fontWeight: 600, color: 'var(--text)', marginTop: 6 }}>{title}</div>
+      {sub && <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', maxWidth: 420, lineHeight: 1.6 }}>{sub}</div>}
     </div>
   )
 }
@@ -318,7 +318,7 @@ export function EmptyState({ emoji = '🎉', title, sub }) {
 // ── Loading spinner row ───────────────────────────────────────────────────────
 export function LoadingRow({ label = 'Loading…' }) {
   return (
-    <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 13 }}>
+    <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>
       <Spinner />
       {label}
       <SpinKeyframes />
@@ -340,7 +340,7 @@ export function SpinKeyframes() {
 export function WorkflowError({ message }) {
   if (!message) return null
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', color: 'var(--red)', fontSize: 13 }}>
+    <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', color: 'var(--red)', fontSize: 'var(--font-base)' }}>
       {message}
     </div>
   )
@@ -351,7 +351,7 @@ export function WorkflowError({ message }) {
 export function WorkflowWarning({ children }) {
   if (!children) return null
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 'var(--r)', color: 'var(--yellow)', fontSize: 13, lineHeight: 1.5 }}>
+    <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 'var(--r)', color: 'var(--yellow)', fontSize: 'var(--font-base)', lineHeight: 1.5 }}>
       {children}
     </div>
   )
@@ -447,7 +447,7 @@ export function ActionBar({ children, summary }) {
       padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
       boxShadow: 'var(--shadow-pop)',
     }}>
-      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>{summary}</div>
+      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
       <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>{children}</div>
     </div>
   )
@@ -500,16 +500,16 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
         }}
       >
         <div style={{ padding: '18px 20px 0' }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+          <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>
             Add {patterns.length} exclusion rule{patterns.length !== 1 ? 's' : ''}
           </div>
-          <p style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
             {subtitle} Excluded files are left out of scoring, workflows and duplicate
             detection from the next audit on — nothing is deleted. These land in
             <b> Config → Excluded Files &amp; Folders</b>, where you can edit or remove them.
           </p>
           {note && (
-            <p style={{ fontSize: 11.5, color: 'var(--text-dim)', margin: '8px 0 0', lineHeight: 1.5 }}>
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '8px 0 0', lineHeight: 1.5 }}>
               {note}
             </p>
           )}
@@ -519,7 +519,7 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
               those are exactly the rows that end up here. A refusal message
               that recommends an impossible action is worse than none. */}
           {tooLong.length > 0 && (
-            <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
               {tooLong.length} rule{tooLong.length !== 1 ? 's are' : ' is'} longer than {MAX_PATTERN_CHARS} characters
               and will be refused. auditorr uses one rule for the whole release folder
               wherever that is safe; these are the files where it is not, so they need a
@@ -535,7 +535,7 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
             return (
               <div key={`${p}-${i}`} title={p} style={{
                 padding: '6px 12px', borderBottom: i < patterns.length - 1 ? '1px solid var(--border)' : 'none',
-                fontSize: 11, fontFamily: 'var(--mono)', wordBreak: 'break-all',
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', wordBreak: 'break-all',
                 color: over ? 'var(--yellow)' : 'var(--text)',
               }}>
                 {p}
@@ -565,7 +565,7 @@ export function ActionButton({ onClick, disabled, danger, primary, children, tit
       disabled={disabled}
       title={title}
       style={{
-        fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)',
+        fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)',
         cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
         border: `1px solid ${danger ? 'var(--red)40' : primary ? 'var(--accent)' : 'var(--border2)'}`,
         background: danger ? 'var(--surface2)' : primary ? 'var(--accent)' : 'var(--surface2)',

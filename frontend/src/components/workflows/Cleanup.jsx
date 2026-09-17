@@ -110,12 +110,12 @@ function StatBox({ label, value, sub, dot }) {
       padding: '12px 16px', borderRadius: 'var(--rl)', flex: 1, minWidth: 140,
       background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
     }}>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
         {dot && <Dot color={dot} />}
         {label}
       </div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
     </div>
   )
 }
@@ -123,7 +123,7 @@ function StatBox({ label, value, sub, dot }) {
 function StateMark({ state }) {
   const s = STATE[state] || STATE.last_copy
   return (
-    <span title={s.title} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontFamily: 'var(--mono)', color: s.color, flexShrink: 0, minWidth: 124, lineHeight: '16px' }}>
+    <span title={s.title} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: s.color, flexShrink: 0, minWidth: 124, lineHeight: '16px' }}>
       <Dot color={s.color} />{s.label}
     </span>
   )
@@ -149,18 +149,18 @@ function FileRow({ row, folder, checked, onToggle }) {
       <StateMark state={row.state} />
       <div style={{ flex: 1, minWidth: 0 }}>
         {row.paths.map(p => (
-          <div key={p} title={p} style={{ fontSize: 11.5, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '16px' }}>
+          <div key={p} title={p} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '16px' }}>
             {shown(p)}
           </div>
         ))}
         {row.paths.length > 1 && (
-          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+          <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>
             One file at {row.paths.length} paths — its space is freed only when every one is deleted.
           </div>
         )}
       </div>
-      <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, lineHeight: '16px' }}>{ageLabel(row.mtime)}</span>
-      <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 60, textAlign: 'right', lineHeight: '16px' }}>
+      <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, lineHeight: '16px' }}>{ageLabel(row.mtime)}</span>
+      <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 60, textAlign: 'right', lineHeight: '16px' }}>
         {formatBytes(row.size)}
       </span>
     </div>
@@ -193,29 +193,29 @@ function FolderGroup({ group, selected, onToggleFile, onToggleKeys }) {
           style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, flexShrink: 0, color: 'var(--text-dim)' }}>
           <polyline points="9 18 15 12 9 6" />
         </svg>
-        <span title={group.folder} style={{ minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span title={group.folder} style={{ minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {group.folder}
         </span>
         {/* Why no folder rule is offered here. Saying so is what stops the
             header checkbox reading as "this whole folder". */}
         {reason && (
-          <span title={reason.title} style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+          <span title={reason.title} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
             {reason.chip}
           </span>
         )}
         <span style={{ flex: 1 }} />
         {tallies.length > 1 && tallies.map(([s, n]) => (
-          <span key={s} title={STATE[s].title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, fontFamily: 'var(--mono)', color: STATE[s].color, flexShrink: 0 }}>
+          <span key={s} title={STATE[s].title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: STATE[s].color, flexShrink: 0 }}>
             <Dot color={STATE[s].color} />{n} {STATE[s].label}
           </span>
         ))}
-        <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
           {group.oldest_mtime != null ? `oldest ${ageLabel(group.oldest_mtime)}` : 'age unavailable'}
         </span>
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
           {plural(group.files.length, 'file')}
         </span>
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 64, textAlign: 'right' }}>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 64, textAlign: 'right' }}>
           {formatBytes(group.total_size)}
         </span>
       </div>
@@ -241,12 +241,12 @@ function Pile({ pile, groups, selected, onToggleFile, onToggleKeys }) {
           <Checkbox checked={allChecked} indeterminate={someChecked} onChange={() => onToggleKeys(keys)} />
         )}
         <Dot color={pile.color} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{pile.title}</span>
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)' }}>{pile.title}</span>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
           {plural(rows.length, 'file')} · {formatBytes(size)}
         </span>
       </div>
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: 0, lineHeight: 1.5 }}>{pile.blurb}</p>
+      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: 0, lineHeight: 1.5 }}>{pile.blurb}</p>
       {groups.map(g => (
         <FolderGroup key={g.folder} group={g} selected={selected}
           onToggleFile={onToggleFile} onToggleKeys={onToggleKeys} />

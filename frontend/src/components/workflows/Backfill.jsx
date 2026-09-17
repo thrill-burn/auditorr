@@ -162,7 +162,7 @@ function MatchChips({ match }) {
     <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
       {items.map(([k, label]) => (
         <span key={k} title={`${label}: ${match[k]} against your file`} style={{
-          fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
+          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
           color: MATCH_COLOR[match[k]] || 'var(--text-dim)',
         }}>{label}{MATCH_MARK[match[k]] || ''}</span>
       ))}
@@ -178,19 +178,19 @@ function sizeDelta(delta) {
 
 // ── Grab button (shared) ──────────────────────────────────────────────────────
 function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
-  if (state === 'idle')        return <button onClick={onGrab} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)' }}>Grab</button>
-  if (state === 'grabbing')    return <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
-  if (state === 'refreshing')  return <span style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--mono)' }}>Re-searching…</span>
-  if (state === 'grabbed')     return <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
+  if (state === 'idle')        return <button onClick={onGrab} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)' }}>Grab</button>
+  if (state === 'grabbing')    return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
+  if (state === 'refreshing')  return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>Re-searching…</span>
+  if (state === 'grabbed')     return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
   // Already in the arr's queue (B12): a second grab would download it twice, so
   // it takes a deliberate click.
   if (state === 'queued') return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span title={errorMsg} style={{ fontSize: 10, color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>In queue</span>
-      <button onClick={onForce} title="Already downloading — grab another copy anyway" style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)' }}>anyway</button>
+      <span title={errorMsg} style={{ fontSize: 'var(--font-sm)', color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>In queue</span>
+      <button onClick={onForce} title="Already downloading — grab another copy anyway" style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)' }}>anyway</button>
     </span>
   )
-  return <button onClick={onReset} title={`${errorMsg || 'Grab failed'} — click to reset`} style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)' }}>Failed ↺</button>
+  return <button onClick={onReset} title={`${errorMsg || 'Grab failed'} — click to reset`} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)' }}>Failed ↺</button>
 }
 
 // ── Result item ───────────────────────────────────────────────────────────────
@@ -362,11 +362,11 @@ function ResultItem({ item }) {
   const icon = searching ? (
     <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
   ) : found ? (
-    <span style={{ color: 'var(--green)', fontSize: 11, fontWeight: 700 }}>✓</span>
+    <span style={{ color: 'var(--green)', fontSize: 'var(--font-sm)', fontWeight: 700 }}>✓</span>
   ) : notFound ? (
-    <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>—</span>
+    <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>—</span>
   ) : (
-    <span style={{ color: 'var(--red)', fontSize: 11, fontWeight: 700 }}>✗</span>
+    <span style={{ color: 'var(--red)', fontSize: 'var(--font-sm)', fontWeight: 700 }}>✗</span>
   )
 
   const filename = (item.path || '').replace(/\\/g, '/').split('/').pop()
@@ -386,14 +386,14 @@ function ResultItem({ item }) {
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div title={scopeReason(item) || undefined} style={{
-            fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontSize: 'var(--font-md)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             color: notFound || errored ? 'var(--text-dim)' : 'var(--text)',
           }}>
             {item.arr_title}{scopeLabel(item)}
           </div>
           {/* Single-release info line */}
           {!multi && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
               {searching && 'Querying indexers…'}
               {found && item.best_release && (() => {
                 const r = item.best_release
@@ -407,7 +407,7 @@ function ResultItem({ item }) {
             </div>
           )}
           {multi && (
-            <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
               {releases.length} releases found
             </div>
           )}
@@ -421,7 +421,7 @@ function ResultItem({ item }) {
                   onClick={e => e.stopPropagation()}
                   title={filename}
                   style={{
-                    fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)',
+                    fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)',
                     opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     flex: '1 1 0', minWidth: 0, textDecoration: 'underline',
                     textDecorationColor: 'var(--text-dim)', textUnderlineOffset: 2,
@@ -432,7 +432,7 @@ function ResultItem({ item }) {
               ) : (
                 <span
                   style={{
-                    fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)',
+                    fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)',
                     opacity: 0.55, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     flex: '1 1 0', minWidth: 0,
                   }}
@@ -442,17 +442,17 @@ function ResultItem({ item }) {
                 </span>
               )}
               {item.file_quality && (
-                <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.65, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.65, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   {item.file_quality}
                 </span>
               )}
               {item.file_hdr && HDR_STYLE[item.file_hdr] && (
-                <span style={{ fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap', flexShrink: 0, background: HDR_STYLE[item.file_hdr].bg, color: HDR_STYLE[item.file_hdr].color }}>
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap', flexShrink: 0, background: HDR_STYLE[item.file_hdr].bg, color: HDR_STYLE[item.file_hdr].color }}>
                   {item.file_hdr}
                 </span>
               )}
               {item.total_size > 0 && (
-                <span style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.65, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', opacity: 0.65, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   {formatBytes(item.total_size)}
                 </span>
               )}
@@ -465,7 +465,7 @@ function ResultItem({ item }) {
           <a href={item.arr_url || undefined} target="_blank" rel="noopener noreferrer"
             onClick={e => e.stopPropagation()} title={`Open in ${item.arr_service}`}
             style={{
-              fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
+              fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
               textDecoration: 'none', cursor: item.arr_url ? 'pointer' : 'default',
               background: item.arr_service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
               color:      item.arr_service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
@@ -477,7 +477,7 @@ function ResultItem({ item }) {
 
         {/* Import status (auto-starts after any grab) */}
         {importStatus && (
-          <span style={{ fontSize: 10, fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
             {WATCH_ACTIVE.includes(importStatus) && (
               <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
             )}
@@ -508,7 +508,7 @@ function ResultItem({ item }) {
           <div style={{ display: 'grid', gridTemplateColumns: RELEASE_GRID, gap: 8, padding: '2px 10px' }}>
             {['Title', 'Tracker', 'Size', 'vs file', 'Peers', 'Quality', 'Score', 'HDR', 'Match', ''].map((h, i) => (
               <span key={i} style={{
-                fontSize: 11, fontFamily: 'var(--sans)', fontWeight: 600, letterSpacing: 0, textTransform: 'none',
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', fontWeight: 600, letterSpacing: 0, textTransform: 'none',
                 color: 'var(--text-dim)', opacity: 0.75,
                 textAlign: i >= 2 && i <= 6 ? 'right' : 'left',
               }}>{h}</span>
@@ -529,41 +529,41 @@ function ResultItem({ item }) {
                 {r.info_url ? (
                   <a href={r.info_url} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}
-                    style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: 'color-mix(in srgb, var(--text) 30%, transparent)', textUnderlineOffset: 2 }}
+                    style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: 'color-mix(in srgb, var(--text) 30%, transparent)', textUnderlineOffset: 2 }}
                     title={r.title}>
                     {r.title}
                   </a>
                 ) : (
-                  <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={r.title}>
                     {r.title}
                   </span>
                 )}
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}
                   title={r.indexer}>
                   {r.indexer}
                 </span>
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
                   {formatBytes(r.size)}
                 </span>
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', textAlign: 'right', whiteSpace: 'nowrap',
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', textAlign: 'right', whiteSpace: 'nowrap',
                   color: MATCH_COLOR[r.match?.size] || 'var(--text-dim)' }}>
                   {sizeDelta(r.size_delta)}
                 </span>
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: r.seeders > 0 ? 'var(--green)' : 'var(--text-dim)', textAlign: 'right' }}>
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: r.seeders > 0 ? 'var(--green)' : 'var(--text-dim)', textAlign: 'right' }}>
                   {r.seeders != null ? `${r.seeders}S` : '—'}
                 </span>
-                <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                   title={r.quality_name}>
                   {r.quality_name || '—'}
                 </span>
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
                   {r.custom_format_score ?? 0}
                 </span>
                 <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                   {hdrInfo ? (
                     <span style={{
-                      fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700,
+                      fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700,
                       padding: '2px 5px', borderRadius: 4,
                       background: hdrInfo.bg, color: hdrInfo.color,
                       whiteSpace: 'nowrap',
@@ -889,24 +889,24 @@ export default function Backfill({ onNavigate }) {
         />
 
         {loading ? (
-          <div style={{ color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
+          <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>Loading…</div>
         ) : (
           <>
             {indexers.length > 0 && (
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
                   <SectionLabel>Indexer Strategy</SectionLabel>
-                  {saving && <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>Saving…</span>}
+                  {saving && <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Saving…</span>}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Download from</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = no restriction.</div>
+                    <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Download from</div>
+                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = no restriction.</div>
                     <IndexerChips options={indexers} value={downloadFrom} onChange={handleDownloadFromChange} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Must also be seeding on</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Release must also be listed on these — downloading it from one of them counts. <em>Any</em> = no restriction.</div>
+                    <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Must also be seeding on</div>
+                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Release must also be listed on these — downloading it from one of them counts. <em>Any</em> = no restriction.</div>
                     <IndexerChips options={indexers} value={seedingOn} onChange={handleSeedingOnChange} allLabel="Any" />
                   </div>
                 </div>
@@ -916,7 +916,7 @@ export default function Backfill({ onNavigate }) {
             {folders.length > 0 && (
               <div>
                 <SectionLabel>Root Folders</SectionLabel>
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                   The root folders configured in Sonarr/Radarr. <em>All</em> = search everything.
                 </div>
                 <FolderChips folders={folders} selected={liveFolders} onChange={setSelectedFolders} />
@@ -925,20 +925,20 @@ export default function Backfill({ onNavigate }) {
 
             <div>
               <SectionLabel>Quality Filter</SectionLabel>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
                 Restrict results by resolution and/or source, exactly like a Sonarr/Radarr quality profile. <em>Any</em> = no restriction.
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
+                  <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
                   <LabeledChips options={QUALITY_RES_OPTIONS} value={resFilter} onChange={setResFilter} />
                 </div>
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
+                  <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
                   <LabeledChips options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
                 </div>
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
+                  <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
                   <LabeledChips options={HDR_OPTIONS} value={hdrFilter} onChange={setHdrFilter} />
                 </div>
               </div>
@@ -946,7 +946,7 @@ export default function Backfill({ onNavigate }) {
 
             <div>
               <SectionLabel>Release Ranking</SectionLabel>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                 Which release is offered first for each candidate.
               </div>
               <SortPicker options={RANK_OPTIONS} value={releaseRank} onChange={setReleaseRank} />
@@ -954,7 +954,7 @@ export default function Backfill({ onNavigate }) {
 
             <div>
               <SectionLabel>Priority</SectionLabel>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                 How to order candidates when there are more than the search limit.
               </div>
               <SortPicker options={SORT_OPTIONS} value={sort} onChange={setSort} />
@@ -965,7 +965,7 @@ export default function Backfill({ onNavigate }) {
                   onChange={e => setTitleSearch(e.target.value)}
                   placeholder="Filter by title…"
                   style={{
-                    padding: '6px 10px', borderRadius: 'var(--r)', fontSize: 13,
+                    padding: '6px 10px', borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
                     border: '1px solid var(--border)',
                     background: 'var(--surface2)',
                     color: 'var(--text)',
@@ -979,7 +979,7 @@ export default function Backfill({ onNavigate }) {
 
             <div>
               <SectionLabel>Search Depth</SectionLabel>
-              <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
                 Each candidate queries your indexers — expect 10–90s per search depending on your setup.
                 {availableCount > 0 && ` ${availableCount.toLocaleString()} searchable candidate${availableCount !== 1 ? 's' : ''}${kinds ? ` — ${kinds}` : ''}.`}
                 {/* Shown even at zero candidates: that is the case where a
@@ -992,9 +992,9 @@ export default function Backfill({ onNavigate }) {
                   paths sit together. Only where the arr holds a file of the same
                   name — otherwise there is nothing true to put beside it. */}
               {unmatchedVideo > 0 && unmatchedExample && (
-                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: -4, marginBottom: 12, lineHeight: 1.6 }}>
+                <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: -4, marginBottom: 12, lineHeight: 1.6 }}>
                   For example, one of those videos and the {exampleArr}{unmatchedExample.connection_name && unmatchedExample.connection_name.toLowerCase() !== exampleArr.toLowerCase() ? ` (${unmatchedExample.connection_name})` : ''} file of the same name:
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, marginTop: 4, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 2, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', marginTop: 4, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 2, minWidth: 0 }}>
                     <span>your library</span>
                     <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.path}>{unmatchedExample.path}</span>
                     <span>{exampleArr}</span>
@@ -1010,7 +1010,7 @@ export default function Backfill({ onNavigate }) {
                 onClick={handleGenerate}
                 disabled={availableCount === 0}
                 style={{
-                  fontSize: 13, fontWeight: 600, padding: '10px 24px', borderRadius: 8,
+                  fontSize: 'var(--font-base)', fontWeight: 600, padding: '10px 24px', borderRadius: 8,
                   cursor: availableCount > 0 ? 'pointer' : 'not-allowed',
                   background: availableCount > 0 ? 'var(--accent)' : 'var(--surface2)',
                   color: availableCount > 0 ? '#fff' : 'var(--text-dim)',
@@ -1020,7 +1020,7 @@ export default function Backfill({ onNavigate }) {
                 Generate {willSearch > 0 ? `${willSearch} ` : ''}Releases →
               </button>
               {availableCount === 0 && (
-                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-dim)' }}>
+                <div style={{ marginTop: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
                   No resolved candidates — check that Radarr/Sonarr is configured.
                 </div>
               )}
@@ -1055,20 +1055,20 @@ export default function Backfill({ onNavigate }) {
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'center', marginBottom: 2 }}>Workflows</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>{phaseLabel}</div>
-          {notice && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>{notice}</div>}
+          <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'center', marginBottom: 2 }}>Workflows</div>
+          <div style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)' }}>{phaseLabel}</div>
+          {notice && <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 4 }}>{notice}</div>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
           {phase === 'running' && (
             <button onClick={handleStop} style={{
-              fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
+              fontSize: 'var(--font-base)', padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
               border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
             }}>Stop</button>
           )}
           {phase !== 'running' && (
             <button onClick={handleReset} style={{
-              fontSize: 12, padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
+              fontSize: 'var(--font-base)', padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
               border: '1px solid var(--accent)40', background: 'var(--accent)10', color: 'var(--accent)',
             }}>← New Search</button>
           )}
@@ -1101,7 +1101,7 @@ export default function Backfill({ onNavigate }) {
       )}
 
       {rows.length === 0 && phase === 'running' && (
-        <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 13 }}>
+        <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>
           <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
           {reattaching ? 'Picking your search back up…' : 'Starting search…'}
         </div>
