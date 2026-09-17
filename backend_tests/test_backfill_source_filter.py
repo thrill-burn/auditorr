@@ -88,5 +88,42 @@ class SourceChipTests(unittest.TestCase):
             rows, [], [], source_filter=['webdl']), [])
 
 
+def _res_rel(quality_name, resolution, size):
+    return dict(_rel(quality_name, '', title=quality_name, size=size), resolution=resolution)
+
+
+class SdChipTests(unittest.TestCase):
+    """BACKFILL B2's note (Phase 14): a DVD or 480p release was parsed and ranked
+    as SD-class, and no chip could select it.
+
+    Checked against source, 2026-09-16. Sonarr `main`
+    (`src/NzbDrone.Core/Qualities/Quality.cs`): `SDTV` (Television, 480), `DVD`
+    (DVD, 480), `WEBDL-480p`, `WEBRip-480p`, `Bluray-480p` (480) and
+    `Bluray-576p` (576). Radarr `develop`, the same file: `SDTV` (TV, 480),
+    **`DVD` (DVD, 0)**, `DVD-R` (DVD, 480), `WEBDL-480p`, `WEBRip-480p`,
+    `Bluray-480p` (480), `Bluray-576p` (576). So a resolution chip keyed on the
+    integer alone would miss every Radarr DVD, which reports no resolution.
+    """
+
+    def _rows(self):
+        return [_res_rel('WEBDL-1080p', 1080, 1), _res_rel('HDTV-720p', 720, 2),
+                _res_rel('DVD', 480, 3),            # Sonarr
+                _res_rel('DVD', 0, 4),              # Radarr — resolution 0
+                _res_rel('DVD-R', 480, 5), _res_rel('SDTV', 480, 6),
+                _res_rel('Bluray-576p', 576, 7), _res_rel('Unknown', 0, 8)]
+
+    def test_a_dvd_release_is_selectable_by_its_chip(self):
+        sd = app._apply_release_filters(self._rows(), [], [], res_filter=['480p'])
+        self.assertEqual(sorted(r['size'] for r in sd), [3, 4, 5, 6, 7])
+        dvd = app._apply_release_filters(self._rows(), [], [], source_filter=['dvd'])
+        self.assertEqual(sorted(r['size'] for r in dvd), [3, 4, 5])
+
+    def test_the_other_resolution_chips_are_unchanged(self):
+        rows = self._rows()
+        self.assertEqual([r['size'] for r in app._apply_release_filters(rows, [], [], res_filter=['1080p'])], [1])
+        self.assertEqual([r['size'] for r in app._apply_release_filters(rows, [], [], res_filter=['720p'])], [2])
+        self.assertEqual(app._apply_release_filters(rows, [], [], res_filter=['2160p']), [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -53,9 +53,12 @@ def gen(monkeypatch):
     monkeypatch.setattr(app, 'AUDITORR_SECRET', '')
     monkeypatch.setattr(app, 'AUDITORR_REQUIRE_AUTH', False)
     monkeypatch.setattr(app, 'db_load_config', lambda: {})
-    monkeypatch.setattr(app, '_build_generate_candidates',
-                        lambda cfg, **kw: [_candidate(n) for n in (1, 2, 3)])
-    monkeypatch.setattr(app, 'arr_media_index_errors', lambda: [])
+    # Phase 14 (S11): generate takes its candidates and their errors from one
+    # `_resolve_backfill` result, where it used to call the builder and then the
+    # errors accessor. Repointed; the three candidates are unchanged.
+    monkeypatch.setattr(app, '_resolve_backfill',
+                        lambda cfg: {'groups': [_candidate(n) for n in (1, 2, 3)],
+                                     'arr_errors': []})
     monkeypatch.setattr(app, 'fetch_release_matrix', gate)
     app._gen_jobs.clear()
     client = app.app.test_client()

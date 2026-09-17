@@ -235,15 +235,33 @@ def fetch_arr_media_index_result(cfg, force=False):
     return snap[1], list(snap[2])
 
 
+def fetch_arr_media_index_with_roots(cfg, force=False):
+    """`(rows, errors, roots)` for the media index, **from one snapshot** (S11, B10).
+
+    Backfill's form of `fetch_arr_media_index_result`: it labels each candidate
+    with its instance's root folder, so the roots have to describe the rows too.
+    It read the errors and the roots through the accessors below, straight after
+    the fetch, until Phase 14 — the sequential contract S11 retired for Triage
+    and Trumped in Phase 9, where another request's refresh can land between the
+    two and a request then reports an instance as healthy that its own fetch
+    could not read, and labels its files with roots it never received.
+
+    `roots` is `{connection_id: [root, ...] | None}` — see `arr_root_folders`.
+    """
+    snap = _arr_media_index_snapshot(cfg, force)
+    return snap[1], list(snap[2]), dict(snap[3])
+
+
 def arr_root_folders():
     """`{connection_id: [root, ...] | None}` from the most recent index snapshot (B10).
 
     Arr-side paths as configured in Sonarr/Radarr, longest first. `None` for an
     instance whose root folders could not be read; an instance whose media index
     failed has no entry at all. **The most recent snapshot**, which under
-    concurrent requests need not be the one the caller's own fetch returned —
-    see `fetch_arr_media_index_result`. Backfill still reads it straight after
-    its fetch; an interleaving costs it a folder chip, never a verdict.
+    concurrent requests need not be the one the caller's own fetch returned.
+    **No request path reads this since Phase 14**: Backfill takes its roots
+    from `fetch_arr_media_index_with_roots`. Kept for the in-container probe,
+    which runs one fetch at a time.
     """
     snap = _arr_media_index_cache.get('snapshot')
     return dict(snap[3]) if snap else {}
@@ -260,10 +278,9 @@ def arr_media_index_errors():
     **This reads whichever fetch landed last**, and under concurrent requests
     that need not be the caller's (S11). Anything that turns these errors into
     a verdict takes them from `fetch_arr_media_index_result` instead — Triage
-    and Trumped do. Backfill still reads this straight after its fetch, where
-    an interleaving can hide a warning banner and nothing more; switching it was
-    not mechanical (the fetch sits inside `_resolve_backfill`, read by two
-    callers) and is recorded rather than done.
+    and Trumped do, and since Phase 14 so does Backfill
+    (`fetch_arr_media_index_with_roots`). **No request path reads this.** Kept
+    for the in-container probe, which runs one fetch at a time.
     """
     snap = _arr_media_index_cache.get('snapshot')
     return list(snap[2]) if snap else []
@@ -433,6 +450,15 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             # numbering, `mappedEpisodeNumbers` is the series' own numbering —
             # the one an episode-file join yields.
             'episode_numbers':     list(r.get('mappedEpisodeNumbers') or r.get('episodeNumbers') or []),
+            # The season those numbers belong to, and the episodes themselves
+            # (amendment 1, Phase 14). Sonarr's `ReleaseResource`:
+            # `MappedSeasonNumber = remoteEpisode.Episodes.FirstOrDefault()?.SeasonNumber`
+            # (null where nothing mapped) and `MappedEpisodeInfo` carrying each
+            # mapped episode's `Id`. The numbers alone could not tell S02E05 from
+            # S01E05. Never the parsed `seasonNumber`: a daily release parses 0.
+            'mapped_season':       r.get('mappedSeasonNumber'),
+            'mapped_episode_ids':  [e.get('id') for e in (r.get('mappedEpisodeInfo') or [])
+                                    if isinstance(e, dict) and e.get('id') is not None],
         })
     return result
 
@@ -1234,7 +1260,8 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
 
 def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=None,
                               download_folder=None, only_paths=None, import_mode='Auto',
-                              only_episode_ids=None, media_folder_fallback=True):
+                              only_episode_ids=None, media_folder_fallback=True,
+                              whole_episode_sets=None):
     """Force manual import of a movie or series, bypassing quality cutoff.
 
     download_id:     the downloadId from the Radarr/Sonarr queue record (qBittorrent hash).
@@ -1255,6 +1282,14 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
                      files being replaced, not imported. Episodes are the unit both
                      sides share. Without it a season pack grabbed for one episode
                      replaces every episode it carries (BACKFILL B1/B11).
+    whole_episode_sets: Sonarr only — the episode ids of each library file the
+                     import may replace, one list per file. A row naming any
+                     episode of a file must name all of them. Sonarr's upgrade
+                     recycles every existing file of the episodes it imports
+                     (`UpgradeMediaFileService`), so a single-episode download
+                     forced over a two-episode file deletes the other episode's
+                     file too — a subset of `only_episode_ids` fitted, and that
+                     was amendment 1's first shape (Phase 14).
     media_folder_fallback: the arr's own library folder as a last resort. Its listing
                      is the library file itself, so without a path scope a force
                      import from it re-imports the very file it is replacing. A caller
@@ -1289,10 +1324,12 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
             rows = [r for r in rows if (r.get('path') or '') in wanted]
         if only_episode_ids is not None:
             allowed = set(only_episode_ids)
+            files = [set(s) for s in (whole_episode_sets or []) if s]
 
             def _in_scope(row):
                 ids = {ep.get('id') for ep in (row.get('episodes') or []) if ep.get('id') is not None}
-                return bool(ids) and ids <= allowed
+                return (bool(ids) and ids <= allowed
+                        and all(held <= ids for held in files if held & ids))
             rows = [r for r in rows if _in_scope(r)]
         return rows
 
@@ -2012,7 +2049,8 @@ def arr_titles_errors():
     instance that is merely unreachable would otherwise be indistinguishable
     from one that has never heard of the release. It reads whichever fetch
     landed last, so a caller that turns it into a verdict takes the errors from
-    `fetch_arr_all_titles_result` instead.
+    `fetch_arr_all_titles_result` instead. **No request path reads this** —
+    every caller does, since Phase 9. Kept for the in-container probe.
     """
     snap = _arr_titles_cache.get('snapshot')
     return list(snap[2]) if snap else []

@@ -126,8 +126,7 @@ def _generate(release_rank=None):
          patch.object(app, 'AUDITORR_REQUIRE_AUTH', False), \
          patch.object(app, 'db_load_config', return_value=cfg), \
          patch.object(app, 'db_load_file_results', return_value=media), \
-         patch.object(app, 'fetch_arr_media_index', return_value=arr_media), \
-         patch.object(app, 'arr_media_index_errors', return_value=[]), \
+         patch.object(app, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})), \
          patch('arr._arr_get', return_value=releases):
         job_id = client.post('/api/workflows/generate', json=body, environ_base=_ENV).get_json()['job_id']
         deadline = time.monotonic() + 10

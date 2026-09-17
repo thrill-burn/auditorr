@@ -36,6 +36,8 @@ export const QUALITY_RES_OPTIONS = [
   { value: '2160p', label: '2160p / 4K' },
   { value: '1080p', label: '1080p'      },
   { value: '720p',  label: '720p'       },
+  // SD: 480p and 576p, and a DVD with no resolution of its own (Radarr reports 0).
+  { value: '480p',  label: '480p / SD'  },
 ]
 export const QUALITY_SOURCE_OPTIONS = [
   { value: 'remux',  label: 'Remux'  },
@@ -43,6 +45,7 @@ export const QUALITY_SOURCE_OPTIONS = [
   { value: 'webdl',  label: 'WEB-DL' },
   { value: 'webrip', label: 'WEBRip' },
   { value: 'hdtv',   label: 'HDTV'   },
+  { value: 'dvd',    label: 'DVD'    },
 ]
 export const HDR_OPTIONS = [
   { value: 'DV',     label: 'Dolby Vision' },

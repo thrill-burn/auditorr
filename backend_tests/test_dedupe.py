@@ -187,6 +187,12 @@ def _call(method, url, torrent_files, media_files, cfg, tmp, body=None, mountinf
         stack.enter_context(patch.object(app, 'db_load_results', return_value={}))
         stack.enter_context(patch.object(app, 'db_load_file_results',
                                          side_effect=lambda tab, conn=None: list(stored.get(tab, []))))
+        # These records are the full lists, the shape of a database whose last
+        # scan predates Phase 14's compact `dedupe` row — so the endpoints take
+        # their fallback. The row itself is tested against a real SQLite file in
+        # `test_dedupe_row.py`.
+        stack.enter_context(patch.object(app, 'db_has_file_results',
+                                         side_effect=lambda tab, conn=None: tab in stored))
         # Never the real /proc/self/mountinfo: on a Linux CI box its answer
         # would depend on where the temp directory lives.
         stack.enter_context(patch.object(

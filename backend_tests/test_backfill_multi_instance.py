@@ -15,7 +15,7 @@ missing from the page:
 """
 import arr
 import app as app_module
-from arr import fetch_arr_media_index, arr_media_index_errors
+from arr import fetch_arr_media_index, fetch_arr_media_index_result
 from unittest.mock import patch
 
 
@@ -54,7 +54,7 @@ def test_same_series_id_on_two_sonarrs_stays_two_candidates():
          'title_slug': 'anime', 'episode_ids': [21]},
     ]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})):
         groups = app_module._build_generate_candidates(_two_sonarrs())
 
     assert len(groups) == 2, 'the anime series was absorbed into the TV series'
@@ -81,8 +81,7 @@ def test_both_instances_contribute_a_root_folder():
     ]
     roots = {'sonarr-tv': ['/data/media/tv'], 'sonarr-anime': ['/data/media/anime']}
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media), \
-         patch.object(app_module, 'arr_root_folders', return_value=roots):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], roots)):
         groups = app_module._build_generate_candidates(_two_sonarrs())
 
     # The arrs' own root folders since B10, not the first segment below MEDIA_PATH.
@@ -124,7 +123,7 @@ def test_unparseable_episode_names_do_not_merge_seasons():
          'season_number': 2, 'episode_numbers': [9], 'episode_ids': [209]},
     ]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})):
         groups = app_module._build_generate_candidates(_single_sonarr())
 
     assert len(groups) == 2, 'two seasons merged into one candidate'
@@ -146,7 +145,7 @@ def test_the_filename_regex_is_still_the_fallback():
          'path': '/data/media/tv/Show/Show.S02E01.mkv'},
     ]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})):
         groups = app_module._build_generate_candidates(_single_sonarr())
 
     assert sorted(g['season_number'] for g in groups) == [1, 2]
@@ -162,7 +161,7 @@ def test_a_whole_season_still_groups_into_one_candidate():
                   'season_number': 1, 'episode_numbers': [n], 'episode_ids': [100 + n]}
                  for n in (1, 2, 3)]
     with patch.object(app_module, 'db_load_file_results', return_value=media_files), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})):
         groups = app_module._build_generate_candidates(_single_sonarr())
 
     assert len(groups) == 1
@@ -180,8 +179,7 @@ def test_acquire_candidates_ships_the_season_so_the_client_can_agree():
                   'season_number': 4, 'episode_numbers': [5], 'episode_ids': [405]}]
     with patch.object(app_module, 'db_load_config', return_value=_single_sonarr()), \
          patch.object(app_module, 'db_load_file_results', return_value=media_files), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media), \
-         patch.object(app_module, 'arr_media_index_errors', return_value=[]):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})):
         body = app_module.app.test_client().get('/api/workflows/acquire_candidates').get_json()
 
     assert body['candidates'][0]['season_number'] == 4
@@ -252,10 +250,9 @@ def test_a_partial_instance_reaches_the_index_errors_channel():
            'ARR_CONNECTIONS': [{'id': 'sonarr-tv', 'service': 'sonarr', 'name': 'TV',
                                 'base_url': 'http://tv:8989', 'api_key': 'a'}]}
     with patch('arr._arr_get', side_effect=_one_series_fails()):
-        media = fetch_arr_media_index(cfg, force=True)
+        media, errors = fetch_arr_media_index_result(cfg, force=True)
 
     assert len(media) == 2, 'the two readable series must still be indexed'
-    errors = arr_media_index_errors()
     assert len(errors) == 1
     assert errors[0]['partial'] is True
     assert (errors[0]['failed'], errors[0]['total']) == (1, 3)
@@ -298,10 +295,9 @@ def test_failed_instance_is_named_in_the_index_errors():
         return [{'id': 11, 'path': '/tv/Show/S01E01.mkv'}]
 
     with patch('arr._arr_get', side_effect=fake_get):
-        media = fetch_arr_media_index(_two_sonarrs(), force=True)
+        media, errors = fetch_arr_media_index_result(_two_sonarrs(), force=True)
 
     assert [m['connection_id'] for m in media] == ['sonarr-tv']
-    errors = arr_media_index_errors()
     assert [e['connection_id'] for e in errors] == ['sonarr-anime']
     assert errors[0]['name'] == 'Anime'
     assert 'timed out' in errors[0]['message']
@@ -320,10 +316,10 @@ def test_a_healthy_fetch_clears_a_previous_failure():
         return [{'id': 11, 'path': '/tv/Show/S01E01.mkv'}]
 
     with patch('arr._arr_get', side_effect=failing):
-        fetch_arr_media_index(_two_sonarrs(), force=True)
-    assert len(arr_media_index_errors()) == 2
+        _media, errors = fetch_arr_media_index_result(_two_sonarrs(), force=True)
+    assert len(errors) == 2
 
     with patch('arr._arr_get', side_effect=healthy):
-        fetch_arr_media_index(_two_sonarrs(), force=True)
-    assert arr_media_index_errors() == []
+        _media, errors = fetch_arr_media_index_result(_two_sonarrs(), force=True)
+    assert errors == []
     _clear_index_cache()

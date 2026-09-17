@@ -19,6 +19,17 @@ import {
 
 const pad2 = n => String(n).padStart(2, '0')
 
+// B6 — candidates whose grab the server accepted, by their stable key
+// (`_resolve_backfill`'s `key`), until the audit lands. Module-level for the
+// reason Triage's and Cleanup's `DISMISSED` sets are: the list is re-fetched
+// from the last audit on every visit, so a grabbed candidate would otherwise come
+// back on navigating away and returning. The keys also ride the next Generate
+// request, because that run builds its candidates server-side and would search
+// the grabbed one again. Cleared on `audit_complete`, when the server's own
+// answer is correct — a scan that lands before the import can list it again, and
+// B12's queue check then refuses the second grab.
+const GRABBED = new Set()
+
 // How a row says what became of its grab. Only `done` is an import auditorr
 // watched happen; the rest are the other ways a watch can end (Phase 12, S07).
 const IMPORT_LABEL = {
@@ -293,6 +304,7 @@ function ResultItem({ item }) {
           setGrab(key, 'grabbing')
           try {
             await api.grabRelease(grabBody(fresh, false))
+            if (item.key) GRABBED.add(item.key)
             setGrab(key, 'grabbed')
             startImportWatch(fresh)
           } catch (err2) {
@@ -317,6 +329,8 @@ function ResultItem({ item }) {
     setGrab(key, 'grabbing')
     try {
       await api.grabRelease(grabBody(release, force))
+      // Only an accepted grab: a refusal (`already_queued`) or a failure keeps the row.
+      if (item.key) GRABBED.add(item.key)
       setGrab(key, 'grabbed')
       startImportWatch(release)
     } catch (err) {
@@ -330,7 +344,7 @@ function ResultItem({ item }) {
         grabFailed(key, err)
       }
     }
-  }, [grabStates, grabBody, grabFailed, setGrab, startImportWatch, doRefreshAndRetry])
+  }, [item, grabStates, grabBody, grabFailed, setGrab, startImportWatch, doRefreshAndRetry])
 
   const resetGrab = useCallback((key, e) => {
     e.stopPropagation()
@@ -611,6 +625,7 @@ export default function Backfill({ onNavigate }) {
   const [totalUnseeded, setTotalUnseeded] = useState(0)
   const [matchedFiles,  setMatchedFiles]  = useState(0)
   const [unmatchedVideo, setUnmatchedVideo] = useState(null)
+  const [unmatchedExample, setUnmatchedExample] = useState(null)   // B9: one pair of paths, or null
   const [loading,       setLoading]       = useState(true)
   const [loadError,     setLoadError]     = useState(null)
   const [arrErrors,     setArrErrors]     = useState([])   // instances whose media index failed
@@ -662,10 +677,11 @@ export default function Backfill({ onNavigate }) {
     setLoadError(null)
     Promise.all([api.acquireCandidates(), api.workflowIndexers(), api.getConfig()])
       .then(([cdata, idata, cfg]) => {
-        setAllGroups(cdata.candidates || [])
+        setAllGroups((cdata.candidates || []).filter(c => !GRABBED.has(c.key)))
         setTotalUnseeded((cdata.resolved_count || 0) + (cdata.unresolved_count || 0))
         setMatchedFiles(cdata.resolved_count || 0)
         setUnmatchedVideo(cdata.unresolved_video_count ?? null)
+        setUnmatchedExample(cdata.unmatched_example || null)
         setArrErrors(cdata.arr_errors || [])
         setIndexers(idata.indexers || [])
         setDownloadFrom(cfg.ACQUIRE_DOWNLOAD_FROM || [])
@@ -682,8 +698,9 @@ export default function Backfill({ onNavigate }) {
   // the scan the user's own backfill just caused, so a file that has been
   // successfully backfilled is still offered and grabbing it again is a plain
   // duplicate download. The config phase is the only thing this re-renders; a
-  // running job lives in a different phase and is untouched.
-  useAuditComplete(load)
+  // running job lives in a different phase and is untouched. The audit's answer
+  // is now the authoritative one, so the locally grabbed keys go (B6).
+  useAuditComplete(() => { GRABBED.clear(); load() })
 
   const saveFilters = useCallback(async (df, so) => {
     setSaving(true)
@@ -812,6 +829,8 @@ export default function Backfill({ onNavigate }) {
         title_search:  titleSearch.trim() || undefined,
         download_from: downloadFrom,
         seeding_on:    seedingOn,
+        // B6 — grabbed since the last audit; the run builds its own list.
+        exclude_keys:  GRABBED.size ? [...GRABBED] : undefined,
       })
       // The run re-fetched the library (the index cache is 120s, and setting
       // filters takes longer than that), so this is the authoritative answer
@@ -839,6 +858,8 @@ export default function Backfill({ onNavigate }) {
     pollToken.current += 1
     clearTimeout(pollRef.current)
     saveJobId(null)
+    // Back to the list the page loaded before the run, less what it grabbed (B6).
+    setAllGroups(groups => groups.filter(c => !GRABBED.has(c.key)))
     setPhase('config')
     setJobId(null)
     setJobData(null)
@@ -851,6 +872,7 @@ export default function Backfill({ onNavigate }) {
   // ── Config phase ──────────────────────────────────────────────────────────────
   if (phase === 'config') {
     const kinds = kindsLine(selectedGroups)
+    const exampleArr = unmatchedExample?.service === 'sonarr' ? 'Sonarr' : 'Radarr'
     return (
       <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 28 }}>
         <WorkflowHeader
@@ -966,6 +988,20 @@ export default function Backfill({ onNavigate }) {
                 {matchedLine && ` ${matchedLine}`}
                 {unmatchedLine && ` ${unmatchedLine}`}
               </div>
+              {/* B9's optional half: the mismatch is usually obvious once the two
+                  paths sit together. Only where the arr holds a file of the same
+                  name — otherwise there is nothing true to put beside it. */}
+              {unmatchedVideo > 0 && unmatchedExample && (
+                <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: -4, marginBottom: 12, lineHeight: 1.6 }}>
+                  For example, one of those videos and the {exampleArr}{unmatchedExample.connection_name && unmatchedExample.connection_name.toLowerCase() !== exampleArr.toLowerCase() ? ` (${unmatchedExample.connection_name})` : ''} file of the same name:
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, marginTop: 4, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 2, minWidth: 0 }}>
+                    <span>your library</span>
+                    <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.path}>{unmatchedExample.path}</span>
+                    <span>{exampleArr}</span>
+                    <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.arr_path}>{unmatchedExample.arr_path}</span>
+                  </div>
+                </div>
+              )}
               <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount || 999} />
             </div>
 

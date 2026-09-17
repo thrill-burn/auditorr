@@ -136,6 +136,8 @@ def stored(path):
             'torrents':   blob('torrents'),
             'triage':     blob('triage'),
             'cleanup':    blob('cleanup'),
+            'dedupe':     blob('dedupe'),
+            'dedupe_stats': meta('file_results_dedupe_stats'),
             'media_sigs': blob('media_sigs'),
             'torrents_sigs': blob('torrents_sigs'),
             'results':    json.loads(results['results_json']) if results else None,
@@ -423,6 +425,34 @@ def test_an_interrupted_publish_leaves_the_previous_scan_whole(tmp_path):
     assert after['aborted'] == 0
 
 
+def test_the_dedupe_row_is_published_with_the_scan(tmp_path):
+    """Phase 14's compact `dedupe` row joins the publish (S04). It lands under
+    the scan's generation, and a publish that fails leaves the previous scan's
+    row — a Dedupe page reading this generation's row against last generation's
+    details would be the mixed read Phase 13 closed."""
+    with real_db(tmp_path) as path:
+        run_scan(tmp_path, torrents=2)
+        good = stored(path)
+        # A second copy of an existing file, so the failed generation *would*
+        # have written a different row.
+        rel = tmp_path / 'torrents' / 'movies' / 'Rel'
+        (rel / 'copy.mkv').write_bytes((rel / 'f0.mkv').read_bytes())
+
+        boom = patch('audit.db_update_meta', side_effect=RuntimeError('disk full'))
+        run_scan(tmp_path, torrents=2, extra=[boom])
+        after = stored(path)
+
+        run_scan(tmp_path, torrents=2)
+        landed = stored(path)
+
+    assert good['dedupe'] == {'torrents': [], 'media': []}
+    assert good['dedupe_stats']['generation'] == good['generation']['id']
+    assert after['dedupe'] == good['dedupe']
+    assert after['dedupe_stats'] == good['dedupe_stats']
+    assert len(landed['dedupe']['torrents']) == 2
+    assert landed['dedupe_stats']['generation'] == landed['generation']['id']
+
+
 def test_no_upload_snapshot_survives_a_publish_that_did_not_complete(tmp_path):
     """Decision 2 (a), 2026-09-15: the differenced series join the publish.
 
@@ -506,7 +536,10 @@ def test_the_publish_never_holds_two_inventories(tmp_path):
     with real_db(tmp_path):
         run_scan(tmp_path, torrents=3, extra=[patch('audit.db_save_file_results', _save)])
 
-    assert [tab for tab, _ in handed] == ['media', 'torrents', 'triage', 'cleanup']
+    # Phase 14 added the compact `dedupe` row, staged beside the other two and
+    # held to the same rule — this list gained a name, the assertion did not
+    # change meaning.
+    assert [tab for tab, _ in handed] == ['media', 'torrents', 'triage', 'cleanup', 'dedupe']
     for tab, files in handed:
         assert isinstance(files, db.PreparedFileResults), f"{tab} was handed a record list"
         assert isinstance(files.blob, bytes)

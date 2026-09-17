@@ -90,8 +90,7 @@ def _run_generate(media, arr_media, episodes=(), releases=(), episodes_fail=Fals
          patch.object(app_module, 'AUDITORR_REQUIRE_AUTH', False), \
          patch.object(app_module, 'db_load_config', return_value=_cfg()), \
          patch.object(app_module, 'db_load_file_results', return_value=media), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media), \
-         patch.object(app_module, 'arr_media_index_errors', return_value=[]), \
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})), \
          patch('arr._arr_get', side_effect=fake_get):
         res = client.post('/api/workflows/generate', json={'count': 50}, environ_base=_ENV)
         assert res.status_code == 200, res.get_json()
@@ -117,8 +116,7 @@ def _acquire(media, arr_media):
          patch.object(app_module, 'AUDITORR_REQUIRE_AUTH', False), \
          patch.object(app_module, 'db_load_config', return_value=_cfg()), \
          patch.object(app_module, 'db_load_file_results', return_value=media), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media), \
-         patch.object(app_module, 'arr_media_index_errors', return_value=[]):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})):
         return app_module.app.test_client().get('/api/workflows/acquire_candidates',
                                                 environ_base=_ENV).get_json()
 
@@ -213,6 +211,129 @@ def test_an_episode_row_is_never_offered_a_pack_or_a_wider_file():
     assert offered == ['Show.2024.01.05.1080p.WEB-DL-GRP', 'Show.S01E01.1080p.WEB-DL-GRP']
 
 
+# ── Amendment 1: episode sets, not counts (Phase 14) ─────────────────────────
+#
+# The 2026-09-10 outside review's first design amendment: replace count
+# comparisons with explicit episode sets. Assessed in Phase 14 against B1's three
+# layers, and two shapes got through all of them — decision 5 (a), 2026-09-16.
+#
+# Checked against Sonarr `main` (2026-09-16): `ReleaseResource.MappedEpisodeNumbers
+# = remoteEpisode.Episodes.Select(v => v.EpisodeNumber)` — numbers only;
+# `MappedSeasonNumber = remoteEpisode.Episodes.FirstOrDefault()?.SeasonNumber`;
+# `MappedEpisodeInfo` carries each mapped episode's `Id`, `SeasonNumber` and
+# `EpisodeNumber`. An episode search maps an off-season release to that season's
+# real episode (`ParsingService.GetStandardEpisodes` falls back to
+# `_episodeService.FindEpisode(series.Id, mappedSeasonNumber, episodeNumber)`),
+# and interactive search lists it with its rejection.
+
+def _mapped(title, season, numbers, ids=None, full_season=False, size=1_000_000_001):
+    """A `/api/v3/release` row the way Sonarr v4 maps it."""
+    row = _release(title, full_season=full_season, episodes=numbers, size=size)
+    row['mappedEpisodeNumbers'] = list(numbers)
+    row['mappedSeasonNumber'] = season
+    if ids is not None:
+        row['mappedEpisodeInfo'] = [{'id': i, 'seasonNumber': season, 'episodeNumber': n}
+                                    for i, n in zip(ids, numbers)]
+    return row
+
+
+def _double_episode_season():
+    """S01E01E02 in one unseeded file beside a seeded S01E03 — an episode row."""
+    rows = [('Show.S01E01E02.1080p.WEB-DL.mkv', 5101, ['None']),
+            ('Show.S01E03.1080p.WEB-DL.mkv', 5103, ['tracker.example'])]
+    media, arr_media = [], []
+    for name, file_id, trackers in rows:
+        rel = f'tv/Show/Season 01/{name}'
+        media.append({'path': rel, 'size': 2_000_000_000, 'trackers': trackers})
+        arr_media.append({'service': 'sonarr', 'connection_id': 'sonarr-tv', 'arr_id': 1,
+                          'title': 'Show', 'path': f'/data/media/{rel}', 'title_slug': 'show',
+                          'file_id': file_id, 'season_number': 1, 'episode_ids': [],
+                          'episode_numbers': [], 'file_quality_name': 'WEBDL-1080p', 'file_hdr': ''})
+    episodes = [{'id': 101, 'seriesId': 1, 'seasonNumber': 1, 'episodeNumber': 1, 'episodeFileId': 5101},
+                {'id': 102, 'seriesId': 1, 'seasonNumber': 1, 'episodeNumber': 2, 'episodeFileId': 5101},
+                {'id': 103, 'seriesId': 1, 'seasonNumber': 1, 'episodeNumber': 3, 'episodeFileId': 5103}]
+    return media, arr_media, episodes
+
+
+def test_an_episode_row_is_never_offered_a_release_covering_part_of_its_file():
+    """Shape 1. A single-episode release for a two-episode file passed the gate
+    (`covers <= mine`) and the import scope, and Sonarr's upgrade then recycles
+    every existing file of the imported episodes (`UpgradeMediaFileService`) —
+    the whole E01E02 file, leaving E02 with none and its torrent orphaned."""
+    media, arr_media, episodes = _double_episode_season()
+    releases = [_mapped('Show.S01E01.1080p.WEB-DL-GRP', 1, [1], ids=[101]),
+                _mapped('Show.S01E02.1080p.WEB-DL-GRP', 1, [2]),
+                _mapped('Show.S01E01E02.1080p.WEB-DL-GRP', 1, [1, 2], ids=[101, 102])]
+
+    searches, results = _run_generate(media, arr_media, episodes, releases=releases)
+
+    assert searches == ['/api/v3/release?episodeId=101']
+    assert [r['title'] for r in results[0]['releases']] == ['Show.S01E01E02.1080p.WEB-DL-GRP']
+
+
+def test_an_episode_row_is_never_offered_another_seasons_episode():
+    """Shape 2. `mappedEpisodeNumbers` is numbers alone, so S02E01 and the special
+    S00E01 read as covering S01E01. The import scope refuses their force import,
+    but the grab still downloads the wrong episode and the arr may upgrade that
+    season's seeded file with it."""
+    media, arr_media, episodes = _season(10, unseeded=1)
+    releases = [_mapped('Show.S02E01.1080p.WEB-DL-GRP', 2, [1]),
+                _mapped('Show.S00E01.Special.1080p.WEB-DL-GRP', 0, [1]),
+                _mapped('Show.S01E01.1080p.WEB-DL-GRP', 1, [1])]
+
+    _searches, results = _run_generate(media, arr_media, episodes, releases=releases)
+
+    assert [r['title'] for r in results[0]['releases']] == ['Show.S01E01.1080p.WEB-DL-GRP']
+
+
+def test_mapped_episode_ids_decide_where_sonarr_gives_them():
+    """Explicit sets, the amendment's own words: where the release names the
+    episodes it maps to, those ids must be the file's."""
+    media, arr_media, episodes = _season(10, unseeded=1)
+    releases = [_mapped('Show.S01E01.WrongMap-GRP', 1, [1], ids=[999]),
+                _mapped('Show.S01E01.1080p.WEB-DL-GRP', 1, [1], ids=[101])]
+
+    _searches, results = _run_generate(media, arr_media, episodes, releases=releases)
+
+    assert [r['title'] for r in results[0]['releases']] == ['Show.S01E01.1080p.WEB-DL-GRP']
+
+
+def test_a_pack_row_is_never_offered_another_seasons_pack():
+    media, arr_media, episodes = _season(2, unseeded=2)
+    releases = [_mapped('Show.S02.1080p.WEB-DL-GRP', 2, [1, 2], full_season=True),
+                _mapped('Show.S01.1080p.WEB-DL-GRP', 1, [1, 2], full_season=True)]
+
+    _searches, results = _run_generate(media, arr_media, episodes, releases=releases)
+
+    assert [r['title'] for r in results[0]['releases']] == ['Show.S01.1080p.WEB-DL-GRP']
+
+
+def test_a_release_sonarr_did_not_map_is_still_offered():
+    """Characterisation. A release with no mapped season or numbers (daily and
+    absolute-numbered names before mapping) is kept, as it always was: refusing
+    it would empty the workflow for exactly the libraries B8 was for, and the
+    import watch scopes by episode id regardless."""
+    media, arr_media, episodes = _season(2, unseeded=1, name='Show - 2024-01-0{ep}.mkv')
+    releases = [_release('Show.2024.01.01.1080p.WEB-DL-GRP')]
+
+    _searches, results = _run_generate(media, arr_media, episodes, releases=releases)
+
+    assert [r['title'] for r in results[0]['releases']] == ['Show.2024.01.01.1080p.WEB-DL-GRP']
+
+
+def test_an_excluded_file_keeps_its_season_from_being_a_pack():
+    """Characterisation, kept from the assessment's scratch cases: nothing else
+    tests it. An excluded file is not a candidate but is still a file the arr
+    holds, so the season is not covered and no pack is searched."""
+    media, arr_media, episodes = _season(3, unseeded=3)
+    media[0]['excluded'] = True
+
+    searches = _searches_issued(media, arr_media, episodes)
+
+    assert not [p for p in searches if 'seasonNumber=' in p]
+    assert sorted(searches) == ['/api/v3/release?episodeId=102', '/api/v3/release?episodeId=103']
+
+
 def test_a_season_row_keeps_its_pack():
     media, arr_media, episodes = _season(2, unseeded=2)
     releases = [_release('Show.S01.1080p.WEB-DL-GRP', full_season=True)]
@@ -250,7 +371,7 @@ def test_the_page_is_served_the_candidates_the_search_runs():
 
     body = _acquire(media, arr_media)
     with patch.object(app_module, 'db_load_file_results', return_value=media), \
-         patch.object(app_module, 'fetch_arr_media_index', return_value=arr_media):
+         patch.object(app_module, 'fetch_arr_media_index_with_roots', return_value=(arr_media, [], {})):
         searched = app_module._build_generate_candidates(_cfg())
 
     assert ([(c['key'], c['scope']) for c in body['candidates']]

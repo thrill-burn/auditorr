@@ -141,6 +141,14 @@ release, and those are left off an episode row. Where Sonarr hasn't numbered
 every file of a show, auditorr can't show that a season is fully unseeded, so
 it searches episode by episode.
 
+A release offered on a row has to cover **exactly** what that row's file holds,
+in the **same season**. A file holding two episodes (`S01E01E02`) is only
+offered two-episode releases: Sonarr replaces the whole existing file when it
+imports, so a single-episode release would delete the other episode's file. And
+a release for the same episode number in another season (`S02E01`, or the
+special `S00E01`) isn't offered for `S01E01`, nor another season's pack for a
+season-pack row. A release Sonarr couldn't match to any episode is still shown.
+
 ### Ranking
 
 **Closest to my file** (the default) puts first the release that looks like the
@@ -151,7 +159,10 @@ the most seeders. Each release shows its size against your file (`= exact`,
 (upgrade)** keeps Sonarr/Radarr's own order — custom format score, quality,
 seeders — for when you mean to upgrade while you backfill.
 
-Results can also be filtered by resolution, source and HDR format.
+Results can also be filtered by resolution (including **480p / SD**), source
+(including **DVD**) and HDR format. The chips go by the quality Sonarr/Radarr
+names each release with, so they mean the same on both — Radarr reports a DVD
+release with no resolution at all, and the SD chip still finds it.
 
 ### Grabbing and importing
 
@@ -177,6 +188,11 @@ release's info hash is used to tell this download apart from another of the same
 title in the queue; with two indistinguishable downloads for one item, auditorr
 won't force either.
 
+Once Sonarr/Radarr accepts a grab, that candidate leaves the page — and isn't
+searched again by your next run — until the next scan. If that scan still finds
+the file unseeded (say it ran before the download imported), the candidate comes
+back, and grabbing it again is refused while the first download is in the queue.
+
 A grab that fails because the release has dropped out of the arr's cache is
 searched again and retried once. Any other failure is shown as it is — a
 timeout may be a grab that actually went through, and retrying it would
@@ -201,7 +217,10 @@ library, it separates subtitles, artwork and other files no arr indexes from
 **video files that didn't match**, which are the number worth acting on. If
 little of your library matched, a path mapping is the usual cause. If most of
 it did, those videos are files Sonarr/Radarr don't track at those paths — a
-title they don't manage, or manage somewhere else.
+title they don't manage, or manage somewhere else. Where one of those videos has
+the same file name as a file Sonarr/Radarr does hold, the page shows the two
+paths together — yours and the arr's — which usually makes a path-mapping
+mismatch obvious. Nothing is shown for a video no arr file shares a name with.
 
 **Indexer strategy** lets you say "download from these indexers, but only if the
 release is also on that one" — useful when you want to satisfy one tracker's
@@ -490,6 +509,13 @@ that holds the files, can tell whether two copies really share a disk and
 whether a file has hardlinks auditorr doesn't know about. Nothing is selected
 for you.
 
+The **Dedupe badge** in the sidebar counts the groups the page lists as of the
+last scan — including any that have changed since. The duplicate figure in your
+health score and on the dashboard counts files, so the two numbers differ. If
+you add an exclusion rule, the page applies it straight away and the badge
+catches up on the next scan (or when you save Config, on a library under
+200,000 files).
+
 Most groups carry no label: the script checks every copy when it runs. On a
 pooled share (an Unraid share, mergerfs) that includes copies on different
 drives — the share makes the link if it can, and the script leaves alone any it
@@ -595,7 +621,10 @@ through it:
 4. **Pick the replacement.** auditorr finds the Sonarr/Radarr entry from the
    files the group is hardlinked to, falling back to the new release's name,
    and searches it. The exact replacement on the PM's tracker is shown as
-   **Grab this one**; the rest are folded under *Other releases*.
+   **Grab this one**; the rest are folded under *Other releases*. If a second
+   Sonarr/Radarr instance also holds the group's files (a 4K Radarr beside your
+   main one, say), step 4 says so — `on Radarr · also Radarr 4K` — naming the
+   instance the search and the grab go to.
 5. **Execute.** The replacement is grabbed through Sonarr/Radarr **first**, and
    the old group is removed via the client only once the arr has accepted it —
    so a grab that fails leaves your files exactly where they were. auditorr then

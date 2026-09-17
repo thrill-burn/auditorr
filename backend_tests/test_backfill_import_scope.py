@@ -310,6 +310,62 @@ def test_a_radarr_watch_needs_no_episode_scope_but_keeps_the_fallback_off():
     assert out.force.call_args.kwargs['media_folder_fallback'] is False
 
 
+class _TwoEpisodeFileArr(_Arr):
+    """Library file 501 holds S01E01 *and* S01E02; the download is S01E01 alone."""
+
+    def get(self, _base, _key, path, timeout=10):
+        if path.startswith('/api/v3/episode?'):
+            return [{'id': 101, 'seasonNumber': 1, 'episodeNumber': 1, 'episodeFileId': 501},
+                    {'id': 102, 'seasonNumber': 1, 'episodeNumber': 2, 'episodeFileId': 501}]
+        if path.startswith('/api/v3/manualimport'):
+            return [{'path': '/downloads/Show.S01E01/Show.S01E01.mkv', 'quality': {},
+                     'languages': [], 'seasonNumber': 1, 'episodes': [{'id': 101}]}]
+        return super().get(_base, _key, path, timeout)
+
+
+def test_the_watch_never_force_imports_part_of_a_multi_episode_file():
+    """Amendment 1, shape 1, at the import (Phase 14, decision 5 (a)). The scope
+    was the set of the file's episodes, and a row naming *some* of them passed —
+    so a single-episode download was force-imported with `replaceExistingFiles`
+    over a file holding two, and Sonarr's upgrade recycles the whole file
+    (`UpgradeMediaFileService`), leaving E02 with no file and its torrent an
+    orphan. The real force import runs here; only HTTP is faked."""
+    the_arr = _TwoEpisodeFileArr([[_episode()]])
+    clock = _Clock()
+    _Sync.scans = []
+    with patch.object(app, 'AUDITORR_SECRET', ''), \
+         patch.object(app, 'AUDITORR_REQUIRE_AUTH', False), \
+         patch.object(app, 'db_load_config', return_value=_cfg()), \
+         patch.object(app, 'db_update_meta'), \
+         patch.object(app.threading, 'Thread', _Sync), \
+         patch('arr._arr_get', side_effect=the_arr.get), \
+         patch('time.monotonic', clock.monotonic), \
+         patch('time.sleep', clock.sleep), \
+         patch('arr.urllib.request.urlopen') as urlopen, \
+         patch.object(app, 'nudge_watchdog'), \
+         patch.object(app, 'try_start_scanning', return_value=True):
+        urlopen.return_value.__enter__.return_value.read.return_value = b'{}'
+        res = app.app.test_client().post('/api/workflows/watch_import', json=_SONARR,
+                                         environ_base={'REMOTE_ADDR': '127.0.0.1'})
+        watch = app._import_watches[res.get_json()['job_id']]
+
+    posted = [json.loads(c.args[0].data) for c in urlopen.call_args_list
+              if getattr(c.args[0], 'data', None)]
+    assert not [b for b in posted if b.get('name') == 'ManualImport'], \
+        'a single-episode download was force-imported over a two-episode library file'
+    assert watch['status'] != 'done'
+
+
+def test_a_download_covering_the_whole_multi_episode_file_is_still_imported():
+    """Characterisation's other half: the rule refuses part of a file, not a
+    multi-episode file."""
+    rows = [{'path': '/d/Show.S01E01E02.mkv', 'episodes': [{'id': 101}, {'id': 102}]}]
+    body, _ = _force(lambda path: rows, service='sonarr', connection_id='sonarr-tv',
+                     arr_id=1, download_id='HASH', only_episode_ids=[101, 102])
+
+    assert [f['path'] for f in body['files']] == ['/d/Show.S01E01E02.mkv']
+
+
 # ── S07: a success needs an observation ──────────────────────────────────────
 #
 # `poll_queue_until_clear` answered `[]` for no connection, a failed download, a

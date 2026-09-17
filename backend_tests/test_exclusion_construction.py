@@ -560,5 +560,51 @@ class TombstoneTests(unittest.TestCase):
         self.assertEqual(len(out['groups'][0]['members']), 2)
 
 
+# ── C8's optional half: a hint for a rule that is read as a glob (Phase 14) ───
+#
+# Since Phase 5 every rule auditorr writes from a path is `literal:`. What is
+# left is a hand-typed or pre-Phase-5 rule, and it fails silently: a path
+# carrying `[` is a character class and matches nothing. Decision 4 (b),
+# 2026-09-16: a warning on config save, through the channel #21 uses for a
+# schemeless URL — never an error, so no install is locked out of its settings
+# by a rule it wrote months ago. `*` and `?` are left alone: in a hand-typed
+# rule those are usually meant.
+
+def _save_config(tmp_path, patterns):
+    from backend_tests.test_publish_atomicity import real_db
+    cfg = {'LOCAL_PATH': '', 'MEDIA_PATH': '', 'EXCLUSION_PATTERNS': list(patterns)}
+    with real_db(tmp_path), \
+         patch.object(app, 'AUDITORR_SECRET', ''), \
+         patch.object(app, 'AUDITORR_REQUIRE_AUTH', False), \
+         patch.object(app, 'restart_watchdog', lambda: None):
+        resp = app.app.test_client().post('/api/config', json=cfg)
+        saved = app.db_load_config()['EXCLUSION_PATTERNS']
+    return resp, saved
+
+
+def test_a_bracketed_path_pattern_is_warned_and_still_saved(tmp_path):
+    rule = 'anime/[SubsPlease] Show - 01 [1080p].mkv'
+    resp, saved = _save_config(tmp_path, [rule])
+
+    assert resp.status_code == 200
+    assert saved == [rule], 'the rule is saved as written — nothing is migrated'
+    warnings = resp.get_json()['warnings']
+    assert len(warnings) == 1
+    assert 'literal:' in warnings[0] and '[SubsPlease]' in warnings[0]
+
+
+def test_rules_the_matcher_does_not_read_as_a_path_glob_are_not_warned(tmp_path):
+    """Typed rules, a subtree prefix (matched as a prefix, not through fnmatch),
+    a bareword, and intended globs."""
+    rules = ['literal:anime/[SubsPlease] Show/', 'ext:sfv', 'contains:[sample]',
+             'name:[extras]', 'anime/[SubsPlease] Show/', 'anime/[SubsPlease] Show/**',
+             'Featurettes', 'movies/*/Sample*.mkv', '*.nfo', 'movies/Film ]2020].mkv']
+    resp, saved = _save_config(tmp_path, rules)
+
+    assert resp.status_code == 200
+    assert saved == rules
+    assert resp.get_json()['warnings'] == []
+
+
 if __name__ == '__main__':
     unittest.main()

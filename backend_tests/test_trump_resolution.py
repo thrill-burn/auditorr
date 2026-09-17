@@ -717,6 +717,37 @@ class TestArrItemFromPaths:
         assert body['arr_item_ambiguous'] is True
         assert len(body['path_items']) == 2
 
+    def test_trumped_ships_both_instance_names_when_two_hold_the_payload(self, tree):
+        """Phase 14 renders 4b's flag the way Triage's T2 chip does: *on X · also
+        Y*. The page needs to name the instance the grab goes to and the other
+        one holding the payload, without re-deriving which `path_items` entry was
+        chosen — the endpoint made that choice and says so."""
+        index = [_index_row(tree.library, arr_id=7, conn='r1', connection_name='Films'),
+                 _index_row(tree.library, arr_id=3, conn='r4k', connection_name='Films 4K')]
+        conns = [{'id': 'r1', 'service': 'radarr', 'name': 'Films', 'base_url': 'http://r1', 'api_key': 'k'},
+                 {'id': 'r4k', 'service': 'radarr', 'name': 'Films 4K', 'base_url': 'http://r4k', 'api_key': 'k'}]
+        with patch.object(app, 'normalize_arr_connections', return_value=conns):
+            matrix = MagicMock(return_value=[])
+            with patch.object(app, 'db_load_config', return_value=dict(tree.cfg)), \
+                 patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
+                 patch.object(app, 'fetch_arr_media_index_result', return_value=(index, [])), \
+                 patch.object(app, 'fetch_release_matrix', matrix):
+                body = app.app.test_client().post('/api/workflows/trump/search_release', json={
+                    'new_title': 'Rel.2020.2160p.UHD.BluRay-NEW',
+                    'group_paths': [tree.linked]}).get_json()
+
+        assert body['arr_item_ambiguous'] is True
+        assert (body['connection_id'], body['connection_name']) == ('r1', 'Films')
+        assert body['arr_item_others'] == [
+            {'connection_id': 'r4k', 'connection_name': 'Films 4K', 'arr_id': 3, 'title': 'Rel'}]
+        # The search went to the chosen instance.
+        assert matrix.call_args.args[2] == 'r1'
+
+    def test_one_instance_ships_no_others(self, tree):
+        body = _search(tree, [_index_row(tree.library)], titles=[]).get_json()
+        assert body['arr_item_ambiguous'] is False
+        assert body.get('arr_item_others', []) == []
+
 
 def test_the_episode_anchor_reads_media_index_rows():
     """Phase 6's note: index rows carry `season_number`, which skipped the

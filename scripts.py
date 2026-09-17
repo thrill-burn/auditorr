@@ -32,16 +32,53 @@ def _compute_script_root(local_path, media_path):
     return common
 
 
+def is_dedupe_relevant(f):
+    """The records duplicate grouping can use: excluded ones (they feed the
+    partner filter) and ones with duplicate partners. One definition, read by
+    `dup_group_inputs` and by the audit's compact `dedupe` row."""
+    return bool(f.get('excluded') or f.get('duplicate_paths'))
+
+
+def dedupe_row(torrent_files, media_files):
+    """The compact `dedupe` `file_results` row (R6, Phase 14): `{'torrents': [...],
+    'media': [...]}` — **references** to the records `is_dedupe_relevant` keeps,
+    never copies, keyed by tree so the builder can tell the two apart.
+
+    Both Dedupe endpoints read this instead of both full lists, which was the
+    last endpoint deserializing the whole library to keep a sliver of it (C10's
+    shape for Cleanup, v1.7.0's for Triage). Feeding it to `build_dedupe_report`
+    is the same computation as feeding the full lists, because the builder's
+    first step is this filter.
+    """
+    return {'torrents': [f for f in torrent_files if is_dedupe_relevant(f)],
+            'media':    [f for f in media_files if is_dedupe_relevant(f)]}
+
+
+def dedupe_group_count(torrent_files, media_files, cfg):
+    """How many groups the Dedupe page lists for these records (the sidebar badge).
+
+    The page's own grouping, minus the per-request `stat` that only classifies
+    and never removes a group — so stale groups count, because the page lists
+    them. The one way the two can still differ: the page applies the exclusion
+    rules as they are *now*, and this applied them as they were when it ran.
+    """
+    local_path = cfg.get('LOCAL_PATH', '') or ''
+    media_path = cfg.get('MEDIA_PATH', '') or ''
+    matcher = compile_exclusions(expand_exclusion_patterns(cfg))
+    built = _build_dup_groups(dup_group_inputs(torrent_files, media_files, local_path, media_path),
+                              local_path, media_path, matcher=matcher, log_counts=False)
+    return len(built['groups'])
+
+
 def dup_group_inputs(torrent_files, media_files, local_path, media_path):
     """Tag files with their filesystem root and tree for _build_dup_groups,
-    keeping only the files group building can actually use: excluded ones (they
-    feed the partner filter) and ones with duplicate partners. Copying every
-    record just to add the tag doubled the multi-GB parsed lists on very large
-    libraries."""
-    def keep(f):
-        return f.get('excluded') or f.get('duplicate_paths')
-    return ([{**f, '_file_root': local_path, '_tree': 'torrents'} for f in torrent_files if keep(f)]
-            + [{**f, '_file_root': media_path, '_tree': 'media'} for f in media_files if keep(f)])
+    keeping only the files group building can actually use (`is_dedupe_relevant`).
+    Copying every record just to add the tag doubled the multi-GB parsed lists
+    on very large libraries."""
+    return ([{**f, '_file_root': local_path, '_tree': 'torrents'}
+             for f in torrent_files if is_dedupe_relevant(f)]
+            + [{**f, '_file_root': media_path, '_tree': 'media'}
+               for f in media_files if is_dedupe_relevant(f)])
 
 
 def _abs(path):
@@ -86,7 +123,7 @@ def _cause(members):
     return 'copies'
 
 
-def _build_dup_groups(all_files, local_path, media_path='', matcher=None):
+def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_counts=True):
     """Duplicate groups built around the inode (DEDUPE §5.2).
 
     `all_files` is `dup_group_inputs`' output. Returns `{'groups',
@@ -235,10 +272,12 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None):
         })
 
     # Counts only: these reach /api/debug/report through the log ring buffer.
-    if self_edges:
+    # The audit's badge count builds the same groups every scan and passes
+    # `log_counts=False`, so the lines stay what they were: one per page load.
+    if self_edges and log_counts:
         log.warning("Dedupe: %d duplicate record(s) named another path of the same file "
                     "— merged, not shown (DEDUPE F12)", len(self_edges))
-    if unresolved:
+    if unresolved and log_counts:
         log.info("Dedupe: %d duplicate partner path(s) matched no stored record and were "
                  "left out", len(unresolved))
     return {"groups": groups, "script_root": script_root, "excluded_count": excluded_count,

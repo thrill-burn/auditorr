@@ -556,12 +556,18 @@ def db_prepare_file_results(files):
 
     Split out from the write in Phase 13 so the publish transaction holds the
     write lock for the write alone — see `PreparedFileResults` for the numbers.
+
+    `files` is a record list, or — for the compact `dedupe` row, which keeps the
+    two trees apart — a dict of record lists. `count` is records either way, so
+    the stats row means the same thing for every tab.
     """
     cobj = zlib.compressobj(level=1)
     chunks = [cobj.compress(chunk.encode('utf-8', errors='replace'))
               for chunk in json.JSONEncoder().iterencode(files)]
     chunks.append(cobj.flush())
-    return PreparedFileResults(len(files), b''.join(chunks))
+    count = (sum(len(v) for v in files.values() if isinstance(v, list))
+             if isinstance(files, dict) else len(files))
+    return PreparedFileResults(count, b''.join(chunks))
 
 
 def db_save_file_results(tab, files, conn=None, generation=None):

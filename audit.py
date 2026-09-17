@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 import sources
 from exclusions import is_excluded, compile_exclusions
+from scripts import dedupe_group_count, dedupe_row
 from media_server_exclusions import expand_exclusion_patterns
 
 from db import (
@@ -844,6 +845,16 @@ def _library_shape(scoring_media):
                 uhd_bytes += f.get('size', 0) or 0
                 break
     return {'title_count': len(title_keys), 'uhd_bytes': uhd_bytes}
+
+
+# Details a scan measures that `process_health_metrics` cannot derive from the
+# stored lists: seeding time comes from the client, the oldest media file from
+# the walk's own stat calls. The config-save recompute rebuilds the dashboard
+# from the lists alone and **carries these forward** — it dropped them until
+# Phase 14, so Rounds' Atlas, Old Faithful and Provenance tiles read 0 from a
+# config save until the next scan. (`dedupe_group_count` is recomputed there
+# instead, from the lists the recompute already holds.)
+SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days')
 
 
 def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
@@ -2075,6 +2086,11 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             'oldest_media_age_days': (
                 max(0, int((time.time() - oldest_media_mtime) // 86400))
                 if oldest_media_mtime else 0),
+            # The groups the Dedupe page lists (Phase 14) — the sidebar badge's
+            # number. `duplicate_count` counts files and feeds the health score,
+            # the change log, Singleton and Clone Hunter, so it stays as it is;
+            # the badge reads this and falls back to it where absent.
+            'dedupe_group_count': dedupe_group_count(torrent_files_data, media_files_data, cfg),
         }
         # The history point is staged rather than written: it joins the publish
         # below, because the hourly/daily series accumulates and a point left
@@ -2227,6 +2243,10 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # page and the delete script read this, never the full torrent list.
             ('cleanup',  db_prepare_file_results(
                 [f for f in torrent_files_data if _is_cleanup_relevant(f)])),
+            # Compact Dedupe working set (R6, Phase 14): the page and the script
+            # read this, never both full lists. References, keyed by tree.
+            ('dedupe',   db_prepare_file_results(
+                dedupe_row(torrent_files_data, media_files_data))),
         ]
         staged_sigs = [
             ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),

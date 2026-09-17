@@ -6,7 +6,39 @@ on:
     tags: [ 'v*' ]
 
 jobs:
+  # The backend suite, on the Python the container runs (Dockerfile: python:3.12-slim).
+  # The image build below `needs` it, so a red suite publishes no image for main,
+  # experimental or a tag: "If a job fails or is skipped, all jobs that need it are
+  # skipped unless the jobs use a conditional expression that causes the job to
+  # continue" (GitHub Docs, workflow syntax, jobs.<job_id>.needs). Phase 14,
+  # decision 1 (a). The frontend needs no step here: the image build fails on a
+  # broken bundle already.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      # The script tests run the generated bash scripts; bash, GNU stat, cmp and
+      # ln are on the runner already.
+      - name: Backend tests
+        run: python -m pytest backend_tests -q -p no:cacheprovider
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

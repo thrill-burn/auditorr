@@ -220,6 +220,28 @@ class CompiledExclusions:
         return False
 
 
+def reads_bracket_as_glob(pattern):
+    """True when a path-shaped rule carries a `[` that both matchers read as glob syntax.
+
+    CLEANUP C8's optional half (decision 4 (b), Phase 14). Since Phase 5 every
+    rule auditorr builds from a path is `literal:`; what is left is a hand-typed
+    or pre-Phase-5 rule, where `[SubsPlease]` is a character class and the rule
+    silently matches nothing. The Config page warns on save and never blocks it.
+
+    Mirrors how `CompiledExclusions` routes a rule, so it warns only where the
+    rule really reaches `fnmatch`: not a typed rule (`literal:`, `ext:`, `name:`,
+    `contains:`), not a bareword, and not a subtree (`…/` or `…/**`), which both
+    matchers take as a plain prefix. Only `[` — a lone `]` is literal to
+    `fnmatch`, and `*`/`?` in a hand-typed rule are usually meant.
+    """
+    pat = _norm(str(pattern or "").strip())
+    if not pat or pat.startswith("#") or "/" not in pat or "[" not in pat:
+        return False
+    if pat.lower().startswith(("ext:", "name:", "contains:", _LITERAL_PREFIX)):
+        return False
+    return not (pat.endswith("/") or pat.endswith("/**"))
+
+
 def compile_exclusions(patterns):
     """Pre-compile a pattern list into a reusable matcher.
 

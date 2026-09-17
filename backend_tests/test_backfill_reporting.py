@@ -54,9 +54,10 @@ def _patched(cfg, files, roots, extra_media=()):
             patch.object(app, 'AUDITORR_REQUIRE_AUTH', False),
             patch.object(app, 'db_load_config', return_value=cfg),
             patch.object(app, 'db_load_file_results', return_value=media),
-            patch.object(app, 'fetch_arr_media_index', return_value=rows),
-            patch.object(app, 'arr_media_index_errors', return_value=[]),
-            patch.object(app, 'arr_root_folders', return_value=roots))
+            # Rows, errors and roots from one snapshot, as `_resolve_backfill`
+            # reads them since Phase 14 (S11). Repointed from three separate
+            # patches of the fetch and its two accessors; fixtures unchanged.
+            patch.object(app, 'fetch_arr_media_index_with_roots', return_value=(rows, [], roots)))
 
 
 def _acquire(cfg, files, roots, extra_media=()):
@@ -185,11 +186,11 @@ def test_root_folders_ride_the_index_fetch_and_their_failure_does_not_fail_it():
         return [{'id': 1, 'title': 'Film', 'movieFile': {'id': 9, 'path': '/movies/Film/Film.mkv'}}]
 
     with patch('arr._arr_get', side_effect=fake_get):
-        media = arr.fetch_arr_media_index(_cfg(_MOVIES), force=True)
+        media, errors, roots = arr.fetch_arr_media_index_with_roots(_cfg(_MOVIES), force=True)
 
     assert len(media) == 1
-    assert arr.arr_media_index_errors() == []
-    assert arr.arr_root_folders() == {'radarr-mv': None}
+    assert errors == []
+    assert roots == {'radarr-mv': None}
     _clear_index_cache()
 
 
@@ -202,9 +203,9 @@ def test_root_folder_paths_are_normalised_longest_first():
         return []
 
     with patch('arr._arr_get', side_effect=fake_get):
-        arr.fetch_arr_media_index(_cfg(_MOVIES), force=True)
+        _media, _errors, roots = arr.fetch_arr_media_index_with_roots(_cfg(_MOVIES), force=True)
 
-    assert arr.arr_root_folders() == {'radarr-mv': ['D:/Media/Anime', '/tv/anime', '/tv']}
+    assert roots == {'radarr-mv': ['D:/Media/Anime', '/tv/anime', '/tv']}
     _clear_index_cache()
 
 
@@ -353,3 +354,145 @@ def test_a_cached_release_search_applies_the_quality_filters_too():
 
 def test_the_candidate_builder_has_no_dead_limit():
     assert 'limit' not in inspect.signature(app._build_generate_candidates).parameters
+
+
+# ── S11: rows, errors and root folders from one snapshot (Phase 14) ──────────
+#
+# Phase 9 closed S11 for Triage and Trumped; Backfill kept reading the accessors
+# straight after its fetch. Under gunicorn's eight threads another request's
+# refresh can land between the two, and the accessors then describe a library
+# this request never received. The pattern is Triage's own test
+# (`ArrResultPairingTests.test_arr_errors_describe_the_rows_they_came_with`):
+# the accessor itself triggers the interleaving refresh.
+
+def test_backfill_reads_rows_errors_and_roots_from_one_snapshot():
+    media = [{'path': 'movies/Film/Film.mkv', 'size': 1000, 'trackers': ['None']}]
+    film = [{'id': 7, 'title': 'Film', 'titleSlug': 'film',
+             'movieFile': {'id': 70, 'path': '/data/media/movies/Film/Film.mkv',
+                           'quality': {'quality': {'name': 'WEBDL-1080p'}}}}]
+
+    def arr_answering(roots, fail=False):
+        def fake_get(_base, _key, path, **_kw):
+            if path == '/api/v3/rootfolder':
+                return [{'path': r} for r in roots]
+            if fail:
+                raise OSError('timed out')
+            return film
+        return fake_get
+
+    real = {name: getattr(arr, name) for name in ('arr_media_index_errors', 'arr_root_folders')}
+
+    def refresh_then(accessor):
+        def read():
+            # Another request's successful refresh, landing mid-request.
+            with patch('arr._arr_get', side_effect=arr_answering(['/elsewhere'])):
+                arr.fetch_arr_media_index(_cfg(_MOVIES), force=True)
+            return real[accessor]()
+        return read
+
+    def acquire(fail):
+        _clear_index_cache()
+        # The interleaving fires on an accessor read by either spelling — the name
+        # `app` imported, or the `arr` module's own attribute. Patching only the
+        # first let a guard mutation that read `arr.arr_media_index_errors`
+        # directly pass this test.
+        with patch.object(app, 'AUDITORR_SECRET', ''), \
+             patch.object(app, 'AUDITORR_REQUIRE_AUTH', False), \
+             patch.object(app, 'db_load_config', return_value=_cfg(_MOVIES)), \
+             patch.object(app, 'db_load_file_results', return_value=media), \
+             patch('arr._arr_get', side_effect=arr_answering(['/data/media/movies'], fail=fail)), \
+             patch('app.arr_media_index_errors', side_effect=refresh_then('arr_media_index_errors'),
+                   create=True), \
+             patch('app.arr_root_folders', side_effect=refresh_then('arr_root_folders'), create=True), \
+             patch('arr.arr_media_index_errors', side_effect=refresh_then('arr_media_index_errors')), \
+             patch('arr.arr_root_folders', side_effect=refresh_then('arr_root_folders')):
+            return app.app.test_client().get('/api/workflows/acquire_candidates',
+                                             environ_base=_ENV).get_json()
+
+    try:
+        failed = acquire(fail=True)
+        answered = acquire(fail=False)
+    finally:
+        _clear_index_cache()
+
+    # The request's own fetch failed: its errors say so, whatever landed since.
+    assert [e['connection_id'] for e in failed['arr_errors']] == ['radarr-mv']
+    # The request's own fetch read `/data/media/movies` as the root, and its
+    # candidate is labelled with it — not with a root another request fetched.
+    assert [c['folder'] for c in answered['candidates']] == ['/data/media/movies']
+    assert answered['arr_errors'] == []
+
+
+# ── B6: a candidate the server accepted a grab for is not offered again ──────
+
+def test_generate_skips_the_candidates_the_page_already_grabbed():
+    """The page keeps the keys of candidates whose grab the server accepted until
+    the audit lands. It can hide them from its own list, but a run builds its
+    candidates server-side — so the keys ride the request, or the grabbed
+    candidate is searched and offered again on the very next run."""
+    files = [_file('radarr-mv', 'radarr', 1, 'movies/A/A.mkv', '/movies/A/A.mkv'),
+             _file('radarr-mv', 'radarr', 2, 'movies/B/B.mkv', '/movies/B/B.mkv')]
+    patches = _patched(_cfg(_MOVIES), files, {'radarr-mv': ['/movies']})
+    for p in patches:
+        p.start()
+    try:
+        with patch.object(app, 'fetch_release_matrix', return_value=[]):
+            client = app.app.test_client()
+            res = client.post('/api/workflows/generate', environ_base=_ENV,
+                              json={'count': 10, 'exclude_keys': ['radarr-mv_1']})
+            assert res.status_code == 200, res.get_json()
+            job_id = res.get_json()['job_id']
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                body = client.get(f'/api/workflows/generate/status?job_id={job_id}',
+                                  environ_base=_ENV).get_json()
+                if body['status'] != 'running':
+                    break
+                time.sleep(0.01)
+    finally:
+        for p in reversed(patches):
+            p.stop()
+
+    assert body['total'] == 1
+    assert [r['key'] for r in body['results']] == ['radarr-mv_2']
+
+
+# ── B9's optional half: one unmatched video beside the arr's own path ────────
+
+def test_an_unmatched_video_is_shown_beside_the_arrs_file_of_the_same_name():
+    """The mismatch is usually obvious the moment the two paths are on screen
+    together (BACKFILL B9). The arr's path rides the media index this request
+    already fetched: a file of the same name it holds somewhere else."""
+    files = [_file('radarr-mv', 'radarr', 1, 'movies/A/A.mkv', '/movies/A/A.mkv')]
+    # The arr holds B.mkv, reported at a path that maps nowhere under MEDIA_PATH.
+    stray = dict(_file('radarr-mv', 'radarr', 2, 'x', '/movies/B/B.mkv')[1],
+                 path='/mnt/other/movies/B/B.mkv')
+    extra = [{'path': 'movies/B/B.mkv', 'size': 1, 'trackers': ['None']},
+             {'path': 'movies/A/A.en.srt', 'size': 1, 'trackers': ['None']}]
+    patches = _patched(_cfg(_MOVIES), files + [({'path': 'unused', 'trackers': ['t']}, stray)],
+                       {'radarr-mv': ['/movies']}, extra_media=extra)
+    for p in patches:
+        p.start()
+    try:
+        body = app.app.test_client().get('/api/workflows/acquire_candidates',
+                                         environ_base=_ENV).get_json()
+    finally:
+        for p in reversed(patches):
+            p.stop()
+
+    assert body['unresolved_video_count'] == 1
+    assert body['unmatched_example'] == {
+        'path': 'movies/B/B.mkv', 'arr_path': '/movies/B/B.mkv',
+        'service': 'radarr', 'connection_name': 'Movies'}
+
+
+def test_no_example_is_shown_where_no_arr_file_shares_the_name():
+    """A video the arr does not track at all has no counterpart to show, and a
+    guess from its title would be a claim the page cannot back."""
+    files = [_file('radarr-mv', 'radarr', 1, 'movies/A/A.mkv', '/movies/A/A.mkv')]
+    extra = [{'path': 'movies/Untracked/Untracked.mkv', 'size': 1, 'trackers': ['None']}]
+
+    body = _acquire(_cfg(_MOVIES), files, {'radarr-mv': ['/movies']}, extra_media=extra)
+
+    assert body['unresolved_video_count'] == 1
+    assert body.get('unmatched_example') is None

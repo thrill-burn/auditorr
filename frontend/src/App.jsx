@@ -499,7 +499,10 @@ function AppInner() {
           return {
             triage:  triageRowCount(det),
             cleanup: det.orphaned_torrent_count || 0,
-            dedupe:  det.duplicate_count        || 0,
+            // Groups, as the page lists them (Phase 14). `duplicate_count` counts
+            // files and is only the fallback, for details a scan wrote before
+            // the group count existed.
+            dedupe:  det.dedupe_group_count ?? det.duplicate_count ?? 0,
           }
         })()}
       />

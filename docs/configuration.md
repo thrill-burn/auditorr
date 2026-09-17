@@ -276,6 +276,14 @@ Bare words are the friendly default: `Extras` excludes every `Extras` folder
 without you needing glob syntax. Use `contains:` when you need to match
 mid-segment text like `Sample` inside a filename.
 
+**Saving warns about a rule that can't match.** A path you typed containing `[`
+is read as a pattern, where `[SubsPlease]` means "any one of those letters", so
+the rule excludes nothing with that name. Config saves it as written and shows a
+warning suggesting `literal:`. Rules the matcher takes as a folder prefix (ending
+in `/` or `/**`) and typed rules (`ext:`, `name:`, `contains:`, `literal:`) aren't
+affected, and `*` or `?` aren't warned about — in a rule you typed yourself they
+are usually meant.
+
 **`literal:` is for paths that contain glob characters**, which release names
 routinely do. Without it, `anime/[SubsPlease] Show - 01 [1080p].mkv` is read as a
 character class and matches nothing at all, and `movies/Film*.mkv` matches

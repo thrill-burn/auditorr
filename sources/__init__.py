@@ -7,10 +7,10 @@ Each backend implements:
   test_connection(payload)     -> {'ok': bool, 'version': str|None, 'error': str|None, 'instances': [...]}
   connection_info(cfg)         -> {'version': str|None, 'instance_summary': str, 'instances': [...]}
   fetch_save_path_hint(payload)-> {'save_path': str|None, 'version': str|None, 'torrent_count': int, 'seeding_size': int, 'instances': [...]}
-  fetch_torrent_details(cfg, items) -> {hash: {'uploaded', 'ratio', 'added_on', 'tracker_health', 'tracker_msg'}}
+  fetch_torrent_details(cfg, items) -> {registration key: {'uploaded', 'ratio', 'added_on', 'tracker_health', 'tracker_msg'}}
   remove_torrents(cfg, items, delete_files=True) -> int (count submitted for deletion)
   list_torrents(cfg) -> ([rows], report)
-  fetch_torrent_file_paths(cfg, items) -> {hash: [paths] | None}   # None = could not ask
+  fetch_torrent_file_paths(cfg, items) -> {registration key: [paths] | None}   # None = could not ask
 
 **Absence is reportable.** Every primitive here answers two different questions
 and must never collapse them: "the client says there is nothing" and "the client

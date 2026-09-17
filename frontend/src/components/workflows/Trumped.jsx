@@ -788,6 +788,18 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   {search.resolved_by === 'title' && ' — matched by title (no library file of this group was found in Sonarr/Radarr)'}
                 </div>
               )}
+              {/* 4b's two-instance flag (Phase 14), said the way Triage's T2 chip
+                  says it: which instance the search and the grab go to, and
+                  which other instance also holds these files — rather than
+                  picking between them silently. */}
+              {search.arr_item_ambiguous && search.arr_item_others?.length > 0 && (
+                <span
+                  title={`${search.arr_item_others.length + 1} ${search.service === 'radarr' ? 'Radarr' : 'Sonarr'} instances hold the files of this group. The search and the grab go to ${search.connection_name || search.connection_id}. ${search.arr_item_others.map(o => `${o.connection_name || o.connection_id} holds ${o.title || 'it'} too`).join('; ')}.`}
+                  style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9, alignSelf: 'flex-start' }}
+                >
+                  on {search.connection_name || search.connection_id} · also {search.arr_item_others.map(o => o.connection_name || o.connection_id).join(', ')}
+                </span>
+              )}
               {recommended ? (
                 <>
                   <RecommendedRelease cand={recommended} indexer={indexer}

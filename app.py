@@ -43,10 +43,11 @@ from state import (
     get_state, set_state, try_start_scanning,
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats, torrent_record_key
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, fetch_arr_media_index_result, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
-                     dedupe_script_units)
+                     dedupe_script_units, dedupe_group_count)
+from exclusions import reads_bracket_as_glob
 from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets, is_tombstone_path
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
 from debug import (
@@ -577,6 +578,16 @@ def handle_config():
                 problem = url_problem(label, data.get(key))
                 if problem:
                     warnings.append(problem)
+        # CLEANUP C8's optional half (decision 4 (b), Phase 14): a hand-typed path
+        # carrying `[` is a character class and matches nothing. Said, never
+        # refused, and never rewritten — existing rules are not migrated (R4).
+        for pattern in data.get('EXCLUSION_PATTERNS') or []:
+            if isinstance(pattern, str) and reads_bracket_as_glob(pattern):
+                shown = pattern if len(pattern) <= 90 else pattern[:87] + '…'
+                warnings.append(
+                    f"Exclusion pattern “{shown}” is read as a glob, where “[” starts a character "
+                    f"class, so it matches nothing with that name. To match the path exactly, "
+                    f"put literal: in front of it.")
         try:
             existing = db_load_config()
             new_conf = {
@@ -656,8 +667,16 @@ def handle_config():
                     media_files  = db_load_file_results('media', conn=snap)
                     torrent_files = db_load_file_results('torrents', conn=snap)
                 if media_files and torrent_files:
+                    prev = (((curr.get('dashboard') or {}).get('current') or {})
+                            .get('details') or {})
+                    extras = {k: prev[k] for k in SCAN_ONLY_DETAILS if k in prev}
+                    # The badge's number, under the rules just saved — the page
+                    # applies the current rules too, and the lists are in hand.
+                    extras['dedupe_group_count'] = dedupe_group_count(
+                        torrent_files, media_files, new_conf)
                     new_dashboard = process_health_metrics(
-                        media_files, torrent_files, new_conf, update_history=False)
+                        media_files, torrent_files, new_conf, update_history=False,
+                        extra_details=extras)
                     # cross_seed_stats is added by the audit, not process_health_metrics —
                     # recompute it here so the config-save dashboard refresh doesn't drop
                     # the Cross-Seed Effectiveness / Tracker Leaderboard panels.
@@ -1304,11 +1323,8 @@ def _dedupe_script_response(cfg, selection):
             "Select the duplicate groups to link first — a dedupe script is only built for an "
             "explicit selection.").response()
 
-    # Pinned: a group is a join of the two lists, so reading them from two
-    # generations builds a group across two scans (S04).
-    with db_read_snapshot() as snap:
-        report = build_dedupe_report(db_load_file_results('torrents', conn=snap),
-                                     db_load_file_results('media', conn=snap), cfg)
+    # The compact row, or both lists from one generation (R6, S04).
+    report = build_dedupe_report(*_dedupe_records(), cfg)
     chosen = [g for g in report['groups']
               if g['id'] in wanted
               or any(p['path'] in wanted for m in g['members'] for p in m['paths'])]
@@ -3074,6 +3090,14 @@ def workflows_trump_search_release():
     # end. Exactness gates the top, because the fuzzy score cannot tell a
     # REPACK from the release it trumped — see `rank_trump_replacements`.
     release, candidates = rank_trump_replacements(releases, new_title, indexer, limit=8)
+    # 4b's flag, rendered (Phase 14): name the instance the grab goes to and
+    # every other one holding this payload, as Triage's T2 chip does. Named here
+    # rather than re-derived on the page from `path_items`, because which entry
+    # was chosen is this endpoint's decision.
+    others = [{'connection_id': p.get('connection_id'),
+               'connection_name': p.get('connection_name') or p.get('connection_id') or '',
+               'arr_id': p.get('arr_id'), 'title': p.get('title') or ''}
+              for p in path_items if not _trump_same_item(p, item)]
     return jsonify({
         "status":          "success",
         "release":         release,
@@ -3081,6 +3105,9 @@ def workflows_trump_search_release():
         "candidate_count": len(releases),
         "service":         item['service'],
         "connection_id":   item['connection_id'],
+        "connection_name": ((conn or {}).get('name') or item.get('connection_name')
+                            or item['connection_id']),
+        "arr_item_others": others,
         "arr_id":          item['arr_id'],
         "arr_title":       item.get('title') or '',
         "arr_year":        item.get('year'),
@@ -4201,12 +4228,31 @@ def workflows_dedupe():
     `scripts.build_dedupe_report`.
     """
     cfg = db_load_config()
-    # Pinned for the same reason the script endpoint is: both lists come from
-    # one generation, or the page shows groups that never coexisted (S04).
-    with db_read_snapshot() as snap:
-        report = build_dedupe_report(db_load_file_results('torrents', conn=snap),
-                                     db_load_file_results('media', conn=snap), cfg)
+    report = build_dedupe_report(*_dedupe_records(), cfg)
     return jsonify({"status": "success", **report})
+
+
+def _dedupe_records():
+    """`(torrent records, media records)` for the Dedupe builder — the compact row,
+    or both full lists where the last scan predates it.
+
+    The audit persists a compact `dedupe` row (`scripts.dedupe_row`: excluded
+    records and records with duplicate partners, keyed by tree), so neither the
+    page nor the script deserializes the whole library to keep a sliver of it —
+    R6, and C10's shape for Cleanup. The builder's first step is that same
+    filter, so the two sources build the same report. A database whose last
+    scan predates the row falls back to the full lists until the next scan.
+
+    Pinned (S04): a group is a join of the two trees, so the fallback's two
+    reads come from one generation, and the row is one read of one.
+    """
+    with db_read_snapshot() as snap:
+        if db_has_file_results('dedupe', conn=snap):
+            row = db_load_file_results('dedupe', conn=snap)
+            if isinstance(row, dict):
+                return row.get('torrents') or [], row.get('media') or []
+        return (db_load_file_results('torrents', conn=snap),
+                db_load_file_results('media', conn=snap))
 
 
 @app.route('/api/workflows/acquire_candidates')
@@ -4227,11 +4273,11 @@ def workflows_acquire_candidates():
     """
     cfg = db_load_config()
     backfill = _resolve_backfill(cfg)
-    # Read straight after the resolve, which is what fetched the index: the
-    # accessor describes the list the caller just received. An instance whose
-    # index failed contributes no rows — indistinguishable from one managing
-    # nothing — so it is reported rather than left to be inferred from a gap.
-    arr_errors = arr_media_index_errors()
+    # The errors of the very fetch the candidates were built from (S11). An
+    # instance whose index failed contributes no rows — indistinguishable from
+    # one managing nothing — so it is reported rather than left to be inferred
+    # from a gap.
+    arr_errors = backfill['arr_errors']
     groups = backfill['groups']
     by_scope = {'season': 0, 'episode': 0, 'movie': 0}
     for g in groups:
@@ -4245,6 +4291,9 @@ def workflows_acquire_candidates():
         # B9: how many of the unresolved files are video. The rest are sidecars
         # no arr indexes; these are the ones worth acting on.
         "unresolved_video_count": backfill['unresolved_video_count'],
+        # B9's optional half: one unmatched video beside the arr's own path for
+        # a file of the same name, or None. Local UI only — never logged.
+        "unmatched_example": backfill['unmatched_example'],
         "arr_errors": arr_errors,
     })
 
@@ -4256,7 +4305,32 @@ def _release_job_key(service, connection_id, arr_id, episode_id, season_number, 
     parts = (service, connection_id, str(arr_id), str(episode_id), str(season_number), file_path or '')
     return ':'.join(parts)
 
-_RES_LABEL_MAP = {'2160p': 2160, '1080p': 1080, '720p': 720}
+_RES_LABEL_MAP = {'2160p': 2160, '1080p': 1080, '720p': 720, '480p': 480}
+
+
+def _release_res_label(r):
+    """The resolution chip a release belongs to, or `''`.
+
+    The arr's integer decides, as it always has for 2160p/1080p/720p. The SD chip
+    (`480p`, BACKFILL B2's note, Phase 14) also takes 576 — `Bluray-576p` is SD —
+    and reads the quality name where the integer is 0, because **Radarr's `DVD`
+    quality carries resolution 0** (`Quality.cs`: `new Quality(2, "DVD",
+    QualitySource.DVD, 0)`, where Sonarr's is 480). `_effective_res_rank`
+    already ranks a DVD source as 480p-class, which is how a DVD release was
+    rankable and yet unselectable.
+    """
+    res = r.get('resolution') or 0
+    for label, px in _RES_LABEL_MAP.items():
+        if res == px:
+            return label
+    if 0 < res <= 576:
+        return '480p'
+    if not res:
+        q_res, q_src = parse_quality_name(r.get('quality_name'))
+        if q_res == '480p' or (not q_res and q_src == 'dvd'):
+            return '480p'
+    return ''
+
 
 def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, source_filter=None, hdr_filter=None):
     groups = {}
@@ -4272,9 +4346,9 @@ def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, sou
                 continue
             filtered.append(r)
     if res_filter:
-        target_resolutions = {_RES_LABEL_MAP[r] for r in res_filter if r in _RES_LABEL_MAP}
-        if target_resolutions:
-            filtered = [r for r in filtered if r.get('resolution') in target_resolutions]
+        target_labels = {r for r in res_filter if r in _RES_LABEL_MAP}
+        if target_labels:
+            filtered = [r for r in filtered if _release_res_label(r) in target_labels]
     if source_filter:
         # Match on the *quality name*, never the raw `source` field. That field
         # is a serialized C# enum and the two services do not spell it the same
@@ -4667,9 +4741,14 @@ def _resolve_backfill(cfg):
     established — the arr reported no season on this file, or on any file of the
     series — the answer is per-episode, never a pack: a missing count read as
     "covers the season" is precisely the harm.
+
+    **Rows, errors and root folders come from one snapshot** (S11, Phase 14),
+    and the errors ride the result as `arr_errors`. They were read through the
+    accessors straight after this fetch, which under gunicorn's eight threads
+    describe whichever fetch landed last — another request's.
     """
     media_files = db_load_file_results('media')
-    arr_media = fetch_arr_media_index(cfg)
+    arr_media, arr_errors, arr_roots = fetch_arr_media_index_with_roots(cfg)
     media_root = cfg.get('MEDIA_PATH', '')
 
     def _norm(p):
@@ -4682,8 +4761,7 @@ def _resolve_backfill(cfg):
             arr_index[key] = item
     held, unknown_series = _sonarr_season_coverage(arr_media)
     conns = normalize_arr_connections(cfg)
-    # Read straight after the fetch, per the accessor's contract.
-    root_labels = _root_folder_labels(conns, arr_root_folders())
+    root_labels = _root_folder_labels(conns, arr_roots)
 
     svc_slug = {'sonarr': '/series/', 'radarr': '/movie/'}
     conn_by_id = {c['id']: c for c in conns}
@@ -4691,6 +4769,8 @@ def _resolve_backfill(cfg):
     # Encounter order is kept so ties under the chosen sort land as they did.
     order, seasons, folder_of = [], {}, {}
     resolved = unresolved = unresolved_video = 0
+    # B9's optional half: unmatched video names, first path per name, bounded.
+    unmatched_names = {}
     for f in media_files:
         if f.get('excluded') or [t for t in (f.get('trackers') or []) if t != 'None']:
             continue
@@ -4704,6 +4784,8 @@ def _resolve_backfill(cfg):
             # acting on, and is usually a path-mapping mismatch.
             if os.path.splitext(rel_path)[1].lower() in VIDEO_EXTENSIONS:
                 unresolved_video += 1
+                if len(unmatched_names) < _UNMATCHED_NAMES_MAX:
+                    unmatched_names.setdefault(posixpath.basename(abs_path), rel_path)
             continue
         resolved += 1
         service  = arr_item.get('service', '')
@@ -4765,7 +4847,49 @@ def _resolve_backfill(cfg):
         g['search'] = _backfill_search(g)
         g['folder'] = folder_of.get(g['rep_path'], 'Other')
     return {'groups': groups, 'resolved_count': resolved, 'unresolved_count': unresolved,
-            'unresolved_video_count': unresolved_video}
+            'unresolved_video_count': unresolved_video, 'arr_errors': arr_errors,
+            'unmatched_example': _unmatched_example(unmatched_names, arr_media, conn_by_id)}
+
+
+# How many unmatched video names `_resolve_backfill` keeps looking for. One
+# example is all the page shows; the bound only stops a library with every video
+# unmatched (a broken mapping, the case this is for) holding every name.
+_UNMATCHED_NAMES_MAX = 200
+
+# The most grabbed-candidate keys a generate request may name (B6). A page holds
+# them only until the audit lands, so this is a sanity bound, not a working one.
+_EXCLUDE_KEYS_MAX = 2000
+
+
+def _unmatched_example(unmatched_names, arr_media, conn_by_id):
+    """One unmatched video beside the arr's own path for a file of the same name (B9).
+
+    BACKFILL B9's optional half: *"show one unmatched video path next to the
+    arr's own path for the same title — the mismatch is usually obvious the
+    moment the two are on screen together."* Matched by **file name**, not by a
+    title guess: a path mapping moves the folder and leaves the name, so the
+    arr's file of the same name is the one it would have matched, and where no
+    arr file shares the name there is nothing to show — a title parse would be a
+    claim the page cannot back. The media index is the one this request already
+    fetched; nothing is called for it.
+
+    `arr_path` is the arr's own spelling (before any remote-path mapping). Paths
+    here reach the page and nowhere else: never a log line, never
+    `/api/debug/report`.
+    """
+    if not unmatched_names:
+        return None
+    for item in arr_media:
+        path = str(item.get('path') or '').replace('\\', '/')
+        rel_path = unmatched_names.get(posixpath.basename(path)) if path else None
+        if rel_path is None:
+            continue
+        conn = conn_by_id.get(item.get('connection_id')) or {}
+        return {'path': rel_path,
+                'arr_path': str(item.get('arr_path') or item.get('path') or '').replace('\\', '/'),
+                'service': item.get('service', ''),
+                'connection_name': conn.get('name') or item.get('connection_name') or ''}
+    return None
 
 
 def _root_folder_labels(conns, roots):
@@ -4804,7 +4928,7 @@ def _root_folder_of(labels, conn_id, arr_path):
     return 'Other'
 
 
-def _release_in_scope(release, scope, episode_numbers):
+def _release_in_scope(release, scope, episode_numbers, season=None, episode_ids=None):
     """May this release be offered for a candidate of this scope? (B1, at the release)
 
     An episode candidate exists *because* part of its season is already seeded,
@@ -4821,46 +4945,78 @@ def _release_in_scope(release, scope, episode_numbers):
     workflow for exactly the libraries B8 was written for, and the import watch
     scopes by episode id as well (B11). Where the candidate's own episodes are
     unknown, a release that names episodes cannot be shown to fit, so it goes.
+
+    **Episode sets, not counts** (the outside review's amendment 1, decision 5
+    (a), Phase 14). Two shapes got through all three of B1's layers:
+
+    * **Part of a file.** The rule was `covers <= mine`, so a two-episode file
+      (S01E01E02) was offered an S01E01 release — and Sonarr's upgrade recycles
+      every existing file of the episodes it imports, so grabbing it deletes the
+      whole two-episode file and leaves E02 with none. The release must cover
+      exactly the file's episodes.
+    * **Another season.** `mappedEpisodeNumbers` is numbers alone, so S02E05 and
+      the special S00E05 read as covering S01E05, and an S02 pack passed on an S01
+      pack row. The release's mapped season must be the candidate's — on both
+      scopes — wherever Sonarr mapped one.
+
+    Where Sonarr names the mapped episodes by id and the candidate's are known,
+    those ids decide outright. Nothing unmapped is refused that was offered
+    before: a release with no mapped season or numbers still stands.
     """
+    mapped_season = release.get('mapped_season')
+    if scope == 'season':
+        return mapped_season is None or season is None or mapped_season == season
     if scope != 'episode':
         return True
     if release.get('full_season'):
         return False
+    if mapped_season is not None and season is not None and mapped_season != season:
+        return False
+    mapped_ids = set(release.get('mapped_episode_ids') or [])
+    if mapped_ids and episode_ids:
+        return mapped_ids == set(episode_ids)
     covers = set(release.get('episode_numbers') or [])
     if not covers:
         return True
     mine = set(episode_numbers or [])
-    return bool(mine) and covers <= mine
+    return bool(mine) and covers == mine
 
 
 def _episode_scope(cfg, candidate, cache):
-    """`(episode_id, episode_numbers)` for an episode candidate, off Sonarr's own join.
+    """`(episode_id, episode_numbers, episode_ids)` for an episode candidate, off Sonarr's own join.
 
     The media index cannot answer this — `/api/v3/episodefile` carries no episode
     ids — so it is joined in from the series' episode list by file id, once per
     series per job (`cache`). Falls back to what the candidate already carries
     (the filename parse) when the join is unavailable, which is where the search
-    has always come from.
+    has always come from. `episode_ids` is every episode the file holds (amendment
+    1: the release gate compares sets), `[]` where the join did not answer.
     """
     episode_id = candidate.get('episode_id')
     numbers = candidate.get('episode_numbers') or []
     file_id = next(iter(candidate.get('file_ids') or []), None)
     if episode_id or file_id is None:
-        return episode_id, numbers
+        return episode_id, numbers, [episode_id] if episode_id else []
     series = (candidate['arr_connection_id'], candidate['arr_id'])
     if series not in cache:
         cache[series] = sonarr_episodes_by_file(cfg, *series)
     eps = (cache[series] or {}).get(file_id)
     if not eps:
-        return episode_id, numbers
-    return eps[0][0], [e[2] for e in eps if e[2] is not None]
+        return episode_id, numbers, []
+    return eps[0][0], [e[2] for e in eps if e[2] is not None], [e[0] for e in eps]
 
 
 def _build_generate_candidates(cfg, folders=None, title_search=None):
     """Resolved, scoped candidates for the generate workflow, narrowed by the page's
     folder and title filters. Uncapped: `generate` sorts and cuts to its own count
     (the old `limit=20` default had one caller, which passed None — B13)."""
-    groups = _resolve_backfill(cfg)['groups']
+    return _narrow_backfill(_resolve_backfill(cfg)['groups'], folders, title_search)
+
+
+def _narrow_backfill(groups, folders=None, title_search=None, exclude_keys=None):
+    """The page's folder and title filters, and the candidates it already grabbed (B6)."""
+    if exclude_keys:
+        groups = [g for g in groups if g['key'] not in exclude_keys]
     if folders:
         groups = [g for g in groups if g['folder'] in folders]
     if title_search:
@@ -4894,6 +5050,12 @@ def workflows_generate():
     source_filter = data.get('source_filter') or []
     hdr_filter    = data.get('hdr_filter') or []
     title_search  = (data.get('title_search') or '').strip()
+    # B6 — the keys of candidates whose grab this page's server accepted, held by
+    # the page until the audit lands. The run builds its candidates here, so a
+    # grabbed candidate the page merely hid would be searched and offered again.
+    raw_keys      = data.get('exclude_keys')
+    exclude_keys  = ({k for k in raw_keys[:_EXCLUDE_KEYS_MAX] if isinstance(k, str)}
+                     if isinstance(raw_keys, list) else set())
 
     # Checked before the build, which deserializes the media list, so a refused
     # request costs nothing; and again at insert, because the build takes long
@@ -4906,19 +5068,20 @@ def workflows_generate():
 
     cfg = db_load_config()
     try:
+        backfill = _resolve_backfill(cfg)
         candidates = _sort_generate_candidates(
-            _build_generate_candidates(cfg, folders=folders or None, title_search=title_search or None),
+            _narrow_backfill(backfill['groups'], folders=folders or None,
+                             title_search=title_search or None, exclude_keys=exclude_keys),
             sort,
         )[:count]
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
-    # Read immediately after the build, which is what fetched the index. The
-    # cache is 120s, so a user who spends longer than that setting filters
-    # starts the run against a *re-fetched* library — one that may have lost an
-    # instance since the page described it. The accessor's contract is "the list
-    # the caller just received", and the caller that just received one is this
-    # request, not the one that painted the page (B13).
-    arr_errors = arr_media_index_errors()
+    # The errors of the fetch this run's candidates came from (S11). The cache is
+    # 120s, so a user who spends longer than that setting filters starts the run
+    # against a *re-fetched* library — one that may have lost an instance since
+    # the page described it — and this is that fetch's answer, not the page's
+    # (B13).
+    arr_errors = backfill['arr_errors']
 
     job_id = secrets.token_hex(8)
     now = time.time()
@@ -4976,8 +5139,9 @@ def workflows_generate():
             try:
                 search = candidate['search']
                 episode_numbers = candidate.get('episode_numbers') or []
+                episode_ids = []
                 if scope == 'episode':
-                    episode_id, episode_numbers = _episode_scope(cfg, candidate, episode_cache)
+                    episode_id, episode_numbers, episode_ids = _episode_scope(cfg, candidate, episode_cache)
                     search = _backfill_search(candidate, episode_id=episode_id)
                     result['search'] = search
                     result['episode_numbers'] = episode_numbers
@@ -4987,7 +5151,9 @@ def workflows_generate():
                     season_number=search.get('season_number'),
                     file_path=search.get('path'),
                 )
-                rows = [r for r in rows if _release_in_scope(r, scope, episode_numbers)]
+                rows = [r for r in rows if _release_in_scope(r, scope, episode_numbers,
+                                                             season=candidate.get('season_number'),
+                                                             episode_ids=episode_ids)]
                 filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter, hdr_filter=hdr_filter)
                 # Closest to the file on disk unless the user asked for the
                 # upgrade order (B3). `best` is what a single-release row grabs,
@@ -5106,22 +5272,29 @@ def _int_list(value, cap=500):
     return [v for v in value if isinstance(v, int) and not isinstance(v, bool)][:cap]
 
 
-def _watch_episode_scope(cfg, connection_id, series_id, file_ids):
-    """The episode ids a Sonarr backfill may force-import over, or None if unknown.
+def _watch_episode_sets(cfg, connection_id, series_id, file_ids):
+    """Per library file, the episode ids it holds — `[[id, ...], ...]` — or None if unknown.
 
     Joined from the library files the candidate was built from, through Sonarr's
     own episode list — `/api/v3/episodefile` carries no episode ids. None when
     there is nothing to join or Sonarr could not be asked, and the watch then
     force-imports nothing: a scope that cannot be established is not a licence
     to import the whole download.
+
+    **Kept per file** since Phase 14 (amendment 1, decision 5 (a)). The watch's
+    scope is their union, and a download row naming *some* of one file's
+    episodes used to fit it — so a single-episode download was force-imported
+    over a two-episode library file, and Sonarr's upgrade recycles the whole
+    file (`UpgradeMediaFileService`), leaving the other episode with none.
     """
     if not file_ids:
         return None
     by_file = sonarr_episodes_by_file(cfg, connection_id, series_id)
     if by_file is None:
         return None
-    ids = sorted({ep_id for fid in file_ids for ep_id, _s, _e in by_file.get(fid, [])})
-    return ids or None
+    sets = [sorted({ep_id for ep_id, _s, _e in by_file.get(fid, [])}) for fid in file_ids]
+    sets = [s for s in sets if s]
+    return sets or None
 
 
 @app.route('/api/workflows/watch_import', methods=['POST'])
@@ -5297,8 +5470,9 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
             # Joined first, long before the import can land: the join runs from
             # file id to episode, and the import is what replaces those files and
             # retires their ids.
-            scope = (_watch_episode_scope(cfg, connection_id, arr_id, file_ids)
-                     if service == 'sonarr' else None)
+            episode_sets = (_watch_episode_sets(cfg, connection_id, arr_id, file_ids)
+                            if service == 'sonarr' else None)
+            scope = sorted({e for s in episode_sets for e in s}) if episode_sets else None
             correlate = {'download_id': info_hash, 'episode_ids': None if info_hash else scope}
             # Brief delay so qBit + Sonarr/Radarr have time to register the grab before we poll
             time.sleep(8)
@@ -5390,7 +5564,8 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
                 try:
                     force_manual_import_by_id(cfg, service, connection_id, arr_id,
                                               download_id=download_id, download_folder=download_folder,
-                                              only_episode_ids=scope, media_folder_fallback=False)
+                                              only_episode_ids=scope, whole_episode_sets=episode_sets,
+                                              media_folder_fallback=False)
                 except ValueError as e:
                     # Typically: nothing in scope is importable any more — the arr
                     # took those episodes itself, and what is left is out of scope.
