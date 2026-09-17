@@ -371,6 +371,7 @@ Set these on the container; they can't be changed from the UI.
 | `AUDITORR_SECRET` | *(unset)* | Access key. Once set, required from every client. See [Remote access](remote-access.md). |
 | `AUDITORR_TRUSTED_NETWORKS` | *(unset)* | Extra CIDRs treated as local, e.g. `100.64.0.0/10` for Tailscale. |
 | `AUDITORR_REQUIRE_AUTH` | `false` | Require the access key even from local clients. |
+| `AUDITORR_DB_TIMEOUT` | `60` | Seconds a database write waits while a scan is saving its results before giving up. A scan saves everything in one step and holds the write for well under a second, so this only needs raising on very slow storage. |
 
 `MALLOC_ARENA_MAX=2` is set in the image itself to limit how much memory the
 allocator holds after a large scan. Don't override it unless you're

@@ -27,6 +27,7 @@ from db import (
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
     db_load_file_results, db_stream_file_results, db_has_file_results,
+    db_read_snapshot,
     db_save_history,
     db_get_recent_runs,
     db_clear_audit_history,
@@ -42,7 +43,7 @@ from state import (
     get_state, set_state, try_start_scanning,
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats, torrent_record_key
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, fetch_arr_media_index_result, arr_media_index_errors, arr_root_folders, VIDEO_EXTENSIONS, queue_records_for_item, arr_titles_errors, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units)
@@ -646,9 +647,14 @@ def handle_config():
                 log.info(f"Skipping immediate health recompute ({stored_count} files stored) — "
                          f"new thresholds apply on the next audit.")
             else:
-                curr         = db_load_results()
-                media_files  = db_load_file_results('media')
-                torrent_files = db_load_file_results('torrents')
+                # Pinned: this reads three rows and then **writes a dashboard
+                # back**, so a read that straddled a publish would persist a
+                # health score computed from half of one scan and half of
+                # another (S04). One read transaction; no copy.
+                with db_read_snapshot() as snap:
+                    curr         = db_load_results(conn=snap)
+                    media_files  = db_load_file_results('media', conn=snap)
+                    torrent_files = db_load_file_results('torrents', conn=snap)
                 if media_files and torrent_files:
                     new_dashboard = process_health_metrics(
                         media_files, torrent_files, new_conf, update_history=False)
@@ -974,9 +980,9 @@ def _cleanup_state(rec):
     return 'last_copy'
 
 
-def _cleanup_details():
+def _cleanup_details(conn=None):
     try:
-        return ((db_load_results() or {}).get('dashboard') or {}) \
+        return ((db_load_results(conn=conn) or {}).get('dashboard') or {}) \
             .get('current', {}).get('details') or {}
     except Exception:
         return {}
@@ -1001,14 +1007,17 @@ def _cleanup_records():
     reason: records from a scan that predates the always-on rule can still carry
     one as `excluded: False`, and `rm` on a tombstone frees nothing.
     """
-    if db_has_file_results('cleanup'):
-        records = db_load_file_results('cleanup')
-        excluded = _cleanup_details().get('orphaned_excluded_count')
-    else:
-        full = db_load_file_results('torrents')
-        records = [f for f in full if _is_cleanup_relevant(f)]
-        excluded = sum(1 for f in full if f.get('status') == 'Orphaned' and f.get('excluded'))
-        del full
+    # Pinned: the row and the count beside it come from two rows, and the
+    # fallback reads a third. One generation or none (S04).
+    with db_read_snapshot() as snap:
+        if db_has_file_results('cleanup', conn=snap):
+            records = db_load_file_results('cleanup', conn=snap)
+            excluded = _cleanup_details(conn=snap).get('orphaned_excluded_count')
+        else:
+            full = db_load_file_results('torrents', conn=snap)
+            records = [f for f in full if _is_cleanup_relevant(f)]
+            excluded = sum(1 for f in full if f.get('status') == 'Orphaned' and f.get('excluded'))
+            del full
     return [r for r in records if not is_tombstone_path(r.get('path'))], excluded
 
 
@@ -1161,7 +1170,7 @@ def _cleanup_live_claims(cfg, rel_paths):
         raise _CleanupRefusal(502, 'client_unreachable', unreachable)
     claimed = set()
     for row in candidates:
-        for p in _cleanup_row_claims(row, listings.get(row.get('hash')), remote, local):
+        for p in _cleanup_row_claims(row, listings.get(_reg(row)), remote, local):
             n = _norm_abs(p)
             if n in wanted:
                 claimed.add(n)
@@ -1295,8 +1304,11 @@ def _dedupe_script_response(cfg, selection):
             "Select the duplicate groups to link first — a dedupe script is only built for an "
             "explicit selection.").response()
 
-    report = build_dedupe_report(db_load_file_results('torrents'),
-                                 db_load_file_results('media'), cfg)
+    # Pinned: a group is a join of the two lists, so reading them from two
+    # generations builds a group across two scans (S04).
+    with db_read_snapshot() as snap:
+        report = build_dedupe_report(db_load_file_results('torrents', conn=snap),
+                                     db_load_file_results('media', conn=snap), cfg)
     chosen = [g for g in report['groups']
               if g['id'] in wanted
               or any(p['path'] in wanted for m in g['members'] for p in m['paths'])]
@@ -1666,7 +1678,69 @@ _REMOVAL_ROUNDS = 5
 _REMOVAL_RECHECK_SECS = 2
 
 
-def _removal_ownership(cfg, rows, seed_hashes):
+def _reg(row):
+    """This live row's registration key (S05) — `(instance_id, hash)`, spelled.
+
+    Every live listing carries `reg`; the fallback derives it for a row built by
+    hand or by a stale caller. With qbit, or any qui row whose instance is
+    unknown, this is the bare hash — so a one-client install's keys are exactly
+    what they were before Phase 13.
+    """
+    return row.get('reg') or sources.registration_key(row.get('instance_id'), row.get('hash'))
+
+
+def _resolve_registrations(rows, keys):
+    """`(regs, ambiguous, missing)` — keys posted by a page, against the live listing.
+
+    A key is a registration key or a bare infohash: every existing page posts
+    hashes, and a hash is still the whole answer wherever a torrent is
+    registered once. Where it is registered on **more than one instance** there
+    is no honest way to pick, so the key is returned as `ambiguous` (naming the
+    instances, by name, because that is what the user has to act on) and nothing
+    acts on it — S05's rule, and R1's one layer up: "could not tell which" is
+    not "the first one".
+    """
+    by_reg, by_hash = {}, {}
+    for r in rows:
+        reg = _reg(r)
+        by_reg[reg] = r
+        by_hash.setdefault(r.get('hash'), []).append(reg)
+    regs, ambiguous, missing = [], [], []
+    for key in dict.fromkeys(str(k) for k in keys if k):
+        if key in by_reg:
+            regs.append(key)
+            continue
+        found = by_hash.get(key) or []
+        if len(found) == 1:
+            regs.append(found[0])
+        elif found:
+            ambiguous.append({
+                'hash': key,
+                'instances': [str(by_reg[f].get('instance_name')
+                                  or by_reg[f].get('instance_id') or '?') for f in found],
+            })
+        else:
+            missing.append(key)
+    return regs, ambiguous, missing
+
+
+def _ambiguous_registration_refusal(ambiguous):
+    """409 `registration_ambiguous`, in `ArrErrorsWarning`'s plain-sentence idiom."""
+    names = ', '.join(sorted({n for a in ambiguous for n in a['instances']})[:4])
+    log.warning("Refusing: %d selected torrent(s) are registered on more than one instance "
+                "and the request did not say which", len(ambiguous))
+    return jsonify({
+        "status": "error", "code": "registration_ambiguous",
+        "ambiguous": ambiguous,
+        "message": (f"{len(ambiguous)} of the selected torrent"
+                    f"{'s are' if len(ambiguous) != 1 else ' is'} registered on more than one "
+                    f"instance ({names}), and this request does not say which one to act on. "
+                    "Nothing was done. Open the row from the instance you mean, or remove the "
+                    "extra registration in your client first."),
+    }), 409
+
+
+def _removal_ownership(cfg, rows, seed_regs):
     """Everything removing these torrents could touch, and who else holds each file (S01).
 
     The question Trumped answers before a trump, asked with Trumped's primitives
@@ -1683,20 +1757,25 @@ def _removal_ownership(cfg, rows, seed_hashes):
     design amendment 2). The rounds stop when a search finds nobody new, which
     is the second round on any ordinary library.
 
-    Returns `{by_hash, paths, holders, groups, unknown, bounded}`: `paths` is
-    `{hash: [paths] | None}` for every torrent asked, `holders` is
-    `{path: {hashes}}`, `groups` is `{seed hash: [member rows]}`, `unknown`
-    counts asked torrents outside every group whose listing is `None` (a torrent
-    that may share a file and could not say), and `bounded` is true when the
-    search was cut short. `_removal_file_decision` reads all of it.
+    Returns `{by_reg, paths, holders, groups, unknown, bounded}`: `paths` is
+    `{registration key: [paths] | None}` for every torrent asked, `holders` is
+    `{path: {registration keys}}`, `groups` is `{seed reg: [member rows]}`,
+    `unknown` counts asked torrents outside every group whose listing is `None`
+    (a torrent that may share a file and could not say), and `bounded` is true
+    when the search was cut short. `_removal_file_decision` reads all of it.
+
+    **Keyed by registration, not by hash** (S05): the same torrent on two qui
+    instances is two registrations that can hold two different sets of bytes,
+    and a hash-keyed map kept whichever came first. `_reg` gives the bare hash
+    back where there are no instances, so a one-client answer is unchanged.
     """
-    by_hash = {r['hash']: r for r in rows}
-    seeds = [by_hash[h] for h in dict.fromkeys(seed_hashes) if h in by_hash]
+    by_reg = {_reg(r): r for r in rows}
+    seeds = [by_reg[k] for k in dict.fromkeys(seed_regs) if k in by_reg]
     paths, bounded, members = {}, False, list(seeds)
     for _ in range(_REMOVAL_ROUNDS):
         candidates, prefilter = _trump_candidates(rows, members)
         bounded = bounded or prefilter['bounded']
-        fresh = [c for c in candidates if c['hash'] not in paths]
+        fresh = [c for c in candidates if _reg(c) not in paths]
         room = _TRUMP_CANDIDATE_BOUND - len(paths)
         if len(fresh) > room:
             bounded, fresh = True, fresh[:max(room, 0)]
@@ -1704,28 +1783,29 @@ def _removal_ownership(cfg, rows, seed_hashes):
             break
         got = sources.fetch_torrent_file_paths(cfg, fresh)
         for c in fresh:
-            paths[c['hash']] = got.get(c['hash'])
-        members, _, _ = _cross_seed_group([by_hash[h] for h in paths], paths, seeds)
+            paths[_reg(c)] = got.get(_reg(c))
+        members, _, _ = _cross_seed_group([by_reg[k] for k in paths], paths, seeds)
     else:
         bounded = True
 
     holders = {}
-    for h, listing in paths.items():
+    for key, listing in paths.items():
         for p in listing or ():
-            holders.setdefault(p, set()).add(h)
-    asked = [by_hash[h] for h in paths]
+            holders.setdefault(p, set()).add(key)
+    asked = [by_reg[k] for k in paths]
     groups = {}
     for s in seeds:
         group, _, _ = _cross_seed_group(asked, paths, s)
-        groups[s['hash']] = group or [{**s, 'paths': []}]
-    in_groups = {g['hash'] for group in groups.values() for g in group}
-    unknown = sum(1 for h, listing in paths.items() if listing is None and h not in in_groups)
-    return {'by_hash': by_hash, 'paths': paths, 'holders': holders, 'groups': groups,
+        groups[_reg(s)] = group or [{**s, 'paths': []}]
+    in_groups = {_reg(g) for group in groups.values() for g in group}
+    unknown = sum(1 for key, listing in paths.items()
+                  if listing is None and key not in in_groups)
+    return {'by_reg': by_reg, 'paths': paths, 'holders': holders, 'groups': groups,
             'unknown': unknown, 'bounded': bounded}
 
 
-def _removal_file_decision(own, h, removal):
-    """`('delete' | 'keep', reason)` for one torrent of a removal set (S01).
+def _removal_file_decision(own, key, removal):
+    """`('delete' | 'keep', reason)` for one **registration** of a removal set (S01).
 
     Files are deleted only when ownership is **established**: the torrent's own
     listing is usable, no torrent that survives the removal holds any of its
@@ -1748,9 +1828,9 @@ def _removal_file_decision(own, h, removal):
       bounded. Either could be a survivor this answer cannot see.
     * `requested` — none of the above; the files go, as asked.
     """
-    if h not in own['by_hash']:
+    if key not in own['by_reg']:
         return 'keep', 'not_in_client'
-    listing = own['paths'].get(h)
+    listing = own['paths'].get(key)
     if not listing:
         return 'keep', 'unusable_listing'
     if any(o not in removal for p in listing for o in own['holders'].get(p, ())):
@@ -1792,17 +1872,22 @@ def _removal_plan_refusal(own, plan, decisions):
 
     A flip the other way — shown deleted, now kept — is the safe direction and
     goes ahead; the route reports it.
+
+    Every key here is a **registration** key; the route normalises the posted
+    plan with `_plan_in_registrations` first, so a page that posts bare hashes
+    (every page before S05, and every page on a one-client install, where the
+    two spellings are the same string) is compared like for like.
     """
     posted_groups = plan.get('groups') if isinstance(plan.get('groups'), dict) else {}
     posted_files = plan.get('files') if isinstance(plan.get('files'), dict) else {}
     added = lost = 0
     for seed, shown in posted_groups.items():
         shown = {str(h) for h in (shown if isinstance(shown, list) else [])}
-        now = {g['hash'] for g in own['groups'].get(str(seed), [])}
+        now = {_reg(g) for g in own['groups'].get(str(seed), [])}
         added += len(now - shown)
         lost += len(shown - now)
-    now_deleting = sum(1 for h, (files, _) in decisions.items()
-                       if files == 'delete' and posted_files.get(h) != 'delete')
+    now_deleting = sum(1 for key, (files, _) in decisions.items()
+                       if files == 'delete' and posted_files.get(key) != 'delete')
     if not (added or lost or now_deleting):
         return None
     log.warning("Client delete: refusing — the plan changed since it was shown "
@@ -1818,8 +1903,32 @@ def _removal_plan_refusal(own, plan, decisions):
     }), 409
 
 
-def _removal_outcomes(cfg, hashes, before):
-    """`{hash: outcome}` — what the client lists after a removal (S09).
+def _plan_in_registrations(rows, plan):
+    """The confirmed plan with every posted key resolved to a registration key.
+
+    A bare hash resolves only when exactly one registration carries it; where
+    several do it is left alone, which reads as a membership change and refuses
+    — the fail-safe direction, and the same rule `_resolve_registrations` takes.
+    """
+    if not isinstance(plan, dict):
+        return None
+    single = {}
+    for r in rows:
+        h = r.get('hash')
+        single[h] = None if h in single else _reg(r)
+    resolve = lambda k: single.get(str(k)) or str(k)          # noqa: E731
+    groups = plan.get('groups') if isinstance(plan.get('groups'), dict) else {}
+    files  = plan.get('files') if isinstance(plan.get('files'), dict) else {}
+    return {
+        'seeds':  [resolve(s) for s in (plan.get('seeds') or [])],
+        'groups': {resolve(seed): [resolve(m) for m in (members if isinstance(members, list) else [])]
+                   for seed, members in groups.items()},
+        'files':  {resolve(k): v for k, v in files.items()},
+    }
+
+
+def _removal_outcomes(cfg, regs, before):
+    """`{registration key: outcome}` — what the client lists after a removal (S09).
 
     `sources.remove_torrents` reports what it *submitted*: qui counts what it
     posted (and a later instance's `raise_for_status` loses the earlier
@@ -1835,9 +1944,15 @@ def _removal_outcomes(cfg, hashes, before):
       which may apply asynchronously — the re-check is the allowance for it;
     * `unknown` — its instance did not answer, so absence means nothing.
 
+    **Per registration, not per hash** (S05). Asking whether the *hash* is still
+    listed reads a correct removal as `still_listed` the moment the same torrent
+    is registered on a second instance — the page then marks it "removal
+    unconfirmed" for something that worked. The question is whether *this*
+    registration is still there.
+
     The page dismisses only `removed` and `already_gone` rows and names the rest.
     """
-    instance_of = {r['hash']: r.get('instance_name') for r in before}
+    instance_of = {_reg(r): r.get('instance_name') for r in before}
 
     def _look():
         try:
@@ -1846,26 +1961,26 @@ def _removal_outcomes(cfg, hashes, before):
             log.warning("Client delete: could not list the client afterwards (%s)", type(e).__name__)
             return None
         failed = {str(f.get('name')) for f in report.get('instances_failed') or []}
-        listed = {r['hash'] for r in rows}
+        listed = {_reg(r) for r in rows}
         out = {}
-        for h in hashes:
-            inst = instance_of.get(h)
+        for key in regs:
+            inst = instance_of.get(key)
             if failed and (inst is None or str(inst) in failed):
-                out[h] = 'unknown'
-            elif h in listed:
-                out[h] = 'still_listed'
+                out[key] = 'unknown'
+            elif key in listed:
+                out[key] = 'still_listed'
             else:
-                out[h] = 'removed' if h in instance_of else 'already_gone'
+                out[key] = 'removed' if key in instance_of else 'already_gone'
         return out
 
-    out = _look() or {h: 'unknown' for h in hashes}
-    lingering = [h for h in hashes if out[h] == 'still_listed']
+    out = _look() or {key: 'unknown' for key in regs}
+    lingering = [key for key in regs if out[key] == 'still_listed']
     if lingering:
         time.sleep(_REMOVAL_RECHECK_SECS)
         again = _look()
         if again:
-            for h in lingering:
-                out[h] = again[h]
+            for key in lingering:
+                out[key] = again[key]
     return out
 
 
@@ -1881,10 +1996,17 @@ def workflows_remove_torrents():
     it *found* no survivor, and a listing it could not read, a survivor it could
     not list and a survivor one `.nfo` larger all found none (S01).
 
-    `plan` — `{seeds, groups: {seed: [hashes]}, files: {hash: keep|delete}}`,
+    `plan` — `{seeds, groups: {seed: [keys]}, files: {key: keep|delete}}`,
     what the confirm modal showed — binds: the group is re-resolved here, once,
     and a change refuses with 409 `plan_changed` (`_removal_plan_refusal`).
     Without a plan the checks still run; there is just nothing to hold them to.
+
+    **Every item is a registration** (S05) — `{hash, instance_id}`, which is
+    what the page has always sent. A posted hash that names more than one
+    registration and no instance refuses with 409 `registration_ambiguous`
+    rather than acting on whichever the client listed first, and `outcomes` is
+    keyed by registration so a correct removal is not reported as unconfirmed
+    because the same hash is still registered elsewhere.
 
     The response says, per torrent, what happened to its files and why, and
     whether it actually left the client (`_removal_outcomes`) — including on a
@@ -1902,14 +2024,14 @@ def workflows_remove_torrents():
             "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
         }), 403
     data  = request.json or {}
-    items = list({str(i.get('hash')): {'hash': str(i.get('hash')), 'instance_id': i.get('instance_id')}
+    items = list({sources.registration_key(i.get('instance_id'), str(i.get('hash'))):
+                  {'hash': str(i.get('hash')), 'instance_id': i.get('instance_id')}
                   for i in (data.get('items') or []) if isinstance(i, dict) and i.get('hash')}.values())
     if not items:
         return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
 
     keep_files = _keeps_files(data.get('delete_files', True))
     plan = data.get('plan') if isinstance(data.get('plan'), dict) else None
-    hashes = [i['hash'] for i in items]
     try:
         # Keeping files needs no ownership answer, so a listing short of an
         # instance is still good enough to report outcomes against.
@@ -1917,32 +2039,51 @@ def workflows_remove_torrents():
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
 
+    # An item that names its instance is already a registration; one that does
+    # not is resolved against the live listing, and refuses where several
+    # registrations answer to the same hash.
+    posted = [(_reg(i), i) for i in items]
+    resolved, ambiguous, absent = _resolve_registrations(before, [k for k, _ in posted])
+    if ambiguous:
+        return _ambiguous_registration_refusal(ambiguous)
+    live = {_reg(r): r for r in before}
+    # A key the client does not list is still answered for — `not_in_client` /
+    # `already_gone` — rather than dropped from the response.
+    regs = resolved + absent
+    by_key = {}
+    for key in regs:
+        row = live.get(key)
+        fallback = next((i for k, i in posted if k == key), {'hash': key, 'instance_id': None})
+        by_key[key] = ({'hash': row['hash'], 'instance_id': row.get('instance_id')}
+                       if row else fallback)
+    plan = _plan_in_registrations(before, plan)
+
     flipped = 0
     if keep_files:
-        decisions = {h: ('keep', 'requested') for h in hashes}
+        decisions = {key: ('keep', 'requested') for key in regs}
     else:
         seeds = [*(str(s) for s in ((plan or {}).get('seeds') or [])),
-                 *(str(s) for s in (((plan or {}).get('groups') or {}) if isinstance((plan or {}).get('groups'), dict) else {})),
-                 *hashes]
+                 *(str(s) for s in ((plan or {}).get('groups') or {})),
+                 *regs]
         own = _removal_ownership(cfg, before, seeds)
-        removal = set(hashes)
-        decisions = {h: _removal_file_decision(own, h, removal) for h in hashes}
+        removal = set(regs)
+        decisions = {key: _removal_file_decision(own, key, removal) for key in regs}
         if plan is not None:
             refusal = _removal_plan_refusal(own, plan, decisions)
             if refusal is not None:
                 return refusal
-            posted = plan.get('files') if isinstance(plan.get('files'), dict) else {}
-            flipped = sum(1 for h, (files, _) in decisions.items()
-                          if files == 'keep' and posted.get(h) == 'delete')
+            posted = plan.get('files') or {}
+            flipped = sum(1 for key, (files, _) in decisions.items()
+                          if files == 'keep' and posted.get(key) == 'delete')
         kept = [r for f, r in decisions.values() if f == 'keep']
         if kept:
             log.info("Client delete: keeping files for %d of %d torrent(s) — %d shared, %d unknown, "
                      "%d unusable listing, %d not in client",
-                     len(kept), len(hashes), kept.count('shared'), kept.count('unknown'),
+                     len(kept), len(regs), kept.count('shared'), kept.count('unknown'),
                      kept.count('unusable_listing'), kept.count('not_in_client'))
 
-    delete_items = [i for i in items if decisions[i['hash']][0] == 'delete']
-    keep_items   = [i for i in items if decisions[i['hash']][0] != 'delete']
+    delete_items = [by_key[k] for k in regs if k in by_key and decisions[k][0] == 'delete']
+    keep_items   = [by_key[k] for k in regs if k in by_key and decisions[k][0] != 'delete']
     submitted, error = 0, None
     try:
         if delete_items:
@@ -1952,9 +2093,12 @@ def workflows_remove_torrents():
     except sources.SourceConnectionError as e:
         error = str(e)
 
-    outcomes = _removal_outcomes(cfg, hashes, before)
-    torrents = [{'hash': h, 'files': decisions[h][0], 'reason': decisions[h][1], 'outcome': outcomes[h]}
-                for h in hashes]
+    outcomes = _removal_outcomes(cfg, regs, before)
+    torrents = [{'reg': key, 'hash': by_key.get(key, {}).get('hash', key),
+                 'instance_id': by_key.get(key, {}).get('instance_id'),
+                 'files': decisions[key][0], 'reason': decisions[key][1],
+                 'outcome': outcomes[key]}
+                for key in regs]
     removed = sum(1 for t in torrents if t['outcome'] == 'removed')
     files_deleted = sum(1 for t in torrents if t['outcome'] == 'removed' and t['files'] == 'delete')
     log.info("Client delete: %d/%d torrent(s) left the client (%d with files deleted, %d submitted, "
@@ -2149,8 +2293,15 @@ def workflows_triage_resolve_groups():
     caller, which no test called, kept iterating it.
     """
     data   = request.json or {}
-    hashes = list(dict.fromkeys(str(h) for h in (data.get('hashes') or []) if h))
-    if not hashes:
+    # Accepts a bare hash (every page before S05) or `{hash, instance_id}`.
+    posted = []
+    for raw in (data.get('hashes') or []):
+        if isinstance(raw, dict) and raw.get('hash'):
+            posted.append(sources.registration_key(raw.get('instance_id'), str(raw['hash'])))
+        elif raw:
+            posted.append(str(raw))
+    posted = list(dict.fromkeys(posted))
+    if not posted:
         return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
     cfg = db_load_config()
     try:
@@ -2158,7 +2309,10 @@ def workflows_triage_resolve_groups():
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
 
-    own = _removal_ownership(cfg, rows, hashes)
+    keys, ambiguous, absent = _resolve_registrations(rows, posted)
+    if ambiguous:
+        return _ambiguous_registration_refusal(ambiguous)
+    own = _removal_ownership(cfg, rows, keys)
     checked = not (own['unknown'] or own['bounded'])
     if not checked:
         log.warning("Triage resolve_groups: ownership not established — %d candidate listing(s) "
@@ -2169,8 +2323,8 @@ def workflows_triage_resolve_groups():
     seen, members_in = set(), []
     for g in own['groups'].values():
         for t in g:
-            if t['hash'] not in seen:
-                seen.add(t['hash'])
+            if _reg(t) not in seen:
+                seen.add(_reg(t))
                 members_in.append({'hash': t['hash'], 'instance_id': t.get('instance_id')})
     try:
         details = sources.fetch_torrent_details(cfg, members_in) if members_in else {}
@@ -2179,20 +2333,22 @@ def workflows_triage_resolve_groups():
         details = {}
 
     out = {}
-    for h in hashes:
-        group = own['groups'].get(h)
+    for key in keys:
+        group = own['groups'].get(key)
         if not group:
-            out[h] = []
+            out[key] = []
             continue
-        everyone = {g['hash'] for g in group}
+        everyone = {_reg(g) for g in group}
         members = []
         for t in group:
-            det = details.get(t['hash'], {})
-            listing = own['paths'].get(t['hash']) or []
-            shares_with = sorted({o for p in listing for o in own['holders'].get(p, ())} - {t['hash']})
-            one = _removal_file_decision(own, t['hash'], {h}) if t['hash'] == h else (None, None)
-            whole = _removal_file_decision(own, t['hash'], everyone)
+            member = _reg(t)
+            det = details.get(member, {})
+            listing = own['paths'].get(member) or []
+            shares_with = sorted({o for p in listing for o in own['holders'].get(p, ())} - {member})
+            one = _removal_file_decision(own, member, {key}) if member == key else (None, None)
+            whole = _removal_file_decision(own, member, everyone)
             members.append({
+                'reg':            member,
                 'hash':           t['hash'],
                 'instance_id':    t.get('instance_id'),
                 'instance_name':  t.get('instance_name'),
@@ -2209,12 +2365,14 @@ def workflows_triage_resolve_groups():
                 'reason':         {'one': one[1], 'all': whole[1]},
             })
         members.sort(key=lambda m: m['name'])
-        out[h] = members
+        out[key] = members
 
     return jsonify({
         "status":           "success",
-        "groups":           out,
-        "missing":          [h for h in hashes if h not in own['by_hash']],
+        # Keyed by registration (S05) — the bare hash wherever a torrent is
+        # registered once, which is every qbit install and every ordinary qui one.
+        "groups":           {**{k: [] for k in absent}, **out},
+        "missing":          absent,
         "checked":          checked,
         "unknown_listings": own['unknown'],
         "bounded":          own['bounded'],
@@ -2427,11 +2585,11 @@ def _trump_candidates(rows, seeds):
     a smaller answer, and it has to say so.
     """
     bound = _TRUMP_CANDIDATE_BOUND
-    seed_hashes = {s['hash'] for s in seeds}
+    seed_regs = {_reg(s) for s in seeds}
     roots = [r for r in (_trump_content_root(s) for s in seeds) if r]
 
     def _near(r):
-        if r['hash'] in seed_hashes:
+        if _reg(r) in seed_regs:
             return True
         root = _trump_content_root(r)
         if root and any(root == sr or root.startswith(sr + '/') or sr.startswith(root + '/')
@@ -2445,7 +2603,7 @@ def _trump_candidates(rows, seeds):
     if len(widened) <= bound:
         return widened, {'candidates': len(widened), 'bound': bound, 'bounded': False}
     sizes = {s['size'] for s in seeds}
-    exact = [r for r in rows if r['hash'] in seed_hashes or r['size'] in sizes]
+    exact = [r for r in rows if _reg(r) in seed_regs or r['size'] in sizes]
     return exact, {'candidates': len(exact), 'widened': len(widened), 'bound': bound, 'bounded': True}
 
 
@@ -2458,46 +2616,50 @@ def _cross_seed_group(rows, paths_map, seeds):
     harmed whether or not it shares one with the seed; and a sibling carrying
     one extra `.nfo` shares every file that matters while differing in size.
 
-    `paths_map` is {hash: [paths] | None}. **`None` is "could not ask"** and a
-    candidate in that state cannot be placed, so it is counted in `unknown` —
-    the group may be missing it, which is TR1c. **`[]` is an answer**: the
-    client says the torrent holds no files, so it has nothing on disk to share
-    or to lose, and it is not counted. The caller refuses outright when a
-    *seed's* own listing is unusable either way.
+    `paths_map` is {registration key: [paths] | None} (S05 — the same torrent on
+    two instances holds two sets of bytes and answers twice). **`None` is
+    "could not ask"** and a candidate in that state cannot be placed, so it is
+    counted in `unknown` — the group may be missing it, which is TR1c. **`[]` is
+    an answer**: the client says the torrent holds no files, so it has nothing on
+    disk to share or to lose, and it is not counted. The caller refuses outright
+    when a *seed's* own listing is unusable either way.
 
-    `components` lists member hashes per connected payload, in seed order, so a
-    caller can count each payload once. Each group row gains a sorted `paths`.
+    `components` lists member registration keys per connected payload, in seed
+    order, so a caller can count each payload once. Each group row gains a
+    sorted `paths`.
     """
     if isinstance(seeds, dict):
         seeds = [seeds]
-    by_hash = {r['hash']: r for r in rows}
+    by_reg = {_reg(r): r for r in rows}
     holders = {}
     for r in rows:
-        for p in paths_map.get(r['hash']) or []:
-            holders.setdefault(p, []).append(r['hash'])
+        for p in paths_map.get(_reg(r)) or []:
+            holders.setdefault(p, []).append(_reg(r))
     seen, components = set(), []
     for s in seeds:
-        if s['hash'] in seen or s['hash'] not in by_hash:
+        if _reg(s) in seen or _reg(s) not in by_reg:
             continue
-        seen.add(s['hash'])
-        comp, stack = [], [s['hash']]
+        seen.add(_reg(s))
+        comp, stack = [], [_reg(s)]
         while stack:
-            h = stack.pop()
-            comp.append(h)
-            for p in paths_map.get(h) or []:
+            key = stack.pop()
+            comp.append(key)
+            for p in paths_map.get(key) or []:
                 for other in holders.get(p, ()):
                     if other not in seen:
                         seen.add(other)
                         stack.append(other)
         components.append(comp)
-    group = [{**by_hash[h], 'paths': sorted(paths_map.get(h) or [])}
-             for comp in components for h in comp]
-    unknown = sum(1 for r in rows if r['hash'] not in seen and paths_map.get(r['hash']) is None)
+    group = [{**by_reg[key], 'paths': sorted(paths_map.get(key) or [])}
+             for comp in components for key in comp]
+    unknown = sum(1 for r in rows if _reg(r) not in seen and paths_map.get(_reg(r)) is None)
     return group, components, unknown
 
 
-def _trump_resolve_group(cfg, rows, seed_hashes):
+def _trump_resolve_group(cfg, rows, seed_keys):
     """Phase 2's expansion — shared by `resolve_group` and `execute`'s re-verify.
+
+    `seed_keys` are **registration keys** (S05), already resolved by the route.
 
     Returns a dict whose `status` is `ok`, `no_seeds` (none of the seeds is in
     the client) or `seed_unknown` (a seed's own listing could not be used).
@@ -2511,24 +2673,24 @@ def _trump_resolve_group(cfg, rows, seed_hashes):
     Logs counts only, never names or hashes: the log ring reaches
     `/api/debug/report`.
     """
-    by_hash = {r['hash']: r for r in rows}
-    wanted = list(dict.fromkeys(seed_hashes))
-    seeds = [by_hash[h] for h in wanted if h in by_hash]
+    by_reg = {_reg(r): r for r in rows}
+    wanted = list(dict.fromkeys(seed_keys))
+    seeds = [by_reg[k] for k in wanted if k in by_reg]
     if not seeds:
         return {'status': 'no_seeds'}
     candidates, prefilter = _trump_candidates(rows, seeds)
     paths_map = sources.fetch_torrent_file_paths(cfg, candidates)
-    unusable = [s for s in seeds if not paths_map.get(s['hash'])]
+    unusable = [s for s in seeds if not paths_map.get(_reg(s))]
     if unusable:
         log.warning("Trump: refusing to resolve — no file listing for %d of %d seed(s)",
                     len(unusable), len(seeds))
         return {'status': 'seed_unknown', 'unknown_seeds': len(unusable), 'seeds': len(seeds)}
 
     group, components, unknown = _cross_seed_group(candidates, paths_map, seeds)
-    by_member = {g['hash']: g for g in group}
+    by_member = {_reg(g): g for g in group}
     # One payload per connected component, however many registrations stand
     # on it; the largest member is the payload plus any extra sidecar.
-    total_size = sum(max((by_member[h].get('size') or 0) for h in comp) for comp in components)
+    total_size = sum(max((by_member[k].get('size') or 0) for k in comp) for comp in components)
     partial = bool(unknown) or prefilter['bounded']
     if partial:
         log.warning("Trump: group resolved partial — %d of %d candidate listing(s) unknown, "
@@ -2636,6 +2798,7 @@ def _trump_link_state(cfg, group):
 def _trump_pick_row(row):
     """Trim a live torrent row to the fields the candidate picker needs."""
     return {
+        'reg':           _reg(row),
         'hash':          row.get('hash'),
         'name':          row.get('name') or '',
         'tracker':       row.get('tracker') or '',
@@ -2647,7 +2810,7 @@ def _trump_pick_row(row):
     }
 
 
-def _trump_prefer_pm_tracker(ranked, auto_hash, indexer):
+def _trump_prefer_pm_tracker(ranked, auto_key, indexer):
     """Break candidate ties with the tracker that sent the PM.
 
     A cross-seed group carries one release name on several trackers, so its rows
@@ -2658,23 +2821,25 @@ def _trump_prefer_pm_tracker(ranked, auto_hash, indexer):
     Strictly a tie-break: the sort is score-first and stable, so a stronger title
     match is never demoted, and nothing is dropped for being on another tracker
     (the PM's tracker may not be in the client under a recognizable name at all).
-    Reorders `ranked` in place and returns the possibly-upgraded auto hash.
+    Reorders `ranked` in place and returns the possibly-upgraded auto
+    **registration key** (S05 — two instances holding the trumped release are
+    two candidates, and the PM's tracker picks between them).
     """
     if not indexer or not ranked:
-        return auto_hash
-    on_tracker = {c['hash'] for c in ranked
+        return auto_key
+    on_tracker = {_reg(c) for c in ranked
                   if tracker_matches_indexer(c.get('tracker'), indexer)}
     if not on_tracker:
-        return auto_hash
-    pinned = next((c for c in ranked if c['hash'] == auto_hash), None)
-    ranked.sort(key=lambda c: ((c.get('match_score') or 0), c['hash'] in on_tracker),
+        return auto_key
+    pinned = next((c for c in ranked if _reg(c) == auto_key), None)
+    ranked.sort(key=lambda c: ((c.get('match_score') or 0), _reg(c) in on_tracker),
                 reverse=True)
     if pinned is None:
-        return ranked[0]['hash']
+        return _reg(ranked[0])
     # Only swap for a sibling that matched the PM equally well.
-    sib = next((c for c in ranked if c['hash'] in on_tracker
+    sib = next((c for c in ranked if _reg(c) in on_tracker
                 and c.get('match_score') == pinned.get('match_score')), None)
-    return sib['hash'] if sib else auto_hash
+    return _reg(sib) if sib else auto_key
 
 
 @app.route('/api/workflows/trump/resolve_group', methods=['POST'])
@@ -2719,14 +2884,16 @@ def workflows_trump_resolve_group():
                 auto   = match_trumped_torrent(rows, title)
                 # The conservative exact/subset matcher is the trusted pre-selection;
                 # make sure it's present in (and at the head of) the ranked list.
-                if auto is not None and all(c['hash'] != auto['hash'] for c in ranked):
+                if auto is not None and all(_reg(c) != _reg(auto) for c in ranked):
                     s, brk = score_release_match(title, auto['name'])
                     ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
-                auto_hash = auto['hash'] if auto is not None else (ranked[0]['hash'] if ranked else None)
-                auto_hash = _trump_prefer_pm_tracker(ranked, auto_hash, indexer)
+                auto_key = _reg(auto) if auto is not None else (_reg(ranked[0]) if ranked else None)
+                auto_key = _trump_prefer_pm_tracker(ranked, auto_key, indexer)
                 picks.append({
                     'title':      title,
-                    'auto':       auto_hash,
+                    # A registration key — the bare hash wherever a torrent is
+                    # registered once, which is every qbit install (S05).
+                    'auto':       auto_key,
                     'candidates': [_trump_pick_row(c) for c in ranked],
                 })
         finally:
@@ -2739,7 +2906,10 @@ def workflows_trump_resolve_group():
     # A failed instance has already refused above, deliberately *not* as
     # `partial`: a sibling living on an instance that did not answer is
     # invisible rather than narrowed, and no acknowledgement makes that safe.
-    res = _trump_resolve_group(cfg, rows, seed_hashes)
+    seed_keys, ambiguous, _absent = _resolve_registrations(rows, seed_hashes)
+    if ambiguous:
+        return _ambiguous_registration_refusal(ambiguous)
+    res = _trump_resolve_group(cfg, rows, seed_keys)
     if res['status'] == 'no_seeds':
         return jsonify({
             "status": "error",
@@ -2760,7 +2930,8 @@ def workflows_trump_resolve_group():
         log.warning("Trump: torrent detail fetch failed: %s", e)
         details = {}
     for g in group:
-        det = details.get(g['hash'], {})
+        g['reg'] = _reg(g)
+        det = details.get(g['reg'], {})
         g['uploaded']       = det.get('uploaded')
         g['seeding_time']   = det.get('seeding_time')
         g['tracker_health'] = det.get('tracker_health', 'unknown')
@@ -2954,15 +3125,28 @@ def _trump_reverify(cfg, items, data):
     A failed instance or an unusable seed listing is a 502, never a partial:
     those are not narrowed answers but missing ones. Seeds are the posted
     `seed_hashes` (the torrents the user confirmed in step 3) when they are part
-    of the posted set, else every posted hash — with the confirmed seeds, a
-    member that stopped sharing the payload drops out and is caught as shrunk.
+    of the posted set, else every posted registration — with the confirmed
+    seeds, a member that stopped sharing the payload drops out and is caught as
+    shrunk. Membership is compared by **registration key** (S05): the same
+    release on two instances is two members, and comparing hashes would read the
+    pair as one and miss a group that really changed.
     """
-    posted = {i['hash'] for i in items}
-    seeds = [h for h in (str(s) for s in (data.get('seed_hashes') or [])) if h in posted]
     try:
         rows = sources.list_torrents(cfg)
     except sources.SourceConnectionError as e:
         return {"status": "error", "message": str(e)}, 502
+    posted_keys, ambiguous, absent = _resolve_registrations(
+        rows, [_reg(i) for i in items])
+    if ambiguous:
+        body, status = _ambiguous_registration_refusal(ambiguous)
+        return body.get_json(), status
+    # A posted key the client no longer lists stays in the set, so the group
+    # comparison below sees it gone and refuses. Dropping it would make a
+    # vanished torrent look like agreement.
+    posted = set(posted_keys) | set(absent)
+    seed_keys, _amb, _miss = _resolve_registrations(
+        rows, [str(x) for x in (data.get('seed_hashes') or [])])
+    seeds = [k for k in seed_keys if k in posted]
     res = _trump_resolve_group(cfg, rows, seeds or sorted(posted))
     if res['status'] == 'seed_unknown':
         return {
@@ -2972,7 +3156,7 @@ def _trump_reverify(cfg, items, data):
                        "reachable and try again.",
         }, 502
 
-    group = {g['hash'] for g in res.get('group') or []}
+    group = {_reg(g) for g in res.get('group') or []}
     added, missing = len(group - posted), len(posted - group)
     if added or missing:
         log.warning("Trump: refusing execute — the group changed since it was confirmed "
@@ -2999,7 +3183,7 @@ def _trump_reverify(cfg, items, data):
             "status": "error", "code": "only_copy",
             "only_copy_bytes": res['link_check']['only_copy_bytes'],
             "only_copy_files": res['link_check']['only_copy_files'],
-            "torrents": [{'hash': g['hash'], 'name': g.get('name') or '',
+            "torrents": [{'reg': _reg(g), 'hash': g['hash'], 'name': g.get('name') or '',
                           'only_copy_bytes': g.get('only_copy_bytes') or 0} for g in only],
             "message": "Nothing outside this group holds some of these files — removing it "
                        "destroys the only copy. Nothing was removed.",
@@ -3346,10 +3530,14 @@ def workflows_triage():
     # Compact working set persisted by the audit (the only records the filters
     # below can select). Databases whose last audit predates the subset row
     # fall back to the full torrent list until the next scan.
-    if db_has_file_results('triage'):
-        torrent_files = db_load_file_results('triage')
-    else:
-        torrent_files = db_load_file_results('torrents')
+    # Pinned: the presence check and the read it decides are two reads, and a
+    # publish landing between them serves a row from the generation the check
+    # did not see (S04).
+    with db_read_snapshot() as snap:
+        if db_has_file_results('triage', conn=snap):
+            torrent_files = db_load_file_results('triage', conn=snap)
+        else:
+            torrent_files = db_load_file_results('torrents', conn=snap)
     not_imported  = [f for f in torrent_files if _is_not_imported_torrent(f)]
     # Dead seeds: fully imported but the tracker no longer registers the
     # torrent (flag captured at audit time). Deleting these via the client is
@@ -3359,10 +3547,13 @@ def workflows_triage():
                   and f.get('status') != 'Orphaned'
                   and f.get('tracker_health') == 'unregistered']
 
-    # Group files by torrent hash — verdicts are per torrent, not per file
+    # Group files by torrent **registration** — verdicts are per torrent, not per
+    # file, and a torrent on two qui instances is two torrents here (S05). The key
+    # is the hash wherever there is one registration of it; `count_triage_items`
+    # groups the same way, or the badge disagrees with the page.
     groups = {}
     for f in not_imported:
-        key = f.get('hash') or f['path']
+        key = torrent_record_key(f) or f['path']
         g = groups.setdefault(key, {
             'hash':          f.get('hash') or '',
             'instance_id':   f.get('instance_id'),
@@ -3378,7 +3569,7 @@ def workflows_triage():
         g['total_size'] += f['size']
         g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
     for f in dead_seeds:
-        key = f.get('hash') or f['path']
+        key = torrent_record_key(f) or f['path']
         existing = groups.get(key)
         if existing is not None and not existing['imported']:
             continue  # partially-imported torrent — already triaged normally
@@ -3404,16 +3595,19 @@ def workflows_triage():
     # covers both kinds of row (T8), and against every listed hash rather than
     # only those the cap keeps — a torrent the cap cut is still not also a dead
     # registration, which is how `count_triage_items` counts.
-    listed_hashes = {g['hash'] for g in groups.values() if g['hash']}
+    listed = {k for k, g in groups.items() if g['hash']}
     dead_reg = {}
     for f in torrent_files:
         if f.get('excluded') or not f.get('dead_siblings'):
             continue
         for s in f['dead_siblings']:
             h = s.get('hash')
-            if not h or h in listed_hashes:
+            if not h:
                 continue
-            g = dead_reg.setdefault(h, {
+            key = sources.registration_key(s.get('instance_id'), h)
+            if key in listed:
+                continue
+            g = dead_reg.setdefault(key, {
                 'hash': h, 'instance_id': s.get('instance_id'),
                 'files': [], 'total_size': 0, 'trackers': set(),
                 'stored_msg': s.get('tracker_msg') or '',
@@ -3622,6 +3816,7 @@ def workflows_triage():
                   if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
         rep = max(videos or g['files'], key=lambda f: f['size'])
         return {
+            'reg':            sources.registration_key(g['instance_id'], g['hash']),
             'hash':           g['hash'],
             'instance_id':    g['instance_id'],
             'rep_path':       rep['path'],
@@ -3720,6 +3915,10 @@ def workflows_triage():
         is_duplicate = any(f.get('duplicate_paths') for f in g['files'])
 
         items.append({
+            # The row's registration (S05) — what /triage/verify keys its
+            # answers by, and what the removal acts on. The bare hash wherever a
+            # torrent is registered once.
+            'reg':            sources.registration_key(g['instance_id'], g['hash']),
             'hash':           g['hash'],
             'instance_id':    g['instance_id'],
             'rep_path':       rep['path'],
@@ -3809,6 +4008,9 @@ def workflows_triage_verify():
         return jsonify({"status": "success", "details": {}})
     cfg = db_load_config()
     try:
+        # Keyed by registration (S05): two instances seeding one torrent have
+        # two sets of upload figures and two tracker answers, and the page holds
+        # a row per registration.
         details = sources.fetch_torrent_details(cfg, items)
     except Exception as e:
         # qBittorrent raises SourceConnectionError when unreachable — surface
@@ -3999,8 +4201,11 @@ def workflows_dedupe():
     `scripts.build_dedupe_report`.
     """
     cfg = db_load_config()
-    report = build_dedupe_report(db_load_file_results('torrents'),
-                                 db_load_file_results('media'), cfg)
+    # Pinned for the same reason the script endpoint is: both lists come from
+    # one generation, or the page shows groups that never coexisted (S04).
+    with db_read_snapshot() as snap:
+        report = build_dedupe_report(db_load_file_results('torrents', conn=snap),
+                                     db_load_file_results('media', conn=snap), cfg)
     return jsonify({"status": "success", **report})
 
 

@@ -89,10 +89,13 @@ class _Client:
         return rows, report
 
     def fetch_paths(self, _cfg, items):
+        # Registration-keyed, as `sources.fetch_torrent_file_paths` answers since
+        # S05 — the mock answers only what the real function does. `self.paths`
+        # stays keyed by hash: these fixtures put one registration on each.
         out = {}
         for i in items:
             self.asked.append(i['hash'])
-            out[i['hash']] = self.paths.get(i['hash'])
+            out[app._reg(i)] = self.paths.get(i['hash'])
         return out
 
     def remove(self, _cfg, items, delete_files=True):
@@ -147,8 +150,16 @@ def _torrent(resp, h):
     return next(t for t in resp.get_json()['torrents'] if t['hash'] == h)
 
 
+# Since S05 the wire is keyed by **registration**, not by hash: `groups`,
+# `outcomes` and `missing` all name `(instance, hash)`. Every row in this file
+# sits on instance 1, so the key is `1:<hash>` — these helpers spell it once
+# rather than sprinkling the prefix through the assertions.
+def _k(h):
+    return app.sources.registration_key(1, h)
+
+
 def _member(resp, seed, h):
-    return next(m for m in resp.get_json()['groups'][seed] if m['hash'] == h)
+    return next(m for m in resp.get_json()['groups'][_k(seed)] if m['hash'] == h)
 
 
 ROWS3 = [_row('aaa', tracker='aither.cc'), _row('bbb', tracker='blutopia.cc'), _row('ccc', tracker='hawke.uno')]
@@ -312,7 +323,7 @@ class TestClosure:
 
         resp = _resolve(_Client(CHAIN_ROWS, CHAIN_PATHS), ['A'])
         assert resp.status_code == 200
-        assert sorted(m['hash'] for m in resp.get_json()['groups']['A']) == ['A', 'B', 'C']
+        assert sorted(m['hash'] for m in resp.get_json()['groups'][_k('A')]) == ['A', 'B', 'C']
 
     def test_a_sharer_of_a_members_file_keeps_that_members_files(self):
         """Candidates are searched near every member, not only near the seed:
@@ -339,13 +350,13 @@ class TestResolveGroups:
         resp = _resolve(_Client(ROWS3, SHARED3), ['aaa'])
         assert resp.status_code == 200
         body = resp.get_json()
-        assert sorted(m['hash'] for m in body['groups']['aaa']) == ['aaa', 'bbb', 'ccc']
+        assert sorted(m['hash'] for m in body['groups'][_k('aaa')]) == ['aaa', 'bbb', 'ccc']
         assert body['checked'] is True
         seed = _member(resp, 'aaa', 'aaa')
         assert seed['shares_path'] is True
         assert seed['files'] == {'one': 'keep', 'all': 'delete'}
         assert seed['reason'] == {'one': 'shared', 'all': 'requested'}
-        assert sorted(seed['shares_with']) == ['bbb', 'ccc']
+        assert sorted(seed['shares_with']) == [_k('bbb'), _k('ccc')]
         # A member that is not the seed is removed only with the whole group.
         assert _member(resp, 'aaa', 'bbb')['files']['one'] is None
 
@@ -368,7 +379,7 @@ class TestResolveGroups:
     def test_a_hash_no_longer_in_the_client_is_named(self):
         resp = _resolve(_Client([_row('aaa')], {'aaa': [MKV]}), ['aaa', 'gone'])
         body = resp.get_json()
-        assert body['groups']['gone'] == []
+        assert body['groups']['gone'] == []          # unresolved: stays as posted
         assert body['missing'] == ['gone']
 
 
@@ -439,14 +450,15 @@ class TestOutcomes:
         resp = _remove(client, ['A', 'B', 'C'], delete_files=False)
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body['outcomes'] == {'A': 'removed', 'B': 'still_listed', 'C': 'removed'}
+        assert body['outcomes'] == {_k('A'): 'removed', _k('B'): 'still_listed',
+                                    _k('C'): 'removed'}
         assert body['removed'] == 2
 
     def test_a_torrent_on_an_instance_that_did_not_answer_is_unknown(self):
         client = _Client([_row('A'), _row('B', size=5000, name='Other', inst=2, inst_name='second')],
                          {'A': [MKV], 'B': [f'{SP}/Other/o.mkv']}, failed_instances={'second'})
         resp = _remove(client, ['A', 'B'], delete_files=False)
-        assert resp.get_json()['outcomes'] == {'A': 'removed', 'B': 'unknown'}
+        assert resp.get_json()['outcomes'] == {_k('A'): 'removed', _k('B'): 'unknown'}
 
     def test_a_removal_that_failed_part_way_reports_what_left(self):
         """qui posts per instance, and a later `raise_for_status` used to lose
@@ -457,5 +469,5 @@ class TestOutcomes:
         resp = _remove(client, ['A', 'B'], delete_files='auto')
         assert resp.status_code == 502
         body = resp.get_json()
-        assert body['outcomes']['A'] == 'removed'
-        assert body['outcomes']['B'] == 'still_listed'
+        assert body['outcomes'][_k('A')] == 'removed'
+        assert body['outcomes'][_k('B')] == 'still_listed'

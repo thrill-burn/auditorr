@@ -529,6 +529,10 @@ def _library_stats():
     out = {}
     for tab in ('media', 'torrents'):
         out[tab] = db_get_meta(f'file_results_{tab}_stats')
+    # The publish that wrote them (S04): its `id` is the scan's `ran_at`, and each
+    # stats row above carries the same value as `generation` when every piece
+    # came from one scan. Counts and a timestamp only.
+    out['generation'] = db_get_meta('audit_generation')
     try:
         results = db_load_results()
         dash = results.get('dashboard') or {}
@@ -623,8 +627,10 @@ def build_debug_report(version):
                 'that day, for the last 7 days — a collapse is measured against the '
                 'largest of them. last_report: completeness of the last scan that '
                 'persisted, with a filesystem block per root (files walked, folders '
-                'that could not be listed). last_anomaly: why a scan refused to '
-                'persist (cleared by a clean scan).'
+                'that could not be listed); torrent_count is registrations, '
+                'distinct_torrents the infohashes behind them, and multi_registered '
+                'how many are on more than one qui instance. last_anomaly: why a '
+                'scan refused to persist (cleared by a clean scan).'
             ),
             'baseline':    db_get_meta('source_baseline'),
             'reference':   db_get_meta('source_reference'),

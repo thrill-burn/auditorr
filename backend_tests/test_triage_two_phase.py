@@ -74,7 +74,7 @@ def _phase1(records, has_subset=True):
     sources.fetch_torrent_details is patched to explode: phase 1 must never
     contact the torrent client.
     """
-    def _load(tab):
+    def _load(tab, conn=None):
         return records
     def _boom(*a, **k):
         raise AssertionError("phase 1 must not call the torrent client")

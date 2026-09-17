@@ -378,6 +378,38 @@ export function ArrErrorsWarning({ errors, extra }) {
   )
 }
 
+// A torrent registration's key — the same string `sources.registration_key`
+// builds server-side (S05). A hash is not an identity: the same torrent can be
+// registered on two qui instances at two save paths, and every map keyed by hash
+// alone kept whichever came first. The bare hash where there is no instance
+// (qBittorrent), which is also what every server answer is keyed by there.
+export function regKey(t) {
+  if (!t) return ''
+  if (t.reg) return t.reg
+  return t.instance_id == null ? String(t.hash || '') : `${t.instance_id}:${t.hash}`
+}
+
+// A request refused because a torrent is registered on more than one instance
+// and the request did not say which (409 `registration_ambiguous`). Nothing was
+// done; the sentence names the instances, since that is what the user acts on.
+export function RegistrationWarning({ refusal }) {
+  const ambiguous = refusal?.ambiguous
+  if (!ambiguous?.length) return null
+  const names = [...new Set(ambiguous.flatMap(a => a.instances || []))]
+  return (
+    <WorkflowWarning>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        {ambiguous.length} torrent{ambiguous.length !== 1 ? 's are' : ' is'} registered on more than one instance
+      </div>
+      <div>
+        {names.join(', ')} each hold {ambiguous.length !== 1 ? 'these torrents' : 'this torrent'}, and auditorr will
+        not pick one of them for you — nothing was done. Remove the extra registration in your client, or act on
+        the row that belongs to the instance you mean.
+      </div>
+    </WorkflowWarning>
+  )
+}
+
 // ── Checkbox ──────────────────────────────────────────────────────────────────
 export function Checkbox({ checked, indeterminate, onChange }) {
   return (

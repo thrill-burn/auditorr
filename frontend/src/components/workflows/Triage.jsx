@@ -6,7 +6,7 @@ import { useToast } from '../Toast'
 import {
   WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
   ArrErrorsWarning, Checkbox, ActionBar, ActionButton, Spinner, SpinKeyframes,
-  HDR_STYLE, useAuditComplete, ConfirmExcludeModal,
+  HDR_STYLE, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning,
 } from './shared'
 
 const VERDICTS = [
@@ -69,8 +69,10 @@ const QUALITY_BUCKETS = [
   },
 ]
 
+// A row is a torrent **registration** (S05): the same hash on two qui instances
+// is two rows, verified and removed independently. Path-keyed rows have no hash.
 function itemKey(item) {
-  return item.hash || item.rep_path
+  return item.hash ? regKey(item) : item.rep_path
 }
 
 // Live-verify batch size. Batches go out sequentially and stay under the
@@ -523,7 +525,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmExclude, setConfirmExclude] = useState(false)
   // Cross-seed groups resolved live when the delete modal opens, keyed by the
-  // item's recorded hash → [{hash, instance_id, name, tracker, seeding_time…}].
+  // item's registration → [{reg, hash, instance_id, name, tracker, seeding_time…}].
   const [groups,    setGroups]    = useState({})
   const [scopes,    setScopes]    = useState({})   // itemKey → 'one' | 'all'
   const [resolving, setResolving] = useState(false)
@@ -531,6 +533,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // What resolve_groups said about the answer as a whole:
   // { checked, unknown_listings, bounded, missing }.
   const [groupsMeta, setGroupsMeta] = useState(null)
+  // A 409 `registration_ambiguous` — a selected torrent registered on more than
+  // one instance, which the server will not guess between (S05).
+  const [ambiguity, setAmbiguity] = useState(null)
   // Rows a removal could not confirm left the client, by item key →
   // 'still_listed' | 'unknown' (S09). They stay, and say so, until the audit.
   const [unconfirmed, setUnconfirmed] = useState({})
@@ -556,20 +561,21 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // marked verified — it used to be, which told the user a torrent the client
   // no longer held had been checked.
   const applyDetails = useCallback((batchItems, details) => {
-    const goneKeys = new Set(batchItems.filter(it => details[it.hash]?.found === false).map(itemKey))
+    // Live details are keyed by registration (S05).
+    const goneKeys = new Set(batchItems.filter(it => details[regKey(it)]?.found === false).map(itemKey))
     const recoveredKeys = new Set(
       batchItems
         .filter(it => !goneKeys.has(itemKey(it))
-          && verdictUnder(it, (details[it.hash] || {}).tracker_health || 'unknown') == null)
+          && verdictUnder(it, (details[regKey(it)] || {}).tracker_health || 'unknown') == null)
         .map(itemKey)
     )
-    const batchHashes = new Set(batchItems.map(it => it.hash))
+    const batchKeys = new Set(batchItems.map(regKey))
     setReport(r => {
       if (!r) return r
       const items = []
       for (const it of r.items) {
-        if (!it.hash || !batchHashes.has(it.hash)) { items.push(it); continue }
-        const det = details[it.hash]
+        if (!it.hash || !batchKeys.has(regKey(it))) { items.push(it); continue }
+        const det = details[regKey(it)]
         if (det?.found === false) continue   // gone from the client since the audit
         const health = det?.tracker_health || 'unknown'
         const verdict = verdictUnder(it, health)
@@ -759,13 +765,18 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // the server will hold the removal to.
   const resolveGroups = useCallback(async () => {
     setResolveError(null)
+    setAmbiguity(null)
     setResolving(true)
     try {
-      const resp = await api.triageResolveGroups(deletableItems.map(i => i.hash))
+      // Registrations, not hashes: the server refuses a hash two instances hold
+      // unless it is told which.
+      const resp = await api.triageResolveGroups(
+        deletableItems.map(i => ({ hash: i.hash, instance_id: i.instance_id })))
       setGroups(resp.groups || {})
       setGroupsMeta({ checked: resp.checked !== false, unknown_listings: resp.unknown_listings || 0,
                       bounded: !!resp.bounded, missing: resp.missing || [] })
     } catch (e) {
+      if (e.code === 'registration_ambiguous') setAmbiguity(e.data)
       setResolveError(e.message)
       setGroups({})
       setGroupsMeta(null)
@@ -804,24 +815,26 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // nothing to remove. A resolve that failed keeps every file.
   const removalPlan = useMemo(() => {
     const checked = !resolveError && groupsMeta?.checked !== false
-    const byHash = new Map(), members = new Map(), shown = {}
+    // Keyed by registration throughout (S05) — `shares_with` names registrations,
+    // so the removal set it is tested against has to as well.
+    const byReg = new Map(), members = new Map(), shown = {}
     for (const item of deletableItems) {
-      const grp = groups[item.hash] || []
+      const grp = groups[regKey(item)] || []
       if (!resolveError && grp.length === 0) continue
-      shown[item.hash] = grp.map(m => m.hash)
-      grp.forEach(m => members.set(m.hash, m))
+      shown[regKey(item)] = grp.map(regKey)
+      grp.forEach(m => members.set(regKey(m), m))
       if ((scopes[itemKey(item)] || 'one') === 'all' && grp.length > 0) {
-        for (const m of grp) byHash.set(m.hash, { hash: m.hash, instance_id: m.instance_id })
+        for (const m of grp) byReg.set(regKey(m), { hash: m.hash, instance_id: m.instance_id })
       } else {
-        byHash.set(item.hash, { hash: item.hash, instance_id: item.instance_id })
+        byReg.set(regKey(item), { hash: item.hash, instance_id: item.instance_id })
       }
     }
-    const removal = new Set(byHash.keys())
+    const removal = new Set(byReg.keys())
     const files = {}
-    for (const h of removal) {
-      files[h] = resolveError ? { files: 'keep', reason: 'unknown' } : fileDecision(members.get(h), removal, checked)
+    for (const k of removal) {
+      files[k] = resolveError ? { files: 'keep', reason: 'unknown' } : fileDecision(members.get(k), removal, checked)
     }
-    return { items: [...byHash.values()], removal, files, groups: shown, checked }
+    return { items: [...byReg.values()], removal, files, groups: shown, checked }
   }, [deletableItems, groups, groupsMeta, scopes, resolveError])
 
   // ── Rescan follow-through ──────────────────────────────────────────────────
@@ -891,16 +904,18 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // per torrent `removed`, `already_gone`, `still_listed`, or `unknown` (its
   // instance did not answer). The rest stay, with a chip, until the audit lands.
   // A row removed as another row's cross-seed leaves too.
+  // Outcomes are per **registration** (S05): the same torrent still registered
+  // on another instance no longer reads as this row's removal being unconfirmed.
   const finishRemoval = (resp, failure) => {
     const outcomes = resp.outcomes || {}
-    const left = new Set(Object.keys(outcomes).filter(h => outcomes[h] === 'removed' || outcomes[h] === 'already_gone'))
-    const keys = new Set((report?.items || []).filter(i => i.hash && left.has(i.hash)).map(itemKey))
+    const left = new Set(Object.keys(outcomes).filter(k => outcomes[k] === 'removed' || outcomes[k] === 'already_gone'))
+    const keys = new Set((report?.items || []).filter(i => i.hash && left.has(regKey(i))).map(itemKey))
     keys.forEach(k => DISMISSED.add(k))
     setReport(r => ({ ...r, items: (r?.items || []).filter(i => !keys.has(itemKey(i))) }))
     setSelected(prev => new Set([...prev].filter(k => !keys.has(k))))
-    const stuck = deletableItems.filter(i => outcomes[i.hash] === 'still_listed' || outcomes[i.hash] === 'unknown')
+    const stuck = deletableItems.filter(i => outcomes[regKey(i)] === 'still_listed' || outcomes[regKey(i)] === 'unknown')
     if (stuck.length) {
-      setUnconfirmed(prev => ({ ...prev, ...Object.fromEntries(stuck.map(i => [itemKey(i), outcomes[i.hash]])) }))
+      setUnconfirmed(prev => ({ ...prev, ...Object.fromEntries(stuck.map(i => [itemKey(i), outcomes[regKey(i)]])) }))
     }
     const parts = [`${resp.removed ?? 0} torrent${resp.removed !== 1 ? 's' : ''} removed from ${client?.name || 'the client'}`]
     if (resp.files_deleted) parts.push(`${resp.files_deleted} with files deleted`)
@@ -933,6 +948,12 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
         toast(e.message, 'warning')
         setBusy(null)
         resolveGroups()
+        return
+      }
+      if (e.code === 'registration_ambiguous') {
+        // Nothing was removed; the modal says which instances and why.
+        setAmbiguity(e.data)
+        setBusy(null)
         return
       }
       if (e.data?.outcomes) finishRemoval(e.data, e.message)
@@ -1314,6 +1335,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
               scopes={scopes}
               resolving={resolving}
               resolveError={resolveError}
+              ambiguity={ambiguity}
               onSetItemScope={setItemScope}
               onSetAllScopes={setAllScopes}
               skippedCount={selectedItems.length - deletableItems.length}
@@ -1363,14 +1385,14 @@ function ScopeSwitch({ scope, groupSize, onChange }) {
 }
 
 function ConfirmDeleteModal({
-  items, groups, plan, meta, scopes, resolving, resolveError,
+  items, groups, plan, meta, scopes, resolving, resolveError, ambiguity,
   onSetItemScope, onSetAllScopes, skippedCount, clientName, busy, onCancel, onConfirm,
 }) {
   const settled   = !resolving && !resolveError
-  const missing   = settled ? items.filter(i => (groups[i.hash] || []).length === 0) : []
+  const missing   = settled ? items.filter(i => (groups[regKey(i)] || []).length === 0) : []
   const totalSize = items.filter(i => !missing.includes(i))
                          .reduce((s, i) => s + (i.torrent_size ?? i.total_size), 0)
-  const anyGroups = items.some(i => (groups[i.hash] || []).length > 1)
+  const anyGroups = items.some(i => (groups[regKey(i)] || []).length > 1)
   const unchecked = settled && meta && !meta.checked
 
   const torrentCount = plan.items.length
@@ -1439,7 +1461,10 @@ function ConfirmDeleteModal({
           )}
           {/* A failed resolve never reads as "no cross-seeds": it is "could not
               check", and removing then keeps every file (S01, decision a). */}
-          {resolveError && (
+          {ambiguity && (
+            <div style={{ margin: '8px 0 0' }}><RegistrationWarning refusal={ambiguity} /></div>
+          )}
+          {resolveError && !ambiguity && (
             <p style={{ fontSize: 11.5, color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
               Couldn’t check for cross-seeds ({resolveError}), so auditorr can’t tell what else uses these files.
               Removing keeps every file: the torrents leave {clientName} and their files stay on disk, where Cleanup can check them later.
@@ -1473,7 +1498,10 @@ function ConfirmDeleteModal({
             </div>
           )}
           {items.map(item => {
-            const grp   = groups[item.hash] || []
+            const grp   = groups[regKey(item)] || []
+            // Two instances holding one torrent are two members with one name;
+            // the instance is what tells them apart (S05).
+            const multiInstance = new Set(grp.map(m => m.instance_id)).size > 1
             const scope = scopes[itemKey(item)] || 'one'
             const hasGroup = grp.length > 1
             const gone = settled && grp.length === 0
@@ -1505,9 +1533,9 @@ function ConfirmDeleteModal({
                       {grp.map(m => {
                         // Straight off the plan the page will post: a member another
                         // selected row removes is removed here too.
-                        const willRemove = plan.removal.has(m.hash)
+                        const willRemove = plan.removal.has(regKey(m))
                         return (
-                          <div key={m.hash} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 10, fontFamily: 'var(--mono)' }}>
+                          <div key={regKey(m)} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 10, fontFamily: 'var(--mono)' }}>
                             <span style={{
                               flexShrink: 0, width: 48, color: willRemove ? 'var(--red)' : 'var(--text-dim)',
                               fontWeight: willRemove ? 700 : 400,
@@ -1517,7 +1545,8 @@ function ConfirmDeleteModal({
                             <span style={{ flex: 1, minWidth: 0, color: willRemove ? 'var(--text)' : 'var(--text-dim)', opacity: willRemove ? 1 : 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {m.name}
                             </span>
-                            {willRemove && decisionTag(m.hash)}
+                            {willRemove && decisionTag(regKey(m))}
+                            {multiInstance && m.instance_name && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{m.instance_name}</span>}
                             {m.tracker && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{m.tracker}</span>}
                             {m.seeding_time != null && <span style={{ flexShrink: 0, color: 'var(--text-dim)' }}>{formatDuration(m.seeding_time)}</span>}
                           </div>
@@ -1538,7 +1567,7 @@ function ConfirmDeleteModal({
                             : 'no cross-seeds'}
                         </span>
                       )}
-                      {!resolving && plan.removal.has(item.hash) && decisionTag(item.hash)}
+                      {!resolving && plan.removal.has(regKey(item)) && decisionTag(regKey(item))}
                     </div>
                     <div style={{ marginTop: 4 }}>
                       {shownPaths.map(p => (

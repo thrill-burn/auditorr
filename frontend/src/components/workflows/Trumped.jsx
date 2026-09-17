@@ -6,7 +6,7 @@ import { useToast } from '../Toast'
 import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
   WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
-  Checkbox, Spinner, SpinKeyframes, ActionButton, HDR_STYLE,
+  Checkbox, Spinner, SpinKeyframes, ActionButton, HDR_STYLE, regKey, RegistrationWarning,
 } from './shared'
 
 const ACCENT = 'var(--green)'
@@ -234,7 +234,7 @@ function GroupTable({ torrents }) {
         const link = LINK_STATE[String(t.hardlinked ?? null)]
         const health = HEALTH[t.tracker_health]
         return (
-          <div key={t.hash} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+          <div key={regKey(t)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
             <span title={t.hardlinked === false && t.only_copy_bytes ? `${link.title} (${formatBytes(t.only_copy_bytes)})` : link.title}
               style={{ ...cell, width: 84, fontSize: 11, fontWeight: 700, color: link.color }}>
               {link.mark}
@@ -321,7 +321,7 @@ function OnlyCopyModal({ info, clientName, busy, onCancel, onConfirm }) {
         </div>
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
           {(info.torrents || []).map(t => (
-            <div key={t.hash} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
+            <div key={regKey(t)} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
               <span style={{ flex: 1, minWidth: 0, fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text)', overflowWrap: 'anywhere' }}>{t.name}</span>
               <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--red)', flexShrink: 0 }}>{formatBytes(t.only_copy_bytes || 0)}</span>
             </div>
@@ -390,6 +390,9 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
 
   const [busy, setBusy]       = useState(null)   // 'parse'|'group'|'search'|'execute'
   const [error, setError]     = useState(null)
+  // A 409 `registration_ambiguous` (S05): a torrent registered on more than one
+  // instance, which the server will not pick between on the user's behalf.
+  const [ambiguity, setAmbiguity] = useState(null)
   const [result, setResult]   = useState(null)
   const [onlyCopy, setOnlyCopy] = useState(null) // info for the second confirmation
   const [queued, setQueued]   = useState(null)   // 409 already_queued
@@ -456,13 +459,16 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
 
   // Phase 2 — expand the confirmed seeds into their full cross-seed group.
   const handleExpandGroup = async () => {
-    setBusy('group'); setError(null)
+    setBusy('group'); setError(null); setAmbiguity(null)
     try {
-      const hashes = [...new Set((picks || []).map((_, i) => selected[i]).filter(Boolean))]
-      const g = await api.trumpResolveGroup(oldTitles.filter(t => t.trim()), hashes)
-      setGroup({ ...g, seed_hashes: hashes })
+      // Registration keys, not bare hashes (S05): the same release on two
+      // instances is two candidates, and the server refuses to guess between them.
+      const seeds = [...new Set((picks || []).map((_, i) => selected[i]).filter(Boolean))]
+      const g = await api.trumpResolveGroup(oldTitles.filter(t => t.trim()), seeds)
+      setGroup({ ...g, seed_hashes: seeds })
     } catch (e) {
-      setError(e.message)
+      if (e.code === 'registration_ambiguous') setAmbiguity(e.data)
+      else setError(e.message)
     }
     setBusy(null)
   }
@@ -550,6 +556,8 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
       if (e.data) operationRef.current = null
       if (e.code === 'in_progress') {
         setError(e.message)
+      } else if (e.code === 'registration_ambiguous') {
+        setAmbiguity(e.data)
       } else if (e.code === 'only_copy') {
         setOnlyCopy(e.data)
       } else if (e.code === 'group_changed') {
@@ -614,6 +622,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
       />
 
       <WorkflowError message={error} />
+      <RegistrationWarning refusal={ambiguity} />
 
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: 'var(--elev-1)', padding: '20px 22px' }}>
         {/* Step 1 — paste PM */}
@@ -697,9 +706,9 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   ) : (
                     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
                       {p.candidates.map(c => (
-                        <CandidateRow key={c.hash} cand={c}
-                          selected={selected[i] === c.hash}
-                          onSelect={() => setSelected(s => ({ ...s, [i]: c.hash }))} />
+                        <CandidateRow key={regKey(c)} cand={c}
+                          selected={selected[i] === regKey(c)}
+                          onSelect={() => setSelected(s => ({ ...s, [i]: regKey(c) }))} />
                       ))}
                       <NoneRow label="None of these — skip this release"
                         selected={selected[i] == null}

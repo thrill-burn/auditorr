@@ -155,6 +155,60 @@ reference counts and the last refusal.
 
 ---
 
+## A scan finished but "could not be saved"
+
+**Symptom:** the status message says *the scan finished but could not be saved*,
+and Audit History shows an `error` run.
+
+A scan stores its results in one go: the file lists, the health score, the change
+log, the upload history, your Rounds progress and the counts the next scan is
+checked against all land together, or none of them do. When saving fails part-way
+— the data volume filled up, or became read-only — **nothing from that scan is
+kept**, and every page still shows the last scan that completed, whole.
+
+It used to keep whatever had been written before the failure, so a page could
+end up joining half of one scan to half of another: a file shown as unseeded in
+Backfill and not imported in Triage at the same time, or an upload chart with a
+spike that never happened.
+
+**What to do:** check that the volume mounted at `/app/data` is writable and has
+free space, then start a scan. The failed run doesn't count towards the
+crash-loop breaker — auditorr declined to save, it didn't crash — so automatic
+scanning carries on.
+
+---
+
+## A torrent is registered on more than one qui instance
+
+**Symptom:** removing a torrent in Triage, or confirming a group in Trumped, says
+*registered on more than one instance* and names them, and nothing happens.
+
+The same torrent can be added to two qui instances — two clients seeding it, or
+one copy on each of two disks. Those are two separate registrations: each has its
+own upload total, can sit at its own save path, and can be removed without the
+other. auditorr treats them that way. Triage lists each one on its own row,
+Trumped shows both in the group with the instance beside each, and a removal
+checks that *the registration you removed* is gone rather than whether the
+torrent is still anywhere.
+
+Where a request names the torrent but not which instance holds it, auditorr
+refuses rather than picking one. **What to do:** act on the row for the instance
+you mean, or remove the extra registration in qui first.
+
+Two things follow that you may notice:
+
+- **Files are kept if another instance still uses them.** Removing one
+  registration of a torrent that two instances share at the same path keeps the
+  files, because the other one is still seeding them.
+- **Upload totals count each instance**, since each really did upload. Seeding
+  size counts the files on disk once where two instances share them, and twice
+  where each instance has its own copy.
+
+A single qBittorrent or a single qui instance can't register a torrent twice, so
+none of this applies there.
+
+---
+
 ## Memory usage stays high after a scan
 
 This is expected and is not a leak.

@@ -94,7 +94,9 @@ class PartitionRemovalTests(unittest.TestCase):
         removals = []
 
         def fetch(_cfg, asked):
-            return {i['hash']: paths_map.get(i['hash']) for i in asked}
+            # Registration-keyed (S05); qbit rows carry no instance, so these
+            # keys are the bare hashes they always were.
+            return {app._reg(i): paths_map.get(i['hash']) for i in asked}
 
         def remove(_cfg, removing, delete_files=True):
             removals.append(([i['hash'] for i in removing], delete_files))

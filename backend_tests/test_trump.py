@@ -551,6 +551,8 @@ class TrumpSeedFileListRuleTests(unittest.TestCase):
     ]
 
     def _resolve(self, paths_map):
+        # Registration-keyed since S05; these rows all sit on instance 1.
+        paths_map = {app.sources.registration_key(1, h): v for h, v in paths_map.items()}
         with patch.object(app, 'db_load_config', return_value={}), \
              patch.object(app.sources, 'list_torrents', return_value=list(self.ROWS)), \
              patch.object(app.sources, 'fetch_torrent_file_paths', return_value=paths_map), \

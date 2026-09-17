@@ -186,7 +186,7 @@ def _call(method, url, torrent_files, media_files, cfg, tmp, body=None, mountinf
         stack.enter_context(patch.object(app, 'db_load_config', return_value=dict(cfg)))
         stack.enter_context(patch.object(app, 'db_load_results', return_value={}))
         stack.enter_context(patch.object(app, 'db_load_file_results',
-                                         side_effect=lambda tab: list(stored.get(tab, []))))
+                                         side_effect=lambda tab, conn=None: list(stored.get(tab, []))))
         # Never the real /proc/self/mountinfo: on a Linux CI box its answer
         # would depend on where the temp directory lives.
         stack.enter_context(patch.object(

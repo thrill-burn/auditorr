@@ -244,7 +244,7 @@ class TriageVerdictSpreadTests(unittest.TestCase):
         with patch.object(_qui, '_session', return_value=sess):
             details = _qui.fetch_torrent_details(_QUI_CFG, [{'hash': 'PART', 'instance_id': 1}])
         _forget_qui_listings()
-        self.assertEqual(details['PART']['size'], 72_000)
+        self.assertEqual(details[_reg(1, 'PART')]['size'], 72_000)
 
         records = [_rec(hash='PART', path='tv/P/a.mkv', size=40),
                    _rec(hash='PART', path='tv/P/b.mkv', size=32, imported=True, tracker_health='working')]
@@ -284,6 +284,11 @@ class TriageCapTests(unittest.TestCase):
 _QUI_CFG = {'QUI_HOST': 'http://qui:7476', 'QUI_API_KEY': 'k'}
 _INSTANCES = [{'id': 1, 'name': 'main', 'connected': True, 'hasLocalFilesystemAccess': True},
               {'id': 2, 'name': 'second', 'connected': True, 'hasLocalFilesystemAccess': True}]
+
+
+def _reg(instance_id, h):
+    """qui answers per registration since S05; qbit's key is still the bare hash."""
+    return _qui.registration_key(instance_id, h)
 
 
 def _forget_qui_listings():
@@ -351,7 +356,7 @@ class TriageVerifyListingTests(unittest.TestCase):
         sess = _QuiSession({1: [{'hash': h} for h in ('AAAA', 'BBBB', 'CCCC')]})
         with patch.object(_qui, '_fetch_all_torrents', wraps=_qui._fetch_all_torrents) as listing:
             for h in ('AAAA', 'BBBB', 'CCCC'):
-                self.assertIn(h, self._details(sess, [{'hash': h, 'instance_id': 1}]))
+                self.assertIn(_reg(1, h), self._details(sess, [{'hash': h, 'instance_id': 1}]))
         self.assertEqual(listing.call_count, 1)
 
     def test_a_removal_forgets_the_listing(self):
@@ -361,7 +366,7 @@ class TriageVerifyListingTests(unittest.TestCase):
             _qui.fetch_torrent_details(_QUI_CFG, [{'hash': 'AAAA', 'instance_id': 1}])
             _qui.remove_torrents(_QUI_CFG, [{'hash': 'AAAA', 'instance_id': 1}], delete_files=False)
             out = _qui.fetch_torrent_details(_QUI_CFG, [{'hash': 'AAAA', 'instance_id': 1}])
-        self.assertEqual(out['AAAA'], {'found': False})
+        self.assertEqual(out[_reg(1, 'AAAA')], {'found': False})
         self.assertEqual(listing.call_count, 2)
 
     def test_a_torrent_added_since_the_listing_is_not_called_gone(self):
@@ -369,8 +374,8 @@ class TriageVerifyListingTests(unittest.TestCase):
         self._details(sess, [{'hash': 'AAAA', 'instance_id': 1}])
         sess.torrents[1].append({'hash': 'DDDD'})
         out = self._details(sess, [{'hash': 'DDDD', 'instance_id': 1}])
-        self.assertNotEqual(out.get('DDDD'), {'found': False})
-        self.assertIn('DDDD', out)
+        self.assertNotEqual(out.get(_reg(1, 'DDDD')), {'found': False})
+        self.assertIn(_reg(1, 'DDDD'), out)
 
     def test_a_hash_the_client_no_longer_lists_is_found_false(self):
         """T10. A torrent removed since the audit stayed on the page under its
@@ -397,7 +402,7 @@ class TriageVerifyListingTests(unittest.TestCase):
 
         out = self._details(_QuiSession({1: [{'hash': 'AAAA'}]}),
                             [{'hash': 'AAAA', 'instance_id': 1}, {'hash': 'BBBB', 'instance_id': 1}])
-        self.assertEqual(out['BBBB'], {'found': False})
+        self.assertEqual(out[_reg(1, 'BBBB')], {'found': False})
 
     def test_a_hash_on_an_instance_that_did_not_answer_is_not_found_false(self):
         """The trap: qui logs and carries on when one instance's listing fails,
@@ -405,8 +410,10 @@ class TriageVerifyListingTests(unittest.TestCase):
         sess = _QuiSession({1: [{'hash': 'AAAA'}]}, fail={2}, instances=_INSTANCES)
         out = self._details(sess, [{'hash': 'BBBB', 'instance_id': 2},
                                    {'hash': 'CCCC', 'instance_id': None}])
-        self.assertNotEqual(out.get('BBBB', {}).get('found'), False)
-        self.assertNotEqual(out.get('CCCC', {}).get('found'), False)
+        # Looked up by registration: a hash-keyed lookup here would pass
+        # vacuously, since no hash key exists to hold a `found: False`.
+        self.assertNotIn(_reg(2, 'BBBB'), out)
+        self.assertNotIn(_reg(None, 'CCCC'), out)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -18,9 +18,10 @@ from db import (
     db_load_results, db_save_results, db_save_audit,
     db_save_upload_snapshot, db_get_upload_snapshots, db_get_recent_runs,
     db_save_change_log_entry,
-    db_save_file_results,
-    db_save_file_signatures, db_load_file_signatures,
+    db_save_file_results, db_prepare_file_results,
+    db_save_file_signatures, db_load_file_signatures, db_prepare_file_signatures,
     db_get_meta, db_set_meta, db_update_meta, db_delete_meta,
+    db_publish,
 )
 import rounds
 from state import get_state, set_state, update_progress
@@ -620,6 +621,28 @@ def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
             r["excl_refused"] = reason
 
 
+def torrent_record_key(record):
+    """The registration a torrent-file record belongs to, or None (S05).
+
+    Triage's rows, its badge (`count_triage_items`) and the two audit stamps that
+    describe a row (`_stamp_torrent_files`, `_mark_whole_torrents`) all group
+    records into torrents, and all four grouped by **hash**. The same torrent on
+    two qui instances at two save paths then became one row carrying both
+    instances' files and the first instance's id — verified as one registration,
+    removed as one, and listing the other's files as going with it. The key is
+    `sources.registration_key`, which is the bare hash on qbit and on any record
+    with no instance, so a one-client install groups exactly as it did.
+
+    **`dead_registration_hashes` deliberately stays keyed by hash.** Its set is
+    persisted in `ns_progress['last_dead_regs']` and diffed on the next scan, so
+    changing the spelling would read every stored hash as retired and pay a
+    one-off burst of shovel credit for nothing. The cost of leaving it is that two
+    registrations of one dead hash retire as one — a missed point, never a false one.
+    """
+    h = record.get('hash')
+    return sources.registration_key(record.get('instance_id'), h) if h else None
+
+
 def _stamp_torrent_files(row_records, files_of):
     """`torrent_files` — how many files a torrent has, where its Triage row shows fewer (T5).
 
@@ -638,9 +661,10 @@ def _stamp_torrent_files(row_records, files_of):
     not_imported, dead_seed = {}, {}
     for r in row_records:
         bucket = not_imported if _is_not_imported_torrent(r) else dead_seed
-        bucket[r['hash']] = bucket.get(r['hash'], 0) + 1
+        key = torrent_record_key(r)
+        bucket[key] = bucket.get(key, 0) + 1
     for r in row_records:
-        h = r['hash']
+        h = torrent_record_key(r)
         shown = not_imported.get(h) or dead_seed.get(h, 0)
         if files_of.get(h, 0) > shown:
             r['torrent_files'] = files_of[h]
@@ -699,8 +723,10 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
     # files each torrent has against how many its Triage row will show.
     imported_states, relevant = {}, set()
     files_of, row_records = {}, []
+    # Keyed by registration (`torrent_record_key`, S05), which is the hash
+    # wherever a torrent is registered once.
     for r in torrent_files_data:
-        h = r.get('hash')
+        h = torrent_record_key(r)
         if not h:
             continue
         imported_states.setdefault(h, set()).add(bool(r.get('imported')))
@@ -719,7 +745,7 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
     # directory. Only these hashes' paths are held, which is what bounds this.
     segs_by_hash = {}
     for r in torrent_files_data:
-        h = r.get('hash')
+        h = torrent_record_key(r)
         if h in whole:
             segs_by_hash.setdefault(h, []).append(
                 str(r.get('path') or '').replace('\\', '/').split('/')[:-1])
@@ -753,7 +779,7 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
     for r in torrent_files_data:
         if r.get('excluded'):
             continue
-        h = r.get('hash')
+        h = torrent_record_key(r)
         segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
         for i in range(1, len(segs) + 1):
             folder = '/'.join(segs[:i])
@@ -821,7 +847,15 @@ def _library_shape(scoring_media):
 
 
 def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
-                           extra_details=None):
+                           extra_details=None, history_sink=None):
+    """The dashboard for one scan.
+
+    `history_sink`, when given, receives the updated history instead of it being
+    written here. The audit passes one so the history point lands **inside** the
+    publish transaction (S04): the hourly/daily series is accumulated, so a point
+    written for a scan whose inventory never published is the same kind of
+    fiction CLEANUP §10 refuses for a refused scan.
+    """
     history = db_load_history()
     now     = datetime.now()
     or_ratio  = float(cfg.get('OR_RATIO',  0.01))
@@ -923,7 +957,7 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
                 history['daily_stats'].append({"date": day, "avg_score": round(sum(scores)/len(scores),1),
                                                "min_score": min(scores), "max_score": max(scores)})
         history['daily_stats'] = history['daily_stats'][-90:]
-        db_save_history(history)
+        (history_sink or db_save_history)(history)
     combined_chart = list(history['daily_stats'])
     recent_groups  = {}
     for s in history['hourly_stats']:
@@ -945,13 +979,17 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
 # Upload / yield stats
 # ---------------------------------------------------------------------------
 
-def compute_upload_stats(days=30, from_date=None, to_date=None):
+def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
     """Compute per-tracker upload deltas and yield from stored snapshots.
 
     Returns None if fewer than 2 snapshots exist (not enough data for deltas).
     Pass from_date/to_date (ISO date strings) to query a specific range instead of days.
+    `conn` reads through an open transaction — the audit computes its yield
+    summary inside the publish, after writing this scan's own snapshot, which is
+    what keeps the stored figure identical to the pre-Phase-13 ordering.
     """
-    rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date)
+    rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
+                                   conn=conn)
     if len(rows) < 2:
         return None
 
@@ -1087,9 +1125,9 @@ def compute_upload_stats(days=30, from_date=None, to_date=None):
     }
 
 
-def _build_yield_summary():
+def _build_yield_summary(conn=None):
     """Lightweight yield summary for embedding in /api/results."""
-    stats = compute_upload_stats(30)
+    stats = compute_upload_stats(30, conn=conn)
     if stats is None:
         return None
     top = next((t for t in stats['tracker_yields'] if t['yield'] is not None), None)
@@ -1463,6 +1501,7 @@ def count_triage_items(torrent_files):
     Live re-verification can still drop rows that recovered, so this is the
     audit-time figure: what the page renders before /triage/verify lands.
     """
+    # Per registration, as the page groups (S05) — `torrent_record_key`.
     not_imported, dead_seeds, dead_reg = set(), set(), set()
     for f in torrent_files:
         if f.get('excluded'):
@@ -1470,11 +1509,11 @@ def count_triage_items(torrent_files):
         # Dead siblings ride on any record, orphaned and imported ones included.
         for s in (f.get('dead_siblings') or []):
             if s.get('hash'):
-                dead_reg.add(s['hash'])
+                dead_reg.add(sources.registration_key(s.get('instance_id'), s['hash']))
         if _is_not_imported_torrent(f):
-            not_imported.add(f.get('hash') or f['path'])
+            not_imported.add(torrent_record_key(f) or f['path'])
         elif _is_dead_seed_torrent(f):
-            dead_seeds.add(f.get('hash') or f['path'])
+            dead_seeds.add(torrent_record_key(f) or f['path'])
     # A partially-imported torrent is triaged as not-imported, not as a dead
     # seed, and a hash already listed in its own right is not also a sibling row.
     dead_seeds -= not_imported
@@ -1813,6 +1852,17 @@ def _scan_peak_rss():
         return None
 
 
+class _PublishFailed(Exception):
+    """The scan computed a whole answer and could not store it (S04).
+
+    The publish is one transaction, so a failure part-way rolls the whole thing
+    back: the *previous* generation is still whole and readable, which is the
+    point. This exists to say so in the run record rather than reporting a
+    generic `Audit error`, and — like `_SourceAnomaly` — to leave the crash-loop
+    breaker alone: the process declined to write, it did not die.
+    """
+
+
 class _SourceAnomaly(Exception):
     """The client's answer is not trustworthy enough to classify orphans from.
 
@@ -2026,8 +2076,13 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 max(0, int((time.time() - oldest_media_mtime) // 86400))
                 if oldest_media_mtime else 0),
         }
+        # The history point is staged rather than written: it joins the publish
+        # below, because the hourly/daily series accumulates and a point left
+        # behind by a publish that failed is the fiction CLEANUP §10 refuses.
+        staged_history = []
         dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg,
-                                                    extra_details=_extra_details)
+                                                    extra_details=_extra_details,
+                                                    history_sink=staged_history.append)
         cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
         tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
         not_imported_paths = _not_imported_paths(torrent_files_data)
@@ -2041,9 +2096,14 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             "tracker_file_stats": tracker_file_stats,
             "not_imported_paths": not_imported_paths,
         }
-        # Save upload snapshot — only on successful audits
-        # Augment with per-tracker file health stats so daily seeding/orphaned trends
-        # can be plotted from the same snapshot rows.
+        # The upload snapshot, augmented with per-tracker file health stats so
+        # daily seeding/orphaned trends can be plotted from the same rows.
+        # **Built here, written in the publish below** (S04): it is a
+        # *differenced* series, so a row stored for a scan whose file lists never
+        # landed is a dip the next scan silently spends as one enormous upload
+        # day — CLEANUP §10's argument, arriving through a partial publish
+        # instead of a refused scan.
+        upload_snapshot = None
         try:
             aug = {k: (dict(v) if isinstance(v, dict) else v) for k, v in tracker_snapshot.items()}
             for tracker, fstats in tracker_file_stats.items():
@@ -2064,17 +2124,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 'total_media_size':      det['total_media_size'],
                 'duplicate_size':        det['duplicate_size'],
             }
-            db_save_upload_snapshot(aug, source=cfg.get('TORRENT_SOURCE', 'qbit'))
+            upload_snapshot = aug
         except Exception as e:
-            log.warning(f"Could not save upload snapshot: {e}")
-
-        # Compute yield summary for results
-        try:
-            yield_summary = _build_yield_summary()
-        except Exception as e:
-            log.warning(f"Could not compute yield summary: {e}")
-            yield_summary = None
-        result["yield_summary"] = yield_summary
+            log.warning(f"Could not build upload snapshot: {e}")
 
         # Compute diff against compact signatures of the previous scan — BEFORE overwriting.
         # Signatures are {path: bitmask}, so this never deserializes the previous full
@@ -2089,6 +2141,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # the previous scan's hash set, and the progress pass below needs the
         # same record to latch against.
         _ns_prev = db_get_meta('ns_progress')
+        diff = None
         try:
             prev_sigs = {
                 'media':    db_load_file_signatures('media'),
@@ -2105,46 +2158,17 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 prev_score = (db_load_results().get('dashboard') or {}).get('score')
                 diff = compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
                 del prev_sigs, curr_snap
-                if diff:
-                    db_save_change_log_entry(
-                        ran_at=ran_at,
-                        health_score=dashboard_stats['score'],
-                        trigger=trigger,
-                        source=cfg.get('TORRENT_SOURCE', 'qbit'),
-                        diff=diff,
-                    )
             else:
                 log.info("No previous file signatures stored — change log skipped this run, "
                          "resumes on the next audit.")
         except Exception as e:
-            log.warning(f"Could not save change log entry: {e}")
-        # Persist file lists separately so /api/results only loads summary data
-        _enter_phase("post", "Saving file results...")
-        db_save_file_results('media',    media_files_data)
-        db_save_file_results('torrents', torrent_files_data)
-        # Compact Triage working set (references, not copies) — lets the
-        # Triage page skip deserializing the full torrent list.
-        db_save_file_results('triage',
-                             [f for f in torrent_files_data if _is_triage_relevant(f)])
-        # Compact Cleanup working set, after the orphan stamps (C10): the page
-        # and the delete script read this and never the full torrent list.
-        db_save_file_results('cleanup',
-                             [f for f in torrent_files_data if _is_cleanup_relevant(f)])
-        db_save_file_signatures('media',    file_signatures(media_files_data))
-        db_save_file_signatures('torrents', file_signatures(torrent_files_data))
-        _enter_phase("post", "Saving audit results...")
-        db_save_results(result)
-        # Snapshot stores only dashboard stats — no file lists (eliminates 300MB+ per row)
-        snapshot = {"dashboard": dashboard_stats}
-        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot,
-                      source=cfg.get('TORRENT_SOURCE', 'qbit'),
-                      duration_seconds=round(time.time() - scan_start, 1),
-                      ran_at=ran_at, peak_rss_mb=_scan_peak_rss())
+            log.warning(f"Could not compute the change log entry: {e}")
         # Advance the Next steps reward counters (cumulative shovel count,
-        # hardlink high-water mark, clean-state streaks). Kept here rather than
-        # in the endpoint so /api/next_steps never recomputes history — it is
-        # polled, and this is a single small app_meta row.
+        # hardlink high-water mark, clean-state streaks). Computed here and
+        # written in the publish, so /api/next_steps never recomputes history —
+        # it is polled, and this is a single small app_meta row.
         # NB: `update_progress` is also a state.py import, hence the namespace.
+        _ns_next = None
         try:
             _ns_det  = dashboard_stats['current']['details']
             # Built with the *previous* progress so prior latches still apply;
@@ -2162,45 +2186,123 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
                 dead_regs=dead_registration_hashes(torrent_files_data),
                 runs=_ns_runs)
-            # Written through a locked read-modify-write, merging the event
-            # counters as they stand *now*: `_ns_prev` was read at the top of
-            # this phase, and a trump or backfill credited since then would
-            # otherwise be erased by this write. See rounds.merge_event_counters.
-            db_update_meta('ns_progress',
-                           lambda latest: rounds.merge_event_counters(_ns_next, latest))
         except Exception as e:
-            log.warning(f"Could not update Next steps progress: {e}")
+            log.warning(f"Could not compute Next steps progress: {e}")
         # This scan's view of the client and the disk is now the one every stored
         # figure is built from, so it becomes what the next scan is measured
-        # against — advanced **only** here, on a scan that persisted, so a
-        # refused collapse never becomes the next scan's baseline. That alone did
+        # against — advanced **only** on a scan that persisted, so a refused
+        # collapse never becomes the next scan's baseline. That alone did
         # nothing about two *accepted* 40% declines, each of which passed against
         # the scan before it (100 → 60 → 36). This comment used to claim it did;
         # the 2026-09-10 outside review's S02 showed otherwise. The reference is
         # what catches instalments — the largest counts persisted in the last
         # `_GUARD_REFERENCE_DAYS` days — and a manual scan that accepted a change
         # restarts it from itself (decisions 1 and 2 (a), 2026-09-15).
+        counts = {
+            'torrent_count': source_report.get('torrent_count', 0),
+            'file_map_size': source_report.get('file_map_size', 0),
+            'torrent_files': filesystem['torrents'].get('files', 0),
+            'media_files':   filesystem['media'].get('files', 0),
+        }
+
+        # ── Compress, then publish (S04, decisions 1/2/4 — 2026-09-15) ────────
+        # Everything above is computed; nothing above this line has been stored.
+        # The six blobs are built **outside** the transaction because
+        # compression is the expensive half and the write is the cheap one
+        # (measured: 21 s against 0.1 s per tab at 650,000 files — see
+        # db.PreparedFileResults), so the write lock is held for a fraction of a
+        # second even on the largest library. The previous generation is never
+        # read, here or anywhere in a scan, so this holds no second inventory:
+        # the extra peak is the compressed blobs alone, 46 MB measured at that size
+        # against a record list already costing several GB.
+        _enter_phase("post", "Saving file results...")
+        staged = [
+            ('media',    db_prepare_file_results(media_files_data)),
+            ('torrents', db_prepare_file_results(torrent_files_data)),
+            # Compact Triage working set (references, not copies) — lets the
+            # Triage page skip deserializing the full torrent list.
+            ('triage',   db_prepare_file_results(
+                [f for f in torrent_files_data if _is_triage_relevant(f)])),
+            # Compact Cleanup working set, after the orphan stamps (C10): the
+            # page and the delete script read this, never the full torrent list.
+            ('cleanup',  db_prepare_file_results(
+                [f for f in torrent_files_data if _is_cleanup_relevant(f)])),
+        ]
+        staged_sigs = [
+            ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),
+            ('torrents', db_prepare_file_signatures(file_signatures(torrent_files_data))),
+        ]
+        _enter_phase("post", "Saving audit results...")
+        # One transaction. Every piece of this scan lands, or none does — so a
+        # reader can never join two generations and an interruption leaves the
+        # last complete scan whole (S04). `ran_at` names the generation; each
+        # file_results stats row carries it, which is what lets the probe say
+        # whether every stored piece came from one scan.
         try:
-            counts = {
-                'torrent_count': source_report.get('torrent_count', 0),
-                'file_map_size': source_report.get('file_map_size', 0),
-                'torrent_files': filesystem['torrents'].get('files', 0),
-                'media_files':   filesystem['media'].get('files', 0),
-            }
-            db_set_meta('source_baseline', {
-                'at': ran_at, 'source': source_report.get('source'), **counts})
-            db_set_meta('source_reference', advance_reference(
-                reference_points, counts, reset=any(accepted)))
-            db_set_meta('last_source_report', source_report)
-            if not source_report.get('partial'):
-                db_delete_meta('last_source_anomaly')
+            with db_publish() as pub:
+                if upload_snapshot is not None:
+                    db_save_upload_snapshot(upload_snapshot,
+                                            source=cfg.get('TORRENT_SOURCE', 'qbit'), conn=pub)
+                # Read back through the same transaction, so the summary still
+                # includes this scan's own snapshot exactly as it did when the
+                # snapshot was committed before this was computed.
+                try:
+                    result["yield_summary"] = _build_yield_summary(conn=pub)
+                except Exception as e:
+                    log.warning(f"Could not compute yield summary: {e}")
+                    result["yield_summary"] = None
+                if diff:
+                    db_save_change_log_entry(
+                        ran_at=ran_at,
+                        health_score=dashboard_stats['score'],
+                        trigger=trigger,
+                        source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                        diff=diff,
+                        conn=pub,
+                    )
+                for tab, prepared in staged:
+                    db_save_file_results(tab, prepared, conn=pub, generation=ran_at)
+                for tab, prepared in staged_sigs:
+                    db_save_file_signatures(tab, prepared, conn=pub)
+                for hist in staged_history:
+                    db_save_history(hist, conn=pub)
+                db_save_results(result, conn=pub)
+                # Snapshot stores only dashboard stats — no file lists
+                # (eliminates 300MB+ per row)
+                db_save_audit(trigger, dashboard_stats['score'], 'ok', None,
+                              {"dashboard": dashboard_stats},
+                              source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                              duration_seconds=round(time.time() - scan_start, 1),
+                              ran_at=ran_at, peak_rss_mb=_scan_peak_rss(), conn=pub)
+                if _ns_next is not None:
+                    # A read-modify-write on the publish's own connection,
+                    # merging the event counters as they stand *now*: `_ns_prev`
+                    # was read at the top of this phase, and a trump or backfill
+                    # credited since then would otherwise be erased by this
+                    # write. `db_publish` holds `_meta_lock`, so a credit landing
+                    # mid-publish waits and merges rather than being lost.
+                    # See rounds.merge_event_counters.
+                    db_update_meta('ns_progress',
+                                   lambda latest: rounds.merge_event_counters(_ns_next, latest),
+                                   conn=pub)
+                db_set_meta('source_baseline', {
+                    'at': ran_at, 'source': source_report.get('source'), **counts}, conn=pub)
+                db_set_meta('source_reference', advance_reference(
+                    reference_points, counts, reset=any(accepted)), conn=pub)
+                db_set_meta('last_source_report', source_report, conn=pub)
+                db_set_meta('audit_generation', {
+                    'id': ran_at, 'trigger': trigger,
+                    'media': len(media_files_data), 'torrents': len(torrent_files_data)},
+                    conn=pub)
+                if not source_report.get('partial'):
+                    db_delete_meta('last_source_anomaly', conn=pub)
+                # Scan finished — clear the crash-loop streak so future startups
+                # scan normally.
+                db_set_meta('consecutive_aborted_scans', 0, conn=pub)
         except Exception as e:
-            log.warning(f"Could not record the source baseline: {e}")
-        # Scan finished — clear the crash-loop streak so future startups scan normally
-        try:
-            db_set_meta('consecutive_aborted_scans', 0)
-        except Exception:
-            pass
+            raise _PublishFailed(str(e)) from e
+        finally:
+            del staged, staged_sigs
         rss = process_rss_mb()
         log.info(f"Audit complete: {len(torrent_files_data)} torrent file(s), "
                  f"{len(media_files_data)} media file(s), {len(trackers)} tracker(s), "
@@ -2225,6 +2327,30 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # written except the reason — see `_record_source_anomaly`.
         _record_source_anomaly(e.anomaly, trigger, cfg, scan_start,
                                persist=persist_source_errors)
+    except _PublishFailed as e:
+        # The transaction rolled back, so the last scan that completed is still
+        # whole — file lists, signatures, upload snapshots and change log all
+        # from one generation. Reported as an error run, on a fresh connection,
+        # because the publish's own connection is gone.
+        msg = (f"Audit error: the scan finished but could not be saved ({e}). Nothing from "
+               f"this scan was stored — the file lists, health score and change log still "
+               f"describe the last scan that completed. Check that the data volume is "
+               f"writable and has free space, then scan again.")
+        log.error(msg)
+        try:
+            _save_error_status(msg)
+            db_save_audit(trigger, None, 'error', msg, {},
+                          source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                          duration_seconds=round(time.time() - scan_start, 1),
+                          peak_rss_mb=_scan_peak_rss())
+            # The process declined to write, it did not die — same reading as a
+            # refused scan (CLEANUP §8). Leaving the streak standing would let a
+            # run of failed publishes trip the crash-loop breaker and stop
+            # automatic scanning altogether.
+            db_set_meta('consecutive_aborted_scans', 0)
+        except Exception as e2:
+            log.error(f"Could not persist the failed-publish status: {e2}")
+        set_state(status_message=msg, last_scan_status="error")
     except sources.SourceConnectionError as e:
         msg = str(e)
         log.error(msg)

@@ -23,6 +23,16 @@ whether the payload is *whole*, and a paused incomplete torrent is
 indistinguishable from a paused complete one by state string alone. `torrent_complete`
 answers that separately, tri-state, and its "could not determine" is the same
 `None` the primitives above use.
+
+**A hash is not an identity; a registration is** (S05, the 2026-09-10 outside
+review). The same torrent can legitimately be registered on two qui instances,
+at two save paths, with independent removal intent — and everything here keyed
+on the infohash alone, so the second registration was dropped from the listing
+with nothing saying so. The identity is `(instance_id, hash)`, spelled by
+`registration_key`; `instance_id` is `None` for qbit, which has one client, and
+the key is then the bare hash so every qbit answer is unchanged. A caller that
+cannot name an instance for a hash registered more than once **refuses rather
+than guessing** — the same rule as "could not ask", one layer up.
 """
 
 import os
@@ -66,10 +76,22 @@ def new_source_report(source):
 
       incomplete_torrents  the client says the payload is not whole yet
       completion_unknown   the client exposed no usable completion field
+
+    And two count what `torrent_count` does not (S05). **`torrent_count` is
+    registrations** — one per (instance, hash), in `fetch_file_map` *and* in
+    `list_torrents`, which used to disagree: the first summed per instance while
+    the second de-duplicated globally, so one hash on two instances counted 2
+    against 1 in the guard's own inputs. The other two say how much of that is
+    one torrent seen twice:
+
+      distinct_torrents   distinct infohashes across every instance
+      multi_registered    hashes registered on more than one instance
     """
     return {
         'source':              source,
         'torrent_count':       0,
+        'distinct_torrents':   0,
+        'multi_registered':    0,
         'file_map_size':       0,
         'listing_failures':    0,
         'listing_recovered':   0,
@@ -82,6 +104,27 @@ def new_source_report(source):
         'partial':             False,
         'notes':               [],
     }
+
+
+def registration_key(instance_id, torrent_hash):
+    """The identity of one torrent **registration** (S05).
+
+    A hash names a payload; a registration is a hash *on a client*. The same
+    torrent can sit on two qui instances at two save paths and be removed from
+    one without the other, so every map that used to be keyed by hash — live
+    listings, file-path lookups, detail lookups, removal receipts, cross-seed
+    groups — is keyed by this instead.
+
+    **`None` gives the bare hash back.** qbit has one client and reports
+    `instance_id: None`, so its keys are byte-identical to what they were, and
+    so are the wire shapes an older frontend bundle reads.
+
+    The key carries an instance id and a full infohash, so it is **never put in
+    a log line**: `debug._TOKEN_RE` redacts at 24 characters, which a 40-char
+    infohash clears — but the prefix an operator would actually find useful sits
+    under it and would print in the clear. Logs carry counts and instance ids.
+    """
+    return str(torrent_hash) if instance_id is None else f"{instance_id}:{torrent_hash}"
 
 
 def report_note(report, message):

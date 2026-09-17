@@ -62,13 +62,13 @@ def _loader(records, compact=True, loaded=None):
     """
     loaded = [] if loaded is None else loaded
 
-    def load(tab):
+    def load(tab, conn=None):
         loaded.append(tab)
         if compact and tab == 'torrents':
             raise AssertionError('the full torrents row was deserialized')
         return list(records)
 
-    def has(tab):
+    def has(tab, conn=None):
         return compact and tab == 'cleanup'
     return load, has, loaded
 
@@ -113,7 +113,8 @@ def _script(records, paths, *, rows=(), listing=None, cfg=None, compact=False,
     cfg = {'LOCAL_PATH': REMOTE, 'REMOTE_PATH': REMOTE, **(cfg or {})}
     load, has, loaded = _loader(records, compact)
     listing = listing or {}
-    fetch = MagicMock(side_effect=lambda _c, items: {i['hash']: listing.get(i['hash'])
+    # Registration-keyed, as `sources.fetch_torrent_file_paths` answers (S05).
+    fetch = MagicMock(side_effect=lambda _c, items: {app._reg(i): listing.get(i['hash'])
                                                      for i in items})
     detailed = MagicMock(side_effect=list_error) if list_error else \
         MagicMock(return_value=(list(rows), report or _report()))

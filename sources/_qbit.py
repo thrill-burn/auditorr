@@ -19,7 +19,7 @@ import qbittorrentapi
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_note,
-    torrent_complete, torrent_claimed_paths, remap_path,
+    torrent_complete, torrent_claimed_paths, remap_path, registration_key,
 )
 
 log = logging.getLogger(__name__)
@@ -48,7 +48,11 @@ def _fetch_inner(cfg, unresolved_roots=None):
     qbt.auth_log_in()
     torrents = list(qbt.torrents_info())
     report = new_source_report('qbit')
-    report['torrent_count']   = len(torrents)
+    # One client, so a registration is a torrent and nothing can be registered
+    # twice — the S05 counters are the same number and a constant zero.
+    report['torrent_count']     = len(torrents)
+    report['distinct_torrents'] = len(torrents)
+    report['multi_registered']  = 0
     report['instances_total'] = 1
     report['instances_ok']    = 1
 
@@ -275,7 +279,8 @@ def _fetch_inner(cfg, unresolved_roots=None):
 def fetch_torrent_details(cfg, items):
     """Live lookup of upload stats + tracker health for specific torrents.
 
-    items: [{'hash': str, ...}] — instance_id is ignored (single instance).
+    items: [{'hash': str, ...}] — instance_id is ignored (single instance), so
+    a registration key here is the bare hash (S05).
     Returns {hash: {'uploaded', 'ratio', 'seeding_time', 'added_on', 'size',
     'tracker_health', 'tracker_msg'}}, and **`{'found': False}` for a hash the
     client does not list** (T10). A single instance filtered server-side, so the
@@ -354,7 +359,7 @@ def fetch_torrent_details(cfg, items):
 def list_torrents(cfg):
     """Light live listing of every torrent in the client.
 
-    Returns ([rows], report) where a row is {'hash', 'name', 'size',
+    Returns ([rows], report) where a row is {'reg', 'hash', 'name', 'size',
     'save_path', 'content_path', 'progress', 'completion_on', 'tracker',
     'instance_id', 'instance_name'} — size is the torrent's payload size, so
     cross-seeds of the same content report identical values (the Trumped
@@ -367,6 +372,11 @@ def list_torrents(cfg):
     A single instance, so the listing is all-or-nothing: it either returns every
     torrent or raises. `report` exists to match the qui backend's shape, where
     one instance can fail while the others answer.
+
+    **qbit has no instances, so S05 is a no-op here**: `instance_id` is `None`,
+    `registration_key` gives the bare hash back, and `reg == hash` on every row.
+    A hash cannot be registered twice in one client, so `distinct_torrents`
+    equals `torrent_count` and `multi_registered` is always 0.
     """
     socket.setdefaulttimeout(30)
     try:
@@ -381,6 +391,7 @@ def list_torrents(cfg):
             tracker_url = getattr(t, 'tracker', '') or ''
             parts = tracker_url.split('/')
             rows.append({
+                'reg':           registration_key(None, t.hash),
                 'hash':          t.hash,
                 'name':          t.name,
                 'size':          t.size,
@@ -393,7 +404,9 @@ def list_torrents(cfg):
                 'instance_name': None,
             })
         report = new_source_report('qbit')
-        report['torrent_count']   = len(rows)
+        report['torrent_count']     = len(rows)
+        report['distinct_torrents'] = len({r['hash'] for r in rows})
+        report['multi_registered']  = 0
         report['instances_total'] = 1
         report['instances_ok']    = 1
         return rows, report
@@ -409,7 +422,9 @@ def fetch_torrent_file_paths(cfg, items):
     items: [{'hash', 'save_path'?, ...}] — save_path is used when provided
     (saves an API round-trip), looked up live otherwise.
 
-    Returns {hash: [paths] | None}. **`None` means the listing could not be
+    Returns {registration key: [paths] | None} — with one client
+    `sources.registration_key(None, h)` is `h`, so this is the same map it
+    always was (S05). **`None` means the listing could not be
     fetched; `[]` means the client answered that this torrent has no files.**
     This used to be `[]` for both, documented as deliberate ("failures yield
     empty lists, never exceptions") — and every consumer is a set-membership

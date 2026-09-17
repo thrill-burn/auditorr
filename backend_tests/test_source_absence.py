@@ -240,14 +240,15 @@ class QuiFilePathsTests(unittest.TestCase):
             out = _qui.fetch_torrent_file_paths(
                 self.CFG, [{'hash': 'aaa', 'instance_id': 1, 'save_path': '/d'},
                            {'hash': 'bbb', 'instance_id': 1, 'save_path': '/d'}])
-        self.assertEqual(out['aaa'], ['/d/a.mkv'])
-        self.assertIsNone(out['bbb'])
+        # Keyed by registration since S05 — these items name instance 1.
+        self.assertEqual(out['1:aaa'], ['/d/a.mkv'])
+        self.assertIsNone(out['1:bbb'])
 
     def test_an_instance_that_answers_with_no_files_answers_an_empty_list(self):
         with patch.object(_qui, '_session', return_value=self._session({'aaa': []})):
             out = _qui.fetch_torrent_file_paths(
                 self.CFG, [{'hash': 'aaa', 'instance_id': 1, 'save_path': '/d'}])
-        self.assertEqual(out['aaa'], [])
+        self.assertEqual(out['1:aaa'], [])
 
 
 # ---------------------------------------------------------------------------

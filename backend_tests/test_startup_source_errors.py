@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -69,23 +69,35 @@ def test_run_audit_process_persists_source_errors_by_default(
 
 class _FakeMeta:
     """Stands in for the app_meta row set so the guard's interactions with the
-    crash-loop breaker can be asserted rather than reasoned about."""
+    crash-loop breaker can be asserted rather than reasoned about.
+
+    Every method takes and ignores `conn` — since Phase 13 the meta writes of a
+    scan ride the publish transaction (S04), so the audit passes one. This
+    harness stands in for the database entirely, so there is nothing to pass it
+    to; `test_publish_atomicity.py` is where a real file is used instead.
+    """
 
     def __init__(self, **initial):
         self.store = dict(initial)
 
-    def get(self, key, default=None):
+    def get(self, key, default=None, conn=None):
         return self.store.get(key, default)
 
-    def set(self, key, value):
+    def set(self, key, value, conn=None):
         self.store[key] = value
 
-    def delete(self, key):
+    def delete(self, key, conn=None):
         self.store.pop(key, None)
 
-    def update(self, key, fn, default=None):
+    def update(self, key, fn, default=None, conn=None):
         self.store[key] = fn(self.store.get(key, default))
         return self.store[key]
+
+
+@contextmanager
+def _fake_publish():
+    """`db_publish` with no database behind it — the writes are all mocked."""
+    yield None
 
 
 def _source_answer(torrents, mapped):
@@ -126,6 +138,7 @@ def _run_guarded(trigger, *, torrents, mapped, baseline, walk_raises=False):
          patch('audit.db_set_meta', side_effect=meta.set), \
          patch('audit.db_delete_meta', side_effect=meta.delete), \
          patch('audit._walk_directory', side_effect=_walk), \
+         patch('audit.db_publish', _fake_publish), \
          patch('audit._save_error_status') as save_error, \
          patch('audit.db_save_audit') as save_audit, \
          patch('audit.db_save_file_results') as save_files, \
@@ -274,7 +287,8 @@ def _run_scan(trigger, *, local, media, answer=None, meta=None, scandir=None):
                 ('audit.db_load_results', {'return_value': {}}),
                 ('audit.db_get_upload_snapshots', {'return_value': []}),
                 ('audit.db_get_recent_runs', {'return_value': []}),
-                ('audit.db_load_file_signatures', {'return_value': {}})):
+                ('audit.db_load_file_signatures', {'return_value': {}}),
+                ('audit.db_publish', {'new': _fake_publish})):
             stack.enter_context(patch(target, **kw))
         if scandir is not None:
             stack.enter_context(patch('os.scandir', scandir))

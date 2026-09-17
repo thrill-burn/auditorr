@@ -53,7 +53,9 @@ def _items(*hashes):
 
 
 def _resolve(rows=ROWS3, paths=SHARED3, seeds=('aaa',), cfg=None, **extra):
-    fetch = MagicMock(side_effect=lambda _c, items: {i['hash']: paths.get(i['hash'])
+    # Keyed by registration, as `sources.fetch_torrent_file_paths` answers
+    # since S05 — a listing mock answers only what the real one does.
+    fetch = MagicMock(side_effect=lambda _c, items: {app._reg(i): paths.get(i['hash'])
                                                      for i in items if i['hash'] in paths})
     with patch.object(app, 'db_load_config', return_value=dict(cfg or {})), \
          patch.object(app.sources, 'list_torrents', return_value=list(rows)), \
@@ -113,14 +115,16 @@ class TestAlreadyRight:
                              json={'old_titles': [NAME],
                                    'indexer': 'Aither (API) (Prowlarr)'}).get_json()
         assert plain['status'] == 'needs_pick'
-        assert plain['picks'][0]['auto'] == 'aaa'
-        assert pm['picks'][0]['auto'] == 'bbb'
+        # `auto` is a registration key since S05 (these rows sit on instance 1).
+        assert plain['picks'][0]['auto'] == app.sources.registration_key(1, 'aaa')
+        assert pm['picks'][0]['auto'] == app.sources.registration_key(1, 'bbb')
         assert len(pm['picks'][0]['candidates']) == 2, 'a tie-break drops nothing'
 
     def test_the_pm_tracker_never_outranks_a_better_title_match(self):
         ranked = [dict(_row('aaa', tracker='blutopia.cc'), match_score=1.0),
                   dict(_row('bbb', tracker='aither.cc'), match_score=0.94)]
-        assert app._trump_prefer_pm_tracker(ranked, 'aaa', 'Aither (API) (Prowlarr)') == 'aaa'
+        assert app._trump_prefer_pm_tracker(
+            ranked, app._reg(ranked[0]), 'Aither (API) (Prowlarr)') == app._reg(ranked[0])
 
     def test_the_service_gate_holds_at_the_endpoint(self):
         """A same-titled film never answers for an episode — searched on Sonarr."""
@@ -301,7 +305,9 @@ def _execute(body, rows=ROWS3, paths=SHARED3, cfg=None, queue=None, thread=_Thre
     remove = MagicMock(side_effect=remove_error if remove_error
                        else (lambda _c, items, delete_files=True: len(items)))
     grab = grab or MagicMock(return_value={})
-    fetch = MagicMock(side_effect=lambda _c, items: {i['hash']: paths.get(i['hash'])
+    # Keyed by registration, as `sources.fetch_torrent_file_paths` answers
+    # since S05 — a listing mock answers only what the real one does.
+    fetch = MagicMock(side_effect=lambda _c, items: {app._reg(i): paths.get(i['hash'])
                                                      for i in items if i['hash'] in paths})
     if listings:
         answers = [list(r) for r in listings]

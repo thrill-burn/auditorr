@@ -4,12 +4,30 @@ import zlib
 import sqlite3
 import logging
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
 
 DATA_DIR = os.environ.get('DATA_DIR', '/app/data')
 DB_FILE  = os.path.join(DATA_DIR, 'auditorr.db')
+
+# How long a connection waits for the write lock before raising
+# `sqlite3.OperationalError: database is locked`. Python's `sqlite3.connect`
+# default is **5 seconds** (its documented `timeout` parameter), which is what
+# applied here until Phase 13 — no value was passed at all.
+#
+# It is raised deliberately, as part of S04's one-transaction publish: a scan
+# now takes the write lock for the whole of its publish, so a config save or a
+# `db_update_meta` credit landing in that window waits instead of failing.
+# Measured 2026-09-15 on this code path: staging the compression outside the
+# transaction (the user's decision, below) leaves the lock held for the writes
+# alone — 0.00 s at 8,000 files, 0.10 s at 650,000. Sixty seconds is ~100× the
+# worst measured hold, so a writer that still times out is a real problem
+# rather than ordinary contention. **A lost `ns_progress` credit is permanent**
+# (Rounds' first rule is that points are never taken away), which is why the
+# number errs long rather than short.
+DB_BUSY_TIMEOUT = float(os.environ.get('AUDITORR_DB_TIMEOUT', '60'))
 
 DEFAULT_CONFIG = {
     'TORRENT_SOURCE':     'qbit',   # 'qbit' | 'qui'
@@ -129,7 +147,7 @@ def score_weight_points(cfg):
 
 
 def _db_conn():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=DB_BUSY_TIMEOUT)
     conn.row_factory = sqlite3.Row
     # WAL mode allows concurrent reads during writes — better for Flask threads
     # reading results while the audit thread writes them.
@@ -137,6 +155,154 @@ def _db_conn():
     # Enforce declared foreign key constraints (SQLite ignores them by default).
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+# ---------------------------------------------------------------------------
+# One generation, published and read as one (S04)
+# ---------------------------------------------------------------------------
+#
+# Every save function below used to open its own connection and commit its own
+# write, so one audit published in sixteen independently committed pieces. Two
+# things followed, and the 2026-09-10 outside review's S04 is both of them:
+#
+#  * a reader of two rows could combine two scans — the brief's probe read media
+#    generation 2 against torrents generation 1, and the resulting join read one
+#    file as unseeded (Backfill offers a grab) and one as not imported (Triage
+#    offers a delete);
+#  * a publish interrupted part-way *persisted* the mix, signatures included, so
+#    the next scan's diff spanned two generations.
+#
+# The fix is one transaction for the write side (`db_publish`) and one read
+# transaction for the read side (`db_read_snapshot`). Both halves are needed:
+# `db_load_file_results` opens its own connection per call, so even an atomic
+# publish leaves two reads as two snapshots.
+#
+# Every save/load below therefore takes `conn=None`. **A caller-supplied
+# connection is neither committed nor closed here** — it belongs to whoever
+# opened the transaction.
+
+
+@contextmanager
+def _writing(conn):
+    """The write half of the `conn=None` contract."""
+    if conn is not None:
+        yield conn
+        return
+    own = _db_conn()
+    try:
+        yield own
+        own.commit()
+    finally:
+        own.close()
+
+
+@contextmanager
+def _reading(conn):
+    """The read half of the `conn=None` contract."""
+    if conn is not None:
+        yield conn
+        return
+    own = _db_conn()
+    try:
+        yield own
+    finally:
+        own.close()
+
+
+@contextmanager
+def db_publish():
+    """One connection, one transaction: a scan's results land whole or not at all.
+
+    `BEGIN IMMEDIATE` takes the write lock up front rather than on the first
+    write, so the publish either starts or waits — it never gets half-way and
+    then discovers the lock is gone. In WAL a reader is never blocked by this
+    and sees either the whole previous generation or the whole new one
+    (sqlite.org/isolation.html: *"when a read transaction starts, that reader
+    continues to see an unchanging snapshot of the database file as it existed
+    at the moment in time when the read transaction started"*).
+
+    **`_meta_lock` is taken before the transaction, not inside it**, and that
+    ordering is load-bearing. `db_update_meta` holds `_meta_lock` across its own
+    read-modify-write; if the publish took the SQLite write lock first and then
+    waited for `_meta_lock`, the two would deadlock until the busy timeout —
+    and worse, a `db_update_meta` that read *before* the publish and wrote
+    *after* it would silently erase the publish's `ns_progress`. Taking the
+    Python lock first makes every writer of that row queue in one order, so a
+    trump or backfill credit landing mid-publish waits and then merges.
+
+    Anything raised inside rolls the whole thing back, which is what makes an
+    interrupted publish leave the previous generation whole.
+    """
+    with _meta_lock:
+        conn = _db_conn()
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            yield conn
+            conn.commit()
+        except BaseException:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+
+@contextmanager
+def db_read_snapshot():
+    """One connection with a read transaction open — every read sees one generation.
+
+    For the readers that read more than one row and join them: Dedupe (both
+    endpoints), the config-save health recompute (which writes a dashboard back,
+    so a mixed read *persists* a wrong health score), Cleanup and Triage.
+
+    `BEGIN` is issued explicitly because python's `sqlite3` will not: with the
+    legacy `isolation_level=""` a transaction is opened implicitly before
+    INSERT/UPDATE/DELETE/REPLACE and **not** before SELECT, so a bare run of
+    SELECTs on one connection is still one snapshot per statement. Deferred, so
+    the snapshot is taken by the first read rather than at open.
+
+    **Pinning is a transaction, not a copy.** Nothing here materialises a second
+    inventory; the reads that follow are the same reads, on one connection.
+    """
+    conn = _db_conn()
+    try:
+        conn.execute('BEGIN')
+        yield conn
+    finally:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+
+
+class PreparedFileResults:
+    """A compressed `file_results` blob, ready to be written.
+
+    Compression is the expensive half of a file-list write and the cheap half is
+    the write. Measured 2026-09-15 on this exact code path (zlib level 1):
+
+        8,000 files    compress 0.27 s   blob 0.2 MB    write+commit 0.00 s
+        100,000 files  compress 2.54 s   blob 2.8 MB    write+commit 0.01 s
+        650,000 files  compress 21.3 s   blob 18.1 MB   write+commit 0.10 s
+
+    So compressing *inside* the publish transaction would hold the write lock
+    for about a minute on a large library, while staging the blobs first holds
+    it for a fraction of a second. The user chose staging (decision 4,
+    2026-09-15): the extra peak is the compressed blobs alone — measured 46 MB
+    for both file lists and both signature maps at 650,000 files, plus the two
+    compact rows, against a record list already costing several GB — and **the
+    previous generation is still never read**, which is what
+    "never hold two inventories" is actually protecting.
+    """
+
+    __slots__ = ('count', 'blob')
+
+    def __init__(self, count, blob):
+        self.count = count
+        self.blob  = blob
 
 
 def init_db():
@@ -261,30 +427,26 @@ def _migrate_json_files():
 # Audit runs + snapshots
 # ---------------------------------------------------------------------------
 
-def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit', duration_seconds=None, ran_at=None, peak_rss_mb=None):
+def db_save_audit(trigger, health_score, status, error_message, snapshot, source='qbit', duration_seconds=None, ran_at=None, peak_rss_mb=None, conn=None):
     if ran_at is None:
         ran_at = datetime.now().isoformat()
-    conn = _db_conn()
-    try:
-        cur = conn.execute(
+    with _writing(conn) as c:
+        cur = c.execute(
             'INSERT INTO audit_runs (ran_at, trigger, health_score, status, error_message, source, duration_seconds, peak_rss_mb) VALUES (?,?,?,?,?,?,?,?)',
             (ran_at, trigger, health_score, status, error_message, source, duration_seconds, peak_rss_mb)
         )
         run_id = cur.lastrowid
-        conn.execute(
+        c.execute(
             'INSERT INTO audit_snapshots (audit_run_id, snapshot_json) VALUES (?,?)',
             (run_id, json.dumps(snapshot))
         )
         # Keep only last 10 full snapshots to bound disk usage
-        conn.execute('''
+        c.execute('''
             DELETE FROM audit_snapshots WHERE id NOT IN (
                 SELECT id FROM audit_snapshots ORDER BY id DESC LIMIT 10
             )
         ''')
-        conn.commit()
         return run_id
-    finally:
-        conn.close()
 
 
 def db_get_last_two_snapshots():
@@ -333,25 +495,28 @@ def db_clear_audit_history():
 # Latest results
 # ---------------------------------------------------------------------------
 
-def db_save_results(results):
+def db_save_results(results, conn=None):
     # Strip file lists — they are stored separately in file_results to keep
     # this row small so every db_load_results call deserializes only summary data.
     summary = {k: v for k, v in results.items() if k not in ('media_files', 'torrent_files')}
-    conn = _db_conn()
-    try:
-        conn.execute(
+    with _writing(conn) as c:
+        c.execute(
             'INSERT OR REPLACE INTO latest_results (id, results_json) VALUES (1, ?)',
             (json.dumps(summary),)
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
-def db_load_results():
-    conn = _db_conn()
-    try:
-        row = conn.execute('SELECT results_json FROM latest_results WHERE id = 1').fetchone()
+def db_load_results(conn=None):
+    """The summary row. Through a pinned snapshot the legacy rewrite is skipped.
+
+    The v1.1-era migration below *writes*, and a read pinned by
+    `db_read_snapshot` is a read: upgrading it to a write would take the write
+    lock from inside what the caller asked for as a snapshot. The migration is
+    idempotent and fires only on rows written before v1.2, so the next
+    unpinned read performs it; the value returned is identical either way.
+    """
+    with _reading(conn) as c:
+        row = c.execute('SELECT results_json FROM latest_results WHERE id = 1').fetchone()
         if row:
             data = json.loads(row['results_json'])
             # Migrate any file lists present in old-format rows into file_results,
@@ -361,61 +526,75 @@ def db_load_results():
                 if tab_key in data:
                     files = data.pop(tab_key)
                     needs_rewrite = True
-                    existing = conn.execute(
+                    if conn is not None:
+                        continue
+                    existing = c.execute(
                         'SELECT 1 FROM file_results WHERE tab = ?', (db_tab,)
                     ).fetchone()
                     if not existing:
                         compressed = zlib.compress(json.dumps(files).encode(), level=1)
-                        conn.execute(
+                        c.execute(
                             'INSERT INTO file_results (tab, files_json) VALUES (?, ?)',
                             (db_tab, compressed)
                         )
-            if needs_rewrite:
-                conn.execute(
+            if needs_rewrite and conn is None:
+                c.execute(
                     'UPDATE latest_results SET results_json = ? WHERE id = 1',
                     (json.dumps(data),)
                 )
-                conn.commit()
+                c.commit()
             return data
         return {"trackers": [], "status": "No audit run yet.", "dashboard": None}
-    finally:
-        conn.close()
 
 
-def db_save_file_results(tab, files):
-    # Stream JSON through zlib rather than materializing the full string + bytes
-    # simultaneously. For 650K-file libraries this avoids a ~1 GB peak where
-    # json.dumps() string, .encode() bytes, and compressed output all coexist.
+def db_prepare_file_results(files):
+    """Compress a file list ready for `db_save_file_results` — outside any lock.
+
+    Streams JSON through zlib rather than materializing the full string + bytes
+    simultaneously. For 650K-file libraries this avoids a ~1 GB peak where
+    json.dumps() string, .encode() bytes, and compressed output all coexist.
+
+    Split out from the write in Phase 13 so the publish transaction holds the
+    write lock for the write alone — see `PreparedFileResults` for the numbers.
+    """
     cobj = zlib.compressobj(level=1)
     chunks = [cobj.compress(chunk.encode('utf-8', errors='replace'))
               for chunk in json.JSONEncoder().iterencode(files)]
     chunks.append(cobj.flush())
-    compressed = b''.join(chunks)
-    conn = _db_conn()
-    try:
-        conn.execute(
+    return PreparedFileResults(len(files), b''.join(chunks))
+
+
+def db_save_file_results(tab, files, conn=None, generation=None):
+    """Store one file-list row. `files` is a list, or an already-compressed blob.
+
+    `generation` stamps the stats row with the publish this belongs to, so a
+    reader — or the probe — can say whether every stored piece came from one
+    scan (S04). Absent on rows written before Phase 13.
+    """
+    prepared = files if isinstance(files, PreparedFileResults) else db_prepare_file_results(files)
+    with _writing(conn) as c:
+        c.execute(
             'INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
-            (tab, compressed)
+            (tab, prepared.blob)
         )
         # Cheap stats so other code paths (config-save recompute guard, debug
         # report) can learn the library size without deserializing the blob.
-        conn.execute(
+        stats = {
+            'count':            prepared.count,
+            'compressed_bytes': len(prepared.blob),
+            'saved_at':         datetime.now().isoformat(),
+        }
+        if generation is not None:
+            stats['generation'] = generation
+        c.execute(
             'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
-            (f'file_results_{tab}_stats', json.dumps({
-                'count':            len(files),
-                'compressed_bytes': len(compressed),
-                'saved_at':         datetime.now().isoformat(),
-            }))
+            (f'file_results_{tab}_stats', json.dumps(stats))
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
-def db_load_file_results(tab):
-    conn = _db_conn()
-    try:
-        row = conn.execute('SELECT files_json FROM file_results WHERE tab = ?', (tab,)).fetchone()
+def db_load_file_results(tab, conn=None):
+    with _reading(conn) as c:
+        row = c.execute('SELECT files_json FROM file_results WHERE tab = ?', (tab,)).fetchone()
         if not row:
             return []
         data = row['files_json']
@@ -424,24 +603,19 @@ def db_load_file_results(tab):
         if isinstance(data, (bytes, bytearray)):
             return json.loads(zlib.decompress(data).decode())
         return json.loads(data)
-    finally:
-        conn.close()
 
 
-def db_has_file_results(tab):
+def db_has_file_results(tab, conn=None):
     """Whether a stored row exists for this tab — distinct from an empty list.
 
     Lets callers with a legacy fallback (e.g. the 'triage' subset, absent
     until the first post-upgrade audit) tell "no row yet" apart from a
     legitimately empty result.
     """
-    conn = _db_conn()
-    try:
-        return conn.execute(
+    with _reading(conn) as c:
+        return c.execute(
             'SELECT 1 FROM file_results WHERE tab = ?', (tab,)
         ).fetchone() is not None
-    finally:
-        conn.close()
 
 
 def db_stream_file_results(tab, chunk_size=1 << 20):
@@ -469,79 +643,73 @@ def db_stream_file_results(tab, chunk_size=1 << 20):
         yield data.encode('utf-8', errors='replace')
 
 
-def db_save_file_signatures(tab, sigs):
+def db_prepare_file_signatures(sigs):
+    """Compress a signature map ready for `db_save_file_signatures` — outside any lock."""
+    return PreparedFileResults(
+        len(sigs), zlib.compress(json.dumps(sigs).encode('utf-8', errors='replace'), 1))
+
+
+def db_save_file_signatures(tab, sigs, conn=None):
     """Persist the compact per-file diff signature map ({path: bitmask}).
 
     Stored separately from the full file lists so the next audit can diff
     against the previous scan without deserializing two multi-GB record lists.
+    `sigs` is a map, or an already-compressed blob.
     """
-    compressed = zlib.compress(json.dumps(sigs).encode('utf-8', errors='replace'), 1)
-    conn = _db_conn()
-    try:
-        conn.execute(
+    prepared = sigs if isinstance(sigs, PreparedFileResults) else db_prepare_file_signatures(sigs)
+    with _writing(conn) as c:
+        c.execute(
             'INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
-            (f'{tab}_sigs', compressed)
+            (f'{tab}_sigs', prepared.blob)
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
-def db_load_file_signatures(tab):
-    conn = _db_conn()
-    try:
-        row = conn.execute('SELECT files_json FROM file_results WHERE tab = ?', (f'{tab}_sigs',)).fetchone()
+def db_load_file_signatures(tab, conn=None):
+    with _reading(conn) as c:
+        row = c.execute('SELECT files_json FROM file_results WHERE tab = ?', (f'{tab}_sigs',)).fetchone()
         if not row:
             return {}
         data = row['files_json']
         if isinstance(data, (bytes, bytearray)):
             return json.loads(zlib.decompress(data).decode())
         return json.loads(data)
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
 # App meta (small key/value rows: scan markers, counters, stats)
 # ---------------------------------------------------------------------------
 
-def db_get_meta(key, default=None):
-    conn = _db_conn()
-    try:
-        row = conn.execute('SELECT value FROM app_meta WHERE key = ?', (key,)).fetchone()
+def db_get_meta(key, default=None, conn=None):
+    with _reading(conn) as c:
+        row = c.execute('SELECT value FROM app_meta WHERE key = ?', (key,)).fetchone()
         return json.loads(row['value']) if row else default
-    finally:
-        conn.close()
 
 
-def db_set_meta(key, value):
-    conn = _db_conn()
-    try:
-        conn.execute(
+def db_set_meta(key, value, conn=None):
+    with _writing(conn) as c:
+        c.execute(
             'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
             (key, json.dumps(value))
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
-def db_delete_meta(key):
-    conn = _db_conn()
-    try:
-        conn.execute('DELETE FROM app_meta WHERE key = ?', (key,))
-        conn.commit()
-    finally:
-        conn.close()
+def db_delete_meta(key, conn=None):
+    with _writing(conn) as c:
+        c.execute('DELETE FROM app_meta WHERE key = ?', (key,))
 
 
 # Serializes read-modify-write on a single app_meta row. One process, several
 # threads: the audit advances `ns_progress` once per scan while the workflow
 # endpoints credit trumps and backfills from their own request threads.
-_meta_lock = threading.Lock()
+#
+# Since Phase 13 it also guards the whole publish (`db_publish`), which is where
+# the audit's own `ns_progress` write now lives. Everyone takes this lock
+# *before* the SQLite write lock, never after — see `db_publish` for why the
+# other order deadlocks and loses a credit.
+_meta_lock = threading.RLock()
 
 
-def db_update_meta(key, fn, default=None):
+def db_update_meta(key, fn, default=None, conn=None):
     """Read-modify-write one app_meta row atomically. Returns the stored value.
 
     `fn` receives the current value and returns the new one. The lock matters
@@ -550,7 +718,16 @@ def db_update_meta(key, fn, default=None):
     own threads — so a plain get/modify/set pair drops whichever write lost the
     race, silently and permanently: these counters are cumulative, so a lost
     increment is never recovered by the next one.
+
+    Inside a `db_publish` the caller already holds `_meta_lock` **and** the
+    SQLite write lock, so the read and the write happen on that transaction and
+    the lock is not taken again — taking it twice would deadlock, and reading
+    outside the transaction would read a generation the publish is replacing.
     """
+    if conn is not None:
+        value = fn(db_get_meta(key, default, conn=conn))
+        db_set_meta(key, value, conn=conn)
+        return value
     with _meta_lock:
         value = fn(db_get_meta(key, default))
         db_set_meta(key, value)
@@ -561,30 +738,23 @@ def db_update_meta(key, fn, default=None):
 # History
 # ---------------------------------------------------------------------------
 
-def db_save_history(hist):
-    conn = _db_conn()
-    try:
-        conn.execute(
+def db_save_history(hist, conn=None):
+    with _writing(conn) as c:
+        c.execute(
             'INSERT OR REPLACE INTO history (id, hourly_stats, daily_stats) VALUES (1, ?, ?)',
             (json.dumps(hist.get('hourly_stats', [])), json.dumps(hist.get('daily_stats', [])))
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
-def db_load_history():
-    conn = _db_conn()
-    try:
-        row = conn.execute('SELECT hourly_stats, daily_stats FROM history WHERE id = 1').fetchone()
+def db_load_history(conn=None):
+    with _reading(conn) as c:
+        row = c.execute('SELECT hourly_stats, daily_stats FROM history WHERE id = 1').fetchone()
         if row:
             return {
                 'hourly_stats': json.loads(row['hourly_stats']),
                 'daily_stats':  json.loads(row['daily_stats']),
             }
         return {"hourly_stats": [], "daily_stats": []}
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -783,16 +953,12 @@ def validate_config(data):
 # Change log
 # ---------------------------------------------------------------------------
 
-def db_save_change_log_entry(ran_at, health_score, trigger, source, diff):
-    conn = _db_conn()
-    try:
-        conn.execute(
+def db_save_change_log_entry(ran_at, health_score, trigger, source, diff, conn=None):
+    with _writing(conn) as c:
+        c.execute(
             'INSERT INTO change_log (ran_at, health_score, trigger, source, diff_json) VALUES (?,?,?,?,?)',
             (ran_at, health_score, trigger, source, json.dumps(diff))
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def db_get_change_log(limit=500):
@@ -819,27 +985,22 @@ def db_get_change_log(limit=500):
 # Upload snapshots
 # ---------------------------------------------------------------------------
 
-def db_save_upload_snapshot(snapshot_dict, source='qbit'):
-    conn = _db_conn()
-    try:
-        conn.execute(
+def db_save_upload_snapshot(snapshot_dict, source='qbit', conn=None):
+    with _writing(conn) as c:
+        c.execute(
             'INSERT INTO upload_snapshots (taken_at, snapshot, source) VALUES (?, ?, ?)',
             (datetime.now().isoformat(), json.dumps(snapshot_dict), source)
         )
         # Keep at most 1000 rows — delete oldest beyond that
-        conn.execute('''
+        c.execute('''
             DELETE FROM upload_snapshots WHERE id NOT IN (
                 SELECT id FROM upload_snapshots ORDER BY id DESC LIMIT 1000
             )
         ''')
-        conn.commit()
-    finally:
-        conn.close()
 
 
-def db_get_upload_snapshots(since_days=90, from_date=None, to_date=None):
-    conn = _db_conn()
-    try:
+def db_get_upload_snapshots(since_days=90, from_date=None, to_date=None, conn=None):
+    with _reading(conn) as c:
         if from_date or to_date:
             conditions, params = [], []
             if from_date:
@@ -850,23 +1011,21 @@ def db_get_upload_snapshots(since_days=90, from_date=None, to_date=None):
                 conditions.append('taken_at <= ?')
                 params.append(to_ceil)
             where = ' AND '.join(conditions)
-            rows = conn.execute(
+            rows = c.execute(
                 f'SELECT taken_at, snapshot, source FROM upload_snapshots WHERE {where} ORDER BY taken_at ASC',
                 params
             ).fetchall()
         elif since_days == 0:
-            rows = conn.execute(
+            rows = c.execute(
                 'SELECT taken_at, snapshot, source FROM upload_snapshots ORDER BY taken_at ASC'
             ).fetchall()
         else:
             cutoff = (datetime.now() - timedelta(days=since_days)).isoformat()
-            rows = conn.execute(
+            rows = c.execute(
                 'SELECT taken_at, snapshot, source FROM upload_snapshots WHERE taken_at >= ? ORDER BY taken_at ASC',
                 (cutoff,)
             ).fetchall()
         return [{'taken_at': r['taken_at'], 'snapshot': json.loads(r['snapshot']), 'source': r['source']} for r in rows]
-    finally:
-        conn.close()
 
 
 def db_delete_upload_snapshots(from_date_str, to_date_str=None):

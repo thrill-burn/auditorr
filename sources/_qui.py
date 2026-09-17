@@ -48,7 +48,7 @@ import requests
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_instance_failure, report_note,
-    torrent_complete, torrent_claimed_paths, remap_path,
+    torrent_complete, torrent_claimed_paths, remap_path, registration_key,
 )
 
 log = logging.getLogger(__name__)
@@ -208,6 +208,21 @@ def _fetch_all_torrents(session, base, inst_id):
     there, so that fails. Hash de-duplication still guarantees termination.
     qbit has no equivalent — `torrents_info()` is one call that returns every
     torrent or raises.
+
+    **`seen_hashes` here is per instance, and that is the whole of the
+    duplicate-row case** (S05). It de-duplicates *pages of one instance*, which
+    is what an API ignoring `page` produces. The global de-duplication this
+    module used to do on top of it — across instances — was explained as a
+    workaround for a per-instance endpoint that returns every managed torrent,
+    and **that premise does not hold**: checked against qui's source
+    (`autobrr/qui`, `main`, 2026-09-15), `ListTorrents` takes `instanceID` from
+    the URL and calls `syncManager.GetTorrentsWithFilters(ctx, instanceID, …)`,
+    so it is instance-scoped. Every instance's torrents come from a *separate*
+    handler, `ListCrossInstanceTorrents` at `GET /api/torrents/cross-instance`,
+    which takes an `instanceIds` query parameter and returns
+    `CrossInstanceTorrentView` rows each carrying their own `instance_id` and
+    `instance_name` — which is also where `_unwrap`'s otherwise unexplained
+    `cross_instance_torrents` key comes from. auditorr does not call it.
     """
     # qui uses page-based pagination (0-indexed), max limit=2000 per page
     all_torrents = []
@@ -316,12 +331,32 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                      seen_hashes, seed_totals=None, report=None, unresolved_roots=None):
+                      seen, seed_totals=None, report=None, unresolved_roots=None):
+    """One instance's torrents, folded into the shared maps.
+
+    `seen` is the cross-instance bookkeeping, and it is **three sets, not one**
+    (S05). One shared `seen_hashes` used to gate everything, which made it wrong
+    in both directions at once: a hash on two instances at two save paths is two
+    payloads on disk whose bytes were counted once, and two clients really
+    uploading whose totals were counted once. De-duplicate by what the number
+    measures:
+
+      `regs`      (instance, hash) — **upload accrues per registration**;
+      `payloads`  (hash, save path) — **bytes de-duplicate by path**: seeding
+                  size, Atlas's byte-seconds, and the completion counters, which
+                  describe bytes on disk;
+      `hashes`    the infohash — only to report how many distinct torrents the
+                  client holds, and how many are registered more than once.
+
+    `file_map` is keyed by path and so de-duplicates by construction, which is
+    why `file_map_size` needed no rule of its own.
+    """
     inst_id   = inst['id']
     inst_name = inst.get('name', str(inst_id))
 
     torrents = _fetch_all_torrents(session, base, inst_id)
     if report is not None:
+        # Registrations, the same unit `list_torrents` counts.
         report['torrent_count'] += len(torrents)
 
     tracker_map = {}
@@ -445,36 +480,53 @@ def _process_instance(session, base, inst, remote_path, local_path,
         for h in hosts:
             trackers_set.add(h)
 
-        # Attribute upload/seeding stats once per unique torrent hash.
-        # In multi-instance qui setups the per-instance torrent endpoint can
-        # return all managed torrents regardless of which instance_id is queried,
-        # so the same hash appears N times and inflates seeding_size by N×.
-        # seen_hashes is shared across all _process_instance calls to prevent this.
-        if th not in seen_hashes:
-            seen_hashes.add(th)
-            # Inside the dedup block for the same reason the upload totals are:
-            # qui's per-instance endpoint can return every managed torrent, so a
-            # hash seen on three instances must be counted once.
+        raw_save_path = nt['save_path']
+        save_path     = remap_path(raw_save_path, remote_path, local_path)
+
+        # How many distinct torrents this client holds, and how many of them are
+        # registered more than once. Counts only — reported, never acted on here.
+        if report is not None:
+            if th in seen['hashes']:
+                if th not in seen['multi']:
+                    seen['multi'].add(th)
+                    report['multi_registered'] += 1
+            else:
+                seen['hashes'].add(th)
+                report['distinct_torrents'] += 1
+
+        # **Upload accrues per registration.** Two instances seeding the same
+        # torrent really did upload separately, and counting the pair once
+        # under-reports the library's whole purpose.
+        reg = registration_key(inst_id, th)
+        if reg not in seen['regs']:
+            seen['regs'].add(reg)
+            for h in hosts:
+                tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
+
+        # **Bytes de-duplicate by path.** One payload is one set of bytes on
+        # disk however many registrations stand on it, so the key is the
+        # payload's location; two registrations at two save paths are two
+        # payloads and count twice. The completion counters follow the same key:
+        # they describe whether the bytes at a path are whole.
+        payload = (th, save_path)
+        if payload not in seen['payloads']:
+            seen['payloads'].add(payload)
             if report is not None:
                 if complete is False:
                     report['incomplete_torrents'] += 1
                 elif complete is None:
                     report['completion_unknown'] += 1
             for h in hosts:
-                tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
                 if status == 'Seeding':
                     tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + nt['size']
-            # Seeding-time aggregates for the Next steps prize layer — inside the
-            # dedup block for the same reason the upload totals are: a hash seen
-            # on three instances must be counted once.
+            # Seeding-time aggregates for the Next steps prize layer. Atlas is
+            # Σ(size × seeding_time), so it is bytes and keys by the payload.
             if seed_totals is not None:
                 seed_secs = int(nt.get('seeding_time') or 0)
                 if seed_secs > 0:
                     seed_totals['byte_secs'] += (nt['size'] or 0) * seed_secs
                     seed_totals['max_secs']   = max(seed_totals['max_secs'], seed_secs)
 
-        raw_save_path = nt['save_path']
-        save_path     = remap_path(raw_save_path, remote_path, local_path)
         # content_path needs the identical remapping or claiming it claims a
         # path the walk can never match.
         content_path  = remap_path(nt['content_path'], remote_path, local_path)
@@ -617,7 +669,9 @@ def _fetch_inner(cfg, unresolved_roots=None):
     trackers_set         = set()
     tracker_upload       = {}
     tracker_seeding_size = {}
-    seen_hashes          = set()  # deduplicate stats across all instances
+    # Cross-instance bookkeeping, one set per unit — see `_process_instance`.
+    seen                 = {'regs': set(), 'payloads': set(),
+                            'hashes': set(), 'multi': set()}
     seed_totals          = {'byte_secs': 0, 'max_secs': 0}
     report               = new_source_report('qui')
     report['instances_total'] = len(eligible)
@@ -626,7 +680,7 @@ def _fetch_inner(cfg, unresolved_roots=None):
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                               seen_hashes, seed_totals, report=report,
+                               seen, seed_totals, report=report,
                                unresolved_roots=unresolved_roots)
             report['instances_ok'] += 1
         except Exception as e:
@@ -654,6 +708,14 @@ def _fetch_inner(cfg, unresolved_roots=None):
     report['file_map_size'] = len(file_map)
     if report['listing_failures']:
         report['partial'] = True
+    if report['multi_registered']:
+        # Counts and instance totals only: a registration key carries a full
+        # infohash and this line reaches the log ring, which reaches
+        # /api/debug/report.
+        log.info('qui: %d of %d distinct torrent(s) are registered on more than one '
+                 'instance (%d registrations across %d instances)',
+                 report['multi_registered'], report['distinct_torrents'],
+                 report['torrent_count'], report['instances_ok'])
     if report['incomplete_torrents'] or report['completion_unknown']:
         log.info(
             'qui: %d torrent(s) not finished downloading, %d with no usable '
@@ -730,28 +792,32 @@ def _instance_detail_listing(sess, base, inst_id, fresh=False):
 def fetch_torrent_details(cfg, items):
     """Live lookup of upload stats + tracker health for specific torrents.
 
-    items: [{'hash': str, 'instance_id': int|None}]. Hashes with a known
-    instance_id only query that instance; hashes without one are looked up on
-    every eligible instance. Returns {hash: details}; failures are best-effort
-    (missing entries, never an exception).
+    items: [{'hash': str, 'instance_id': int|None}]. Registrations with a known
+    instance_id only query that instance; those without one are looked up on
+    every eligible instance. Returns **{registration key: details}** (S05,
+    `sources.registration_key`) — the same torrent on two instances has two sets
+    of upload figures and two tracker answers, and keying by hash returned
+    whichever instance was listed first. Failures are best-effort (missing
+    entries, never an exception).
 
     **`{'found': False}` only where the listing that would hold the hash
     answered** (T10) — its own instance, or with no instance id every eligible
     instance. This backend logs and carries on when an instance's listing fails
-    and swallows a total failure, so a hash with no entry is "could not ask",
-    never "gone". A hash missing from a *cached* listing is listed again before
-    it is called gone: the torrent may simply be newer than the listing.
+    and swallows a total failure, so a registration with no entry is "could not
+    ask", never "gone". A hash missing from a *cached* listing is listed again
+    before it is called gone: the torrent may simply be newer than the listing.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
     if not base:
         return {}
 
-    wanted = {}  # hash -> instance_id|None
+    wanted = {}  # registration key -> (hash, instance_id|None)
     for i in items:
         h = i.get('hash')
         if h:
-            wanted.setdefault(h, i.get('instance_id'))
+            wanted.setdefault(registration_key(i.get('instance_id'), h),
+                              (h, i.get('instance_id')))
     if not wanted:
         return {}
 
@@ -769,10 +835,10 @@ def fetch_torrent_details(cfg, items):
 
         # Upload stats come from the per-instance torrent lists (no single-hash
         # endpoint is documented) — each involved instance's list, once.
-        involved_ids = {inst_id for inst_id in wanted.values() if inst_id in eligible}
-        if any(inst_id not in eligible for inst_id in wanted.values()):
+        involved_ids = {inst_id for _h, inst_id in wanted.values() if inst_id in eligible}
+        if any(inst_id not in eligible for _h, inst_id in wanted.values()):
             involved_ids = set(eligible)  # unknown instance — search everywhere
-        hash_to_instance, listed_ok, listed_now = {}, set(), set()
+        reg_to_instance, listed_ok, listed_now = {}, set(), set()
 
         def _list(inst_id, fresh):
             try:
@@ -784,23 +850,28 @@ def fetch_torrent_details(cfg, items):
             listed_ok.add(inst_id)
             if now:
                 listed_now.add(inst_id)
-            for th in wanted:
-                if th not in details and th in listing:
-                    details[th] = {**listing[th], 'tracker_health': 'unknown', 'tracker_msg': ''}
-                    hash_to_instance[th] = inst_id
+            for key, (th, named) in wanted.items():
+                # A registration that names an instance is answered by that
+                # instance alone: the other one's upload figures belong to the
+                # other registration.
+                if named is not None and named != inst_id:
+                    continue
+                if key not in details and th in listing:
+                    details[key] = {**listing[th], 'tracker_health': 'unknown', 'tracker_msg': ''}
+                    reg_to_instance[key] = (th, inst_id)
 
         for inst_id in involved_ids:
             _list(inst_id, fresh=False)
-        if any(th not in details for th in wanted):
+        if any(key not in details for key in wanted):
             for inst_id in [i for i in involved_ids if i in listed_ok and i not in listed_now]:
                 _list(inst_id, fresh=True)
-        for th, inst_id in wanted.items():
-            if th not in details:
+        for key, (_th, inst_id) in wanted.items():
+            if key not in details:
                 asked = [inst_id] if inst_id in eligible else list(eligible)
                 if all(i in listed_ok for i in asked):
-                    details[th] = {'found': False}
+                    details[key] = {'found': False}
 
-        def _fetch_health(torrent_hash, inst_id):
+        def _fetch_health(key, torrent_hash, inst_id):
             try:
                 tr_resp = sess.get(
                     f'{base}/api/instances/{inst_id}/torrents/{torrent_hash}/trackers',
@@ -815,17 +886,19 @@ def fetch_torrent_details(cfg, items):
                     }
                     for t in _unwrap(tr_resp.json())
                 ]
-                return torrent_hash, classify_tracker_entries(entries)
+                return key, classify_tracker_entries(entries)
             except Exception:
-                return torrent_hash, ('unknown', '')
+                return key, ('unknown', '')
 
+        # Per registration: two instances announce to the tracker separately, so
+        # one can be unregistered while the other is fine.
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(_fetch_health, th, inst_id)
-                       for th, inst_id in hash_to_instance.items()]
+            futures = [executor.submit(_fetch_health, key, th, inst_id)
+                       for key, (th, inst_id) in reg_to_instance.items()]
             for future in as_completed(futures, timeout=120):
-                torrent_hash, (health, msg) = future.result()
-                details[torrent_hash]['tracker_health'] = health
-                details[torrent_hash]['tracker_msg']    = msg
+                key, (health, msg) = future.result()
+                details[key]['tracker_health'] = health
+                details[key]['tracker_msg']    = msg
     except Exception as e:
         log.warning('qui: fetch_torrent_details failed: %s', e)
     return details
@@ -847,13 +920,24 @@ def _eligible_instances(sess, base):
 def list_torrents(cfg):
     """Light live listing of every torrent across all eligible qui instances.
 
-    Returns ([rows], report); a row is {'hash', 'name', 'size', 'save_path',
-    'content_path', 'progress', 'completion_on', 'tracker', 'instance_id',
-    'instance_name'}, deduplicated by hash (qui per-instance endpoints can return
-    all managed torrents regardless of which instance is queried). The paths are
-    unremapped; the completion fields are `_norm_torrent`'s, the same ones
-    `fetch_file_map` reads, so Cleanup's live re-verify applies the audit's own
-    claim rule (`sources.torrent_claimed_paths`).
+    Returns ([rows], report); a row is {'reg', 'hash', 'name', 'size',
+    'save_path', 'content_path', 'progress', 'completion_on', 'tracker',
+    'instance_id', 'instance_name'}. The paths are unremapped; the completion
+    fields are `_norm_torrent`'s, the same ones `fetch_file_map` reads, so
+    Cleanup's live re-verify applies the audit's own claim rule
+    (`sources.torrent_claimed_paths`).
+
+    **One row per registration** (S05). This used to de-duplicate the whole
+    listing by hash, explained as a workaround for a per-instance endpoint that
+    returns every managed torrent — a premise that does not hold for current qui
+    (see `_fetch_all_torrents`, checked against qui's source). So the same
+    torrent registered on two instances at two save paths came back as **one
+    row**, with `instances_ok 2`, `torrent_count 1` and `partial False`: nothing
+    anywhere said a registration had been dropped, while Trumped resolved its
+    group against half the client and a removal reported "removal unconfirmed"
+    for a torrent it had correctly removed. The duplicate-*page* case the
+    de-duplication really was for is handled inside `_fetch_all_torrents`, per
+    instance, where it belongs.
 
     An instance that fails to list is **recorded on the report**, which is what
     the `sources.list_torrents` wrapper refuses on. This used to log and carry
@@ -875,17 +959,21 @@ def list_torrents(cfg):
         report = new_source_report('qui')
         report['instances_total'] = len(eligible)
         rows = []
-        seen = set()
+        seen_hashes, multi = set(), set()
         for inst in eligible:
             try:
                 for t in _fetch_all_torrents(sess, base, inst['id']):
                     nt = _norm_torrent(t)
-                    if not nt['hash'] or nt['hash'] in seen:
+                    if not nt['hash']:
                         continue
-                    seen.add(nt['hash'])
+                    if nt['hash'] in seen_hashes:
+                        multi.add(nt['hash'])
+                    else:
+                        seen_hashes.add(nt['hash'])
                     tracker_url = t.get('tracker') or ''
                     parts = tracker_url.split('/')
                     rows.append({
+                        'reg':           registration_key(inst['id'], nt['hash']),
                         'hash':          nt['hash'],
                         'name':          nt['name'],
                         'size':          nt['size'],
@@ -901,7 +989,10 @@ def list_torrents(cfg):
             except Exception as e:
                 log.warning('qui: list_torrents failed for instance %s: %s', inst.get('name', '?'), e)
                 report_instance_failure(report, inst.get('name', '?'), e)
-        report['torrent_count'] = len(rows)
+        # Registrations, the same unit `fetch_file_map` counts (S05).
+        report['torrent_count']     = len(rows)
+        report['distinct_torrents'] = len(seen_hashes)
+        report['multi_registered']  = len(multi)
         return rows, report
     except SourceConnectionError:
         raise
@@ -916,37 +1007,65 @@ def list_torrents(cfg):
 def fetch_torrent_file_paths(cfg, items):
     """Absolute client-side file paths for specific torrents.
 
-    items: [{'hash', 'instance_id'?, 'save_path'?, ...}]. Unknown instance ids
-    are tried against every eligible instance.
+    items: [{'hash', 'instance_id'?, 'save_path'?, ...}].
 
-    Returns {hash: [paths] | None}. **`None` means the listing could not be
-    fetched; `[]` means the client answered that this torrent has no files.**
-    This used to be `[]` for both, documented as deliberate ("failures yield
-    empty lists, never exceptions") — and every consumer is a set-membership
-    test, where an empty list reads as "shares nothing with anything" and
-    quietly collapses whatever it was building. Still never raises per torrent:
-    the failure is in the value now, not in control flow. A total failure
-    (unreachable host, no eligible instances) leaves every requested hash at
-    `None` rather than returning a map of empty lists.
+    Returns **{registration key: [paths] | None}** (S05) — `sources.registration_key`,
+    so a hash on two instances at two save paths answers twice. This used to key
+    by hash and, for an item that named no instance, ask the *first* eligible
+    instance and join **that** instance's file listing to the *caller's* save
+    path: on the brief's two-instance probe it returned instance 1's file list
+    rooted at instance 2's save path, which is a set of paths neither client
+    holds.
+
+    An item that names no instance for a hash registered on more than one
+    answers **`None`** — "could not ask unambiguously" is the same fail-safe
+    direction as "could not ask", and every consumer already refuses on it. One
+    that names no instance for a hash on exactly one is resolved to it.
+
+    **`None` means the listing could not be fetched; `[]` means the client
+    answered that this torrent has no files.** This used to be `[]` for both,
+    documented as deliberate ("failures yield empty lists, never exceptions") —
+    and every consumer is a set-membership test, where an empty list reads as
+    "shares nothing with anything" and quietly collapses whatever it was
+    building. Still never raises per torrent: the failure is in the value now,
+    not in control flow. A total failure (unreachable host, no eligible
+    instances) leaves every requested registration at `None` rather than
+    returning a map of empty lists.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
-    hashes  = list(dict.fromkeys(i.get('hash') for i in items if i.get('hash')))
+    wanted  = []
+    for i in items:
+        h = i.get('hash')
+        if h:
+            key = registration_key(i.get('instance_id'), h)
+            if key not in {k for k, _ in wanted}:
+                wanted.append((key, i))
     if not base:
-        return {h: None for h in hashes}
-    result = {h: None for h in hashes}
+        return {key: None for key, _ in wanted}
+    result = {key: None for key, _ in wanted}
     try:
         sess = _session(api_key)
         eligible_ids = [i['id'] for i in _eligible_instances(sess, base)]
-        seen = set()
-        for i in items:
-            h = i.get('hash')
-            if not h or h in seen:
-                continue
-            seen.add(h)
+        ambiguous = 0
+        for key, i in wanted:
+            h  = i.get('hash')
             sp = (i.get('save_path') or '').rstrip('/')
             inst = i.get('instance_id')
-            try_ids = [inst] if inst in eligible_ids else eligible_ids
+            if inst in eligible_ids:
+                try_ids = [inst]
+            elif len(eligible_ids) == 1:
+                try_ids = list(eligible_ids)
+            else:
+                # Several instances could hold it and the caller did not say
+                # which. Finding it on one and joining its listing to the
+                # caller's save path is a guess, and a wrong one whenever the
+                # two registrations sit at different paths.
+                found = _instances_holding(sess, base, eligible_ids, h)
+                if found is None or len(found) != 1:
+                    ambiguous += 1
+                    continue
+                try_ids = found
             for iid in try_ids:
                 try:
                     resp = sess.get(
@@ -956,14 +1075,38 @@ def fetch_torrent_file_paths(cfg, items):
                 except Exception:
                     continue
                 if files:
-                    result[h] = [f"{sp}/{f['name']}" for f in files]
+                    result[key] = [f"{sp}/{f['name']}" for f in files]
                     break
                 # The instance answered and knows of no files for this hash.
                 # Distinct from "no instance answered", which leaves None.
-                result[h] = []
+                result[key] = []
+        if ambiguous:
+            # Counts only — a registration key carries a full infohash.
+            log.warning('qui: %d torrent(s) name no instance and could be on more than one; '
+                        'their file listings are unknown rather than guessed', ambiguous)
     except Exception as e:
         log.warning('qui: fetch_torrent_file_paths failed: %s', e)
     return result
+
+
+def _instances_holding(sess, base, eligible_ids, torrent_hash):
+    """Which eligible instances list this hash, or `None` if one could not say.
+
+    Used only to resolve an item that names no instance. `None` is "could not
+    ask" — an instance that failed to list might hold it, so the answer cannot
+    be narrowed to the ones that did.
+    """
+    found = []
+    for iid in eligible_ids:
+        try:
+            listing, _ = _instance_detail_listing(sess, base, iid)
+        except Exception as e:
+            log.warning('qui: instance %s could not be listed while resolving a torrent: %s',
+                        iid, e)
+            return None
+        if torrent_hash in listing:
+            found.append(iid)
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -973,12 +1116,21 @@ def fetch_torrent_file_paths(cfg, items):
 def remove_torrents(cfg, items, delete_files=True):
     """Delete torrents — and their downloaded files — across qui instances.
 
-    items: [{'hash': str, 'instance_id': int|None}]. Hashes without a known
-    instance_id are located by listing every eligible instance first (same
-    approach as fetch_torrent_details). Uses qui's bulk-action endpoint
+    items: [{'hash': str, 'instance_id': int|None}] — **one entry per
+    registration** (S05): the same torrent on two instances is two removals, and
+    removing it from one leaves the other registered on top of files that have
+    just been deleted. Uses qui's bulk-action endpoint
     (POST /api/instances/{id}/torrents/bulk-action) with action
     'deleteWithFiles' / 'delete' — both confirmed in the action enum of a
     live instance's /api/openapi.json (2026-06-12).
+
+    A hash with **no** instance named is located by listing every eligible
+    instance, as before — but where more than one holds it, it is **skipped
+    rather than removed from whichever answered first**. Guessing an instance
+    for a destructive action is the one thing this must not do; the caller sees
+    it in the per-registration outcome (`app._removal_outcomes`), which reports
+    the registration as still listed rather than as removed.
+
     Returns the number of torrents submitted for deletion.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
@@ -1015,22 +1167,30 @@ def remove_torrents(cfg, items, delete_files=True):
                 unresolved.append(h)
 
         if unresolved:
-            remaining = set(unresolved)
+            # Where a hash turns up on several instances the caller did not say
+            # which registration it meant, so nothing is removed for it.
+            holders = {h: [] for h in unresolved}
             for inst_id in eligible:
-                if not remaining:
-                    break
                 try:
-                    found = []
-                    for t in _fetch_all_torrents(sess, base, inst_id):
-                        h = _norm_torrent(t)['hash']
-                        if h in remaining:
-                            found.append(h)
+                    listed = {_norm_torrent(t)['hash']
+                              for t in _fetch_all_torrents(sess, base, inst_id)}
                 except Exception as e:
                     log.warning('qui: torrent list failed for instance %s: %s', inst_id, e)
                     continue
-                if found:
-                    by_instance.setdefault(inst_id, []).extend(found)
-                    remaining -= set(found)
+                for h in unresolved:
+                    if h in listed:
+                        holders[h].append(inst_id)
+            ambiguous = 0
+            for h, found in holders.items():
+                if len(found) == 1:
+                    by_instance.setdefault(found[0], []).append(h)
+                elif len(found) > 1:
+                    ambiguous += 1
+            if ambiguous:
+                # Counts and instance totals only: this line reaches the debug
+                # report's log ring.
+                log.warning('qui: %d torrent(s) named no instance and are registered on more '
+                            'than one, so nothing was removed for them', ambiguous)
 
         removed = 0
         for inst_id, hashes in by_instance.items():
