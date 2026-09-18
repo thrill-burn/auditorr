@@ -246,14 +246,25 @@ inode, i.e. two real copies burning two lots of disk space.
 
 Review the duplicate groups, select the ones you want collapsed, and generate a
 script that replaces each copy with a hardlink to a single kept file. The script
-runs `cmp` on every pair before linking, so it will refuse to collapse anything
-that isn't genuinely identical.
+runs in Bash on the host using standard system tools; Python is not required.
+It runs `cmp` once per separate inode before linking, then replaces all included
+hardlink paths using a temporary hardlink and an atomic rename. Excluded paths
+are left alone. Copies on different filesystems are never linked together.
+
+Stop processes writing these files before running the script. A failed operation
+or interruption leaves the target path present, and the script can be rerun.
+Catchable termination signals clean up temporary links; a forced kill or power
+loss may leave `.auditorr-dedupe-*` temporary directories next to the targets.
+Reported reclaimed bytes count each old copy once, only when it has no remaining
+hardlinks (including excluded or unscanned links). This is logical file size,
+not measured free space: open files or snapshots can retain the underlying data.
 
 <p><img src="workflow-dedupe.png" alt="Dedupe workflow" width="100%" /></p>
 
 Disc rips generate enormous numbers of identically-sized structural files, so
 detection skips excluded files, skips size groups above 200 files, and records
-at most 10 siblings per file. If you rip discs, turn on the disc-rip exclusion
+at most 10 other physical copies per file, retaining all known hardlink paths
+for each referenced copy. If you rip discs, turn on the disc-rip exclusion
 preset and this page gets dramatically more useful.
 
 ---

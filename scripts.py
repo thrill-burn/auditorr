@@ -2,6 +2,7 @@ import os
 import posixpath
 import shlex
 import logging
+import stat
 from datetime import datetime
 
 log = logging.getLogger(__name__)
@@ -45,60 +46,70 @@ def _build_dup_groups(all_files, local_path, media_path=''):
     Files marked excluded never appear in a group — not as the canonical copy and
     not as a duplicate partner — so generated scripts never touch them (#14).
     """
-    script_root   = _compute_script_root(local_path, media_path)
-    groups        = []
-    seen_file_ids = set()
-    covered_paths = set()  # absolute paths already assigned to any group slot
-
-    # Absolute paths of every excluded file, so excluded *partners* can be
-    # dropped from other files' duplicate lists (duplicate_paths entries are
-    # absolute paths with no excluded flag of their own).
-    excluded_abs   = set()
+    script_root = _compute_script_root(local_path, media_path)
+    excluded = set()
     excluded_count = 0
     for f in all_files:
+        excluded.update(f.get('excluded_paths', []))
         if f.get('excluded'):
-            file_root = f.get('_file_root', local_path)
-            excluded_abs.add(posixpath.join(file_root, f['path']) if file_root else f['path'])
-            if f.get('duplicate_paths'):
-                excluded_count += 1
+            excluded.add(posixpath.join(f.get('_file_root', local_path), f['path']))
+            excluded_count += bool(f.get('duplicate_paths'))
+
+    excluded = {posixpath.normpath(p) for p in excluded}
+
+    # Union overlapping candidate groups before assigning a canonical path.
+    # Paths, rather than cached inode numbers, also support older audit snapshots.
+    parents = {}
+
+    def find(path):
+        parents.setdefault(path, path)
+        while parents[path] != path:
+            parents[path] = parents[parents[path]]
+            path = parents[path]
+        return path
 
     for f in all_files:
-        if not f.get('duplicate_paths') or f.get('excluded'):
+        if not f.get('duplicate_paths'):
             continue
-        inode   = f['inode']
-        file_id = f.get('file_id', inode)
-        if file_id in seen_file_ids:
-            continue
-        file_root  = f.get('_file_root', local_path)
-        canon_full = posixpath.join(file_root, f['path']) if file_root else f['path']
-        if canon_full in covered_paths:
-            continue
-        dup_paths = [p for p in f.get('duplicate_paths', []) if p not in excluded_abs]
-        if not dup_paths:
-            continue  # every partner is excluded — nothing left to dedupe
-        seen_file_ids.add(file_id)
-        covered_paths.add(canon_full)
-
-        canon_rel = posixpath.relpath(canon_full, script_root)
-        try:
-            canon_dev = os.stat(canon_full).st_dev
-        except OSError:
-            canon_dev = None
-        group_files = [{"path": canon_rel, "size": f['size'], "inode": inode, "canonical": True, "same_fs": True}]
-        is_cross_fs = False
-        for dup_path in dup_paths:
-            covered_paths.add(dup_path)
+        paths = [posixpath.join(f.get('_file_root', local_path), f['path'])]
+        paths += f.get('dedupe_paths', []) + f['duplicate_paths']
+        paths = list(dict.fromkeys(posixpath.normpath(p) for p in paths))
+        paths = [p for p in paths if p not in excluded]
+        if paths:
+            root = find(paths[0])
+            for path in paths[1:]:
+                parents[find(path)] = root
+    components = {}
+    for path in parents:
+        components.setdefault(find(path), []).append(path)
+    groups = []
+    for paths in components.values():
+        # Hardlinks can only be made within one device. A remote copy should
+        # not prevent deduplication of local copies in the same component.
+        devices = {}
+        for path in paths:
             try:
-                same_fs = (canon_dev is not None and os.stat(dup_path).st_dev == canon_dev)
+                st = os.lstat(path)
+                if not stat.S_ISREG(st.st_mode):
+                    continue
             except OSError:
-                same_fs = False
-            if not same_fs:
-                is_cross_fs = True
-            dup_rel = posixpath.relpath(dup_path, script_root)
-            group_files.append({"path": dup_rel, "size": f['size'], "inode": 0, "canonical": False, "same_fs": same_fs})
-        recoverable = 0 if is_cross_fs else f['size'] * len(dup_paths)
-        groups.append({"files": group_files, "recoverable_size": recoverable, "skipped": is_cross_fs})
-    return {"groups": groups, "script_root": script_root, "excluded_count": excluded_count}
+                continue
+            devices.setdefault(st.st_dev, {}).setdefault(st.st_ino, []).append((path, st))
+        for copies in devices.values():
+            if len(copies) < 2:
+                continue
+            files = []
+            recoverable = 0
+            for index, siblings in enumerate(copies.values()):
+                st = siblings[0][1]
+                if index and len(siblings) == st.st_nlink:
+                    recoverable += st.st_size
+                for path, st in siblings:
+                    files.append({'path': posixpath.relpath(path, script_root),
+                                  'size': st.st_size, 'inode': st.st_ino,
+                                  'canonical': not files, 'same_fs': True})
+            groups.append({'files': files, 'recoverable_size': recoverable, 'skipped': False})
+    return {'groups': groups, 'script_root': script_root, 'excluded_count': excluded_count}
 
 
 def generate_script(script_type, results, cfg, selection=None):
@@ -334,123 +345,209 @@ def _build_dedupe_script(results, cfg, now_str, selection):
         groups = [g for g in groups
                   if next(f['path'] for f in g['files'] if f['canonical']) in wanted]
     total_recoverable  = sum(g['recoverable_size'] for g in groups)
-    skipped_count      = sum(1 for g in groups if g['skipped'])
     non_skipped_groups = [g for g in groups if not g['skipped']]
-    total_non_skipped  = len(non_skipped_groups)
     lines = [
         '#!/bin/bash',
         '# auditorr — Dedupe Script',
         f'# Generated: {now_str}',
-        '#',
-        '# SUMMARY',
-        f'# {len(groups)} duplicate groups found',
-        f'# {_human_size(total_recoverable)} recoverable',
-        f'# {skipped_count} groups skipped (cross-filesystem — cannot hardlink across mounts)',
+        f'# {len(groups)} duplicate groups; {_human_size(total_recoverable)} potentially recoverable',
+        f'# {excluded_count} excluded duplicate records',
+        f'# Run with bash from the host directory corresponding to {script_root!r}.',
+        '# Uses Bash and system tools (cmp, stat, ln, mv, mktemp, rm, rmdir).',
+        '# Stop writers before running; files must remain unchanged during deduplication.',
+        '# Reported bytes are logical size of copies with no remaining hardlinks,',
+        '# not a measurement of free disk space (snapshots/open files may retain data).',
+        _DEDUPE_RUNTIME,
     ]
-    if excluded_count:
-        lines.append(f'# {excluded_count} duplicate file(s) skipped — they match your Excluded Files & Folders settings')
-    lines += [
-        '#',
-        '# This script replaces duplicate files with hardlinks.',
-        '# All file paths will continue to exist after running.',
-        '# All torrents will continue seeding normally.',
-        '# Review each group carefully before running.',
-        '#',
-        '# USAGE:',
-        f'#   cd <directory on your host that maps to {script_root}>',
-        '#   bash dedupe.sh',
-        '#',
-        '# TIP: install "pv" (e.g. apt install pv) for a live progress bar while',
-        '#      large files are verified — without it you get a heartbeat instead.',
-        '#',
-        f'# All paths are relative to {script_root} (auditorr\'s view).',
-        '',
-        f'TOTAL={total_non_skipped}',
-        'DONE=0',
-        'SKIPPED=0',
-        'RECLAIMED=0',
-        '',
-        '# Re-verify two files are byte-identical before hardlinking. cmp has no',
-        '# progress output of its own, so wrap it: a live progress bar via pv when',
-        '# installed, otherwise a heartbeat so large-file checks are never silent.',
-        'verify_identical() {',
-        '  if command -v pv >/dev/null 2>&1; then',
-        '    cmp -s <(pv -N "  comparing" "$1") "$2"',
-        '  else',
-        '    cmp -s "$1" "$2" &',
-        '    local _pid=$!',
-        '    while kill -0 "$_pid" 2>/dev/null; do printf "."; sleep 1; done',
-        '    printf "\\n"',
-        '    wait "$_pid"',
-        '  fi',
-        '}',
-        '',
-    ]
-
-    # Working-directory guard using the first canonical file in a non-skipped group
-    first_canon = next(
-        (next(f for f in g['files'] if f['canonical']) for g in non_skipped_groups),
-        None
-    )
-    if first_canon:
-        qfirst = shlex.quote(first_canon['path'])
-        lines += [
-            f'FIRST_FILE={qfirst}',
-            'if [ ! -e "$FIRST_FILE" ]; then',
-            '  echo "ERROR: Cannot find files. Are you in the correct data directory?"',
-            '  echo "  Expected to find: $FIRST_FILE"',
-            '  echo "  cd into your parent data folder and try again."',
-            '  exit 1',
-            'fi',
-            '',
-        ]
-
-    group_num = 0
-    for g in groups:
-        canonical     = next(f for f in g['files'] if f['canonical'])
-        non_canonical = [f for f in g['files'] if not f['canonical']]
-        filename      = os.path.basename(canonical['path'])
-        if g['skipped']:
-            lines.append(f'# SKIPPED Group: {filename} — cross-filesystem, cannot hardlink')
-            lines.append('')
-            continue
-        group_num += 1
-        canon_path = canonical['path']
-        lines.append(f'# Group {group_num}: {filename} — {_human_size(g["recoverable_size"])} recoverable')
-        lines.append(f'# Canonical: {canon_path}')
-        lines.append('GROUP_LINKED=0')
-        for nc in non_canonical:
-            nc_path    = nc['path']
-            size_human = _human_size(nc['size'])
-            size_bytes = nc['size']
-            qcanon = shlex.quote(canon_path)
-            qnc    = shlex.quote(nc_path)
-            qname  = shlex.quote(filename)
-            lines.append(f'# Duplicate: {nc_path}')
-            lines.append(f'printf "[{group_num}/{total_non_skipped}] Verifying %s ({size_human})...\\n" {qname}')
-            # cmp stops at the first differing byte — md5sum would read both
-            # files in full (and hash them) even when they differ immediately.
-            # verify_identical wraps cmp with a progress bar / heartbeat.
-            lines.append(f'if ! verify_identical {qcanon} {qnc}; then')
-            lines.append('  echo "  SKIP: Files differ — skipping this group"')
-            lines.append('  SKIPPED=$((SKIPPED+1))')
-            lines.append('else')
-            lines.append('  echo "  Verified identical. Creating hardlink..."')
-            lines.append(f'  ln -f {qcanon} {qnc}')
-            lines.append(f'  echo "  Done. {size_human} reclaimed."')
-            lines.append(f'  RECLAIMED=$((RECLAIMED+{size_bytes}))')
-            lines.append('  GROUP_LINKED=1')
-            lines.append('fi')
-            lines.append('echo ""')
-        lines.append('if [ "$GROUP_LINKED" -gt 0 ]; then DONE=$((DONE+1)); fi')
-        lines.append('')
+    for group in non_skipped_groups:
+        # Prefix relative paths so option-like filenames are safe on BSD too.
+        paths = [shlex.quote('./' + f['path']) for f in group['files']]
+        lines.append('dedupe_group ' + ' '.join(paths))
     lines.extend([
-        'echo "================================"',
-        'echo "Dedupe complete."',
-        'echo "Groups processed: $DONE / $TOTAL"',
-        'echo "Groups skipped (hash mismatch): $SKIPPED"',
-        'echo ""',
-        "echo \"Run 'df -h' to verify space reclaimed.\"",
+        'printf "Paths linked: %s\\n" "$LINKED"',
+        'printf "Copies skipped: %s\\n" "$SKIPPED"',
+        'printf "Errors: %s\\n" "$ERRORS"',
+        'printf "Reclaimed bytes (logical): %s\\n" "$RECLAIMED"',
+        '[ "$ERRORS" -eq 0 ]',
+        '',
     ])
     return '\n'.join(lines)
 
+
+_DEDUPE_RUNTIME = r'''RECLAIMED=0
+LINKED=0
+SKIPPED=0
+ERRORS=0
+TMP_DIR=''
+
+error() {
+  printf 'ERROR: %s\n' "$*" >&2
+  ERRORS=$((ERRORS+1))
+}
+
+cleanup_temp() {
+  if [ -n "$TMP_DIR" ]; then
+    rm -f -- "$TMP_DIR/replacement" && rmdir -- "$TMP_DIR" || return 1
+    TMP_DIR=''
+  fi
+}
+trap 'cleanup_temp' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Unraid uses GNU stat/mv. BSD variants also allow local macOS review/testing.
+if stat -c '%d' -- . >/dev/null 2>&1; then
+  STAT_STYLE=gnu
+else
+  STAT_STYLE=bsd
+fi
+file_stat() {
+  local field=$1 path=$2 fmt
+  if [ "$STAT_STYLE" = gnu ]; then
+    case "$field" in
+      key) fmt='%d:%i';;
+      signature) fmt='%d:%i:%s:%y';;
+      links) fmt='%h';;
+      size) fmt='%s';;
+    esac
+    stat -L -c "$fmt" -- "$path"
+  else
+    case "$field" in
+      key) fmt='%d:%i';;
+      signature) fmt='%d:%i:%z:%m';;
+      links) fmt='%l';;
+      size) fmt='%z';;
+    esac
+    # BSD /dev/fd reports the devfs device, so fstat via stdin instead.
+    case "$path" in
+      /dev/fd/8) stat -f "$fmt" <&8;;
+      /dev/fd/9) stat -f "$fmt" <&9;;
+      *) stat -L -f "$fmt" "$path";;
+    esac
+  fi
+}
+regular_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+unchanged() {
+  local actual
+  actual=$(file_stat signature "$1") && [ "$actual" = "$2" ]
+}
+replace_target() {
+  if [ "$STAT_STYLE" = gnu ]; then
+    # -T prevents treating a concurrently substituted directory as a destination.
+    mv -fT -- "$1" "$2"
+  else
+    mv -fh -- "$1" "$2"
+  fi
+}
+
+dedupe_group() {
+  local canonical=$1 source_key source_sig old_key old_sig size links status
+  local path key candidate i j seen
+  local paths=("$@") keys=() processed=()
+  if ! regular_file "$canonical"; then
+    error "Missing or non-regular canonical: $canonical"
+    return
+  fi
+  source_sig=$(file_stat signature "$canonical") || { error "Cannot stat $canonical"; return; }
+  source_key=$(file_stat key "$canonical") || { error "Cannot stat $canonical"; return; }
+  exec 8< "$canonical" || { error "Cannot open $canonical"; return; }
+  if ! unchanged /dev/fd/8 "$source_sig"; then
+    error "Canonical changed: $canonical"
+    exec 8<&-
+    return
+  fi
+  # Read identities at execution time, so an already completed/partial run is safe.
+  for path in "${paths[@]}"; do
+    if regular_file "$path" && key=$(file_stat key "$path"); then
+      keys+=("$key")
+    else
+      error "Missing or non-regular target: $path"
+      keys+=('')
+    fi
+  done
+  for ((i=0; i<${#paths[@]}; i++)); do
+    old_key=${keys[i]}
+    [ -n "$old_key" ] && [ "$old_key" != "$source_key" ] || continue
+    seen=0
+    for key in "${processed[@]}"; do
+      [ "$key" != "$old_key" ] || seen=1
+    done
+    [ "$seen" -eq 0 ] || continue
+    processed+=("$old_key")
+    if [ "${old_key%%:*}" != "${source_key%%:*}" ]; then
+      printf 'SKIP: different filesystem: %s\n' "${paths[i]}"
+      SKIPPED=$((SKIPPED+1))
+      continue
+    fi
+    candidate=${paths[i]}
+    old_sig=$(file_stat signature "$candidate") || { error "Cannot stat $candidate"; continue; }
+    if ! regular_file "$candidate" || ! exec 9< "$candidate"; then
+      error "Cannot open $candidate"
+      continue
+    fi
+    key=$(file_stat key /dev/fd/9)
+    if [ "$key" != "$old_key" ] || ! unchanged /dev/fd/9 "$old_sig"; then
+      error "Target changed: $candidate"
+      exec 9<&-
+      continue
+    fi
+    size=$(file_stat size /dev/fd/9) || { error "Cannot stat $candidate"; exec 9<&-; continue; }
+    printf 'Verifying: %s\n' "$candidate"
+    cmp -s "$canonical" "$candidate"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+      if [ "$status" -eq 1 ]; then
+        printf 'SKIP: files differ: %s\n' "$candidate"
+        SKIPPED=$((SKIPPED+1))
+      else
+        error "Comparison failed: $candidate"
+      fi
+      exec 9<&-
+      continue
+    fi
+    for ((j=i; j<${#paths[@]}; j++)); do
+      [ "${keys[j]}" = "$old_key" ] || continue
+      path=${paths[j]}
+      if ! regular_file "$canonical" || ! regular_file "$path" ||
+         ! unchanged "$canonical" "$source_sig" || ! unchanged /dev/fd/8 "$source_sig" ||
+         ! unchanged "$path" "$old_sig" || ! unchanged /dev/fd/9 "$old_sig"; then
+        error "File changed during verification: $path"
+        continue
+      fi
+      # The temporary link is in the target's directory/filesystem. Never unlink
+      # the target first: failed ln/mv or interruption leaves its pathname alive.
+      TMP_DIR=$(mktemp -d "${path%/*}/.auditorr-dedupe-XXXXXXXX") || {
+        error "Cannot create temporary directory for $path"; continue;
+      }
+      if ! ln -- "$canonical" "$TMP_DIR/replacement"; then
+        error "Cannot create replacement hardlink: $path"
+      elif ! unchanged "$TMP_DIR/replacement" "$source_sig" ||
+           ! regular_file "$path" || ! unchanged "$path" "$old_sig"; then
+        error "File changed before replacement: $path"
+      elif replace_target "$TMP_DIR/replacement" "$path"; then
+        LINKED=$((LINKED+1))
+      else
+        error "Cannot replace target: $path"
+      fi
+      if ! cleanup_temp; then
+        error 'Cannot clean temporary hardlink; stopping'
+        exit 1
+      fi
+    done
+    # Stat the open OLD inode, even after its last pathname was replaced.
+    # Excluded/unscanned hardlinks keep nlink > 0 and prevent any recovery claim.
+    if links=$(file_stat links /dev/fd/9); then
+      if [ "$links" -eq 0 ]; then
+        RECLAIMED=$((RECLAIMED+size))
+      else
+        printf 'No space counted: old copy still has hardlinks.\n'
+      fi
+    else
+      error "Cannot verify remaining links: $candidate"
+    fi
+    exec 9<&-
+  done
+  exec 8<&-
+}
+'''

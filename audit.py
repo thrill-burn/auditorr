@@ -89,6 +89,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 inode_map.setdefault(file_key, {
                     'trackers': set(), 'status': 'Orphaned',
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
+                    'excluded_paths': [],
                     'instance_id': None, 'instance_name': None,
                     'tracker_health': 'unknown', 'tracker_msg': '',
                     'unreg_claimants': {},
@@ -96,6 +97,8 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     'torrent_rel_path': None, 'torrent_excluded': False,
                     'media_rel_path': None, 'media_excluded': False,
                 })
+                if excluded:
+                    inode_map[file_key]['excluded_paths'].append(full_path)
                 if source_label == 'Torrent':
                     inode_map[file_key]['torrent_paths'].append(full_path)
                     if inode_map[file_key]['torrent_rel_path'] is None:
@@ -159,14 +162,17 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
 # (BDMV .bdmv/.clpi/.bup, DVD IFO/BUP) and hashing + cross-referencing them is
 # what used to blow up both scan time and memory on disc-heavy libraries.
 DUP_GROUP_LIMIT = 200
-# Each file stores at most this many sibling paths. Without a cap a group of k
+# Each file references at most this many other physical copies. All hardlink
+# paths of each selected copy must be retained. Without a cap a group of k
 # identical files stores k*(k-1) path strings — quadratic, and the reason
 # file_results JSON used to exceed SQLite's 1 GB limit on large libraries.
 DUP_PATHS_PER_FILE = 10
 
 
 def _info_excluded(info):
-    """Effective excluded flag for an inode (torrent role wins when present)."""
+    """Whether every known path of this physical copy is excluded."""
+    if 'excluded_paths' in info:
+        return set(info['torrent_paths'] + info['media_paths']) <= set(info['excluded_paths'])
     if info['torrent_rel_path'] is not None:
         return info['torrent_excluded']
     return info['media_excluded']
@@ -190,7 +196,8 @@ def _build_duplicate_map(inode_map):
         hash_to_keys = {}
         for file_key in file_keys:
             info = inode_map[file_key]
-            paths = info['torrent_paths'] or info['media_paths']
+            paths = [p for p in info['torrent_paths'] + info['media_paths']
+                     if p not in info.get('excluded_paths', [])]
             if not paths:
                 continue
             fh = get_fast_hash(paths[0], size)
@@ -201,14 +208,16 @@ def _build_duplicate_map(inode_map):
                 continue
             for file_key in dup_keys:
                 others = duplicate_map.setdefault(file_key, [])
+                copies = 0
                 for o in dup_keys:
-                    if len(others) >= DUP_PATHS_PER_FILE:
+                    if copies >= DUP_PATHS_PER_FILE:
                         break
                     if o != file_key:
                         oinfo  = inode_map[o]
-                        opaths = oinfo['torrent_paths'] or oinfo['media_paths']
-                        if opaths:
-                            others.append(opaths[0])
+                        opaths = oinfo['torrent_paths'] + oinfo['media_paths']
+                        others.extend(dict.fromkeys(p for p in opaths
+                                      if p not in oinfo.get('excluded_paths', [])))
+                        copies += 1
     if skipped_groups:
         log.info(f"Duplicate detection: skipped {skipped_groups} size group(s) larger than "
                  f"{DUP_GROUP_LIMIT} files (structural files, e.g. disc folders).")
@@ -247,6 +256,9 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['media_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
+            "dedupe_paths": list(dict.fromkeys(info['torrent_paths'] + info['media_paths']))
+                            if file_key in duplicate_map else [],
+            "excluded_paths": info.get('excluded_paths', []),
             "excluded": info['torrent_excluded'],
             "hash": info.get('hash', ''),
             "category": info.get('category', ''),
@@ -273,6 +285,9 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['torrent_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
+            "dedupe_paths": list(dict.fromkeys(info['torrent_paths'] + info['media_paths']))
+                            if file_key in duplicate_map else [],
+            "excluded_paths": info.get('excluded_paths', []),
             "excluded": info['media_excluded'],
         })
     return torrent_files_data, media_files_data
