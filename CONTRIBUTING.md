@@ -29,12 +29,17 @@ so it can sit well behind — a change written against `main` may duplicate work
 already exists on `experimental`, or conflict with it badly enough that there's no
 clean way to merge it.
 
-**But don't run `experimental` against a library you care about.** It is a working
-branch, not a preview build: any given commit can be mid-refactor, half-finished or
-simply broken, and the `ghcr.io/thrill-burn/auditorr:experimental` image is published
-on every push without that being a claim it works. For an install you actually use,
-stay on a tagged release. If you need to test a change against real data, take a
-backup first — auditorr generates scripts that delete and relink files.
+**`experimental` is a working branch, not a preview build.** Any given commit can be
+mid-refactor, half-finished or simply broken, and the
+`ghcr.io/thrill-burn/auditorr:experimental` image is published on every push without
+that being a claim it works.
+
+auditorr itself never writes to your media — it reads the filesystem and writes only
+to its own database. The one built-in destructive action is removing torrents through
+your client, which is opt-in (`ALLOW_CLIENT_DELETE`, off by default) and behind a
+confirmation. **What does write is the scripts it generates**: deletes and hardlinks
+you run yourself, with your own privileges. Read one before you run it, and be
+especially careful with a script built from a branch that's mid-change.
 
 ```bash
 git clone https://github.com/thrill-burn/auditorr.git
