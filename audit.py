@@ -224,6 +224,12 @@ DUP_GROUP_LIMIT = 200
 # identical files stores k*(k-1) path strings — quadratic, and the reason
 # file_results JSON used to exceed SQLite's 1 GB limit on large libraries.
 DUP_PATHS_PER_FILE = 10
+# And at most this many of its *own* other paths (`_dedupe_paths`, F18). A
+# different bound from the one above and deliberately looser: this one is linear
+# in how many times a single file is hardlinked, not quadratic in a group's
+# size. Truncating it costs a reclaim and never safety — the generated script
+# re-reads `stat -c %h` and leaves alone any file it cannot replace whole.
+DEDUPE_PATHS_PER_FILE = 20
 
 
 def _info_excluded(info):
@@ -421,6 +427,33 @@ def _extra_torrent_paths(inode_map):
                 yield p[len(base):].replace('\\', '/'), orphan
 
 
+def _dedupe_paths(tree_paths):
+    """This inode's *other* paths in the record's own tree (DEDUPE F18).
+
+    A record spells one path of its own tree — the first the walk saw — and
+    `linked_paths` spells every path of the other tree, so an inode walked in
+    both trees is already described in full by its pair of records. What no
+    record names is a **second path in the record's own tree**: a cross-seed
+    hardlinked into two tracker directories and never imported, which on a
+    cross-seeding box is the ordinary case rather than the exotic one.
+
+    Dedupe is the consumer that needs every path of a copy, because its script
+    replaces all of a file's paths or none of them (§5.4). With the second path
+    missing the script read `st_nlink` 2 against one listed path and left the
+    file alone — safe, and nothing reclaimed. **Joloxx9 found this (PR #24)**,
+    on `main`, where the same gap instead *split* the file and claimed the bytes.
+
+    Sparse, and only on records the duplicate map named — the
+    `dead_siblings`/`incomplete` rule: a key on every record multiplies across
+    the library and grows `files_json`. Excluded paths are deliberately **not**
+    filtered out here, unlike `_stamp_orphan`'s `other_paths`: `_build_dup_groups`
+    drops them against the rules as they are *now*, which is how it already
+    treats `linked_paths`, so a pattern removed in Config takes effect on the
+    next page load rather than on the next scan.
+    """
+    return tree_paths[1:1 + DEDUPE_PATHS_PER_FILE]
+
+
 def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map,
                       compiled_exclusions=None, unverified=None):
     if unverified:
@@ -470,6 +503,10 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         }
         if dead_siblings:
             record["dead_siblings"] = dead_siblings
+        if file_key in duplicate_map:
+            extra = _dedupe_paths(info['torrent_paths'])
+            if extra:
+                record["dedupe_paths"] = extra
         # Completion, written only when it is not "complete" — the same sparse
         # shape as dead_siblings above, and for the reason `seeding_time`
         # established: a field on every file record multiplies across every file
@@ -493,7 +530,7 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         seen_media_keys.add(file_key)
         info    = inode_map[file_key]
         file_id = f"{file_key[0]}:{file_key[1]}"
-        media_files_data.append({
+        record = {
             "path": info['media_rel_path'], "size": info['size'], "inode": file_key[1],
             "file_id": file_id,
             "status": info['status'], "imported": True,
@@ -501,7 +538,12 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "linked_paths": info['torrent_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
             "excluded": info['media_excluded'],
-        })
+        }
+        if file_key in duplicate_map:
+            extra = _dedupe_paths(info['media_paths'])
+            if extra:
+                record["dedupe_paths"] = extra
+        media_files_data.append(record)
     _mark_whole_torrents(torrent_files_data, media_files_data)
     _mark_cleanup_folders(torrent_files_data, media_files_data,
                           extra_paths=_extra_torrent_paths(inode_map))

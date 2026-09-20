@@ -146,11 +146,13 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
       the first and the first does not know the last. Taking one record's list
       as its group truncated at eleven. An entry that names no record is
       dropped and counted, never guessed at.
-    * **A member's paths are the ones the records know**, which is not always
-      every link: a record carries its inode's first walked path only, so a
-      not-imported inode's second torrent path sits on no record. The script
-      refuses to replace part of a file (`stat -c %h` against the paths it
-      lists), so what is unknown here costs yield, never topology.
+    * **A member's paths are the ones the records know**, which since F18 is
+      every path both walks saw: a record's own path, `linked_paths` (the other
+      tree's paths of that inode) and `dedupe_paths` (its own tree's other
+      paths, which no record spells — a never-imported cross-seed's second
+      tracker directory). What is still unknown is a link outside both trees,
+      and the script refuses to replace part of a file (`stat -c %h` against the
+      paths it lists), so that costs a reclaim, never topology.
     * **Excluded paths and tombstones are never a member's paths** (#14) — from
       the records' own flags and, for a path with no record of its own, the
       current exclusion rules through `matcher`. Tombstones are filtered here as
@@ -209,6 +211,8 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
         paths = known.setdefault(fid, {})
         sizes.setdefault(fid, int(f.get('size') or 0))
         paths.setdefault(own_path(f), tree)
+        for p in f.get('dedupe_paths') or []:
+            paths.setdefault(_abs(p), tree)
         for p in f.get('linked_paths') or []:
             paths.setdefault(_abs(p), other_tree[tree])
         edges.extend((fid, _abs(p)) for p in f['duplicate_paths'])

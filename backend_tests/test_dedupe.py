@@ -117,7 +117,7 @@ class Lib:
             for key in ('path', 'excl_folder'):
                 if rec.get(key):
                     rec[key] = _posix(rec[key])
-            for key in ('linked_paths', 'duplicate_paths', 'other_paths'):
+            for key in ('linked_paths', 'duplicate_paths', 'other_paths', 'dedupe_paths'):
                 if rec.get(key):
                     rec[key] = [_posix(p) for p in rec[key]]
         return t, m
@@ -175,6 +175,25 @@ def _imported_partner(lib, size=4096):
     lib.link(K1, K3)
     lib.file(P_T, data)
     lib.link(P_T, P_M)
+    return data
+
+
+# F18's pair (Joloxx9, PR #24): two copies of one film, each cross-seeded across
+# two tracker directories and neither imported. Every path is in the torrent
+# tree, so `linked_paths` is empty on both records and only the first path of
+# each was on a record before `dedupe_paths`.
+X_A1 = 'torrents/luminarr/Film.2019/Film.mkv'
+X_A2 = 'torrents/darkpeers/Film.2019/Film.mkv'
+X_B1 = 'torrents/luminarr/Film.2019.PROPER/Film.mkv'
+X_B2 = 'torrents/darkpeers/Film.2019.PROPER/Film.mkv'
+
+
+def _cross_seeded_pair(lib, size=4096):
+    data = _bytes(size, 5)
+    lib.file(X_A1, data)
+    lib.link(X_A1, X_A2)
+    lib.file(X_B1, data)
+    lib.link(X_B1, X_B2)
     return data
 
 
@@ -473,6 +492,31 @@ class TestGrouping:
         assert len(report['groups']) == 1, [len(g.get('members', g.get('files'))) for g in report['groups']]
         assert sorted(_group_paths(report['groups'][0])) == paths
 
+    def test_a_cross_seeded_copy_lists_every_path_of_its_own_tree(self, tmp_path):
+        """F18 — theirs (Joloxx9, PR #24). Both copies are cross-seeded and
+        neither is imported, so `linked_paths` is empty on both records and the
+        second tracker directory sits on no record at all."""
+        lib = Lib(tmp_path)
+        _cross_seeded_pair(lib)
+        t, m = lib.audit()
+        assert not any(r['linked_paths'] for r in t)
+        assert sorted(len(r.get('dedupe_paths') or []) for r in t) == [1, 1]
+        report = _report(t, m, lib.cfg(), tmp_path)
+        assert len(report['groups']) == 1, report['groups']
+        group = report['groups'][0]
+        assert _members(group) == sorted([sorted([X_A1, X_A2]), sorted([X_B1, X_B2])])
+        assert group['path_count'] == 4
+
+    def test_dedupe_paths_is_written_only_where_it_says_something(self, tmp_path):
+        """Sparse, like `dead_siblings`: a record with one path, or with no
+        duplicate partner, must not grow a key."""
+        lib = Lib(tmp_path)
+        _f1(lib)                                   # duplicates, one path each per tree
+        lib.file('torrents/solo/Alone.mkv', _bytes(777, 4))
+        lib.link('torrents/solo/Alone.mkv', 'torrents/solo2/Alone.mkv')  # two paths, no partner
+        t, m = lib.audit()
+        assert not any('dedupe_paths' in r for r in t + m)
+
     def test_frees_up_to_counts_each_inode_once(self, tmp_path):
         lib = Lib(tmp_path)
         _f1(lib, size=2048)
@@ -541,6 +585,49 @@ class TestScriptRun:
         assert code == 0, out
         assert lib.ino(P_T) == lib.ino(P_M) == lib.ino(K1) == lib.ino(K2), out
         assert os.stat(lib.root / K1).st_nlink == 5
+        assert _freed(out) == '4.0 KB'
+
+    def test_a_cross_seeded_partner_has_every_path_replaced(self, tmp_path):
+        """F18 — theirs (Joloxx9, PR #24). Both copies carry two hardlinks, so
+        whichever is not kept used to read `st_nlink` 2 against one listed path
+        and be left alone: correct, and nothing reclaimed. With both paths
+        listed the file moves whole and the bytes are really freed."""
+        lib = Lib(tmp_path)
+        _cross_seeded_pair(lib, size=4096)
+        t, m = lib.audit()
+        report = _report(t, m, lib.cfg(), tmp_path)
+        code, out = _run(_text(_script(t, m, lib.cfg(), tmp_path, groups=_ids(report))),
+                         lib.root)
+        assert code == 0, out
+        assert 'more hardlink' not in out, out
+        inos = {lib.ino(p) for p in (X_A1, X_A2, X_B1, X_B2)}
+        assert len(inos) == 1, out
+        assert os.stat(lib.root / X_A1).st_nlink == 4
+        assert _freed(out) == '4.0 KB'
+
+    def test_an_excluded_cross_seed_path_keeps_the_partial_refusal(self, tmp_path):
+        """The other half of F18, and why `dedupe_paths` is not filtered in the
+        audit: an excluded path is not the user's to replace, so its copy is
+        still short a link and is still left alone rather than split."""
+        lib = Lib(tmp_path)
+        data = _cross_seeded_pair(lib, size=4096)
+        keep = 'torrents/keepme/one/Film.mkv'        # three links, so it is kept
+        lib.file(keep, data)
+        lib.link(keep, 'torrents/keepme/two/Film.mkv')
+        lib.link(keep, 'torrents/keepme/three/Film.mkv')
+        pattern = f'literal:{X_A1.split("/", 1)[1]}'  # one of A's two paths
+        t, m = lib.audit(patterns=[pattern])
+        cfg = lib.cfg(EXCLUSION_PATTERNS=[pattern])
+        report = _report(t, m, cfg, tmp_path)
+        assert X_A1 not in _group_paths(report['groups'][0])
+        before = lib.ino(X_A1)
+        code, out = _run(_text(_script(t, m, cfg, tmp_path, groups=_ids(report))), lib.root)
+        assert code == 0, out
+        assert 'more hardlink' in out, out
+        # A is short a link and is left whole; B, which is not, moves onto the
+        # kept copy, so the run still reclaims exactly one copy.
+        assert lib.ino(X_A1) == before == lib.ino(X_A2) != lib.ino(keep)
+        assert lib.ino(X_B1) == lib.ino(X_B2) == lib.ino(keep)
         assert _freed(out) == '4.0 KB'
 
     def test_a_partner_with_links_the_script_does_not_know_is_skipped(self, tmp_path):

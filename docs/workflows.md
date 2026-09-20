@@ -498,10 +498,12 @@ hardlink**, or **duplicate copies** (the same bytes twice in one folder) — but
 not who made the copy, and auditorr doesn't claim either shape is the common one
 in your library.
 
-A group is a set of identical files. Every path of each file is listed, so a
-file already hardlinked into your library shows its torrent path and its library
-path together. No copy is marked as the one to keep: the script decides that
-when it runs.
+A group is a set of identical files. Every path of each file is listed — a file
+already hardlinked into your library shows its torrent path and its library path
+together, and a cross-seed shows every tracker directory it sits in. They go
+together or not at all, which is what the line under a file with more than one
+path means. No copy is marked as the one to keep: the script decides that when
+it runs.
 
 The headline says how many files would share a copy and how much that frees
 **at most**. It is a maximum because only the script, running on the machine
@@ -545,7 +547,9 @@ from the folder it names at the top. For each group it:
    alone, because every path of a linked file takes the kept copy's;
 4. leaves alone a copy with hardlinks the script doesn't list — replacing only
    some of a file's paths frees nothing, and would split a torrent file from its
-   library copy;
+   library copy. The script lists every path in your torrent and media folders,
+   so this is a link outside them (a snapshot, a backup tree) or a path an
+   exclusion rule hides, which isn't auditorr's to replace;
 5. compares each copy with the kept one byte for byte (`cmp`);
 6. makes the new hardlink under a temporary name beside the file, checks that it
    really is a hardlink of the kept copy, then renames it over the original.
