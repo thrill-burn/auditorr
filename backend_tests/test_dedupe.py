@@ -60,6 +60,33 @@ def _posix(p):
     return str(p).replace('\\', '/')
 
 
+_REAL_WALK = os.walk
+
+
+def _ordered_walk(top, **kw):
+    """`os.walk` with every listing sorted, for `Lib.audit()`.
+
+    A record carries its inode's **first walked path** in each tree, and
+    `_info_excluded` reads that path's flag — so for an inode whose paths
+    disagree (one excluded, one not) the audit's answer depends on the order
+    the filesystem hands back a directory. NTFS is alphabetical and ext4 is
+    hash-ordered, so a fixture built here behaved one way on the dev machine
+    and the other in CI, and `test_an_excluded_cross_seed_path_keeps_the_partial_refusal`
+    failed on Linux only: its copy read as excluded, left the duplicate map,
+    and never reached the group whose refusal the test is about.
+
+    Sorting makes every test in this file see one order. It does not paper over
+    the underlying behaviour — that an inode with one excluded path is a
+    duplicate candidate or not depending on which path was seen first is real,
+    predates F18, and is recorded in `prompts/DEDUPE.md` §0 as the open half of
+    PR #24. A test must not be the thing that decides it.
+    """
+    for root, dirs, files in _REAL_WALK(top, **kw):
+        dirs.sort()
+        files.sort()
+        yield root, dirs, files
+
+
 class Lib:
     """A torrent tree and a media tree under one root, walked by the real audit.
 
@@ -105,12 +132,13 @@ class Lib:
         expanded = expand_exclusion_patterns({'EXCLUSION_PATTERNS': list(patterns)})
         compiled = compile_exclusions(expanded)
         inode_map = {}
-        tko, _, _, _ = _walk_directory(str(self.torrents), 'Torrent', inode_map, {}, 0, 0,
-                                       exclusion_patterns=expanded,
-                                       compiled_exclusions=compiled)
-        mko, _, _, _ = _walk_directory(str(self.media), 'Media', inode_map, {}, 0, 0,
-                                       exclusion_patterns=expanded,
-                                       compiled_exclusions=compiled)
+        with patch('audit.os.walk', _ordered_walk):
+            tko, _, _, _ = _walk_directory(str(self.torrents), 'Torrent', inode_map, {}, 0, 0,
+                                           exclusion_patterns=expanded,
+                                           compiled_exclusions=compiled)
+            mko, _, _, _ = _walk_directory(str(self.media), 'Media', inode_map, {}, 0, 0,
+                                           exclusion_patterns=expanded,
+                                           compiled_exclusions=compiled)
         dup = _build_duplicate_map(inode_map)
         t, m = _assemble_records(tko, mko, inode_map, dup, compiled_exclusions=compiled)
         for rec in t + m:
