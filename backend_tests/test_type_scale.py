@@ -35,8 +35,8 @@ SCOPE = sorted(glob.glob(os.path.join(SRC, 'components', 'workflows', '*.jsx')))
 
 # (file relative to frontend/src, text on the site's line, sites it must match, reason)
 EXEMPTIONS = [
-    ('components/workflows/shared.jsx', 'fontSize: 40, lineHeight: 1 }}>{emoji}', 1,
-     "EmptyState's emoji is a picture, not text"),
+    # EmptyState's 🎉 (fontSize: 40) was the third exemption until the UI pass
+    # (2026-09-21) replaced it with a line icon, which has no font size.
     ('App.jsx', "fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×", 1,
      "ScriptModal's close × is a glyph sized as an icon"),
     ('components/ImportProgress.jsx', "fontSize: 16, lineHeight: 1, padding: '0 2px'", 1,

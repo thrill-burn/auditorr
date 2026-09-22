@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import {
-  WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
-  Checkbox, ActionBar, ActionButton, SpinKeyframes, useAuditComplete,
+  WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
+  Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete, StatBox, Dot, ITEM_TITLE, tint,
 } from './shared'
 
 // ── What each group is ────────────────────────────────────────────────────────
@@ -62,25 +62,6 @@ const CAUSE = {
 const plural = (n, word) => `${n} ${word}${n !== 1 ? 's' : ''}`
 const selectable = g => g.selectable !== false && g.status !== 'stale'
 
-function Dot({ color }) {
-  return <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
-}
-
-function StatBox({ label, value, sub }) {
-  return (
-    <div style={{
-      padding: '12px 16px', borderRadius: 9, flex: 1, minWidth: 140,
-      background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
-    }}>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
-        {label}
-      </div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
-    </div>
-  )
-}
-
 function DupGroup({ group, checked, onToggle }) {
   const canSelect = selectable(group)
   const status = STATUS[group.status] || STATUS.unverifiable
@@ -90,19 +71,19 @@ function DupGroup({ group, checked, onToggle }) {
 
   return (
     <div style={{
-      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)',
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)',
       overflow: 'hidden',
     }}>
       <div
         onClick={canSelect ? onToggle : undefined}
-        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', flexWrap: 'wrap', cursor: canSelect ? 'pointer' : 'default', background: checked ? 'var(--accent)06' : 'var(--surface2)' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', flexWrap: 'wrap', cursor: canSelect ? 'pointer' : 'default', background: checked ? tint('var(--accent)', 2) : 'var(--surface2)' }}
       >
         {canSelect ? (
           <Checkbox checked={checked} onChange={onToggle} />
         ) : (
           <span title={note || ''} style={{ width: 15, height: 15, borderRadius: 'var(--r-sm)', border: '1.5px dashed var(--border2)', flexShrink: 0, cursor: 'not-allowed' }} />
         )}
-        <span title={group.id} style={{ minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span title={group.id} style={{ ...ITEM_TITLE, minWidth: 0, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {name}
         </span>
         <span title={cause.title} style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>
@@ -211,7 +192,7 @@ export default function Dedupe({ onNavigate, onScript }) {
   }
 
   return (
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <WorkflowPage>
       <WorkflowHeader
         title="Dedupe"
         accent="var(--purple)"
@@ -247,12 +228,9 @@ export default function Dedupe({ onNavigate, onScript }) {
 
           {choosable.length > 0 && (
             <div>
-              <button onClick={toggleAll} style={{
-                fontSize: 'var(--font-base)', padding: '5px 14px', borderRadius: 99, cursor: 'pointer',
-                border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)',
-              }}>
+              <Button size="sm" variant="ghost" onClick={toggleAll}>
                 {allChosen ? 'Deselect all' : `Select all (${choosable.length})`}
-              </button>
+              </Button>
             </div>
           )}
 
@@ -264,14 +242,14 @@ export default function Dedupe({ onNavigate, onScript }) {
 
           {selectedGroups.length > 0 && (
             <ActionBar summary={`${selectionLine} selected`}>
-              <ActionButton primary onClick={handleScript}>
+              <Button variant="primary" onClick={handleScript}>
                 Generate Dedupe Script
-              </ActionButton>
+              </Button>
             </ActionBar>
           )}
         </>
       )}
       <SpinKeyframes />
-    </div>
+    </WorkflowPage>
   )
 }

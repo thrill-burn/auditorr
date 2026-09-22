@@ -184,6 +184,34 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   color: var(--text-dim);
 }
 
+/* The workflow Button (components/workflows/shared.jsx). Each variant hands its
+   colours in as custom properties, so one rule gives all of them a hover — an
+   inline background would outrank :hover. Tints are color-mix(), never a hex
+   alpha glued to a var(): that spelling is invalid after substitution and the
+   browser drops the whole declaration. */
+.wf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: none;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: 1px solid var(--btn-border);
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1), filter 0.12s cubic-bezier(.4,0,.2,1);
+}
+.wf-btn:hover:not(:disabled) {
+  background: var(--btn-bg-hover);
+  color: var(--btn-fg-hover);
+  filter: var(--btn-filter-hover);
+}
+.wf-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .wf-btn { transition: none; } }
+
 .ui-chip {
   display: inline-flex;
   align-items: center;

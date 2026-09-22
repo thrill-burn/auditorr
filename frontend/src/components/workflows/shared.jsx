@@ -31,6 +31,18 @@ export function useAuditComplete(onComplete) {
   }, [])
 }
 
+// ── Tints ─────────────────────────────────────────────────────────────────────
+//
+// An alpha tint of a theme colour, as `color-mix` — **never `var(--x)NN`**. CSS
+// substitutes var() as tokens and does not re-parse the result, so
+// `var(--red)40` is a colour followed by a stray number: invalid, and the
+// browser drops the whole declaration. `border: 1px solid var(--red)40` draws
+// no border at all. That is how every warning box lost its box, every danger
+// button its hairline and every coloured row chip its border, for as long as
+// the idiom was in use (UI pass, 2026-09-21). `backend_tests/test_tint_idiom.py`
+// fails the build on the old spelling.
+export const tint = (color, pct) => `color-mix(in srgb, ${color} ${pct}%, transparent)`
+
 // ── Shared option lists ───────────────────────────────────────────────────────
 export const QUALITY_RES_OPTIONS = [
   { value: '2160p', label: '2160p / 4K' },
@@ -71,7 +83,7 @@ export function Chip({ active, onClick, children }) {
       style={{
         padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 'var(--font-base)', cursor: 'pointer',
         border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
-        background: active ? 'var(--accent)18' : 'transparent',
+        background: active ? tint('var(--accent)', 9) : 'transparent',
         color: active ? 'var(--accent)' : 'var(--text-dim)',
         fontWeight: active ? 600 : 400,
       }}
@@ -254,10 +266,165 @@ export function CountPicker({ value, onChange, max }) {
   )
 }
 
-// ── Section label ─────────────────────────────────────────────────────────────
+// ── Headings ──────────────────────────────────────────────────────────────────
+//
+// Three weights, one per role, taken from Triage (UI pass, 2026-09-21): a
+// section heading is 700, a sub-heading 600, an item's title 500 — all at
+// --font-md, so the hierarchy is weight alone and R8's sizes do not move.
+// Cleanup's piles and Backfill's section labels were 600, level with their own
+// sub-labels; Cleanup's and Dedupe's item titles were a mono 600 heavier than
+// the heading above them. Rounds and Trumped were already here.
+//
+// Item titles pick their typeface by kind, as Rounds does: sans for a title
+// auditorr knows ("Heat (1995)"), mono for a raw path or release name.
+export const ITEM_TITLE = { fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)' }
+
 export function SectionLabel({ children }) {
   return (
-    <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 700, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
+      {children}
+    </div>
+  )
+}
+
+export function Dot({ color, size = 7 }) {
+  return <span className="ui-status-dot" style={{ width: size, height: size, background: color }} />
+}
+
+// A pile / verdict / bucket heading over a list: [checkbox] [dot] title meta,
+// then its description set under the title rather than under the checkbox.
+//
+// `check` is `{ checked, indeterminate, onChange }`, or `null` for a section
+// with nothing selectable — which still reserves the slot, so the dots of every
+// section on a page sit in one column. `sub` is the second level: no dot, the
+// title in its hue at 600.
+export function SectionHeading({ title, dot, color, meta, desc, check, sub = false }) {
+  const indent = (check !== undefined ? 25 : 0) + (dot ? 17 : 0)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: sub ? 4 : 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {check ? <Checkbox checked={check.checked} indeterminate={check.indeterminate} onChange={check.onChange} />
+          : check === null ? <span style={{ width: 15, height: 15, flexShrink: 0 }} /> : null}
+        {dot && <Dot color={dot} />}
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: sub ? 600 : 700, color: color || 'var(--text)' }}>{title}</span>
+        {meta != null && (
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{meta}</span>
+        )}
+      </div>
+      {desc && (
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: `0 0 ${sub ? 4 : 2}px ${indent}px`, lineHeight: 1.5, maxWidth: 960 }}>
+          {desc}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Stat box ──────────────────────────────────────────────────────────────────
+// Cleanup's and Dedupe's summary tiles were two copies that had drifted (12 vs
+// 9 radius). Hue, where there is one, is the dot beside the label.
+export function StatBox({ label, value, sub, dot }) {
+  return (
+    <div style={{
+      padding: '12px 16px', borderRadius: 'var(--rl)', flex: 1, minWidth: 140,
+      background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
+    }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
+        {dot && <Dot color={dot} />}
+        {label}
+      </div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
+    </div>
+  )
+}
+
+// ── Release evidence ──────────────────────────────────────────────────────────
+// A quality label and its HDR tag. `unknown` renders the absence as a readout
+// (Triage's rows say "unknown") rather than as nothing (Trumped's candidates).
+export function QualityChip({ label, hdr, dim, unknown = false }) {
+  const hdrInfo = HDR_STYLE[hdr]
+  if (!label && !hdrInfo) {
+    return unknown
+      ? <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.5 }}>unknown</span>
+      : null
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {label && (
+        <span style={{
+          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-sm)',
+          background: dim ? 'var(--surface2)' : 'var(--surface3)',
+          border: '1px solid var(--border2)',
+          color: dim ? 'var(--text-dim)' : 'var(--text)', whiteSpace: 'nowrap',
+        }}>
+          {label}
+        </span>
+      )}
+      {hdrInfo && (
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color, whiteSpace: 'nowrap' }}>
+          {hdr}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// How a release compares with the file it would replace or match, field by
+// field. Hue as text only, never a fill: green agrees, red differs, amber is a
+// partial overlap. `fields` is [[key, LABEL], …] — each page asks its own
+// question (Backfill: size/quality/HDR; Trumped: the PM's title fields).
+export const MATCH_COLOR = { same: 'var(--green)', diff: 'var(--red)', partial: 'var(--yellow)' }
+const MATCH_MARK = { same: '✓', diff: '✗', partial: '~' }
+
+export function MatchChips({ match, fields, titleSuffix = '' }) {
+  if (!match) return null
+  const items = fields.filter(([k]) => match[k])
+  if (!items.length) return null
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
+      {items.map(([k, label]) => (
+        <span key={k} title={`${label}: ${match[k]}${titleSuffix}`} style={{
+          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
+          color: MATCH_COLOR[match[k]] || 'var(--text-dim)',
+        }}>{label}{MATCH_MARK[match[k]] || ''}</span>
+      ))}
+    </span>
+  )
+}
+
+// ── Disclosure ────────────────────────────────────────────────────────────────
+// A text toggle for a folded list, chevron after the label — Rounds' "Show all
+// feats" shape, which Trumped's "Other releases ▸" now shares.
+export function Disclosure({ open, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-expanded={open}
+      style={{
+        alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+        fontSize: 'var(--font-base)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
+      }}
+    >
+      {children}
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+        strokeLinecap="round" strokeLinejoin="round"
+        style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.5 }}>
+        <polyline points="9 18 15 12 9 6" />
+      </svg>
+    </button>
+  )
+}
+
+// ── Workflow page ─────────────────────────────────────────────────────────────
+// The frame every workflow page sits in: the app's page gutter (Rounds' too),
+// and room at the foot for the sticky action bar.
+export function WorkflowPage({ gap = 22, maxWidth, children }) {
+  return (
+    <div className="fade-in" style={{
+      padding: 'var(--page-gutter) var(--page-gutter) 48px', display: 'flex', flexDirection: 'column', gap,
+      ...(maxWidth ? { maxWidth } : null),
+    }}>
       {children}
     </div>
   )
@@ -305,11 +472,16 @@ export function WorkflowCrossLink({ text, linkLabel, count, onClick }) {
 }
 
 // ── Empty / success state ─────────────────────────────────────────────────────
-export function EmptyState({ emoji = '🎉', title, sub }) {
+// A line icon, not the 🎉 it used to be: the design system allows emoji only as
+// functional status glyphs in dense rows, never as decoration.
+export function EmptyState({ title, sub }) {
   return (
     <div style={{ padding: '64px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
-      <div style={{ fontSize: 40, lineHeight: 1 }}>{emoji}</div>
-      <div style={{ fontSize: 'var(--font-lg)', fontWeight: 600, color: 'var(--text)', marginTop: 6 }}>{title}</div>
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="1.75"
+        strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" />
+      </svg>
+      <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)', marginTop: 6 }}>{title}</div>
       {sub && <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', maxWidth: 420, lineHeight: 1.6 }}>{sub}</div>}
     </div>
   )
@@ -326,9 +498,9 @@ export function LoadingRow({ label = 'Loading…' }) {
   )
 }
 
-export function Spinner({ size = 12 }) {
+export function Spinner({ size = 12, weight = 2 }) {
   return (
-    <span style={{ display: 'inline-block', width: size, height: size, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+    <span style={{ display: 'inline-block', flexShrink: 0, width: size, height: size, borderRadius: '50%', border: `${weight}px solid var(--accent)`, borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
   )
 }
 
@@ -340,7 +512,7 @@ export function SpinKeyframes() {
 export function WorkflowError({ message }) {
   if (!message) return null
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', color: 'var(--red)', fontSize: 'var(--font-base)' }}>
+    <div style={{ padding: '10px 14px', background: tint('var(--red)', 6), border: `1px solid ${tint('var(--red)', 19)}`, borderRadius: 'var(--r)', color: 'var(--red)', fontSize: 'var(--font-base)' }}>
       {message}
     </div>
   )
@@ -351,7 +523,7 @@ export function WorkflowError({ message }) {
 export function WorkflowWarning({ children }) {
   if (!children) return null
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 'var(--r)', color: 'var(--yellow)', fontSize: 'var(--font-base)', lineHeight: 1.5 }}>
+    <div style={{ padding: '10px 14px', background: tint('var(--yellow)', 6), border: `1px solid ${tint('var(--yellow)', 19)}`, borderRadius: 'var(--r)', color: 'var(--yellow)', fontSize: 'var(--font-base)', lineHeight: 1.5 }}>
       {children}
     </div>
   )
@@ -546,10 +718,10 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
           <span style={{ flex: 1 }} />
-          <ActionButton onClick={onCancel} disabled={busy}>Cancel</ActionButton>
-          <ActionButton primary onClick={onConfirm} disabled={busy}>
+          <Button onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button variant="primary" onClick={onConfirm} disabled={busy}>
             {busy ? 'Excluding…' : `Add ${patterns.length} rule${patterns.length !== 1 ? 's' : ''}`}
-          </ActionButton>
+          </Button>
         </div>
       </div>
     </div>,
@@ -557,21 +729,67 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
   )
 }
 
-export function ActionButton({ onClick, disabled, danger, primary, children, title }) {
-  const color = danger ? 'var(--red)' : primary ? 'var(--accent)' : 'var(--text)'
+// ── Button ────────────────────────────────────────────────────────────────────
+//
+// Every button on the workflow surfaces, the script modal and Rounds (UI pass,
+// 2026-09-21). There were fourteen hand-rolled styles — seven paddings, five
+// radii, two weights, white and near-black text on the same orange — and none
+// had a hover. The design system's `Button` is the model.
+//
+// Variants:
+//   primary    orange fill, dark text. At most one per view: the forward action,
+//              never a destructive one.
+//   secondary  the raised surface. The default.
+//   danger     red text on a faint red wash with a red hairline — quiet, per the
+//              ration-colour rule, and the hairline it always meant to have.
+//   ghost      transparent, dim text: a quiet control beside a louder one.
+//   subtle     a neutral row chip: raised, dim text.
+//   `tone`     any theme colour: its text and hairline, on an 8% wash. Row chips
+//              that carry a hue (Grab, radarr ↗, Dedupe ↗, Failed ↺).
+//
+// Sizes:
+//   md    every standalone button — action bars, modal footers, page headers,
+//         wizard steps, Rounds' "Open …".
+//   sm    a small control inside a panel or a sentence (Retry, Select all).
+//   chip  an action inside a row — R8's "action chip", at --font-sm like the
+//         tags it sits beside, so a slot that swaps a chip for a tag keeps its size.
+//
+// Colours arrive as custom properties and index.css's `.wf-btn` applies them,
+// because an inline `background` would outrank the `:hover` rule. Pass `href`
+// for a link that looks like a button (the arr and client chips).
+const BUTTON_SIZE = {
+  md:   { fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)' },
+  sm:   { fontSize: 'var(--font-base)', fontWeight: 500, padding: '4px 10px', borderRadius: 'var(--r)' },
+  chip: { fontSize: 'var(--font-sm)', fontWeight: 500, padding: '1px 7px', borderRadius: 'var(--r-sm)', fontFamily: 'var(--mono)' },
+}
+
+const BUTTON_LOOK = {
+  primary:   { bg: 'var(--accent)', border: 'var(--accent)', fg: '#0a0a0a', filter: 'brightness(1.08)' },
+  secondary: { bg: 'var(--surface2)', border: 'var(--border2)', fg: 'var(--text)', bgHover: 'var(--surface3)' },
+  danger:    { bg: tint('var(--red)', 7), border: tint('var(--red)', 25), fg: 'var(--red)', bgHover: tint('var(--red)', 12) },
+  ghost:     { bg: 'transparent', border: 'var(--border2)', fg: 'var(--text-dim)', bgHover: 'var(--surface2)', fgHover: 'var(--text)' },
+  subtle:    { bg: 'var(--surface2)', border: 'var(--border2)', fg: 'var(--text-dim)', bgHover: 'var(--surface3)', fgHover: 'var(--text)' },
+}
+
+const toneLook = c => ({ bg: tint(c, 8), border: tint(c, 30), fg: c, bgHover: tint(c, 14) })
+
+export function Button({
+  variant = 'secondary', size = 'md', tone, href, target, rel,
+  onClick, disabled, title, style, children,
+}) {
+  const look = tone ? toneLook(tone) : (BUTTON_LOOK[variant] || BUTTON_LOOK.secondary)
+  const css = {
+    fontFamily: 'var(--sans)', lineHeight: 1.25, ...(BUTTON_SIZE[size] || BUTTON_SIZE.md),
+    '--btn-bg': look.bg, '--btn-border': look.border, '--btn-fg': look.fg,
+    '--btn-bg-hover': look.bgHover || look.bg, '--btn-fg-hover': look.fgHover || look.fg,
+    '--btn-filter-hover': look.filter || 'none',
+    ...style,
+  }
+  if (href) {
+    return <a className="wf-btn" href={href} target={target} rel={rel} onClick={onClick} title={title} style={css}>{children}</a>
+  }
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      style={{
-        fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)',
-        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
-        border: `1px solid ${danger ? 'var(--red)40' : primary ? 'var(--accent)' : 'var(--border2)'}`,
-        background: danger ? 'var(--surface2)' : primary ? 'var(--accent)' : 'var(--surface2)',
-        color: primary ? '#0a0a0a' : color,
-      }}
-    >
+    <button className="wf-btn" type="button" onClick={onClick} disabled={disabled} title={title} style={css}>
       {children}
     </button>
   )

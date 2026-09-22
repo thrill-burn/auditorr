@@ -1,4 +1,5 @@
 import React from 'react'
+import { tint } from './workflows/shared'
 
 // An import watch has more ways to end than done and error (Phase 12, S07).
 // `done` is the only success, and the server reaches it only when the arr's file
@@ -77,11 +78,11 @@ export default function ImportProgress({ open, jobs, onClose }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* Backfill and Trumped grabs share one watch and one panel. */}
-          <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)' }}>Import Jobs</span>
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Import Jobs</span>
           {activeCount > 0 && (
             <span style={{
               fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
-              background: 'var(--accent)18', color: 'var(--accent)', border: '1px solid var(--accent)30',
+              background: tint('var(--accent)', 9), color: 'var(--accent)', border: `1px solid ${tint('var(--accent)', 19)}`,
             }}>
               {activeCount} active
             </span>
@@ -113,9 +114,9 @@ export default function ImportProgress({ open, jobs, onClose }) {
               <span style={{
                 fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 5px', borderRadius: 3,
                 flexShrink: 0, marginTop: 1,
-                background: job.service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
+                background: tint(job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)', 9),
                 color:      job.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-                border:     `1px solid ${job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}35`,
+                border:     `1px solid ${tint(job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)', 21)}`,
               }}>
                 {job.service || '—'}
               </span>

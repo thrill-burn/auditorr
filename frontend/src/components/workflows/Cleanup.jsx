@@ -3,9 +3,9 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
 import {
-  WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
-  Checkbox, ActionBar, ActionButton, SpinKeyframes, useAuditComplete,
-  ConfirmExcludeModal,
+  WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
+  Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete,
+  ConfirmExcludeModal, SectionHeading, StatBox, Dot, ITEM_TITLE, tint,
 } from './shared'
 
 // Exclusion rules are built from real paths, so they are written as `literal:`
@@ -100,26 +100,6 @@ function ageLabel(mtime) {
 const selectable = row => row.state !== 'unverified'
 const plural = (n, word) => `${n} ${word}${n !== 1 ? 's' : ''}`
 
-function Dot({ color }) {
-  return <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0, display: 'inline-block' }} />
-}
-
-function StatBox({ label, value, sub, dot }) {
-  return (
-    <div style={{
-      padding: '12px 16px', borderRadius: 'var(--rl)', flex: 1, minWidth: 140,
-      background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
-    }}>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
-        {dot && <Dot color={dot} />}
-        {label}
-      </div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
-    </div>
-  )
-}
-
 function StateMark({ state }) {
   const s = STATE[state] || STATE.last_copy
   return (
@@ -140,7 +120,7 @@ function FileRow({ row, folder, checked, onToggle }) {
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 14px 7px 36px',
         borderTop: '1px solid var(--border)', cursor: canSelect ? 'pointer' : 'default',
-        background: checked ? 'var(--accent)06' : 'transparent',
+        background: checked ? tint('var(--accent)', 2) : 'transparent',
       }}
     >
       {canSelect
@@ -193,7 +173,7 @@ function FolderGroup({ group, selected, onToggleFile, onToggleKeys }) {
           style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, flexShrink: 0, color: 'var(--text-dim)' }}>
           <polyline points="9 18 15 12 9 6" />
         </svg>
-        <span title={group.folder} style={{ minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span title={group.folder} style={{ ...ITEM_TITLE, minWidth: 0, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {group.folder}
         </span>
         {/* Why no folder rule is offered here. Saying so is what stops the
@@ -236,17 +216,14 @@ function Pile({ pile, groups, selected, onToggleFile, onToggleKeys }) {
   const size = rows.reduce((s, f) => s + f.size, 0)
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {keys.length > 0 && (
-          <Checkbox checked={allChecked} indeterminate={someChecked} onChange={() => onToggleKeys(keys)} />
-        )}
-        <Dot color={pile.color} />
-        <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)' }}>{pile.title}</span>
-        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
-          {plural(rows.length, 'file')} · {formatBytes(size)}
-        </span>
-      </div>
-      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: 0, lineHeight: 1.5 }}>{pile.blurb}</p>
+      {/* An unselectable pile keeps the checkbox's slot, so its dot sits in
+          the same column as the others. */}
+      <SectionHeading
+        check={keys.length > 0 ? { checked: allChecked, indeterminate: someChecked, onChange: () => onToggleKeys(keys) } : null}
+        dot={pile.color} title={pile.title}
+        meta={`${plural(rows.length, 'file')} · ${formatBytes(size)}`}
+        desc={pile.blurb}
+      />
       {groups.map(g => (
         <FolderGroup key={g.folder} group={g} selected={selected}
           onToggleFile={onToggleFile} onToggleKeys={onToggleKeys} />
@@ -393,7 +370,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
   const unchecked = report?.unverified || { count: 0, size: 0 }
 
   return (
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <WorkflowPage>
       <WorkflowHeader
         title="Cleanup"
         accent="var(--yellow)"
@@ -461,12 +438,12 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
 
           {selected.size > 0 && (
             <ActionBar summary={`${plural(selectedRows.length, 'file')} selected · ${selKeeps} keep a copy · ${selOnly.length} only copy · up to ${formatBytes(selFreeable)} freed`}>
-              <ActionButton onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
+              <Button onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
                 {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
-              </ActionButton>
-              <ActionButton danger onClick={handleDeleteScript} disabled={busy != null}>
+              </Button>
+              <Button variant="danger" onClick={handleDeleteScript} disabled={busy != null}>
                 Generate Delete Script
-              </ActionButton>
+              </Button>
             </ActionBar>
           )}
 
@@ -482,6 +459,6 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
         </>
       )}
       <SpinKeyframes />
-    </div>
+    </WorkflowPage>
   )
 }

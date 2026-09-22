@@ -4,7 +4,8 @@ import { formatBytes } from '../../utils'
 import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
   LabeledChips, IndexerChips, FolderChips, SortPicker, CountPicker,
-  SectionLabel, WorkflowHeader, SpinKeyframes, WorkflowError, ArrErrorsWarning,
+  SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, ArrErrorsWarning,
+  Button, MatchChips, MATCH_COLOR, ITEM_TITLE, tint,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
 } from './shared'
@@ -149,26 +150,9 @@ const RANK_OPTIONS = [
 
 // ── Closeness to the file on disk (B3) ────────────────────────────────────────
 // Hue as text only, never a fill — the treatment Trumped gives its candidates
-// for the same question: is this the release I already have?
+// for the same question: is this the release I already have? (`MatchChips`,
+// shared with Trumped, which asks its own fields.)
 const MATCH_FIELDS = [['size', 'SIZE'], ['quality', 'QUAL'], ['hdr', 'HDR']]
-const MATCH_COLOR  = { same: 'var(--green)', diff: 'var(--red)', partial: 'var(--yellow)' }
-const MATCH_MARK   = { same: '✓', diff: '✗', partial: '~' }
-
-function MatchChips({ match }) {
-  if (!match) return null
-  const items = MATCH_FIELDS.filter(([k]) => match[k])
-  if (!items.length) return null
-  return (
-    <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
-      {items.map(([k, label]) => (
-        <span key={k} title={`${label}: ${match[k]} against your file`} style={{
-          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
-          color: MATCH_COLOR[match[k]] || 'var(--text-dim)',
-        }}>{label}{MATCH_MARK[match[k]] || ''}</span>
-      ))}
-    </span>
-  )
-}
 
 function sizeDelta(delta) {
   if (delta == null) return '—'
@@ -177,8 +161,11 @@ function sizeDelta(delta) {
 }
 
 // ── Grab button (shared) ──────────────────────────────────────────────────────
+// The idle Grab is a row chip in the accent; every state after it is a tag in
+// the same slot at the same size (R8), and the two that take a second click —
+// "anyway" and "Failed ↺" — are chips again.
 function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
-  if (state === 'idle')        return <button onClick={onGrab} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--accent)50', background: 'var(--accent)10', color: 'var(--accent)' }}>Grab</button>
+  if (state === 'idle')        return <Button size="chip" tone="var(--accent)" onClick={onGrab}>Grab</Button>
   if (state === 'grabbing')    return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
   if (state === 'refreshing')  return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>Re-searching…</span>
   if (state === 'grabbed')     return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
@@ -187,10 +174,10 @@ function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
   if (state === 'queued') return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       <span title={errorMsg} style={{ fontSize: 'var(--font-sm)', color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>In queue</span>
-      <button onClick={onForce} title="Already downloading — grab another copy anyway" style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)' }}>anyway</button>
+      <Button size="chip" variant="ghost" onClick={onForce} title="Already downloading — grab another copy anyway">anyway</Button>
     </span>
   )
-  return <button onClick={onReset} title={`${errorMsg || 'Grab failed'} — click to reset`} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer', border: '1px solid var(--red)50', background: 'var(--red)10', color: 'var(--red)' }}>Failed ↺</button>
+  return <Button size="chip" tone="var(--red)" onClick={onReset} title={`${errorMsg || 'Grab failed'} — click to reset`}>Failed ↺</Button>
 }
 
 // ── Result item ───────────────────────────────────────────────────────────────
@@ -360,7 +347,7 @@ function ResultItem({ item }) {
   const multi     = releases.length > 1
 
   const icon = searching ? (
-    <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+    <Spinner size={10} />
   ) : found ? (
     <span style={{ color: 'var(--green)', fontSize: 'var(--font-sm)', fontWeight: 700 }}>✓</span>
   ) : notFound ? (
@@ -386,7 +373,7 @@ function ResultItem({ item }) {
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div title={scopeReason(item) || undefined} style={{
-            fontSize: 'var(--font-md)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             color: notFound || errored ? 'var(--text-dim)' : 'var(--text)',
           }}>
             {item.arr_title}{scopeLabel(item)}
@@ -400,7 +387,7 @@ function ResultItem({ item }) {
                 const parts = [r.indexer, formatBytes(r.size), r.size_delta != null ? sizeDelta(r.size_delta) : null,
                   r.seeders != null ? `${r.seeders}S` : null, r.quality_name, r.hdr || null].filter(Boolean)
                 if (r.custom_format_score) parts.push(`CF:${r.custom_format_score}`)
-                return <><span>{parts.join(' · ')}</span><MatchChips match={r.match} /></>
+                return <><span>{parts.join(' · ')}</span><MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" /></>
               })()}
               {notFound  && 'No releases found'}
               {errored   && item.error}
@@ -460,27 +447,25 @@ function ResultItem({ item }) {
           )}
         </div>
 
-        {/* Service badge link */}
-        {item.arr_service && (
-          <a href={item.arr_url || undefined} target="_blank" rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()} title={`Open in ${item.arr_service}`}
-            style={{
-              fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-              textDecoration: 'none', cursor: item.arr_url ? 'pointer' : 'default',
-              background: item.arr_service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
-              color:      item.arr_service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-              border:     `1px solid ${item.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
-            }}>
+        {/* Service link — the same chip Triage's rows carry. With no link
+            address it is only a label, and says so by not being a button. */}
+        {item.arr_service && (item.arr_url ? (
+          <Button size="chip" tone={item.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}
+            href={item.arr_url} target="_blank" rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()} title={`Open in ${item.arr_service}`}>
             {item.arr_service} ↗
-          </a>
-        )}
+          </Button>
+        ) : (
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0,
+            color: item.arr_service === 'radarr' ? 'var(--yellow)' : 'var(--blue)' }}>
+            {item.arr_service}
+          </span>
+        ))}
 
         {/* Import status (auto-starts after any grab) */}
         {importStatus && (
           <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {WATCH_ACTIVE.includes(importStatus) && (
-              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', border: '1.5px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
-            )}
+            {WATCH_ACTIVE.includes(importStatus) && <Spinner size={8} weight={1.5} />}
             <span style={{ color: watchColor(importStatus) }} title={importMessage}>
               {IMPORT_LABEL[importStatus] || importStatus}
             </span>
@@ -489,7 +474,7 @@ function ResultItem({ item }) {
 
         {/* Single-release grab button */}
         {found && !multi && item.best_release && (
-          <div style={{ flexShrink: 0 }}>
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
             <GrabButton
               state={grabStates[singleKey] || 'idle'}
               errorMsg={grabErrors[singleKey]}
@@ -523,18 +508,18 @@ function ResultItem({ item }) {
               <div key={key} style={{
                 display: 'grid', gridTemplateColumns: RELEASE_GRID,
                 alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
-                background: isBest ? 'var(--accent)08' : 'transparent',
-                border: `1px solid ${isBest ? 'var(--accent)25' : 'transparent'}`,
+                background: isBest ? tint('var(--accent)', 3) : 'transparent',
+                border: `1px solid ${isBest ? tint('var(--accent)', 15) : 'transparent'}`,
               }}>
                 {r.info_url ? (
                   <a href={r.info_url} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}
-                    style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: 'color-mix(in srgb, var(--text) 30%, transparent)', textUnderlineOffset: 2 }}
+                    style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: tint('var(--text)', 30), textUnderlineOffset: 2 }}
                     title={r.title}>
                     {r.title}
                   </a>
                 ) : (
-                  <span style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  <span style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={r.title}>
                     {r.title}
                   </span>
@@ -573,7 +558,7 @@ function ResultItem({ item }) {
                   ) : null}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                  <MatchChips match={r.match} />
+                  <MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <GrabButton
@@ -874,7 +859,7 @@ export default function Backfill({ onNavigate }) {
     const kinds = kindsLine(selectedGroups)
     const exampleArr = unmatchedExample?.service === 'sonarr' ? 'Sonarr' : 'Radarr'
     return (
-      <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 28 }}>
+      <WorkflowPage gap={28}>
         <WorkflowHeader
           title="Backfill"
           accent="var(--blue)"
@@ -889,7 +874,7 @@ export default function Backfill({ onNavigate }) {
         />
 
         {loading ? (
-          <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>Loading…</div>
+          <LoadingRow label="Loading candidates…" />
         ) : (
           <>
             {indexers.length > 0 && (
@@ -1006,19 +991,9 @@ export default function Backfill({ onNavigate }) {
             </div>
 
             <div>
-              <button
-                onClick={handleGenerate}
-                disabled={availableCount === 0}
-                style={{
-                  fontSize: 'var(--font-base)', fontWeight: 600, padding: '10px 24px', borderRadius: 8,
-                  cursor: availableCount > 0 ? 'pointer' : 'not-allowed',
-                  background: availableCount > 0 ? 'var(--accent)' : 'var(--surface2)',
-                  color: availableCount > 0 ? '#fff' : 'var(--text-dim)',
-                  border: 'none', opacity: availableCount > 0 ? 1 : 0.5,
-                }}
-              >
+              <Button variant="primary" onClick={handleGenerate} disabled={availableCount === 0}>
                 Generate {willSearch > 0 ? `${willSearch} ` : ''}Releases →
-              </button>
+              </Button>
               {availableCount === 0 && (
                 <div style={{ marginTop: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
                   No resolved candidates — check that Radarr/Sonarr is configured.
@@ -1029,7 +1004,7 @@ export default function Backfill({ onNavigate }) {
         )}
 
         <SpinKeyframes />
-      </div>
+      </WorkflowPage>
     )
   }
 
@@ -1051,29 +1026,17 @@ export default function Backfill({ onNavigate }) {
                                              `Stopped — ${found}`
 
   return (
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'center', marginBottom: 2 }}>Workflows</div>
-          <div style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)' }}>{phaseLabel}</div>
-          {notice && <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 4 }}>{notice}</div>}
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-          {phase === 'running' && (
-            <button onClick={handleStop} style={{
-              fontSize: 'var(--font-base)', padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
-              border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-            }}>Stop</button>
-          )}
-          {phase !== 'running' && (
-            <button onClick={handleReset} style={{
-              fontSize: 'var(--font-base)', padding: '6px 16px', borderRadius: 7, cursor: 'pointer',
-              border: '1px solid var(--accent)40', background: 'var(--accent)10', color: 'var(--accent)',
-            }}>← New Search</button>
-          )}
-        </div>
-      </div>
+    <WorkflowPage gap={14}>
+      {/* The shared header, as the config phase uses. This was a hand copy of
+          it whose eyebrow carried `textAlign: 'center'`, so "Workflows" sat in
+          the middle of the page above a left-aligned title. */}
+      <WorkflowHeader
+        title={phaseLabel}
+        blurb={notice}
+        right={phase === 'running'
+          ? <Button onClick={handleStop}>Stop</Button>
+          : <Button onClick={handleReset}>← New Search</Button>}
+      />
 
       {/* Progress bar */}
       <div style={{ height: 3, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
@@ -1095,19 +1058,19 @@ export default function Backfill({ onNavigate }) {
 
       {/* Results list */}
       {rows.length > 0 && (
-        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
           {rows.map((item, i) => <ResultItem key={item.key ?? i} item={item} />)}
         </div>
       )}
 
       {rows.length === 0 && phase === 'running' && (
         <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>
-          <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+          <Spinner />
           {reattaching ? 'Picking your search back up…' : 'Starting search…'}
         </div>
       )}
 
       <SpinKeyframes />
-    </div>
+    </WorkflowPage>
   )
 }

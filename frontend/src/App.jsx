@@ -19,12 +19,10 @@ import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
 import { api } from './api'
 import { formatBytes } from './utils'
+import { Button, tint } from './components/workflows/shared'
 
 
 // ── Script Modal ──────────────────────────────────────────────────────────────
-function _btnStyle(bg, color) {
-  return { padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border2)', background: bg, color, fontSize: 'var(--font-base)', fontWeight: 600, cursor: 'pointer' }
-}
 
 // What the server says about a script it just built. Cleanup's delete script
 // sends a verification time (it re-checks the selection against the torrent
@@ -138,7 +136,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
       >
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
           <div>
-            <div style={{ fontSize: 'var(--font-lg)', fontWeight: 600, color: 'var(--text)' }}>{title}</div>
+            <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{title}</div>
             {shownSubtitle && !error && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>{shownSubtitle}</div>}
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
@@ -162,7 +160,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
           {loading ? (
             <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>Checking…</div>
           ) : error ? (
-            <div style={{ padding: '12px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', fontSize: 'var(--font-base)', lineHeight: 1.6 }}>
+            <div style={{ padding: '12px 14px', background: tint('var(--red)', 6), border: `1px solid ${tint('var(--red)', 19)}`, borderRadius: 'var(--r)', fontSize: 'var(--font-base)', lineHeight: 1.6 }}>
               <div style={{ color: 'var(--red)', fontWeight: 600, marginBottom: 4 }}>No script was built</div>
               <div style={{ color: 'var(--text)' }}>{error}</div>
             </div>
@@ -170,12 +168,12 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
             <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
           )}
         </div>
-        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
-          <button onClick={onClose} style={_btnStyle('var(--surface2)', 'var(--text-dim)')}>Close</button>
+        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end', flexShrink: 0 }}>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
           {!loading && !error && script && (
             <>
-              <button onClick={handleDownload} style={_btnStyle('var(--surface2)', 'var(--text)')}>Download .sh</button>
-              <button onClick={handleCopy} style={_btnStyle('var(--accent)', '#0a0a0a')}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</button>
+              <Button onClick={handleDownload}>Download .sh</Button>
+              <Button variant="primary" onClick={handleCopy}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</Button>
             </>
           )}
         </div>

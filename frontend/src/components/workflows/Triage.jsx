@@ -4,9 +4,9 @@ import { api } from '../../api'
 import { formatBytes, copyText } from '../../utils'
 import { useToast } from '../Toast'
 import {
-  WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowCrossLink,
-  ArrErrorsWarning, Checkbox, ActionBar, ActionButton, Spinner, SpinKeyframes,
-  HDR_STYLE, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning,
+  WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
+  ArrErrorsWarning, ActionBar, Button, Spinner, SpinKeyframes, SectionHeading, QualityChip, Checkbox,
+  ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning,
 } from './shared'
 
 const VERDICTS = [
@@ -227,30 +227,6 @@ function rejectionSummary(rejected) {
 // rather than disabled, because the row already carries its reason.
 const canExclude = item => (item.exclusion_patterns || []).length > 0
 
-function QualityChip({ label, hdr, dim }) {
-  if (!label && !hdr) return <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.5 }}>unknown</span>
-  const hdrInfo = HDR_STYLE[hdr]
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      {label && (
-        <span style={{
-          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4,
-          background: dim ? 'var(--surface2)' : 'var(--surface3)',
-          border: '1px solid var(--border2)',
-          color: dim ? 'var(--text-dim)' : 'var(--text)', whiteSpace: 'nowrap',
-        }}>
-          {label}
-        </span>
-      )}
-      {hdrInfo && (
-        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color, whiteSpace: 'nowrap' }}>
-          {hdr}
-        </span>
-      )}
-    </span>
-  )
-}
-
 function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending, rescanned, unconfirmed }) {
   const p = item.parsed || {}
   const seTag = p.season != null
@@ -265,7 +241,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
       style={{
         display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 14px',
         borderBottom: '1px solid var(--border)', cursor: 'pointer',
-        background: checked ? 'var(--accent)06' : 'transparent',
+        background: checked ? tint('var(--accent)', 2) : 'transparent',
       }}
     >
       <span style={{ paddingTop: 3 }}>
@@ -274,7 +250,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-          <span style={{ fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {p.title || filename}{p.year ? ` (${p.year})` : ''}{seTag}
           </span>
           {subsetLabel(item) && (
@@ -328,7 +304,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
 
         {/* Evidence line */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, flexWrap: 'wrap' }}>
-          <QualityChip label={p.quality_label} hdr={p.hdr} />
+          <QualityChip label={p.quality_label} hdr={p.hdr} unknown />
           {lib && lib.quality_name && (
             <>
               <span
@@ -337,7 +313,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               >
                 vs library{lib.year ? ` (${lib.year})` : ''}
               </span>
-              <QualityChip label={lib.quality_name} hdr={lib.hdr} dim />
+              <QualityChip label={lib.quality_name} hdr={lib.hdr} dim unknown />
             </>
           )}
           {/* T2 — more than one instance holds this title. The row names them and
@@ -389,30 +365,22 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
             </span>
           )}
           {item.is_duplicate && (
-            <button
+            <Button size="chip" tone="var(--purple)"
               onClick={e => { e.stopPropagation(); onNavigate && onNavigate({ tab: 'dedupe' }) }}
               title="A byte-identical copy exists on disk — open the Dedupe workflow to hardlink it and reclaim the space (lossless)"
-              style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
-                background: 'var(--purple)18', color: 'var(--purple)', border: '1px solid var(--purple)40',
-              }}
             >
               Dedupe ↗
-            </button>
+            </Button>
           )}
           {/* The reactive counterpart to a trump PM: a tracker dropping an
               imported torrent is often a trump the user never saw (TR16). */}
           {item.verdict === 'dead_seed' && (
-            <button
+            <Button size="chip" tone="var(--green)"
               onClick={e => { e.stopPropagation(); onNavigate && onNavigate({ tab: 'trumped', oldTitle: item.name || torrentSearchName(item) }) }}
               title="If the tracker trumped this release, the Trumped workflow removes every cross-seed of it and grabs the replacement"
-              style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
-                background: 'var(--green)18', color: 'var(--green)', border: '1px solid var(--green)40',
-              }}
             >
               Trumped? ↗
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -459,22 +427,18 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
         )}
       </div>
 
-      <span style={{ flexShrink: 0, width: 58, display: 'flex', justifyContent: 'flex-end' }}>
+      {/* 72, the width "sonarr ↗" takes as a chip. At 58 it overflowed into the
+          earnings column — invisibly, until the chip's hairline rendered. */}
+      <span style={{ flexShrink: 0, width: 72, display: 'flex', justifyContent: 'flex-end' }}>
         {lib?.arr_url && (
-          <a
+          <Button size="chip" tone={lib.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}
             href={lib.arr_url} target="_blank" rel="noopener noreferrer"
             onClick={e => e.stopPropagation()}
             title={`Open in ${lib.service}`}
-            style={{
-              fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-              textDecoration: 'none', marginTop: 2, alignSelf: 'flex-start',
-              background: lib.service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
-              color:      lib.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-              border:     `1px solid ${lib.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}40`,
-            }}
+            style={{ marginTop: 2, alignSelf: 'flex-start' }}
           >
             {lib.service} ↗
-          </a>
+          </Button>
         )}
       </span>
 
@@ -482,21 +446,15 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           torrent; qBittorrent copies the title for a one-paste search. Red
           for unregistered (the verdict that begs for deletion). */}
       {client && (
-        <button
+        <Button size="chip" variant="subtle" tone={item.verdict === 'unregistered' ? 'var(--red)' : undefined}
           onClick={e => onOpenClient(item, e)}
           title={canDeepLink(client, item)
             ? 'Open this torrent in qui'
             : `Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find this torrent`}
-          style={{
-            fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-            cursor: 'pointer', marginTop: 2,
-            background: item.verdict === 'unregistered' ? 'var(--red)18' : 'var(--surface2)',
-            color:      item.verdict === 'unregistered' ? 'var(--red)'   : 'var(--text-dim)',
-            border:     `1px solid ${item.verdict === 'unregistered' ? 'var(--red)40' : 'var(--border2)'}`,
-          }}
+          style={{ marginTop: 2 }}
         >
           {client.name} {canDeepLink(client, item) ? '↗' : '⧉↗'}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -1080,7 +1038,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   }
 
   return (
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <WorkflowPage>
       <WorkflowHeader
         title="Triage"
         accent="var(--red)"
@@ -1114,7 +1072,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       {!loading && verify && (verify.running || verify.failed) && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', flexWrap: 'wrap',
-          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r)',
         }}>
           {verify.running ? (
             <>
@@ -1133,15 +1091,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                 Live tracker verification failed ({verify.failed}) — showing audit-time tracker data
                 {verify.done > 0 ? ` (${verify.done}/${verify.total} verified before the error)` : ''}.
               </span>
-              <button
-                onClick={() => runVerify(items.filter(i => i.hash && !i.verified))}
-                style={{
-                  fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', padding: '2px 10px', borderRadius: 5, cursor: 'pointer',
-                  border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-                }}
-              >
+              <Button size="sm" onClick={() => runVerify(items.filter(i => i.hash && !i.verified))}>
                 ↻ Retry
-              </button>
+              </Button>
             </>
           )}
         </div>
@@ -1164,9 +1116,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             </div>
           )}
           {!report?.arr_configured && (
-            <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, color: 'var(--yellow)', fontSize: 'var(--font-base)' }}>
+            <WorkflowWarning>
               No Sonarr/Radarr connection configured — library matching is disabled, so most items fall into “Not in Library”.
-            </div>
+            </WorkflowWarning>
           )}
 
           <ArrErrorsWarning
@@ -1176,29 +1128,24 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
           />
 
           {report?.suggestions?.length > 0 && (
-            <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>
                 <span style={{ fontWeight: 600 }}>Tidy up Triage</span>
                 <span style={{ color: 'var(--text-dim)' }}> — some torrents only linger here because of files Sonarr/Radarr never import. Exclude them in one click (saved to Config → Excluded Files, editable there):</span>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {report.suggestions.map(s => (
-                  <button
-                    key={s.id}
+                  <Button
+                    key={s.id} size="sm"
                     onClick={() => handleSuggestionExclude(s)}
                     disabled={busy != null}
                     title={`${s.detail} — adds ${s.patterns.join(', ')}`}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 7,
-                      fontSize: 'var(--font-base)', cursor: busy != null ? 'not-allowed' : 'pointer', opacity: busy != null ? 0.5 : 1,
-                      border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
-                    }}
                   >
                     <span>Exclude <span style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>{s.label}</span></span>
-                    <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+                    <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', fontWeight: 400 }}>
                       {s.count} · {formatBytes(s.size)}
                     </span>
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
@@ -1213,7 +1160,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             const someChecked = !allChecked && keys.some(k => selected.has(k))
 
             const renderRows = (rowItems) => (
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
                 {rowItems.map(item => (
                   <TriageRow
                     key={itemKey(item)}
@@ -1233,18 +1180,13 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             )
 
             return (
-              <div key={v.key}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <Checkbox checked={allChecked} indeterminate={someChecked} onChange={() => toggleSection(sectionItems)} />
-                  <span style={{ width: 9, height: 9, borderRadius: 3, background: v.color, flexShrink: 0 }} />
-                  <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{v.label}</span>
-                  <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
-                    {sectionItems.length} · {formatBytes(sectionSize)}
-                  </span>
-                </div>
-                <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '0 0 10px 34px', lineHeight: 1.5, maxWidth: 960 }}>
-                  {v.desc}
-                </p>
+              <div key={v.key} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <SectionHeading
+                  check={{ checked: allChecked, indeterminate: someChecked, onChange: () => toggleSection(sectionItems) }}
+                  dot={v.color} title={v.label}
+                  meta={`${sectionItems.length} · ${formatBytes(sectionSize)}`}
+                  desc={v.desc}
+                />
                 {v.key !== 'superseded' ? renderRows(sectionItems) : (
                   QUALITY_BUCKETS.map(b => {
                     const bucketItems = sectionItems.filter(i => qualityBucket(i) === b.key)
@@ -1253,18 +1195,16 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     const bAll  = bKeys.every(k => selected.has(k))
                     const bSome = !bAll && bKeys.some(k => selected.has(k))
                     const bSize = bucketItems.reduce((s, i) => s + i.total_size, 0)
+                    // Indented to the verdict's title, so a bucket's checkbox sits
+                    // under the heading it belongs to.
                     return (
-                      <div key={b.key} style={{ marginLeft: 34, marginBottom: 16 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                          <Checkbox checked={bAll} indeterminate={bSome} onChange={() => toggleSection(bucketItems)} />
-                          <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: b.color }}>{b.label}</span>
-                          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
-                            {bucketItems.length} · {formatBytes(bSize)}
-                          </span>
-                        </div>
-                        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '0 0 8px 25px', lineHeight: 1.5, maxWidth: 960 }}>
-                          {b.desc}
-                        </p>
+                      <div key={b.key} style={{ marginLeft: 42, marginBottom: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <SectionHeading sub
+                          check={{ checked: bAll, indeterminate: bSome, onChange: () => toggleSection(bucketItems) }}
+                          color={b.color} title={b.label}
+                          meta={`${bucketItems.length} · ${formatBytes(bSize)}`}
+                          desc={b.desc}
+                        />
                         {renderRows(bucketItems)}
                       </div>
                     )
@@ -1276,27 +1216,27 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
 
           {selectedItems.length > 0 && (
             <ActionBar summary={`${selectedItems.length} torrent${selectedItems.length !== 1 ? 's' : ''} selected · ${selectedFiles} file${selectedFiles !== 1 ? 's' : ''} · ${formatBytes(selectedSize)}`}>
-              <ActionButton onClick={handleRescan} disabled={busy != null} title="Tell Sonarr/Radarr to rescan these folders and retry the import">
+              <Button onClick={handleRescan} disabled={busy != null} title="Tell Sonarr/Radarr to rescan these folders and retry the import">
                 {busy === 'rescan' ? 'Rescanning…' : 'Trigger Rescan'}
-              </ActionButton>
+              </Button>
               {forceImportItems.length > 0 && (
-                <ActionButton onClick={handleForceImport} disabled={busy != null}
+                <Button onClick={handleForceImport} disabled={busy != null}
                   title={`Replace the library file with this release via Sonarr/Radarr's "Import Anyway" — the only way past the upgrade check a same-quality swap can never pass`}>
                   {busy === 'force' ? 'Importing…' : `Force import (${forceImportItems.length})`}
-                </ActionButton>
+                </Button>
               )}
               {excludableItems.length > 0 && (
-                <ActionButton onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
+                <Button onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
                   {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
-                </ActionButton>
+                </Button>
               )}
               {client && (clientDeleteAllowed ? (
-                <ActionButton danger onClick={openConfirm} disabled={busy != null || deletableItems.length === 0}
+                <Button variant="danger" onClick={openConfirm} disabled={busy != null || deletableItems.length === 0}
                   title={deletableItems.length === 0
                     ? 'None of the selected items have a torrent hash'
                     : `Remove the selected torrents via ${client.name} — files deleted only where no live seed shares them`}>
                   Remove from {client.name}
-                </ActionButton>
+                </Button>
               ) : (
                 // Deletion is off: show the action greyed out (so users know it
                 // exists) with a one-click path to enable it, mirroring Trumped.
@@ -1306,10 +1246,10 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     <a onClick={() => onNavigate && onNavigate({ tab: 'config' })}
                       style={{ color: 'var(--yellow)', cursor: 'pointer', textDecoration: 'underline' }}>enable in Config</a>
                   </span>
-                  <ActionButton danger disabled
+                  <Button variant="danger" disabled
                     title={`Client deletion is disabled — enable “Workflow torrent deletion” in Config → Torrent Source to remove torrents via ${client.name}`}>
                     Remove from {client.name}
-                  </ActionButton>
+                  </Button>
                 </>
               ))}
             </ActionBar>
@@ -1349,7 +1289,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       )}
       <SpinKeyframes />
       <style>{`@keyframes triagePulse { 0%, 100% { opacity: .25 } 50% { opacity: .75 } }`}</style>
-    </div>
+    </WorkflowPage>
   )
 }
 
@@ -1371,7 +1311,7 @@ function ScopeSwitch({ scope, groupSize, onChange }) {
             style={{
               fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', padding: '3px 9px', cursor: 'pointer',
               border: 'none', borderLeft: idx ? '1px solid var(--border2)' : 'none',
-              background: active ? (o.key === 'all' ? 'var(--red)20' : 'var(--surface3)') : 'transparent',
+              background: active ? (o.key === 'all' ? tint('var(--red)', 13) : 'var(--surface3)') : 'transparent',
               color: active ? (o.key === 'all' ? 'var(--red)' : 'var(--text)') : 'var(--text-dim)',
               fontWeight: active ? 700 : 400,
             }}
@@ -1486,8 +1426,8 @@ function ConfirmDeleteModal({
           {anyGroups && !resolving && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 0', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
               <span>Choose how much of each cross-seed group to remove. Apply to all:</span>
-              <button onClick={() => onSetAllScopes('one')} style={miniBtn}>This torrent only</button>
-              <button onClick={() => onSetAllScopes('all')} style={miniBtn}>All cross-seeds</button>
+              <Button size="sm" onClick={() => onSetAllScopes('one')}>This torrent only</Button>
+              <Button size="sm" onClick={() => onSetAllScopes('all')}>All cross-seeds</Button>
             </div>
           )}
         </div>
@@ -1510,7 +1450,7 @@ function ConfirmDeleteModal({
             return (
               <div key={itemKey(item)} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', opacity: gone ? 0.6 : 1 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ ...ITEM_TITLE, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {item.parsed?.title || (item.rep_path || '').replace(/\\/g, '/').split('/').pop()}
                     {item.parsed?.year ? ` (${item.parsed.year})` : ''}
                   </span>
@@ -1594,18 +1534,13 @@ function ConfirmDeleteModal({
             </span>
           )}
           <span style={{ flex: 1 }} />
-          <ActionButton onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</ActionButton>
-          <ActionButton danger onClick={onConfirm} disabled={busy || resolving || torrentCount === 0}>
+          <Button onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</Button>
+          <Button variant="danger" onClick={onConfirm} disabled={busy || resolving || torrentCount === 0}>
             {confirmLabel}
-          </ActionButton>
+          </Button>
         </div>
       </div>
     </div>,
     document.body
   )
-}
-
-const miniBtn = {
-  fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 5, cursor: 'pointer',
-  border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)',
 }

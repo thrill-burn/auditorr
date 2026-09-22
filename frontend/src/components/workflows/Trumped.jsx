@@ -5,8 +5,9 @@ import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
 import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
-  WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
-  Checkbox, Spinner, SpinKeyframes, ActionButton, HDR_STYLE, regKey, RegistrationWarning,
+  WorkflowPage, WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
+  Checkbox, Spinner, SpinKeyframes, Button, Disclosure, QualityChip, MatchChips, ITEM_TITLE, tint,
+  regKey, RegistrationWarning,
 } from './shared'
 
 const ACCENT = 'var(--green)'
@@ -80,44 +81,12 @@ function Field({ label, value, onChange, mono }) {
   )
 }
 
-function QualityChip({ label, hdr }) {
-  const hdrInfo = HDR_STYLE[hdr]
-  if (!label && !hdrInfo) return null
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      {label && (
-        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 4, background: 'var(--surface3)', border: '1px solid var(--border2)', color: 'var(--text)' }}>{label}</span>
-      )}
-      {hdrInfo && (
-        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color }}>{hdr}</span>
-      )}
-    </span>
-  )
-}
-
 // ── Match feedback ────────────────────────────────────────────────────────────
 // Hue as text only (never a fill): green agrees with the PM, red differs, amber
 // is a partial title overlap. Lets the user see at a glance exactly why a
 // candidate ranks where it does before committing to a delete or a grab.
+// (`MatchChips` is shared with Backfill, which asks size/quality/HDR.)
 const MATCH_FIELDS = [['year', 'YR'], ['res', 'RES'], ['source', 'SRC'], ['audio', 'AUD'], ['hdr', 'HDR'], ['group', 'GRP']]
-const MATCH_COLOR  = { same: 'var(--green)', diff: 'var(--red)', partial: 'var(--yellow)' }
-const MATCH_MARK   = { same: '✓', diff: '✗', partial: '~' }
-
-function MatchChips({ match }) {
-  if (!match) return null
-  const items = MATCH_FIELDS.filter(([k]) => match[k])
-  if (!items.length) return null
-  return (
-    <span style={{ display: 'inline-flex', gap: 7, flexShrink: 0 }}>
-      {items.map(([k, label]) => (
-        <span key={k} title={`${label}: ${match[k]}`} style={{
-          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
-          color: MATCH_COLOR[match[k]] || 'var(--text-dim)',
-        }}>{label}{MATCH_MARK[match[k]] || ''}</span>
-      ))}
-    </span>
-  )
-}
 
 function ScoreBadge({ score }) {
   if (score == null) return null
@@ -135,14 +104,14 @@ function CandidateRow({ cand, selected, onSelect }) {
     <div onClick={onSelect} style={{
       display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer',
       borderBottom: '1px solid var(--border)',
-      background: selected ? `${ACCENT}0e` : 'transparent',
+      background: selected ? tint(ACCENT, 5) : 'transparent',
       borderLeft: `2px solid ${selected ? ACCENT : 'transparent'}`,
     }}>
       <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
       {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
-      <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
+      <span style={{ ...ITEM_TITLE, flex: 1, minWidth: 0, fontFamily: 'var(--mono)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
       {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
-      <MatchChips match={cand.match} />
+      <MatchChips match={cand.match} fields={MATCH_FIELDS} />
       {sub && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)', flexShrink: 0 }}>{sub}</span>}
       {cand.seeders != null && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{cand.seeders}S</span>}
       <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(cand.size)}</span>
@@ -177,8 +146,8 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
       : { text: 'exact match for the new release name', color: 'var(--text-dim)' }
   return (
     <div onClick={onSelect} style={{
-      cursor: 'pointer', borderRadius: 10, padding: '14px 16px',
-      background: selected ? `${ACCENT}0e` : 'var(--surface2)',
+      cursor: 'pointer', borderRadius: 'var(--rl)', padding: '14px 16px',
+      background: selected ? tint(ACCENT, 5) : 'var(--surface2)',
       border: `1px solid ${selected ? ACCENT : 'var(--border2)'}`,
       boxShadow: 'var(--elev-1)',
     }}>
@@ -187,12 +156,12 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
         <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Grab this one</span>
         <span style={{ fontSize: 'var(--font-sm)', color: where.color }}>· {where.text}</span>
       </div>
-      <div style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere', marginBottom: 8 }}>
+      <div style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', lineHeight: 1.45, overflowWrap: 'anywhere', marginBottom: 8 }}>
         {cand.title}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
-        <MatchChips match={cand.match} />
+        <MatchChips match={cand.match} fields={MATCH_FIELDS} />
         {cand.indexer && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{cand.indexer}</span>}
         {cand.seeders != null && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders} seeders</span>}
         <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{formatBytes(cand.size)}</span>
@@ -240,7 +209,7 @@ function GroupTable({ torrents }) {
               {link.mark}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.name}</div>
+              <div style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.name}</div>
               <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
                 <span title={t.hash} style={cell}>hash {String(t.hash).slice(0, 12)}…</span>
                 {showInstance && t.instance_name && <span style={cell}>on {t.instance_name}</span>}
@@ -322,17 +291,17 @@ function OnlyCopyModal({ info, clientName, busy, onCancel, onConfirm }) {
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
           {(info.torrents || []).map(t => (
             <div key={regKey(t)} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-md)', fontFamily: 'var(--mono)', color: 'var(--text)', overflowWrap: 'anywhere' }}>{t.name}</span>
+              <span style={{ ...ITEM_TITLE, flex: 1, minWidth: 0, fontFamily: 'var(--mono)', overflowWrap: 'anywhere' }}>{t.name}</span>
               <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--red)', flexShrink: 0 }}>{formatBytes(t.only_copy_bytes || 0)}</span>
             </div>
           ))}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
           <span style={{ flex: 1 }} />
-          <ActionButton onClick={onCancel} disabled={busy}>Cancel</ActionButton>
-          <ActionButton danger onClick={onConfirm} disabled={busy}>
+          <Button onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button variant="danger" onClick={onConfirm} disabled={busy}>
             {busy ? 'Removing…' : `Remove and destroy ${bytes}`}
-          </ActionButton>
+          </Button>
         </div>
       </div>
     </div>,
@@ -602,16 +571,12 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   const step5 = step3 && search != null
 
   return (
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 980 }}>
+    <WorkflowPage maxWidth={980}>
       <WorkflowHeader
         title="Trumped"
         accent={ACCENT}
         blurb="When a tracker trumps one of your releases, paste the PM here: auditorr finds the whole hardlink group (every cross-seed), removes it from the client with its files, and grabs the replacement through Sonarr/Radarr — the manual multi-step swap, automated and confirmed at every step."
-        right={(parsed || picks) && (
-          <button onClick={reset} style={{ fontSize: 'var(--font-base)', padding: '6px 16px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)' }}>
-            ↺ Start over
-          </button>
-        )}
+        right={(parsed || picks) && <Button onClick={reset}>↺ Start over</Button>}
       />
 
       <WorkflowCrossLink
@@ -624,7 +589,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
       <WorkflowError message={error} />
       <RegistrationWarning refusal={ambiguity} />
 
-      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, boxShadow: 'var(--elev-1)', padding: '20px 22px' }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: '20px 22px' }}>
         {/* Step 1 — paste PM */}
         <StepShell n={1} active done={parsed} title="Paste the trump PM">
           {!parsed ? (
@@ -640,12 +605,12 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                 }}
               />
               <div style={{ display: 'flex', gap: 8 }}>
-                <ActionButton primary onClick={handleParse} disabled={busy != null || !pmText.trim()}>
+                <Button variant="primary" onClick={handleParse} disabled={busy != null || !pmText.trim()}>
                   {busy === 'parse' ? 'Parsing…' : 'Parse PM'}
-                </ActionButton>
-                <ActionButton onClick={() => setParsed(true)} disabled={busy != null}>
+                </Button>
+                <Button onClick={() => setParsed(true)} disabled={busy != null}>
                   Enter titles manually
-                </ActionButton>
+                </Button>
               </div>
             </div>
           ) : (
@@ -684,9 +649,9 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               </select>
             </label>
             {picks == null && (
-              <ActionButton primary onClick={handleFindTorrents} disabled={busy != null || !oldTitles.some(t => t.trim())}>
+              <Button variant="primary" onClick={handleFindTorrents} disabled={busy != null || !oldTitles.some(t => t.trim())}>
                 {busy === 'group' ? 'Finding torrents…' : 'Find matching torrents →'}
-              </ActionButton>
+              </Button>
             )}
           </div>
         </StepShell>
@@ -717,9 +682,11 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   )}
                 </div>
               ))}
-              <ActionButton primary onClick={handleExpandGroup} disabled={busy != null || !Object.values(selected).some(Boolean)}>
-                {busy === 'group' ? 'Expanding…' : 'Confirm & find cross-seeds →'}
-              </ActionButton>
+              <div>
+                <Button variant="primary" onClick={handleExpandGroup} disabled={busy != null || !Object.values(selected).some(Boolean)}>
+                  {busy === 'group' ? 'Expanding…' : 'Confirm & find cross-seeds →'}
+                </Button>
+              </div>
             </div>
           )}
 
@@ -733,12 +700,12 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               <LinkSummary group={group} />
               <PartialWarning group={group} ack={ackPartial} onAck={() => setAckPartial(a => !a)} />
               {skippedTitles.length > 0 && (
-                <div style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
+                <WorkflowWarning>
                   Skipped (no torrent selected):
                   <div style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 4 }}>
                     {skippedTitles.map((t, i) => <div key={i}>{t}</div>)}
                   </div>
-                </div>
+                </WorkflowWarning>
               )}
               <GroupTable torrents={group.torrents} />
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
@@ -749,12 +716,12 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               </div>
               {search == null && !conflict && (
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <ActionButton primary onClick={() => handleSearch()} disabled={busy != null}>
+                  <Button variant="primary" onClick={() => handleSearch()} disabled={busy != null}>
                     {busy === 'search' ? 'Searching…' : 'Find replacement release →'}
-                  </ActionButton>
-                  <button onClick={() => setGroup(null)} disabled={busy != null} style={{ fontSize: 'var(--font-base)', padding: '6px 14px', borderRadius: 7, cursor: 'pointer', border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text-dim)' }}>
+                  </Button>
+                  <Button variant="ghost" onClick={() => setGroup(null)} disabled={busy != null}>
                     ← Change selection
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
@@ -768,12 +735,12 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Two answers for which title this is</div>
               <div>{conflict.message}</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                <ActionButton primary onClick={() => handleSearch(conflict.path_item)} disabled={busy != null}>
+                <Button variant="primary" onClick={() => handleSearch(conflict.path_item)} disabled={busy != null}>
                   Search {conflict.path_item?.title}{conflict.path_item?.year ? ` (${conflict.path_item.year})` : ''} — your library files
-                </ActionButton>
-                <ActionButton onClick={() => handleSearch(conflict.title_item)} disabled={busy != null}>
+                </Button>
+                <Button onClick={() => handleSearch(conflict.title_item)} disabled={busy != null}>
                   Search {conflict.title_item?.title}{conflict.title_item?.year ? ` (${conflict.title_item.year})` : ''} — the new release name
-                </ActionButton>
+                </Button>
               </div>
             </WorkflowWarning>
           )}
@@ -821,9 +788,9 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               {others.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {recommended && (
-                    <button onClick={() => setShowOthers(s => !s)} style={{ alignSelf: 'flex-start', fontSize: 'var(--font-base)', padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}>
-                      {showOthers ? '▾' : '▸'} Other releases ({others.length}) — for edge cases
-                    </button>
+                    <Disclosure open={showOthers} onClick={() => setShowOthers(s => !s)}>
+                      Other releases ({others.length}) — for edge cases
+                    </Disclosure>
                   )}
                   {showOthers && (
                     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
@@ -880,16 +847,16 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           ) : step5 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {!clientDeleteAllowed && (
-                <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 8, color: 'var(--yellow)', fontSize: 'var(--font-base)' }}>
+                <WorkflowWarning>
                   Client deletion is disabled, so the group can’t be removed from here. Enable “Workflow torrent deletion” in <a onClick={() => onNavigate && onNavigate({ tab: 'config' })} style={{ color: 'var(--yellow)', cursor: 'pointer', textDecoration: 'underline' }}>Config → Torrent Source</a> — or grab the replacement only, and remove the torrents in {clientName} yourself.
-                </div>
+                </WorkflowWarning>
               )}
               {queued && (
                 <WorkflowWarning>
                   <div>{queued.message}</div>
                   <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                    <ActionButton onClick={() => handleExecute({ remove: queued.remove, force: true })} disabled={busy != null}>Grab anyway</ActionButton>
-                    <ActionButton onClick={() => { setChosenRelease(null); setQueued(null) }} disabled={busy != null}>Don’t grab</ActionButton>
+                    <Button onClick={() => handleExecute({ remove: queued.remove, force: true })} disabled={busy != null}>Grab anyway</Button>
+                    <Button onClick={() => { setChosenRelease(null); setQueued(null) }} disabled={busy != null}>Don’t grab</Button>
                   </div>
                 </WorkflowWarning>
               )}
@@ -900,14 +867,14 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                 {' '}There is no undo.
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <ActionButton danger onClick={handleRemove} disabled={busy != null || removeBlocked}
+                <Button variant="danger" onClick={handleRemove} disabled={busy != null || removeBlocked}
                   title={group?.partial && !ackPartial ? 'Acknowledge the incomplete group above first' : undefined}>
                   {busy === 'execute' ? 'Executing…' : (chosenRelease ? 'Grab replacement + remove group' : 'Remove group')}
-                </ActionButton>
+                </Button>
                 {chosenRelease && (
-                  <ActionButton onClick={() => handleExecute({ remove: false })} disabled={busy != null}>
+                  <Button onClick={() => handleExecute({ remove: false })} disabled={busy != null}>
                     Grab only
-                  </ActionButton>
+                  </Button>
                 )}
               </div>
             </div>
@@ -921,6 +888,6 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           onConfirm={() => handleExecute({ remove: true, ackOnlyCopy: true })} />
       )}
       <SpinKeyframes />
-    </div>
+    </WorkflowPage>
   )
 }

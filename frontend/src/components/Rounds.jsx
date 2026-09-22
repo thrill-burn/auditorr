@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { api } from '../api'
-import { LoadingRow, WorkflowError, useAuditComplete } from './workflows/shared'
+import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot } from './workflows/shared'
 
 // Rounds — "this is your prioritized (and rewarded) workflows page."
 //
@@ -120,10 +120,6 @@ function Icon({ name, size = 20, style }) {
       {I[name] || I.trophy}
     </svg>
   )
-}
-
-function Dot({ color, size = 7 }) {
-  return <span className="ui-status-dot" style={{ width: size, height: size, background: color, flexShrink: 0 }} />
 }
 
 function Track({ pct, color = 'var(--accent)', height = 4 }) {
@@ -470,20 +466,9 @@ function Prizes({ data }) {
         </div>
       )}
 
-      <button
-        onClick={() => setShowAll(s => !s)}
-        style={{
-          alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-          fontSize: 'var(--font-base)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
-        }}
-      >
+      <Disclosure open={showAll} onClick={() => setShowAll(s => !s)}>
         {showAll ? 'Hide feats' : `Show all ${feats.length} feats`}
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-          strokeLinecap="round" strokeLinejoin="round"
-          style={{ transform: showAll ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.5 }}>
-          <polyline points="9 18 15 12 9 6" />
-        </svg>
-      </button>
+      </Disclosure>
 
       {/* Grouped, in ascending difficulty within each group. Eighty unsorted
           one-offs read as a wall you cannot get a foothold in; named sections
@@ -762,20 +747,9 @@ function Timeline({ data }) {
       </div>
 
       {entries.length > HISTORY_PREVIEW && (
-        <button
-          onClick={() => setShowAll(s => !s)}
-          style={{
-            alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-            fontSize: 'var(--font-base)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
-          }}
-        >
+        <Disclosure open={showAll} onClick={() => setShowAll(s => !s)}>
           {showAll ? 'Show recent only' : `Show all ${entries.length}`}
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
-            strokeLinecap="round" strokeLinejoin="round"
-            style={{ transform: showAll ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.5 }}>
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
-        </button>
+        </Disclosure>
       )}
     </div>
   )
@@ -825,20 +799,17 @@ function WorkflowCard({ row, onNavigate, compact }) {
   // consistency guarantee than right-aligned did: the left edge is the same x
   // on every card whatever the copy says, where the right edge moved the moment
   // the column's width cap came off.
+  //
+  // The shared workflow Button at `md`, the same button as every workflow
+  // page's (UI pass, 2026-09-21). It was 9×18 against the pages' 8×16, with a
+  // 7×14 branch for compact cards that could never render: a compact card is
+  // exactly one with no button.
   const button = (actionable || row.state === 'blocked') ? (
-    <button
+    <Button variant={actionable ? 'primary' : 'secondary'}
       onClick={() => onNavigate(row.state === 'blocked' ? 'config' : row.id)}
-      style={{
-        alignSelf: 'flex-start', flexShrink: 0, marginTop: 10,
-        padding: compact ? '7px 14px' : '9px 18px', borderRadius: 'var(--r)', cursor: 'pointer',
-        border: `1px solid ${actionable ? 'var(--accent)' : 'var(--border2)'}`,
-        background: actionable ? 'var(--accent)' : 'var(--surface2)',
-        color: actionable ? '#0a0a0a' : 'var(--text)',
-        fontSize: 'var(--font-base)', fontWeight: 600,
-      }}
-    >
+      style={{ alignSelf: 'flex-start', marginTop: 10 }}>
       {row.state === 'blocked' ? 'Open Config →' : `Open ${row.label} →`}
-    </button>
+    </Button>
   ) : null
 
   return (
