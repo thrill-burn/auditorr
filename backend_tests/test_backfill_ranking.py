@@ -1,15 +1,19 @@
-"""Backfill ranks releases by closeness to the file already on disk (B3).
+"""Backfill offers two release orders, and each row carries its evidence (B3).
 
-The old order was the arr's interactive-search order — custom format score,
-quality weight, seeders — which answers "what is the best copy of this?". That
-is the upgrade question. Backfill asks "which of these is the file I already
-have?", and the page already rendered every input needed to answer it (the
-library file's size, quality and HDR) while the ranker read none of them. So
-the default pick was routinely a different, larger release: a bigger download,
-a library file replaced by another encode, and often a release the user's own
-quality profile had already passed over.
+`closest` ranks by closeness to the file already on disk — exact size, then
+within tolerance, then quality, then HDR, then seeders. It answers Backfill's
+narrow question, "which of these is the file I already have?", and grabbing its
+pick is the only outcome that leaves the library where it started with a seed
+behind it. The page renders every input it needs (the library file's size,
+quality and HDR) and the original ranker read none of them.
 
-The upgrade order is still there, as a choice.
+`upgrade` keeps the arr's interactive-search order — custom format score,
+quality weight, seeders — which answers "what is the best copy of this?". It is
+the **default** (amendment 2, 2026-09-22): that order is the one the user
+already tuned with their quality profile.
+
+The evidence is attached under both, so a row always shows what it is against
+the file on disk whichever order chose it.
 """
 import time
 from unittest.mock import patch
@@ -139,12 +143,22 @@ def _generate(release_rank=None):
     raise AssertionError('the generate job never finished')
 
 
-def test_a_run_picks_the_closest_release_by_default():
-    result = _generate()
+def test_a_run_picks_the_best_available_release_by_default():
+    """Amendment 2: the arr's own order is the default."""
+    assert _generate()['best_release']['guid'] == 'remux'
+    assert _generate('upgrade')['best_release']['guid'] == 'remux'
+
+
+def test_the_default_order_still_carries_the_closeness_evidence():
+    """Ranking by the arr's order must not cost the "vs file" readout."""
+    best = _generate()['best_release']
+
+    assert best['size_delta'] == 52_000_000_000
+    assert best['match'] == {'size': 'diff', 'quality': 'diff', 'hdr': ''}
+
+
+def test_a_run_can_ask_for_the_closest_release_instead():
+    result = _generate('closest')
 
     assert result['best_release']['guid'] == 'old'
     assert result['best_release']['match']['size'] == 'same'
-
-
-def test_a_run_can_ask_for_the_best_available_instead():
-    assert _generate('upgrade')['best_release']['guid'] == 'remux'

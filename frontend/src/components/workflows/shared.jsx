@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { tint } from '../../utils'
 
 // ── Staying current ───────────────────────────────────────────────────────────
 //
@@ -32,16 +33,9 @@ export function useAuditComplete(onComplete) {
 }
 
 // ── Tints ─────────────────────────────────────────────────────────────────────
-//
-// An alpha tint of a theme colour, as `color-mix` — **never `var(--x)NN`**. CSS
-// substitutes var() as tokens and does not re-parse the result, so
-// `var(--red)40` is a colour followed by a stray number: invalid, and the
-// browser drops the whole declaration. `border: 1px solid var(--red)40` draws
-// no border at all. That is how every warning box lost its box, every danger
-// button its hairline and every coloured row chip its border, for as long as
-// the idiom was in use (UI pass, 2026-09-21). `backend_tests/test_tint_idiom.py`
-// fails the build on the old spelling.
-export const tint = (color, pct) => `color-mix(in srgb, ${color} ${pct}%, transparent)`
+// `tint()` moved to utils.js once the rest of the app needed it too; it is
+// re-exported here because every workflow page imports it from the kit.
+export { tint }
 
 // ── Shared option lists ───────────────────────────────────────────────────────
 export const QUALITY_RES_OPTIONS = [

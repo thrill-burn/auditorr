@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Checkbox } from './workflows/shared'
-import { formatBytes } from '../utils'
+import { formatBytes, tint } from '../utils'
 
 // Comparison table — doubles as the chart's legend and tracker selector.
 // Whole-row click toggles a tracker's line; the colored checkbox mirrors the
@@ -36,7 +36,7 @@ function ValueCell({ stats, m, isActive, on, tracker, onNavigate }) {
       title={navigable ? `View ${tracker} ${m.label.toLowerCase()} in Torrents` : undefined}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 12px', height: '100%',
-        background: isActive ? m.color + '0d' : 'transparent', opacity: on ? 1 : 0.4,
+        background: isActive ? tint(m.color, 5) : 'transparent', opacity: on ? 1 : 0.4,
         cursor: navigable ? 'pointer' : 'default',
       }}>
       <span style={{
@@ -63,7 +63,7 @@ export default function CompareTable({
     return (
       <button onClick={() => onSort(m.key)} title={`Sort by ${m.label}`} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, width: '100%',
-        background: metricKey === m.key ? m.color + '14' : 'none', border: 'none', cursor: 'pointer',
+        background: metricKey === m.key ? tint(m.color, 8) : 'none', border: 'none', cursor: 'pointer',
         padding: '0 12px', height: '100%', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: 1,
         textTransform: 'uppercase', color: active ? 'var(--text)' : 'var(--text-dim)', fontWeight: active ? 700 : 500,
       }}>

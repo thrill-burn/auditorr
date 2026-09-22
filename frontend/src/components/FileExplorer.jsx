@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { FixedSizeList } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
-import { formatBytes, copyText, parseReleaseTitle } from '../utils'
+import { formatBytes, copyText, parseReleaseTitle, tint } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
 
@@ -63,13 +63,37 @@ function clientLinkTitle(node, torrentSource) {
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
+// A row's status word. It was written as a filled pill, but its background and
+// hairline were glued-alpha tints the browser dropped, so for as long as it has
+// existed it has rendered as coloured text — which is also what the
+// ration-colour rule asks for on a list where every row carries one. Kept that
+// way deliberately when the tints were fixed (R9); do not "restore" the fill.
 function Tag({ color, children }) {
   return (
     <span style={{
-      padding: '1px 7px', borderRadius: 99, fontSize: 11, fontWeight: 600,
-      fontFamily: 'var(--mono)', background: color + '22', color,
-      border: '1px solid ' + color + '44', whiteSpace: 'nowrap', flexShrink: 0,
+      padding: '1px 7px', fontSize: 11, fontWeight: 600,
+      fontFamily: 'var(--mono)', color, whiteSpace: 'nowrap', flexShrink: 0,
     }}>{children}</span>
+  )
+}
+
+// "Open in Sonarr/Radarr". Same story as Tag, and it was a hand-copy in both
+// row renderers. Hover underlines, because the wash it used to set never drew.
+function ArrSearchButton({ service, color, state, onClick }) {
+  return (
+    <button
+      title={`Search in ${service}`}
+      onClick={onClick}
+      style={{
+        background: 'none', border: 'none', padding: '1px 2px',
+        color, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
+        cursor: 'pointer', flexShrink: 0, textDecoration: 'none',
+      }}
+      onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
+      onMouseLeave={e => e.currentTarget.style.textDecoration = 'none'}
+    >
+      {state === 'loading' ? 'Opening…' : state === 'success' ? '✓ Opened' : state === 'error' ? '✗ Failed' : `Open in ${service}`}
+    </button>
   )
 }
 
@@ -80,7 +104,7 @@ function Chip({ active, color, onClick, children, style }) {
     <button onClick={onClick} style={Object.assign({
       padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, fontWeight: 500,
       border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
-      background: active ? 'var(--accent)18' : 'transparent',
+      background: active ? tint('var(--accent)', 9) : 'transparent',
       color: active ? 'var(--accent)' : 'var(--text-dim)',
       cursor: 'pointer', transition: 'all 0.12s', whiteSpace: 'nowrap',
       display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--sans)',
@@ -270,7 +294,7 @@ function FilterInput({ value, onChange, placeholder, width = 160 }) {
       style={{
         width, height: 28, padding: '0 10px',
         borderRadius: 'var(--r)', fontSize: 12,
-        border: `1px solid ${focused ? 'var(--accent)' : value ? 'var(--accent)66' : 'var(--border2)'}`,
+        border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
         background: focused || value ? 'var(--surface2)' : 'transparent',
         color: 'var(--text)', fontFamily: 'var(--mono)',
         outline: 'none', transition: 'all 0.12s',
@@ -293,7 +317,7 @@ function SizeInput({ value, onChange, placeholder }) {
       style={{
         width: 80, height: 28, padding: '0 8px',
         borderRadius: 'var(--r)', fontSize: 12,
-        border: `1px solid ${focused ? 'var(--accent)' : value ? 'var(--accent)66' : 'var(--border2)'}`,
+        border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
         background: focused || value ? 'var(--surface2)' : 'transparent',
         color: 'var(--text)', fontFamily: 'var(--mono)',
         outline: 'none', transition: 'all 0.12s',
@@ -570,34 +594,10 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         {showSearchButtons && showSonarr && (
-          <button
-            title="Search in Sonarr"
-            onClick={handleSonarrSearch}
-            style={{
-              background: 'var(--blue)18', border: '1px solid var(--blue)44', borderRadius: 99,
-              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
-            onMouseLeave={e => e.currentTarget.style.background = 'var(--blue)18'}
-          >
-            {sonarrState === 'loading' ? 'Opening…' : sonarrState === 'success' ? '✓ Opened' : sonarrState === 'error' ? '✗ Failed' : 'Open in Sonarr'}
-          </button>
+          <ArrSearchButton service="Sonarr" color="var(--blue)" state={sonarrState} onClick={handleSonarrSearch} />
         )}
         {showSearchButtons && showRadarr && (
-          <button
-            title="Search in Radarr"
-            onClick={handleRadarrSearch}
-            style={{
-              background: 'var(--yellow)18', border: '1px solid var(--yellow)44', borderRadius: 99,
-              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
-            onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)18'}
-          >
-            {radarrState === 'loading' ? 'Opening…' : radarrState === 'success' ? '✓ Opened' : radarrState === 'error' ? '✗ Failed' : 'Open in Radarr'}
-          </button>
+          <ArrSearchButton service="Radarr" color="var(--yellow)" state={radarrState} onClick={handleRadarrSearch} />
         )}
         <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
         {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
@@ -704,7 +704,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
       height: FLAT_ITEM_HEIGHT, boxSizing: 'border-box',
       padding: '6px 16px',
       borderBottom: '1px solid var(--border)',
-      background: isRevealed ? 'var(--accent)08' : 'var(--surface)',
+      background: isRevealed ? tint('var(--accent)', 3) : 'var(--surface)',
       borderLeft: isRevealed ? '2px solid var(--accent)' : 'none',
       overflow: 'hidden',
     }}>
@@ -729,26 +729,10 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
           {showSearchButtons && showSonarr && (
-            <button title="Search in Sonarr" onClick={handleSonarrSearch} style={{
-              background: 'var(--blue)18', border: '1px solid var(--blue)44', borderRadius: 99,
-              color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--blue)30'}
-            onMouseLeave={e => e.currentTarget.style.background = 'var(--blue)18'}>
-              {sonarrState === 'loading' ? 'Opening…' : sonarrState === 'success' ? '✓ Opened' : sonarrState === 'error' ? '✗ Failed' : 'Open in Sonarr'}
-            </button>
+            <ArrSearchButton service="Sonarr" color="var(--blue)" state={sonarrState} onClick={handleSonarrSearch} />
           )}
           {showSearchButtons && showRadarr && (
-            <button title="Search in Radarr" onClick={handleRadarrSearch} style={{
-              background: 'var(--yellow)18', border: '1px solid var(--yellow)44', borderRadius: 99,
-              color: 'var(--yellow)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'background 0.1s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--yellow)30'}
-            onMouseLeave={e => e.currentTarget.style.background = 'var(--yellow)18'}>
-              {radarrState === 'loading' ? 'Opening…' : radarrState === 'success' ? '✓ Opened' : radarrState === 'error' ? '✗ Failed' : 'Open in Radarr'}
-            </button>
+            <ArrSearchButton service="Radarr" color="var(--yellow)" state={radarrState} onClick={handleRadarrSearch} />
           )}
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
           {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
@@ -1283,7 +1267,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           <button onClick={copyPaths} title={`Copy ${filtered.length} paths to clipboard`} style={{
             padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
             border: `1px solid ${copied ? 'var(--green)' : 'var(--border2)'}`,
-            background: copied ? 'var(--green)18' : 'transparent',
+            background: copied ? tint('var(--green)', 9) : 'transparent',
             color: copied ? 'var(--green)' : 'var(--text-dim)',
             cursor: 'pointer', transition: 'all 0.15s',
           }}>{copied ? '✓ Copied!' : 'Copy Paths'}</button>

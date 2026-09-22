@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api'
+import { tint } from '../utils'
 
 function DataBrowser({ onSelectMedia, onSelectTorrents }) {
   const [result, setResult] = useState(null)
@@ -77,7 +78,7 @@ function StepIndicator({ current }) {
           <div style={{
             width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700,
-            background: current === n ? 'var(--accent)' : current > n ? 'var(--accent)30' : 'var(--surface2)',
+            background: current === n ? 'var(--accent)' : current > n ? tint('var(--accent)', 19) : 'var(--surface2)',
             color: current === n ? '#000' : current > n ? 'var(--accent)' : 'var(--text-dim)',
             border: `1px solid ${current >= n ? 'var(--accent)' : 'var(--border2)'}`,
             transition: 'all 0.2s',
@@ -178,7 +179,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
             <button key={src} onClick={() => { onChange('TORRENT_SOURCE', src); setTestStatus(null); setSourceInfo(null) }} style={{
               padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
               border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-              background: active ? 'var(--accent)18' : 'transparent',
+              background: active ? tint('var(--accent)', 9) : 'transparent',
               color: active ? 'var(--accent)' : 'var(--text-dim)',
               cursor: 'pointer', transition: 'all 0.12s',
             }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>

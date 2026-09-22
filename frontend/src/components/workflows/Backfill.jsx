@@ -139,13 +139,15 @@ const SORT_OPTIONS = [
   { value: 'alpha',    label: 'A → Z',      sub: 'alphabetical'        },
 ]
 
-// How each candidate's releases are ranked (B3). The arr's own order answers
-// "what is the best copy of this?" — the upgrade question. Backfill asks "which
-// of these is the file I already have?", so that is the default, and upgrading
-// while backfilling is something you pick on purpose rather than get by accident.
+// How each candidate's releases are ranked (B3, amendment 2). The arr's own
+// order answers "what is the best copy of this?" and is the default, because
+// that is the order the user already tuned with their quality profile. Closest
+// answers "which of these is the file I already have?" — the conservative pick,
+// for a backfill that must not change what the library holds. Either way every
+// row still shows its size/quality/HDR against the file on disk.
 const RANK_OPTIONS = [
-  { value: 'closest', label: 'Closest to my file',       sub: 'size, then quality'  },
   { value: 'upgrade', label: 'Best available (upgrade)', sub: "the arr's own order" },
+  { value: 'closest', label: 'Closest to my file',       sub: 'size, then quality'  },
 ]
 
 // ── Closeness to the file on disk (B3) ────────────────────────────────────────
@@ -580,9 +582,24 @@ function ResultItem({ item }) {
 
 // ── Prefs persistence ─────────────────────────────────────────────────────────
 const PREFS_KEY = 'auditorr_backfill_prefs'
+// Bumped when a default changes, and read by `loadDefaulted` alone. The persist
+// effect writes every pref on first render, so a stored value is NOT evidence
+// that anybody chose it — without this, changing a default would change nothing
+// for every install that has ever opened the page. A blob written before the
+// bump has its defaulted keys ignored once; the next save stamps the version and
+// the value is a real preference from then on.
+const PREFS_VERSION = 2
+
+function readPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }
+  catch { return {} }
+}
 function loadPref(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')[key] ?? fallback }
-  catch { return fallback }
+  return readPrefs()[key] ?? fallback
+}
+function loadDefaulted(key, fallback) {
+  const prefs = readPrefs()
+  return prefs.v === PREFS_VERSION ? (prefs[key] ?? fallback) : fallback
 }
 
 // The running search's id, per tab (B4). It lived only in component state, so
@@ -624,7 +641,7 @@ export default function Backfill({ onNavigate }) {
   const [titleSearch,     setTitleSearch]     = useState('')  // not persisted — ephemeral per-session
   const [searchCount,     setSearchCount]     = useState(() => loadPref('searchCount', 5))
   const [sort,            setSort]            = useState(() => loadPref('sort', 'largest'))
-  const [releaseRank,     setReleaseRank]     = useState(() => loadPref('releaseRank', 'closest'))
+  const [releaseRank,     setReleaseRank]     = useState(() => loadDefaulted('releaseRank', 'upgrade'))
   const [resFilter,       setResFilter]       = useState(() => loadPref('resFilter', []))
   const [sourceFilter,    setSourceFilter]    = useState(() => loadPref('sourceFilter', []))
   const [hdrFilter,       setHdrFilter]       = useState(() => loadPref('hdrFilter', []))
@@ -652,6 +669,7 @@ export default function Backfill({ onNavigate }) {
   useEffect(() => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({
+        v: PREFS_VERSION,
         sort, releaseRank, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders,
       }))
     } catch {}

@@ -3,7 +3,7 @@ import DatePicker from './DatePicker'
 import { FixedSizeList } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
 import { api } from '../api'
-import { formatBytes } from '../utils'
+import { formatBytes, tint } from '../utils'
 import { CHANGE_CATEGORIES } from './changeCategories'
 
 function useDebounce(value, delay) {
@@ -257,7 +257,7 @@ export default function ChangeLog({ onNavigate }) {
             style={{
               padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, cursor: 'pointer',
               border: catFilter.length === 0 ? '1px solid var(--accent)' : '1px solid var(--border2)',
-              background: catFilter.length === 0 ? 'var(--accent)18' : 'transparent',
+              background: catFilter.length === 0 ? tint('var(--accent)', 9) : 'transparent',
               color: catFilter.length === 0 ? 'var(--accent)' : 'var(--text-dim)',
               transition: 'all 0.12s',
             }}
@@ -272,7 +272,7 @@ export default function ChangeLog({ onNavigate }) {
                 style={{
                   padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 11, cursor: 'pointer',
                   border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
-                  background: active ? 'var(--accent)18' : 'transparent',
+                  background: active ? tint('var(--accent)', 9) : 'transparent',
                   color: active ? 'var(--accent)' : 'var(--text-dim)',
                   fontFamily: 'var(--sans)', transition: 'all 0.12s',
                   display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -313,13 +313,13 @@ export default function ChangeLog({ onNavigate }) {
               style={{
                 width: 200, height: 34, padding: '0 12px',
                 borderRadius: 'var(--r)', fontSize: 12,
-                border: `1px solid ${pathQuery ? 'var(--accent)66' : 'var(--border2)'}`,
+                border: `1px solid ${pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}`,
                 background: pathQuery ? 'var(--surface2)' : 'transparent',
                 color: 'var(--text)', fontFamily: 'var(--mono)',
                 outline: 'none', transition: 'all 0.12s',
               }}
               onFocus={e => e.target.style.borderColor = 'var(--accent)'}
-              onBlur={e => e.target.style.borderColor = pathQuery ? 'var(--accent)66' : 'var(--border2)'}
+              onBlur={e => e.target.style.borderColor = pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}
             />
           </div>
           {pathQuery && (
@@ -343,7 +343,7 @@ export default function ChangeLog({ onNavigate }) {
 
       {/* Error */}
       {error && (
-        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: 'var(--red)12', border: '1px solid var(--red)30', fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>
+        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>
           Failed to load change log: {error}
         </div>
       )}

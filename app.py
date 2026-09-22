@@ -4424,24 +4424,24 @@ def _release_closeness(release, local):
     return key, delta, {'size': size_match, 'quality': quality_match, 'hdr': hdr_match}
 
 
-def _rank_releases(rows, rank='closest', local=None):
+def _rank_releases(rows, rank='upgrade', local=None):
     """Order one candidate's filtered releases, and attach the evidence (B3).
 
-    Backfill's question is not the arr's. Interactive search ranks by custom
-    format score and quality weight, which answers *"what is the best copy of
-    this?"* — the upgrade question. Backfill asks *"which of these is the file I
-    already have?"*, and the answer is the release whose size and quality match
-    the one on disk: that is the release the file came from, and grabbing it is
-    the only outcome that leaves the library where it started with a seed behind
-    it. The top-scoring release instead means a bigger download, a library file
-    replaced by a different encode, and — for anyone whose quality profile
-    already had its chance at that upgrade — a release the arr passed over.
+    `upgrade` (the default, amendment 2) keeps the arr's own interactive-search
+    order — custom format score, quality weight, seeders — which answers *"what
+    is the best copy of this?"*. `closest` answers the other question, *"which
+    of these is the file I already have?"*: exact size, then within
+    `_SIZE_MATCH_TOLERANCE`, then quality, then HDR, then seeders. That is the
+    release the file on disk came from, so grabbing it leaves the library where
+    it started with a seed behind it — the conservative choice, and the one to
+    pick when a backfill must not change what the library holds.
 
-    `closest` (the default): exact size, then within `_SIZE_MATCH_TOLERANCE`,
-    then quality, then HDR, then seeders. `upgrade` keeps the arr's order, for
-    the user who does want to upgrade while backfilling — deliberately, not by
-    accident. Rows are expected in upgrade order already (`_apply_release_filters`)
-    and the sort is stable, so ties keep it.
+    **Both orders attach the same evidence** (`size_delta`, `match`), because the
+    closeness of a release to the file you already have is worth showing whether
+    or not it decides the order.
+
+    Rows are expected in upgrade order already (`_apply_release_filters`) and the
+    sort is stable, so ties keep it.
 
     Without a `local` file there is nothing to be close to and rows come back
     as given.
@@ -5155,12 +5155,13 @@ def workflows_generate():
                                                              season=candidate.get('season_number'),
                                                              episode_ids=episode_ids)]
                 filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter, hdr_filter=hdr_filter)
-                # Closest to the file on disk unless the user asked for the
-                # upgrade order (B3). `best` is what a single-release row grabs,
-                # so the default pick must answer Backfill's question, not the arr's.
+                # The arr's own order unless the user asked for closeness to the
+                # file on disk (B3, amendment 2). Either way the closeness
+                # evidence is attached, so every row still shows what it is
+                # against the file you already have.
                 filtered = _rank_releases(
                     filtered,
-                    'upgrade' if data.get('release_rank') == 'upgrade' else 'closest',
+                    'closest' if data.get('release_rank') == 'closest' else 'upgrade',
                     {'total_size':   candidate.get('total_size') or 0,
                      'file_quality': candidate.get('file_quality') or '',
                      'file_hdr':     candidate.get('file_hdr') or ''},

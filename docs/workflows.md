@@ -151,13 +151,15 @@ season-pack row. A release Sonarr couldn't match to any episode is still shown.
 
 ### Ranking
 
-**Closest to my file** (the default) puts first the release that looks like the
+**Best available (upgrade)** (the default) keeps Sonarr/Radarr's own order —
+custom format score, quality, seeders — the order your quality profile already
+tunes. **Closest to my file** instead puts first the release that looks like the
 file you already have: an exact size match, then one within 1% (a scene
-torrent's `.nfo` and sample), then the same quality, then the same HDR, then
-the most seeders. Each release shows its size against your file (`= exact`,
-`+1.2 GB`) and whether size, quality and HDR agree. **Best available
-(upgrade)** keeps Sonarr/Radarr's own order — custom format score, quality,
-seeders — for when you mean to upgrade while you backfill.
+torrent's `.nfo` and sample), then the same quality, then the same HDR, then the
+most seeders. That's the release your file came from, so grabbing it gets you a
+seed without changing what the library holds — pick it when a backfill shouldn't
+turn into an upgrade. Either way, each release shows its size against your file
+(`= exact`, `+1.2 GB`) and whether size, quality and HDR agree.
 
 Results can also be filtered by resolution (including **480p / SD**), source
 (including **DVD**) and HDR format. The chips go by the quality Sonarr/Radarr

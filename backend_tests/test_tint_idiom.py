@@ -1,4 +1,4 @@
-"""No colour on the workflow surfaces is tinted by gluing a hex alpha onto a var() (UI pass, 2026-09-21).
+"""No colour anywhere in the frontend is tinted by gluing a hex alpha onto a var() (UI pass, R9).
 
 The design system teaches `background: var(--accent)1a` as its alpha-tint idiom,
 and the workflow pages used it in 42 places. It does not work. CSS substitutes
@@ -14,17 +14,32 @@ looked like fourteen different styles. Rounds.jsx already said so in a comment;
 the idiom kept spreading anyway, so this is a test, like the type-scale guard
 beside it, rather than another comment.
 
-Tint through `tint(color, pct)` in `workflows/shared.jsx`, which is
+Tint through `tint(color, pct)` in `utils.js`, which is
 `color-mix(in srgb, <color> <pct>%, transparent)`. Three spellings are refused:
-`var(--x)NN`, a template literal `${X}NN`, and a string concatenation `+ 'NN'`
-— the last two produce the same broken value whenever the colour is a var().
+`var(--x)NN`, a template value `${…}NN`, and a string concatenation `+ 'NN'` —
+the last two produce the same broken value whenever the colour is a var().
+
+Scope is **every** `.jsx`, `.js` and `.css` file under `frontend/src`. It was
+the type guard's narrower scope until the rest of the app was converted too
+(2026-09-22): 42 sites on the workflow pages, then 55 more everywhere else.
+A hex colour may legitimately carry an alpha suffix, but the two are
+indistinguishable at a glance and the var() case is silent, so the rule is
+"tint() everywhere" — Dashboard's seed bar, the one real hex site, says
+`tint(color, 80)`.
 
 Comments are skipped, so the explanation can quote the thing it forbids.
 """
+import glob
 import os
 import re
 
-from backend_tests.test_type_scale import SCOPE, SRC
+from backend_tests.test_type_scale import SRC
+
+SCOPE = sorted(
+    glob.glob(os.path.join(SRC, '**', '*.jsx'), recursive=True)
+    + glob.glob(os.path.join(SRC, '**', '*.js'), recursive=True)
+    + glob.glob(os.path.join(SRC, '**', '*.css'), recursive=True)
+)
 
 _VAR_ALPHA = re.compile(r"var\(--[\w-]+\)[0-9a-fA-F]{2}(?![\w-])")
 # Any template substitution, not only a bare name: `${a || 'var(--x)'}40` and
@@ -75,7 +90,10 @@ def _rel(path):
     return os.path.relpath(path, SRC).replace(os.sep, '/')
 
 
-def test_no_colour_on_the_workflow_surfaces_is_tinted_with_a_glued_alpha():
+def test_no_colour_in_the_frontend_is_tinted_with_a_glued_alpha():
+    # The scope is a glob, so an empty one would pass this test without reading
+    # a thing. The frontend has ~30 files; ten is a floor, not a target.
+    assert len(SCOPE) > 10, f'scope collapsed to {len(SCOPE)} file(s) — is {SRC} right?'
     bad = []
     for path in SCOPE:
         with open(path, encoding='utf-8') as fh:

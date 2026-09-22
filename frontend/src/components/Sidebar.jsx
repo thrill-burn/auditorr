@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { scoreColor } from '../utils'
+import { scoreColor, tint } from '../utils'
 
 const NAV = [
   {
@@ -140,7 +140,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
 
   return (
     <>
-    <style>{`@keyframes sidebarBadgePulse { 0%,100% { opacity:0.8 } 50% { opacity:1; box-shadow:0 0 6px var(--accent)60 } }`}</style>
+    <style>{`@keyframes sidebarBadgePulse { 0%,100% { opacity:0.8 } 50% { opacity:1 } }`}</style>
     <aside style={{
       width: 'var(--sidebar-w)', flexShrink: 0,
       background: 'var(--surface)', borderRight: '1px solid var(--border)',
@@ -235,7 +235,10 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                               style={{
                                 fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-pill)',
                                 background: child.accent ? 'transparent' : 'var(--surface2)',
-                                border: `1px solid ${child.accent || 'var(--border2)'}40`,
+                                // A coloured count, not an outlined badge: this
+                                // border was a dropped tint and the number has
+                                // always read as plain text (R9).
+                                border: child.accent ? 'none' : '1px solid var(--border2)',
                                 color: child.accent || 'var(--text-dim)',
                                 flexShrink: 0, lineHeight: 1.5,
                               }}
@@ -341,7 +344,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {lastScanStatus === 'error' && statusMessage && (
-              <div style={{ padding: '5px 8px', borderRadius: 'var(--r-sm)', background: 'var(--red)12', border: '1px solid var(--red)30', marginBottom: 2 }}>
+              <div style={{ padding: '5px 8px', borderRadius: 'var(--r-sm)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, marginBottom: 2 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
                   ✗ {statusMessage}
                 </span>

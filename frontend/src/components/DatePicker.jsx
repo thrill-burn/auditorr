@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { tint } from '../utils'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DOW    = ['Su','Mo','Tu','We','Th','Fr','Sa']
@@ -71,7 +72,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
         onClick={handleOpen}
         style={{
           height: 34, padding: '0 12px', borderRadius: 'var(--r)', fontSize: 12,
-          border: `1px solid ${value ? 'var(--accent)66' : 'var(--border2)'}`,
+          border: `1px solid ${value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
           background: value ? 'var(--surface2)' : 'transparent',
           color: value ? 'var(--text)' : 'var(--text-dim)',
           fontFamily: 'var(--sans)', cursor: 'pointer', whiteSpace: 'nowrap',

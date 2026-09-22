@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { formatBytes, formatBytesCompact, scoreColor } from '../utils'
+import { formatBytes, formatBytesCompact, scoreColor, tint } from '../utils'
 import ChangesPanel from './ChangesPanel'
 import { RangePresets, TrackerDropdown } from './FilterBar'
 import { api } from '../api'
@@ -90,8 +90,9 @@ function hslToHex(h, s, l) {
 }
 
 // Interpolates hue, sat AND light so the endpoints can be deep/rich rather than
-// two equally-bright mid-tones. Returns hex (not hsl) so callers can append an
-// alpha suffix (e.g. `${dialColor(t)}1a`) the same way they do with scoreColor.
+// two equally-bright mid-tones. Returns hex (not hsl) so a caller can read the
+// colour itself; tint it with `tint(color, pct)` like any other, never by
+// gluing on a hex alpha — `scoreColor` returns a var(), where that is dropped.
 function dialColor(t) {
   const stops = DIAL_COLOR_STOPS
   const last = stops[stops.length - 1]
@@ -562,7 +563,10 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
               title={`Click to filter media by ${seg.count}× seeded`}
               style={{
                 flex: `0 0 ${pct}%`,
-                background: hovered === i ? color : color + 'cc',
+                // The one place the alpha suffix worked: SEED_COLORS are hex, so
+                // `#ef4444cc` is a valid 8-digit colour. Said as tint() anyway,
+                // so the guard needs no exception and a var() can't creep in.
+                background: hovered === i ? color : tint(color, 80),
                 transition: 'background 0.15s',
                 cursor: 'pointer',
                 position: 'relative',
@@ -1126,7 +1130,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {alerts.map((a, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 8, background: a.color + '10', border: `1px solid ${a.color}30` }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 8, background: tint(a.color, 6), border: `1px solid ${tint(a.color, 19)}` }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }} aria-hidden="true">
                     <path d="M8 2l7 12H1L8 2z" stroke={a.color} strokeWidth="1.5" strokeLinejoin="round" />
@@ -1135,7 +1139,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                   </svg>
                   <span style={{ fontSize: 12, color: 'var(--text)' }}>{a.msg}</span>
                 </div>
-                <button onClick={() => onNavigate(a.action)} style={{ padding: '4px 12px', borderRadius: 6, border: `1px solid ${a.color}40`, background: a.color + '15', color: a.color, fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0, marginLeft: 12 }}>
+                <button onClick={() => onNavigate(a.action)} style={{ padding: '4px 12px', borderRadius: 6, border: `1px solid ${tint(a.color, 25)}`, background: tint(a.color, 8), color: a.color, fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0, marginLeft: 12 }}>
                   {a.action.label} →
                 </button>
               </div>
@@ -1167,7 +1171,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
               <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
               <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
               <YAxis domain={[minScore, maxScore]} ticks={yTicks} allowDecimals={false} width={30} tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
-              <Tooltip content={<GrafanaTooltip color={c} />} cursor={{ stroke: c + '40', strokeWidth: 1, strokeDasharray: '3 3' }} />
+              <Tooltip content={<GrafanaTooltip color={c} />} cursor={{ stroke: tint(c, 25), strokeWidth: 1, strokeDasharray: '3 3' }} />
               <Area type="linear" dataKey="avg_score" stroke={c} strokeWidth={1.5} fill="url(#grafanaGrad)" dot={false} activeDot={{ r: 4, fill: c, stroke: 'var(--bg)', strokeWidth: 2 }} />
             </AreaChart>
           </ResponsiveContainer>

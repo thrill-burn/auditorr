@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { FixedSizeList } from 'react-window'
 import { api } from '../api'
+import { tint } from '../utils'
 
 const AUDIT_ROW_H = 36
 const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 0.8fr 1fr'
@@ -48,11 +49,12 @@ const AuditRunRow = ({ index, style, data }) => {
         {fmtDuration(run.duration_seconds)}
       </div>
       <div style={{ padding: '0 12px' }}>
+        {/* Coloured text, not a filled pill: its wash and hairline were
+            dropped tints, and a pill on every row of a long run list is more
+            hue than the ration-colour rule allows (R9). */}
         <span style={{
-          padding: '2px 8px', borderRadius: 99, fontSize: 11,
-          background: isOk ? 'var(--green)18' : 'var(--red)18',
+          padding: '2px 8px', fontSize: 11,
           color: isOk ? 'var(--green)' : 'var(--red)',
-          border: `1px solid ${isOk ? 'var(--green)' : 'var(--red)'}35`,
         }}>
           {isOk ? 'ok' : run.error_message?.split(':')[0] || 'error'}
         </span>
@@ -318,7 +320,7 @@ function SegToggle({ options, value, onChange, size = 'md' }) {
             style={{
               padding: pad, borderRadius: 'var(--r)', fontSize, fontWeight: 500,
               border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-              background: active ? 'var(--accent)18' : 'transparent',
+              background: active ? tint('var(--accent)', 9) : 'transparent',
               color: active ? 'var(--accent)' : 'var(--text-dim)',
               cursor: 'pointer', transition: 'all 0.12s',
             }}
@@ -950,7 +952,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                           {conn.id || `${service}-${index + 1}`}
                         </span>
                         {conn._stored_api_key && !conn.api_key && (
-                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--green)', border: '1px solid var(--green)35', borderRadius: 'var(--r)', padding: '1px 6px' }}>stored key</span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--green)', padding: '1px 6px' }}>stored key</span>
                         )}
                       </div>
                       <button onClick={() => removeArrConnection(index)} style={smallMonoButton}>
@@ -1104,7 +1106,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         {allWeightsZero && (
           <div style={{
             fontSize: 11, color: 'var(--red)', fontFamily: 'var(--mono)',
-            background: 'var(--red)14', border: '1px solid var(--red)33',
+            background: tint('var(--red)', 8), border: `1px solid ${tint('var(--red)', 20)}`,
             borderRadius: 'var(--r)', padding: '7px 10px', marginBottom: 18,
           }}>
             At least one category needs a weight above zero.
@@ -1204,7 +1206,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                   style={{
                     padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12,
                     border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-                    background: active ? 'var(--accent)18' : 'transparent',
+                    background: active ? tint('var(--accent)', 9) : 'transparent',
                     color: active ? 'var(--accent)' : 'var(--text-dim)',
                     cursor: 'pointer', transition: 'all 0.12s',
                   }}
@@ -1230,7 +1232,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                   style={{
                     padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12,
                     border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-                    background: active ? 'var(--accent)18' : 'transparent',
+                    background: active ? tint('var(--accent)', 9) : 'transparent',
                     color: active ? 'var(--accent)' : 'var(--text-dim)',
                     cursor: 'pointer', transition: 'all 0.12s',
                   }}
