@@ -987,7 +987,7 @@ export default function Backfill({ onNavigate }) {
                   </div>
                 </div>
               )}
-              <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount || 999} />
+              <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount} />
             </div>
 
             <div>

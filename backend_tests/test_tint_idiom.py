@@ -27,7 +27,11 @@ import re
 from backend_tests.test_type_scale import SCOPE, SRC
 
 _VAR_ALPHA = re.compile(r"var\(--[\w-]+\)[0-9a-fA-F]{2}(?![\w-])")
-_TEMPLATE_ALPHA = re.compile(r"\$\{[A-Za-z_][\w.]*\}[0-9a-fA-F]{2}(?![\w-])")
+# Any template substitution, not only a bare name: `${a || 'var(--x)'}40` and
+# `${ok ? 'var(--green)' : 'var(--red)'}35` both render `var(--x)NN`, and the
+# first version of this pattern (`\$\{name\}NN`) let both through outside the
+# guarded files (Sidebar's count badges, Config's run badges).
+_TEMPLATE_ALPHA = re.compile(r"\}[0-9a-fA-F]{2}(?![\w-])")
 _CONCAT_ALPHA = re.compile(r"""\+\s*(['"])[0-9a-fA-F]{2}\1""")
 _LINE_COMMENT = re.compile(r"(?<![:\w])//.*$")
 
@@ -86,6 +90,8 @@ def test_the_check_catches_each_spelling_and_skips_comments():
                  "border: '1px solid var(--red)40',",
                  "border: `1px solid ${isBest ? 'var(--accent)25' : 'x'}`",
                  "background: selected ? `${ACCENT}0e` : 'transparent',",
+                 "border: `1px solid ${child.accent || 'var(--border2)'}40`,",
+                 "border: `1px solid ${isOk ? 'var(--green)' : 'var(--red)'}35`,",
                  "background: color + '14',"]:
         assert check(line), line
     for line in ["background: tint('var(--accent)', 9),",
@@ -93,7 +99,9 @@ def test_the_check_catches_each_spelling_and_skips_comments():
                  "{/* The `var(--accent)55` alpha-suffix idiom */}",
                  "color: 'var(--text)', padding: '1px 7px',",
                  "href: 'https://example.com/a1'",
-                 "width: `${pad2(n)}px`"]:
+                 "width: `${pad2(n)}px`",
+                 "} else {",
+                 "{items.map(x => <X key={x.id} />)}"]:
         assert not check(line), line
     assert not check("/* one\n var(--red)40\n */ x")
     assert check("/* one */ border: '1px solid var(--red)40'")

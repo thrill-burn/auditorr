@@ -147,36 +147,57 @@ export function FolderChips({ folders, selected, onChange }) {
   )
 }
 
+// ── Option cards ──────────────────────────────────────────────────────────────
+// A single-choice row of cards: Backfill's Release Ranking, Priority and Search
+// Depth. Every card is one shape — a sans name over a mono detail — at one
+// minimum width, so the three rows line up in columns instead of each card
+// being as wide as its own words. Search Depth was a different control (a
+// centred 20px number in a taller box) until R9 made it these cards.
+//
+// The line heights are fixed, not `normal`: a <button> resets line-height to
+// normal, and under normal a glyph drawn from a fallback font (the → of A → Z)
+// makes its line, and so its card, taller than the ones beside it.
+// Colours ride `.wf-btn`'s custom properties, which is what gives them a hover.
+const OPTION_ROW  = { display: 'flex', gap: 8, flexWrap: 'wrap' }
+const OPTION_CARD = {
+  flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 2,
+  minWidth: 170, padding: '8px 14px', borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)',
+  fontFamily: 'var(--sans)', textAlign: 'left',
+}
+const OPTION_NAME = { fontSize: 'var(--font-base)', fontWeight: 600, lineHeight: '16px' }
+const OPTION_SUB  = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', lineHeight: '14px' }
+const optionColors = active => ({
+  '--btn-bg': active ? 'var(--surface3)' : 'var(--surface)',
+  '--btn-bg-hover': active ? 'var(--surface3)' : 'var(--surface2)',
+  '--btn-border': active ? 'var(--accent)' : 'var(--border)',
+  '--btn-fg': 'var(--text)', '--btn-fg-hover': 'var(--text)', '--btn-filter-hover': 'none',
+})
+
+function OptionCard({ active, onClick, disabled, name, sub }) {
+  return (
+    <button type="button" className="wf-btn" aria-pressed={active} onClick={onClick} disabled={disabled}
+      style={{ ...OPTION_CARD, ...optionColors(active) }}>
+      <span style={OPTION_NAME}>{name}</span>
+      <span style={OPTION_SUB}>{sub}</span>
+    </button>
+  )
+}
+
 // ── Sort picker ───────────────────────────────────────────────────────────────
 export function SortPicker({ options, value, onChange }) {
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      {options.map(opt => {
-        const active = value === opt.value
-        return (
-          <button
-            key={opt.value}
-            onClick={() => onChange(opt.value)}
-            style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-              padding: '8px 14px', borderRadius: 'var(--r)', cursor: 'pointer', minWidth: 110,
-              border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-              background: active ? 'var(--surface3)' : 'var(--surface)',
-              color: 'var(--text)',
-              boxShadow: 'var(--elev-1)',
-            }}
-          >
-            <span style={{ fontSize: 'var(--font-base)', fontWeight: 600 }}>{opt.label}</span>
-            <span style={{ fontSize: 'var(--font-sm)', marginTop: 2, opacity: 0.6, fontFamily: 'var(--mono)' }}>{opt.sub}</span>
-          </button>
-        )
-      })}
+    <div style={OPTION_ROW}>
+      {options.map(opt => (
+        <OptionCard key={opt.value} active={value === opt.value} onClick={() => onChange(opt.value)}
+          name={opt.label} sub={opt.sub} />
+      ))}
     </div>
   )
 }
 
 // ── Count picker ──────────────────────────────────────────────────────────────
-// null means "all available"
+// null means "all available". `max` is the real candidate count: at 0 the All
+// card is disabled rather than offering a number that is not there.
 export function CountPicker({ value, onChange, max }) {
   const inputRef = useRef(null)
   const [inputVal, setInputVal] = useState(() =>
@@ -205,63 +226,38 @@ export function CountPicker({ value, onChange, max }) {
     if (!isNaN(n) && n >= 1) onChange(max > 0 ? Math.min(n, max) : n)
   }
 
-  const cardStyle = (active) => ({
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    padding: '10px 22px', borderRadius: 'var(--r)', minWidth: 90,
-    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-    background: active ? 'var(--surface3)' : 'var(--surface)',
-    color: 'var(--text)',
-    boxShadow: 'var(--elev-1)',
-  })
-
-  const numStyle = (active) => ({
-    fontSize: 'var(--font-xl)', fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: '24px',
-    height: 24, display: 'flex', alignItems: 'center',
-    color: 'var(--text)',
-  })
-
-  const subStyle = { fontSize: 'var(--font-sm)', marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }
-
+  // The custom card holds an input, so it is a div in the card's clothes rather
+  // than an OptionCard (an input may not sit inside a button). Its underline is
+  // an inset shadow, not a border, so it adds no height to the row.
   return (
-    <div style={{ display: 'flex', gap: 10 }}>
-      <button onClick={handleFive} style={{ ...cardStyle(fiveActive), cursor: 'pointer', border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: fiveActive ? 'var(--accent)' : 'var(--border)' }}>
-        <span style={numStyle(fiveActive)}>5</span>
-        <span style={subStyle}>quick</span>
-      </button>
+    <div style={OPTION_ROW}>
+      <OptionCard active={fiveActive} onClick={handleFive} name="Quick" sub="5 candidates" />
 
-      <div style={{ ...cardStyle(customActive), cursor: 'text' }} onClick={() => inputRef.current?.focus()}>
-        <input
-          ref={inputRef}
-          type="number"
-          min={1}
-          max={max || undefined}
-          value={inputVal}
-          onChange={handleInput}
-          placeholder="—"
-          style={{
-            ...numStyle(customActive),
-            width: 54, textAlign: 'center',
-            background: 'none', border: 'none', outline: 'none',
-            padding: 0, margin: 0, fontWeight: 700,
-          }}
-        />
-        <span style={subStyle}>custom</span>
+      <div className="wf-btn" style={{ ...OPTION_CARD, ...optionColors(customActive), cursor: 'text' }}
+        onClick={() => inputRef.current?.focus()}>
+        <span style={OPTION_NAME}>Custom</span>
+        <span style={{ ...OPTION_SUB, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          <input
+            ref={inputRef}
+            type="number"
+            min={1}
+            max={max || undefined}
+            value={inputVal}
+            onChange={handleInput}
+            placeholder="—"
+            aria-label="Custom number of candidates"
+            style={{
+              ...OPTION_SUB, color: 'var(--text)', width: '5ch', height: 14,
+              padding: 0, margin: 0, background: 'none', border: 'none', outline: 'none',
+              boxShadow: 'inset 0 -1px 0 var(--border2)',
+            }}
+          />
+          candidates
+        </span>
       </div>
 
-      <button
-        onClick={handleAll}
-        disabled={max === 0}
-        style={{ ...cardStyle(allActive), cursor: max === 0 ? 'not-allowed' : 'pointer', opacity: max === 0 ? 0.4 : 1, border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: allActive ? 'var(--accent)' : 'var(--border)' }}
-      >
-        <span style={numStyle(allActive)}>{max > 0 ? max : '—'}</span>
-        <span style={subStyle}>all</span>
-      </button>
-
-      <style>{`
-        input[type=number]::-webkit-inner-spin-button,
-        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-        input[type=number] { -moz-appearance: textfield; }
-      `}</style>
+      <OptionCard active={allActive} onClick={handleAll} disabled={max === 0}
+        name="All" sub={max > 0 ? `${max.toLocaleString()} candidates` : 'none available'} />
     </div>
   )
 }
