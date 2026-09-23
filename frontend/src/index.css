@@ -39,6 +39,11 @@
   --font-md:   13px;  /* card titles, prominent values */
   --font-lg:   15px;  /* modal headers, tracker card titles */
   --font-xl:   20px;  /* page headers */
+  /* Control heights. A filter bar picks one and every control in it — button,
+     segmented track, input, select, clear ✕ — takes that height. `Button`'s sm
+     and md sizes are these two, so there is one small and one standard button. */
+  --control-h:    28px;  /* dense toolbars: File Explorer */
+  --control-h-lg: 34px;  /* page filter bars and forms: Dashboard, Trackers, Audit History, Config */
 }
 
 [data-theme="light"] {
@@ -152,38 +157,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   border-color: var(--border2);
 }
 
-.ui-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 16px;
-  border-radius: var(--r);
-  border: 1px solid var(--border2);
-  background: var(--surface2);
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 600;
-  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1), border-color 0.12s cubic-bezier(.4,0,.2,1);
-}
-
-.ui-button:hover {
-  background: var(--surface3);
-  border-color: var(--border2);
-}
-
-.ui-button-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #0a0a0a;
-}
-
-.ui-button-ghost {
-  background: transparent;
-  color: var(--text-dim);
-}
-
 /* The workflow Button (components/workflows/shared.jsx). Each variant hands its
    colours in as custom properties, so one rule gives all of them a hover — an
    inline background would outrank :hover. Tints are color-mix(), never a hex
@@ -212,27 +185,76 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .wf-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) { .wf-btn { transition: none; } }
 
-.ui-chip {
+/* Segmented (shared.jsx): every filter row in the app, one choice or several.
+   An inset track whose selected segments are raised. The selected state carries
+   an inset hairline as well as the shadow, because on the dark theme's
+   near-black page the shadow draws nothing and a selected segment is otherwise
+   a fill one shade darker than its track, carried by its bold label alone.
+   Inset, so selecting never changes a size. The track is exactly the bar's
+   control height: the segment's min-height is that less the 3px padding. */
+.seg {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  border: 1px solid var(--border2);
-  border-radius: 99px;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  max-width: 100%;
+  flex-shrink: 0;
+  background: var(--surface3);
+  border-radius: var(--r);
+}
+.seg-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+  min-height: calc(var(--control-h) - 6px);
+  padding: 2px 12px;
+  border: none;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-dim);
   font-family: var(--sans);
-  font-size: 12px;
+  font-size: var(--font-base);
   font-weight: 500;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
 }
+.seg-lg .seg-opt { min-height: calc(var(--control-h-lg) - 6px); padding: 4px 12px; }
+.seg-mono .seg-opt { font-family: var(--mono); }
+.seg-opt:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
+.seg-opt[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--seg-fg, var(--text));
+  font-weight: 700;
+  box-shadow: var(--elev-1), inset 0 0 0 1px var(--border2);
+}
+.seg-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.seg-opt:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .seg-opt { transition: none; } }
 
-/* `var(--accent)18` here was worse than a missing wash: a declaration that is
-   invalid after substitution is dropped rather than falling back to the rule
-   above, so the selected chip rendered *less* filled than an unselected one. */
-.ui-chip-active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  border-color: var(--accent);
+/* IconButton / CloseButton (shared.jsx): a quiet square for a line icon — the
+   close ×, a collapse chevron. An icon has no font size, which is what retired
+   the type guard's two close-× exemptions. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
 }
+.icon-btn:hover { color: var(--text); background: var(--surface2); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .ui-input {
   background: var(--surface2);

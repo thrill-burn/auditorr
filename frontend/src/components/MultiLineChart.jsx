@@ -23,7 +23,9 @@ export default function MultiLineChart({ series, dates, unit, baseline, height =
     return () => window.removeEventListener('resize', measure)
   }, [])
 
-  const gL = 48, gR = 16, gT = 14, gB = 28
+  // gR holds half of the last date label, which is centred on its tick: "Sep 22"
+  // at --font-sm mono is ~40px wide, and at 16 its last digit was cut off.
+  const gL = 48, gR = 24, gT = 14, gB = 28
   const plotW = Math.max(10, w - gL - gR), plotH = height - gT - gB
   const N = dates.length
   const denom = Math.max(1, N - 1)
@@ -78,12 +80,12 @@ export default function MultiLineChart({ series, dates, unit, baseline, height =
         {yTicks.map((t, i) => (
           <g key={i}>
             <line x1={gL} y1={y(t)} x2={w - gR} y2={y(t)} stroke="var(--border)" strokeOpacity={i === 0 ? 0.9 : 0.45} strokeDasharray={i === 0 ? '0' : '2 4'} />
-            <text x={gL - 8} y={y(t) + 3.5} textAnchor="end" fontFamily="var(--mono)" fontSize="10" fill="var(--text-faint)">{fmtAxis(t, unit)}</text>
+            <text x={gL - 8} y={y(t) + 3.5} textAnchor="end" fontFamily="var(--mono)" style={{ fontSize: 'var(--font-sm)' }} fill="var(--text-faint)">{fmtAxis(t, unit)}</text>
           </g>
         ))}
         {/* x labels */}
         {xTickIdx.map(i => (
-          <text key={i} x={x(i)} y={height - 9} textAnchor="middle" fontFamily="var(--mono)" fontSize="10" fill="var(--text-faint)">{dates[i]}</text>
+          <text key={i} x={x(i)} y={height - 9} textAnchor="middle" fontFamily="var(--mono)" style={{ fontSize: 'var(--font-sm)' }} fill="var(--text-faint)">{dates[i]}</text>
         ))}
         {/* crosshair */}
         {cursor != null && <line x1={x(cursor)} y1={gT} x2={x(cursor)} y2={gT + plotH} stroke="var(--border2)" strokeWidth="1" />}
@@ -115,10 +117,10 @@ export default function MultiLineChart({ series, dates, unit, baseline, height =
           background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 8,
           boxShadow: 'var(--shadow-pop)', padding: '8px 10px', pointerEvents: 'none', zIndex: 5, minWidth: 150,
         }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--text-dim)', marginBottom: 6, letterSpacing: 0.5 }}>{dates[cursor]}</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 6, letterSpacing: 0.5 }}>{dates[cursor]}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {tipRows.map(r => (
-              <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 11.5 }}>
+              <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, flexShrink: 0 }} />
                 <span style={{ color: 'var(--text-dim)', flex: 1 }}>{r.name}</span>
                 <span style={{ color: 'var(--text)', fontWeight: 600 }}>{fmtVal(r.v, unit)}</span>

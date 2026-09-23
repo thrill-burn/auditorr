@@ -1,8 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { tint } from '../utils'
+import { Button } from './workflows/shared'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DOW    = ['Su','Mo','Tu','We','Th','Fr','Sa']
+
+// The month arrows are line chevrons, like Disclosure's: as ‹ › characters they
+// needed a 16px glyph size the type scale does not have.
+function Chevron({ dir }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points={dir === 'left' ? '15 18 9 12 15 6' : '9 18 15 12 9 6'} />
+    </svg>
+  )
+}
 
 function parseYMD(str) {
   if (!str) return null
@@ -71,7 +83,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
       <button
         onClick={handleOpen}
         style={{
-          height: 34, padding: '0 12px', borderRadius: 'var(--r)', fontSize: 12,
+          height: 'var(--control-h-lg)', padding: '0 12px', borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
           border: `1px solid ${value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
           background: value ? 'var(--surface2)' : 'transparent',
           color: value ? 'var(--text)' : 'var(--text-dim)',
@@ -93,21 +105,23 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
         }}>
           {/* Month / year nav */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <button onClick={prevMonth} style={{ ...btnBase, fontSize: 16, padding: '0 8px', color: 'var(--text-dim)' }}
+            <button onClick={prevMonth} title="Previous month" aria-label="Previous month"
+              style={{ ...btnBase, display: 'inline-flex', padding: 6, color: 'var(--text-dim)' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'none'}>‹</button>
-            <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
+              onMouseLeave={e => e.currentTarget.style.background = 'none'}><Chevron dir="left" /></button>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
               {MONTHS[viewMonth]} {viewYear}
             </span>
-            <button onClick={nextMonth} style={{ ...btnBase, fontSize: 16, padding: '0 8px', color: 'var(--text-dim)' }}
+            <button onClick={nextMonth} title="Next month" aria-label="Next month"
+              style={{ ...btnBase, display: 'inline-flex', padding: 6, color: 'var(--text-dim)' }}
               onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'none'}>›</button>
+              onMouseLeave={e => e.currentTarget.style.background = 'none'}><Chevron dir="right" /></button>
           </div>
 
           {/* Day-of-week headers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', marginBottom: 4 }}>
             {DOW.map(d => (
-              <div key={d} style={{ fontFamily: 'var(--sans)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '2px 0' }}>{d}</div>
+              <div key={d} style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '2px 0' }}>{d}</div>
             ))}
           </div>
 
@@ -124,7 +138,7 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
                   onClick={() => handleSelect(day)}
                   style={{
                     ...btnBase,
-                    fontSize: 11, textAlign: 'center', padding: '5px 0',
+                    fontSize: 'var(--font-sm)', textAlign: 'center', padding: '5px 0',
                     border: isToday && !isSelected ? '1px solid var(--border2)' : '1px solid transparent',
                     background: isSelected ? 'var(--accent)' : 'transparent',
                     color: isSelected ? '#0a0a0a' : isToday ? 'var(--accent)' : 'var(--text)',
@@ -141,17 +155,10 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
 
           {/* Clear */}
           {value && (
-            <button
-              onClick={() => { onChange(''); setOpen(false) }}
-              style={{
-                ...btnBase, marginTop: 10, width: '100%', padding: '5px 0',
-                border: '1px solid var(--border2)', fontSize: 11, color: 'var(--text-dim)',
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-            >
+            <Button size="sm" variant="ghost" onClick={() => { onChange(''); setOpen(false) }}
+              style={{ marginTop: 10, width: '100%' }}>
               Clear
-            </button>
+            </Button>
           )}
         </div>
       )}

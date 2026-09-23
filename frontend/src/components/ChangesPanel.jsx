@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { formatBytes } from '../utils'
 import { CHANGE_CATEGORIES } from './changeCategories'
+import { Segmented, IconButton, CloseButton, Dot } from './workflows/shared'
 
 const ROW_HEIGHT = 36
 
@@ -60,12 +61,12 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
           <span className="ui-section-title" style={{ textAlign: 'left' }}>
             Changes since last scan
           </span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             {fmtDate(prevRanAt)} - {fmtDate(currRanAt)}
           </span>
           {scoreDelta != null && (
             <span style={{
-              fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
+              fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600,
               color: 'var(--text-dim)',
               border: '1px solid var(--border2)',
               borderRadius: 6, padding: '2px 8px',
@@ -76,29 +77,21 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
             </span>
           )}
           {hasItems && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               {allRows.length} {allRows.length === 1 ? 'change' : 'changes'}
             </span>
           )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <button
-            className="ui-button ui-button-ghost"
-            onClick={handleCollapse}
-            title={collapsed ? 'Expand changes' : 'Collapse changes'}
-            style={{ width: 28, height: 28, padding: 0 }}
-          >
-            {collapsed ? '+' : '-'}
-          </button>
-          <button
-            className="ui-button ui-button-ghost"
-            onClick={handleDismiss}
-            title="Dismiss changes"
-            style={{ width: 28, height: 28, padding: 0 }}
-          >
-            x
-          </button>
+          <IconButton onClick={handleCollapse} title={collapsed ? 'Expand changes' : 'Collapse changes'} pressed={!collapsed}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+              strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+              style={{ transform: collapsed ? 'none' : 'rotate(180deg)', transition: 'transform 0.15s' }}>
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </IconButton>
+          <CloseButton onClick={handleDismiss} title="Dismiss changes" />
         </div>
       </div>
 
@@ -109,29 +102,15 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
             padding: '9px 16px', borderBottom: '1px solid var(--border)',
             background: 'var(--surface2)',
           }}>
-            <button
-              onClick={() => setActiveFilter(null)}
-              className={`ui-chip${activeFilter === null ? ' ui-chip-active' : ''}`}
-              style={{ padding: '3px 10px' }}
-            >
-              All ({allRows.length})
-            </button>
-            {CHANGE_CATEGORIES.map(cat => {
-              const n = counts[cat.key]
-              if (!n) return null
-              const active = activeFilter === cat.key
-              return (
-                <button
-                  key={cat.key}
-                  onClick={() => setActiveFilter(active ? null : cat.key)}
-                  className={`ui-chip${active ? ' ui-chip-active' : ''}`}
-                  style={{ padding: '3px 10px' }}
-                >
-                  <span className="ui-status-dot" style={{ width: 6, height: 6, background: cat.color }} />
-                  {cat.label} ({n})
-                </button>
-              )
-            })}
+            <Segmented label="Change category" value={activeFilter} onChange={setActiveFilter}
+              options={[
+                { value: null, label: `All (${allRows.length})` },
+                ...CHANGE_CATEGORIES.filter(cat => counts[cat.key]).map(cat => ({
+                  value: cat.key,
+                  icon: <Dot color={cat.color} size={6} />,
+                  label: `${cat.label} (${counts[cat.key]})`,
+                })),
+              ]} />
           </div>
 
           <div style={{
@@ -161,7 +140,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
               }}>
                 <div>
                   <span style={{
-                    fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
+                    fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600,
                     color: 'var(--text)',
                     border: '1px solid var(--border2)',
                     borderRadius: 6, padding: '1px 7px',
@@ -180,7 +159,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
                       title="Click to reveal in file explorer"
                       style={{
                         background: 'none', border: 'none', cursor: 'pointer',
-                        fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)',
+                        fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)',
                         textAlign: 'left', width: '100%', overflow: 'hidden',
                         textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: 0,
                         display: 'block',
@@ -192,7 +171,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
                     </button>
                   ) : (
                     <span style={{
-                      fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
+                      fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)',
                       display: 'block', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>
@@ -203,7 +182,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
 
                 <div style={{ textAlign: 'right' }}>
                   {row.size != null && (
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
                       {formatBytes(row.size)}
                     </span>
                   )}

@@ -69,75 +69,140 @@ export const HDR_STYLE = {
   'HLG':    { bg: '#0f766e20', color: '#2dd4bf' },
 }
 
-// ── Chip ──────────────────────────────────────────────────────────────────────
-export function Chip({ active, onClick, children }) {
+// ── Segmented ─────────────────────────────────────────────────────────────────
+//
+// Every filter row in the app, whether it takes one choice or several (UI pass,
+// 2026-09-22). There were fifteen control shapes doing five jobs — pills,
+// bordered pairs, separate rectangles, two inset tracks at different radii —
+// and once tint() drew them properly a pill and a button looked equally
+// clickable. The rule now: **a pill is never interactive**. Filters are this
+// track; actions are `Button`; a single choice that needs a detail line is an
+// OptionCard; the any/only/hide flag is `FlagToggle`.
+//
+// Multi-select is the same track with several segments lit — by the user's
+// choice over a row of separate toggle buttons, which retired CLAUDE.md's old
+// "multi-select filters stay pill Chips" rule. `allLabel` puts a leading
+// All/Any segment that is lit when nothing else is and clears the rest.
+//
+// options: [{ value, label, icon?, title?, disabled?, tone? }]. `icon` renders
+// before the label (a status Dot, a chart swatch). `tone` colours the label of
+// a selected segment — Triage's destructive "All cross-seeds" is red.
+// size: 'sm' is var(--control-h) (dense toolbars), 'lg' is var(--control-h-lg).
+// mono: for readouts (7d/30d/90d); words are sans. Styling lives in index.css's
+// `.seg`, because the hover and the selected hairline cannot be inline.
+export function Segmented({
+  options, value, onChange, multiple = false, allLabel, size = 'sm', mono = false, disabled = false, label,
+}) {
+  const chosen = multiple ? (value || []) : value
+  const isOn = v => (multiple ? chosen.includes(v) : chosen === v)
+  const pick = v => {
+    if (!multiple) onChange(v)
+    else onChange(isOn(v) ? chosen.filter(x => x !== v) : [...chosen, v])
+  }
+  const cls = 'seg' + (size === 'lg' ? ' seg-lg' : '') + (mono ? ' seg-mono' : '')
   return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 'var(--font-base)', cursor: 'pointer',
-        border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
-        background: active ? tint('var(--accent)', 9) : 'transparent',
-        color: active ? 'var(--accent)' : 'var(--text-dim)',
-        fontWeight: active ? 600 : 400,
-      }}
-    >
+    <div role="group" aria-label={label} className={cls}>
+      {multiple && allLabel != null && (
+        <button type="button" className="seg-opt" aria-pressed={chosen.length === 0} disabled={disabled}
+          onClick={() => onChange([])}>
+          {allLabel}
+        </button>
+      )}
+      {options.map(opt => (
+        <button key={String(opt.value)} type="button" className="seg-opt"
+          aria-pressed={isOn(opt.value)} disabled={disabled || opt.disabled} title={opt.title}
+          style={opt.tone ? { '--seg-fg': opt.tone } : undefined}
+          onClick={() => pick(opt.value)}>
+          {opt.icon}
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// Backfill's filter rows. `value` is a list; [] means no restriction.
+export function OptionFilter({ options, value, onChange, allLabel = 'Any' }) {
+  return <Segmented multiple allLabel={allLabel} options={options} value={value} onChange={onChange} />
+}
+
+export function IndexerFilter({ options, value, onChange, allLabel = 'All' }) {
+  return (
+    <Segmented multiple allLabel={allLabel} value={value} onChange={onChange}
+      options={options.map(o => ({ value: o, label: o }))} />
+  )
+}
+
+export function FolderFilter({ folders, selected, onChange }) {
+  return (
+    <Segmented multiple allLabel="All" value={selected} onChange={onChange}
+      options={folders.map(({ name, count }) => ({
+        value: name,
+        label: <>{name} <span style={{ opacity: 0.55, fontWeight: 400 }}>({count})</span></>,
+      }))} />
+  )
+}
+
+// ── Flag toggle ───────────────────────────────────────────────────────────────
+// A tri-state filter for an orthogonal boolean: 'any' (neither pressed — the
+// flag does not constrain), 'only' (+), 'hide' (−). File Explorer's Duplicates
+// and Excluded, and its per-tracker include/exclude. It is a pair and not a
+// Segmented because it is not a choice among options: "orphaned but not
+// excluded" is a status *and* a flag, which is why issue #23 split them.
+const FLAG = {
+  minHeight: 'var(--control-h)', padding: '4px 10px', fontFamily: 'var(--sans)',
+  fontSize: 'var(--font-base)', lineHeight: 1.25,
+}
+const flagLook = (on, color) => ({
+  fontWeight: on ? 600 : 500,
+  '--btn-bg': on ? 'var(--surface2)' : 'transparent',
+  '--btn-border': on ? color : 'var(--border2)',
+  '--btn-fg': on ? color : 'var(--text-dim)',
+  '--btn-bg-hover': on ? 'var(--surface3)' : 'var(--surface2)',
+  '--btn-fg-hover': on ? color : 'var(--text)',
+  '--btn-filter-hover': 'none',
+})
+
+export function FlagToggle({ label, value, onChange, onlyTitle, hideTitle }) {
+  const only = value === 'only'
+  const hide = value === 'hide'
+  return (
+    <div role="group" style={{ display: 'inline-flex', flexShrink: 0 }}>
+      <button type="button" className="wf-btn" aria-pressed={only} title={onlyTitle}
+        onClick={() => onChange(only ? 'any' : 'only')}
+        style={{ ...FLAG, ...flagLook(only, 'var(--green)'), borderRadius: 'var(--r) 0 0 var(--r)', borderRight: 'none' }}>
+        + {label}
+      </button>
+      <button type="button" className="wf-btn" aria-pressed={hide} title={hideTitle}
+        onClick={() => onChange(hide ? 'any' : 'hide')}
+        style={{ ...FLAG, ...flagLook(hide, 'var(--red)'), borderRadius: '0 var(--r) var(--r) 0' }}>
+        −
+      </button>
+    </div>
+  )
+}
+
+// ── Icon buttons ──────────────────────────────────────────────────────────────
+// A quiet square for a line icon. Styling is index.css's `.icon-btn`.
+export function IconButton({ onClick, title, pressed, children }) {
+  return (
+    <button type="button" className="icon-btn" onClick={onClick} title={title} aria-label={title} aria-pressed={pressed}>
       {children}
     </button>
   )
 }
 
-// ── Labeled chips (options with separate display labels) ─────────────────────
-export function LabeledChips({ options, value, onChange, allLabel = 'Any' }) {
-  const noneSelected = value.length === 0
+// One close control for every modal, popover and panel. It was a × character at
+// 20px in three places, 16px in two and a 13px icon in Rounds — and the two
+// characters inside the type guard's scope each needed an exemption.
+export function CloseButton({ onClick, title = 'Close', size = 14 }) {
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>{allLabel}</Chip>
-      {options.map(opt => {
-        const active = value.includes(opt.value)
-        return (
-          <Chip key={opt.value} active={active}
-            onClick={() => onChange(active ? value.filter(v => v !== opt.value) : [...value, opt.value])}>
-            {opt.label}
-          </Chip>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Indexer chips ─────────────────────────────────────────────────────────────
-export function IndexerChips({ options, value, onChange, allLabel = 'All' }) {
-  const noneSelected = value.length === 0
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>{allLabel}</Chip>
-      {options.map(opt => {
-        const active = value.includes(opt)
-        return (
-          <Chip key={opt} active={active}
-            onClick={() => onChange(active ? value.filter(v => v !== opt) : [...value, opt])}>
-            {opt}
-          </Chip>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Folder chips ──────────────────────────────────────────────────────────────
-export function FolderChips({ folders, selected, onChange }) {
-  const noneSelected = selected.length === 0
-  const toggle = name => onChange(selected.includes(name) ? selected.filter(f => f !== name) : [...selected, name])
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>All</Chip>
-      {folders.map(({ name, count }) => (
-        <Chip key={name} active={selected.includes(name)} onClick={() => toggle(name)}>
-          {name} <span style={{ opacity: 0.55 }}>({count})</span>
-        </Chip>
-      ))}
-    </div>
+    <IconButton onClick={onClick} title={title}>
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        strokeWidth="2.25" strokeLinecap="round" aria-hidden="true">
+        <path d="M18 6 6 18M6 6l12 12" />
+      </svg>
+    </IconButton>
   )
 }
 
@@ -747,11 +812,23 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
 // Colours arrive as custom properties and index.css's `.wf-btn` applies them,
 // because an inline `background` would outrank the `:hover` rule. Pass `href`
 // for a link that looks like a button (the arr and client chips).
+//
+// md and sm are exactly index.css's two control heights (UI pass, 2026-09-22),
+// so a button sits level with the inputs and segmented tracks in any bar. They
+// rendered 33 and 25px before, one step short of each; the user chose to grow
+// them everywhere over fencing the heights inside filter bars, which would have
+// left two different "small" buttons in the app.
+//
+// `square` makes an icon-only button as wide as it is tall (the ✕ that clears a
+// search, the changes panel's collapse); give it an `ariaLabel`. `pressed` marks
+// a toggle (File Explorer's Trackers panel) for assistive tech — the caller
+// picks the variant that shows it.
 const BUTTON_SIZE = {
-  md:   { fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)' },
-  sm:   { fontSize: 'var(--font-base)', fontWeight: 500, padding: '4px 10px', borderRadius: 'var(--r)' },
+  md:   { fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)', minHeight: 'var(--control-h-lg)' },
+  sm:   { fontSize: 'var(--font-base)', fontWeight: 500, padding: '4px 10px', borderRadius: 'var(--r)', minHeight: 'var(--control-h)' },
   chip: { fontSize: 'var(--font-sm)', fontWeight: 500, padding: '1px 7px', borderRadius: 'var(--r-sm)', fontFamily: 'var(--mono)' },
 }
+const SQUARE = { md: 'var(--control-h-lg)', sm: 'var(--control-h)' }
 
 const BUTTON_LOOK = {
   primary:   { bg: 'var(--accent)', border: 'var(--accent)', fg: '#0a0a0a', filter: 'brightness(1.08)' },
@@ -765,21 +842,23 @@ const toneLook = c => ({ bg: tint(c, 8), border: tint(c, 30), fg: c, bgHover: ti
 
 export function Button({
   variant = 'secondary', size = 'md', tone, href, target, rel,
-  onClick, disabled, title, style, children,
+  onClick, disabled, title, ariaLabel, pressed, square = false, style, children,
 }) {
   const look = tone ? toneLook(tone) : (BUTTON_LOOK[variant] || BUTTON_LOOK.secondary)
   const css = {
     fontFamily: 'var(--sans)', lineHeight: 1.25, ...(BUTTON_SIZE[size] || BUTTON_SIZE.md),
+    ...(square && SQUARE[size] ? { padding: 0, width: SQUARE[size] } : null),
     '--btn-bg': look.bg, '--btn-border': look.border, '--btn-fg': look.fg,
     '--btn-bg-hover': look.bgHover || look.bg, '--btn-fg-hover': look.fgHover || look.fg,
     '--btn-filter-hover': look.filter || 'none',
     ...style,
   }
   if (href) {
-    return <a className="wf-btn" href={href} target={target} rel={rel} onClick={onClick} title={title} style={css}>{children}</a>
+    return <a className="wf-btn" href={href} target={target} rel={rel} onClick={onClick} title={title} aria-label={ariaLabel} style={css}>{children}</a>
   }
   return (
-    <button className="wf-btn" type="button" onClick={onClick} disabled={disabled} title={title} style={css}>
+    <button className="wf-btn" type="button" onClick={onClick} disabled={disabled} title={title}
+      aria-label={ariaLabel} aria-pressed={pressed} style={css}>
       {children}
     </button>
   )

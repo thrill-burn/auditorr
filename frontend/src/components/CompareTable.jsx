@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Checkbox } from './workflows/shared'
+import { Checkbox, Button } from './workflows/shared'
 import { formatBytes, tint } from '../utils'
 
 // Comparison table — doubles as the chart's legend and tracker selector.
@@ -40,7 +40,7 @@ function ValueCell({ stats, m, isActive, on, tracker, onNavigate }) {
         cursor: navigable ? 'pointer' : 'default',
       }}>
       <span style={{
-        fontFamily: 'var(--mono)', fontSize: 12.5, fontWeight: isActive ? 700 : 500,
+        fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: isActive ? 700 : 500,
         color: navigable && hov ? m.color : zero ? 'var(--text-faint)' : isActive ? 'var(--text)' : 'var(--text-dim)',
         textDecoration: navigable && hov ? 'underline' : 'none', textUnderlineOffset: 3,
         transition: 'color 0.1s',
@@ -64,7 +64,7 @@ export default function CompareTable({
       <button onClick={() => onSort(m.key)} title={`Sort by ${m.label}`} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, width: '100%',
         background: metricKey === m.key ? tint(m.color, 8) : 'none', border: 'none', cursor: 'pointer',
-        padding: '0 12px', height: '100%', fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: 1,
+        padding: '0 12px', height: '100%', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', letterSpacing: 1,
         textTransform: 'uppercase', color: active ? 'var(--text)' : 'var(--text-dim)', fontWeight: active ? 700 : 500,
       }}>
         {m.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
@@ -78,7 +78,7 @@ export default function CompareTable({
       <div style={{ display: 'grid', gridTemplateColumns: grid, background: 'var(--surface2)', borderBottom: '1px solid var(--border)', height: 34, alignItems: 'stretch' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px' }}>
           <Checkbox checked={allOn} indeterminate={someOn} onChange={onToggleAll} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--text-dim)' }}>Tracker</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', letterSpacing: 1, textTransform: 'uppercase', color: 'var(--text-dim)' }}>Tracker</span>
         </div>
         {metrics.map(m => <Th key={m.key} m={m} />)}
       </div>
@@ -108,13 +108,13 @@ export default function CompareTable({
                 {on && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#0b0b0c" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
               </span>
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 600, color: on ? 'var(--text)' : 'var(--text-dim)',
+                fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 600, color: on ? 'var(--text)' : 'var(--text-dim)',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: on ? 1 : 0.55,
               }}>{t}</span>
-              {emph && <button onClick={(e) => { e.stopPropagation(); onSolo(t) }} title="Show only this tracker" style={{
-                marginLeft: 'auto', flexShrink: 0, background: 'var(--surface3)', border: '1px solid var(--border2)', borderRadius: 5, cursor: 'pointer',
-                padding: '2px 8px', fontFamily: 'var(--mono)', fontSize: 10.5, letterSpacing: 0.5, color: 'var(--text-dim)',
-              }}>only</button>}
+              {emph && (
+                <Button size="chip" variant="subtle" title="Show only this tracker" style={{ marginLeft: 'auto' }}
+                  onClick={(e) => { e.stopPropagation(); onSolo(t) }}>only</Button>
+              )}
             </div>
             {/* value cells */}
             {metrics.map(m => (

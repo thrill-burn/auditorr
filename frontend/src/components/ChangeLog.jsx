@@ -5,6 +5,7 @@ import AutoSizer from 'react-virtualized-auto-sizer'
 import { api } from '../api'
 import { formatBytes, tint } from '../utils'
 import { CHANGE_CATEGORIES } from './changeCategories'
+import { Button, Segmented, Dot } from './workflows/shared'
 
 function useDebounce(value, delay) {
   const [debounced, setDebounced] = useState(value)
@@ -56,12 +57,12 @@ function ChangeRow({ index, style, data }) {
       {/* Date */}
       <div style={{ overflow: 'hidden', paddingRight: 8 }}>
         <span style={{
-          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)',
+          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block',
         }}>
           {fmtDate(row.ran_at)}
           {fmtDuration(row.duration_seconds) && (
-            <span style={{ color: 'var(--text-dim)', opacity: 0.6, fontSize: 10 }}>
+            <span style={{ color: 'var(--text-dim)', opacity: 0.6, fontSize: 'var(--font-sm)' }}>
               {' · '}{fmtDuration(row.duration_seconds)}
             </span>
           )}
@@ -71,7 +72,7 @@ function ChangeRow({ index, style, data }) {
       <div>
         {row.trigger && (
           <span style={{
-            fontFamily: 'var(--mono)', fontSize: 11,
+            fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
             color: 'var(--text-dim)', background: 'var(--surface2)',
             border: '1px solid var(--border2)', borderRadius: 'var(--r-sm)', padding: '1px 6px',
             whiteSpace: 'nowrap',
@@ -83,7 +84,7 @@ function ChangeRow({ index, style, data }) {
       {/* Type */}
       <div>
         <span style={{
-          fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600,
+          fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600,
           color: 'var(--text)',
           border: '1px solid var(--border2)',
           borderRadius: 'var(--r)', padding: '1px 7px', whiteSpace: 'nowrap',
@@ -99,7 +100,7 @@ function ChangeRow({ index, style, data }) {
           title={row.path}
           onClick={() => onNavigate && onNavigate(row.path, row.tab)}
           style={{
-            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
+            fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)',
             display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             cursor: onNavigate ? 'pointer' : 'default',
             textDecoration: 'none',
@@ -113,7 +114,7 @@ function ChangeRow({ index, style, data }) {
       {/* Size */}
       <div style={{ textAlign: 'right' }}>
         {row.size != null && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             {formatBytes(row.size)}
           </span>
         )}
@@ -233,12 +234,12 @@ export default function ChangeLog({ onNavigate }) {
           { label: 'Removed',  val: boxStats.removed,  size: boxStats.removedSize,  color: 'var(--red)' },
         ].map(c => (
           <div key={c.label} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)', padding: '10px 14px' }}>
-            <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', textTransform: 'none', letterSpacing: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', textTransform: 'none', letterSpacing: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
               {c.color !== 'var(--text)' && <span className="ui-status-dot" style={{ background: c.color }} />}
               {c.label}
             </div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>{entries == null ? '—' : c.val.toLocaleString()}</div>
-            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{entries == null ? '' : formatBytes(c.size)}</div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)' }}>{entries == null ? '—' : c.val.toLocaleString()}</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{entries == null ? '' : formatBytes(c.size)}</div>
           </div>
         ))}
       </div>
@@ -250,100 +251,67 @@ export default function ChangeLog({ onNavigate }) {
         marginBottom: 14,
         flexShrink: 0,
       }}>
-        {/* Row 1: category chips */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 0 4px' }}>
-          <button
-            onClick={() => setCatFilter([])}
-            style={{
-              padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, cursor: 'pointer',
-              border: catFilter.length === 0 ? '1px solid var(--accent)' : '1px solid var(--border2)',
-              background: catFilter.length === 0 ? tint('var(--accent)', 9) : 'transparent',
-              color: catFilter.length === 0 ? 'var(--accent)' : 'var(--text-dim)',
-              transition: 'all 0.12s',
-            }}
-          >All</button>
-          {CHANGE_CATEGORIES.map(cat => {
-            const n = counts[cat.key] ?? 0
-            if (!n && entries != null) return null
-            const active = catFilter.includes(cat.key)
-            return (
-              <button key={cat.key}
-                onClick={() => setCatFilter(prev => active ? prev.filter(k => k !== cat.key) : [...prev, cat.key])}
-                style={{
-                  padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 11, cursor: 'pointer',
-                  border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
-                  background: active ? tint('var(--accent)', 9) : 'transparent',
-                  color: active ? 'var(--accent)' : 'var(--text-dim)',
-                  fontFamily: 'var(--sans)', transition: 'all 0.12s',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                }}
-              >
-                <span className="ui-status-dot" style={{ width: 6, height: 6, background: cat.color }} />
-                {cat.label}{n ? ` (${n.toLocaleString()})` : ''}
-              </button>
-            )
-          })}
+        {/* A page filter bar: every control is var(--control-h-lg), the height
+            the date pickers already had. The categories are many-of-N, one
+            track with All as its reset — the same shape as every filter row. */}
+        {/* Row 1: categories */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 0 6px' }}>
+          <Segmented multiple size="lg" allLabel="All" label="Change categories"
+            value={catFilter} onChange={setCatFilter}
+            options={CHANGE_CATEGORIES
+              .filter(cat => (counts[cat.key] ?? 0) || entries == null)
+              .map(cat => {
+                const n = counts[cat.key] ?? 0
+                return {
+                  value: cat.key,
+                  icon: <Dot color={cat.color} size={6} />,
+                  label: `${cat.label}${n ? ` (${n.toLocaleString()})` : ''}`,
+                }
+              })} />
         </div>
         {/* Row 2: date range + search + export */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '4px 0 8px' }}>
-          <span style={{ fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text-dim)' }}>Date:</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '0 0 8px' }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>Date:</span>
           <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>—</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>—</span>
           <DatePicker value={dateTo} onChange={setDateTo} placeholder="To" />
           {(dateFrom || dateTo) && (
-            <button
-              onClick={() => { setDateFrom(''); setDateTo('') }}
-              style={{
-                padding: '2px 7px', borderRadius: 'var(--r-pill)', fontSize: 11,
-                border: '1px solid var(--border2)', background: 'transparent',
-                color: 'var(--text-dim)', cursor: 'pointer',
-              }}
-            >✕</button>
+            <Button variant="ghost" square onClick={() => { setDateFrom(''); setDateTo('') }}
+              title="Clear dates" ariaLabel="Clear dates">✕</Button>
           )}
 
-          <div style={{ width: 1, height: 18, background: 'var(--border2)', margin: '0 2px' }} />
+          <div style={{ width: 1, height: 18, background: 'var(--border2)', margin: '0 3px' }} />
 
           {/* Path search */}
-          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-            <input
-              type="text"
-              value={pathQuery}
-              onChange={e => setPathQuery(e.target.value)}
-              placeholder="🔎 search path…"
-              style={{
-                width: 200, height: 34, padding: '0 12px',
-                borderRadius: 'var(--r)', fontSize: 12,
-                border: `1px solid ${pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}`,
-                background: pathQuery ? 'var(--surface2)' : 'transparent',
-                color: 'var(--text)', fontFamily: 'var(--mono)',
-                outline: 'none', transition: 'all 0.12s',
-              }}
-              onFocus={e => e.target.style.borderColor = 'var(--accent)'}
-              onBlur={e => e.target.style.borderColor = pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}
-            />
-          </div>
+          <input
+            type="text"
+            value={pathQuery}
+            onChange={e => setPathQuery(e.target.value)}
+            placeholder="Search path…"
+            style={{
+              width: 200, height: 'var(--control-h-lg)', padding: '0 12px',
+              borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
+              border: `1px solid ${pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}`,
+              background: pathQuery ? 'var(--surface2)' : 'transparent',
+              color: 'var(--text)', fontFamily: 'var(--mono)',
+              outline: 'none', transition: 'all 0.12s',
+            }}
+            onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+            onBlur={e => e.target.style.borderColor = pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}
+          />
           {pathQuery && (
-            <button onClick={() => setPathQuery('')} style={{
-              padding: '2px 7px', borderRadius: 'var(--r-pill)', fontSize: 11,
-              border: '1px solid var(--border2)', background: 'transparent',
-              color: 'var(--text-dim)', cursor: 'pointer',
-            }}>✕</button>
+            <Button variant="ghost" square onClick={() => setPathQuery('')} title="Clear search" ariaLabel="Clear search">✕</Button>
           )}
 
           <div style={{ flex: 1 }} />
 
-          <button onClick={exportCSV} style={{
-            height: 34, display: 'inline-flex', alignItems: 'center',
-            padding: '0 12px', borderRadius: 'var(--r-pill)', fontSize: 12, flexShrink: 0,
-            border: '1px solid var(--border2)', background: 'transparent',
-            color: 'var(--text-dim)', cursor: 'pointer',
-          }}>Export CSV</button>
+          <Button variant="subtle" onClick={exportCSV}>Export CSV</Button>
         </div>
       </div>
 
       {/* Error */}
       {error && (
-        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>
+        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--red)' }}>
           Failed to load change log: {error}
         </div>
       )}
@@ -356,11 +324,11 @@ export default function ChangeLog({ onNavigate }) {
           flex: 1, minHeight: 0,
         }}>
           {entries == null ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 12 }}>
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)' }}>
               Loading…
             </div>
           ) : rows.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 12 }}>
+            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)' }}>
               {allRows.length === 0
                 ? 'No changes recorded yet. Changes appear after two or more successful audits.'
                 : 'No entries match the current filters.'}
@@ -380,7 +348,7 @@ export default function ChangeLog({ onNavigate }) {
               }}>
                 {['Date', 'Trigger', 'Type', 'Path', 'Size'].map((col, i) => (
                   <span key={col} style={{
-                    fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600, color: 'var(--text-dim)',
+                    fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text-dim)',
                     letterSpacing: 0, textTransform: 'none',
                     textAlign: i === 4 ? 'right' : 'left',
                   }}>{col}</span>
@@ -409,7 +377,7 @@ export default function ChangeLog({ onNavigate }) {
       )}
 
       {!error && entries != null && rows.length > 0 && (
-        <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'right' }}>
+        <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'right' }}>
           {rows.length.toLocaleString()} {rows.length === 1 ? 'change' : 'changes'}
           {entries.length > 0 && ` across ${entries.length.toLocaleString()} ${entries.length === 1 ? 'audit' : 'audits'}`}
         </div>

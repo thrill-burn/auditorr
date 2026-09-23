@@ -1,5 +1,5 @@
 import React from 'react'
-import { tint } from './workflows/shared'
+import { tint, CloseButton } from './workflows/shared'
 
 // An import watch has more ways to end than done and error (Phase 12, S07).
 // `done` is the only success, and the server reaches it only when the arr's file
@@ -88,10 +88,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
             </span>
           )}
         </div>
-        <button onClick={onClose} style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: 'var(--text-dim)', fontSize: 16, lineHeight: 1, padding: '0 2px',
-        }}>×</button>
+        <CloseButton onClick={onClose} />
       </div>
 
       {/* Job list */}

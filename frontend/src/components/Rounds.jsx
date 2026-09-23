@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { api } from '../api'
-import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot } from './workflows/shared'
+import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot, CloseButton } from './workflows/shared'
 
 // Rounds — "this is your prioritized (and rewarded) workflows page."
 //
@@ -289,14 +289,7 @@ function LadderDetail({ l, onClose }) {
             {l.blurb}
           </p>
         </div>
-        <button onClick={onClose} title="Close"
-          style={{
-            background: 'none', border: 'none', padding: 4, cursor: 'pointer',
-            color: 'var(--text-faint)', display: 'flex', flexShrink: 0,
-          }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2.5" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
-        </button>
+        <CloseButton onClick={onClose} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(216px, 1fr))', gap: 4 }}>

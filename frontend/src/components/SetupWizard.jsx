@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api'
 import { tint } from '../utils'
+import { Button, Segmented, Disclosure } from './workflows/shared'
 
 function DataBrowser({ onSelectMedia, onSelectTorrents }) {
   const [result, setResult] = useState(null)
@@ -9,18 +10,12 @@ function DataBrowser({ onSelectMedia, onSelectTorrents }) {
     api.browseData().then(setResult).catch(() => setResult({ dirs: [], missing: true }))
   }, [])
 
-  const btnStyle = {
-    padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border2)',
-    background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)',
-    fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap',
-  }
-
   if (!result) return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>Browsing /data…</div>
+    <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 6 }}>Browsing /data…</div>
   )
 
   if (result.missing || result.dirs.length === 0) return (
-    <div style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.55 }}>
+    <div style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', lineHeight: 1.55 }}>
       {result.missing
         ? <span style={{ color: '#f59e0b' }}>⚠ /data is not mounted or is empty. Check your Docker volume configuration — auditorr expects your data to be mounted at /data.</span>
         : <span style={{ color: 'var(--text-dim)' }}>No subdirectories found in /data.</span>
@@ -36,11 +31,11 @@ function DataBrowser({ onSelectMedia, onSelectTorrents }) {
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" style={{ flexShrink: 0 }}>
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>/data/{dir}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>/data/{dir}</span>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-            <button style={btnStyle} onClick={() => onSelectMedia('/data/' + dir)}>→ Media</button>
-            <button style={btnStyle} onClick={() => onSelectTorrents('/data/' + dir)}>→ Torrents</button>
+            <Button size="chip" variant="subtle" onClick={() => onSelectMedia('/data/' + dir)}>→ Media</Button>
+            <Button size="chip" variant="subtle" onClick={() => onSelectTorrents('/data/' + dir)}>→ Torrents</Button>
           </div>
         </div>
       ))}
@@ -52,17 +47,17 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
   const [focused, setFocused] = useState(false)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, ...style }}>
-      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{label}</label>
-      {hint && <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45 }}>{hint}</span>}
+      <label style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>{label}</label>
+      {hint && <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45 }}>{hint}</span>}
       <input
         type={type} value={value ?? ''} placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
         style={{
-          padding: '8px 11px', borderRadius: 'var(--r)',
+          height: 'var(--control-h-lg)', padding: '0 11px', borderRadius: 'var(--r)',
           border: `1px solid ${focused ? 'var(--accent)' : 'var(--border2)'}`,
           background: 'var(--surface2)', color: 'var(--text)',
-          fontFamily: 'var(--mono)', fontSize: 13, outline: 'none',
+          fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', outline: 'none',
           transition: 'border 0.12s', width: '100%', boxSizing: 'border-box',
         }}
       />
@@ -77,7 +72,7 @@ function StepIndicator({ current }) {
         <React.Fragment key={n}>
           <div style={{
             width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700,
+            fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 700,
             background: current === n ? 'var(--accent)' : current > n ? tint('var(--accent)', 19) : 'var(--surface2)',
             color: current === n ? '#000' : current > n ? 'var(--accent)' : 'var(--text-dim)',
             border: `1px solid ${current >= n ? 'var(--accent)' : 'var(--border2)'}`,
@@ -94,24 +89,6 @@ function StepIndicator({ current }) {
       ))}
     </div>
   )
-}
-
-function btnPrimary(disabled) {
-  return {
-    padding: '8px 20px', borderRadius: 'var(--r)', border: 'none',
-    background: disabled ? 'var(--border2)' : 'var(--accent)',
-    color: disabled ? 'var(--text-dim)' : '#0a0a0a',
-    fontWeight: 700, fontSize: 12, cursor: disabled ? 'default' : 'pointer',
-    transition: 'all 0.12s',
-  }
-}
-
-function btnSecondary() {
-  return {
-    padding: '8px 16px', borderRadius: 'var(--r)',
-    border: '1px solid var(--border2)', background: 'var(--surface2)',
-    color: 'var(--text)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-  }
 }
 
 const fmtSize = b => {
@@ -165,26 +142,17 @@ function Step1({ data, onChange, onNext, onSkip }) {
 
   return (
     <>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 1 of 3</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Torrent Source</div>
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16, lineHeight: 1.55 }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 1 of 3</div>
+      <div style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Torrent Source</div>
+      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 16, lineHeight: 1.55 }}>
         Connect auditorr to your torrent client. Choose qBittorrent for a single instance, or qui for multi-instance setups.
       </p>
 
       {/* Source toggle */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {['qbit', 'qui'].map(src => {
-          const active = data.TORRENT_SOURCE === src
-          return (
-            <button key={src} onClick={() => { onChange('TORRENT_SOURCE', src); setTestStatus(null); setSourceInfo(null) }} style={{
-              padding: '7px 18px', borderRadius: 'var(--r)', fontSize: 12, fontWeight: 500,
-              border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-              background: active ? tint('var(--accent)', 9) : 'transparent',
-              color: active ? 'var(--accent)' : 'var(--text-dim)',
-              cursor: 'pointer', transition: 'all 0.12s',
-            }}>{src === 'qbit' ? 'qBittorrent' : 'qui'}</button>
-          )
-        })}
+      <div style={{ marginBottom: 20 }}>
+        <Segmented size="lg" label="Torrent source" value={data.TORRENT_SOURCE}
+          onChange={src => { onChange('TORRENT_SOURCE', src); setTestStatus(null); setSourceInfo(null) }}
+          options={[{ value: 'qbit', label: 'qBittorrent' }, { value: 'qui', label: 'qui' }]} />
       </div>
 
       {!isQui ? (
@@ -199,7 +167,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
         </>
       ) : (
         <>
-          <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 14 }}>
+          <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 14 }}>
             qui aggregates multiple qBittorrent instances behind one API endpoint — ideal for multi-instance setups sharing a common filesystem (e.g. mergerfs).
           </p>
           <Field label="Host URL" placeholder="http://192.168.1.x:7476"
@@ -212,33 +180,33 @@ function Step1({ data, onChange, onNext, onSkip }) {
       )}
 
       {advancing && (
-        <div style={{ marginBottom: 14, padding: '10px 14px', borderRadius: 'var(--r)', border: '1px solid #f59e0b', background: '#f59e0b12', fontSize: 12, color: '#f59e0b' }}>
+        <div style={{ marginBottom: 14, padding: '10px 14px', borderRadius: 'var(--r)', border: '1px solid #f59e0b', background: '#f59e0b12', fontSize: 'var(--font-base)', color: '#f59e0b' }}>
           ⚠ A torrent source is required for auditorr to function. You can finish configuring it later in Settings.
         </div>
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: sourceInfo ? 8 : 16 }}>
-        <button onClick={handleTest} style={btnSecondary()}>Test Connection</button>
+        <Button onClick={handleTest}>Test Connection</Button>
         {testStatus && (testStatus.loading || !testStatus.ok) && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
             {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
           </span>
         )}
       </div>
       {sourceInfo && testStatus?.ok && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--green)' }}>
             {isQui
               ? `✓ Connected · qui${sourceInfo.version ? ` v${sourceInfo.version}` : ''} · ${sourceInfo.summary}`
               : `✓ Connected · qBittorrent ${sourceInfo.version || ''}`}
           </div>
           {isQui && sourceInfo.skipped?.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              <button onClick={() => setQuiSkippedOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-                {quiSkippedOpen ? '▼' : '▶'} {sourceInfo.skipped.length} skipped
-              </button>
+              <Disclosure open={quiSkippedOpen} onClick={() => setQuiSkippedOpen(o => !o)}>
+                {sourceInfo.skipped.length} skipped
+              </Disclosure>
               {quiSkippedOpen && sourceInfo.skipped.map((inst, i) => (
-                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', paddingLeft: 10, lineHeight: 1.6 }}>
+                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', paddingLeft: 10, lineHeight: 1.6 }}>
                   {inst.name || inst.id}: {inst._skip_reason}
                 </div>
               ))}
@@ -247,7 +215,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button onClick={handleNext} style={btnPrimary(false)}>Next →</button>
+        <Button variant="primary" onClick={handleNext}>Next →</Button>
       </div>
 
       <SkipLink onSkip={onSkip} />
@@ -296,9 +264,9 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
 
   return (
     <>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 2 of 3</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Data Paths</div>
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 2 of 3</div>
+      <div style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Data Paths</div>
+      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
         Tell auditorr where your media library and torrent downloads live inside this container.
       </p>
 
@@ -314,15 +282,11 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
           const srcLabel = isQui ? 'qui' : 'qBittorrent'
           return (
             <>
-              <button
-                onClick={hasHost ? handleFetchSavePath : undefined}
-                disabled={!hasHost}
-                style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: hasHost ? 'pointer' : 'default', opacity: hasHost ? 1 : 0.4 }}
-              >
+              <Button size="sm" onClick={handleFetchSavePath} disabled={!hasHost}>
                 {fetchSavePathStatus === 'loading' ? 'Fetching…' : `Fetch from ${srcLabel}`}
-              </button>
-              {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in {srcLabel}</span>}
-              {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
+              </Button>
+              {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No torrents found in {srcLabel}</span>}
+              {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ Could not connect</span>}
             </>
           )
         })()}
@@ -335,7 +299,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         style={{ marginBottom: 6 }}
       />
       {pathStatus && !pathStatus.loading && !pathStatus.error && (
-        <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: mediaOk ? 'var(--green)' : 'var(--red)' }}>
+        <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: mediaOk ? 'var(--green)' : 'var(--red)' }}>
           {mediaOk ? '✓ Path exists' : '✗ ' + (pathStatus.media_path?.message || 'Path not found')}
         </div>
       )}
@@ -347,13 +311,13 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         style={{ marginBottom: 6 }}
       />
       {pathStatus && !pathStatus.loading && !pathStatus.error && (
-        <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 11, color: localOk ? 'var(--green)' : 'var(--red)' }}>
+        <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: localOk ? 'var(--green)' : 'var(--red)' }}>
           {localOk ? '✓ Path exists' : '✗ ' + (pathStatus.local_path?.message || 'Path not found')}
         </div>
       )}
 
       <div style={{ marginTop: 20, marginBottom: 8 }}>
-        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Container filesystem</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Container filesystem</div>
         <DataBrowser
           onSelectMedia={v => { onChange('MEDIA_PATH', v); clearStatus() }}
           onSelectTorrents={v => { onChange('LOCAL_PATH', v); clearStatus() }}
@@ -361,23 +325,23 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 16, marginBottom: 12 }}>
-        <button onClick={handleTestPaths} style={btnSecondary()}>
+        <Button onClick={handleTestPaths}>
           {pathStatus?.loading ? 'Testing…' : 'Test Paths'}
-        </button>
+        </Button>
         {!pathStatus && (
-          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Verify these paths are visible inside the container</span>
+          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Verify these paths are visible inside the container</span>
         )}
         {pathStatus?.loading && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Testing…</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Testing…</span>
         )}
         {pathStatus?.error && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ {pathStatus.error}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ {pathStatus.error}</span>
         )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <button onClick={onBack} style={btnSecondary()}>← Back</button>
-        <button onClick={() => { onEarlyStart(data); onNext() }} style={btnPrimary(false)}>Next →</button>
+        <Button onClick={onBack}>← Back</Button>
+        <Button variant="primary" onClick={() => { onEarlyStart(data); onNext() }}>Next →</Button>
       </div>
 
       <SkipLink onSkip={onSkip} />
@@ -408,9 +372,9 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
 
   return (
     <>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 3 of 3</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Optional: Sonarr & Radarr</div>
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', textAlign: 'center', marginBottom: 6 }}>Step 3 of 3</div>
+      <div style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>Optional: Sonarr & Radarr</div>
+      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 20, lineHeight: 1.55 }}>
         Can be set up later. Required only for interactive search in the Media explorer. API keys are in each app under Settings → General.
         Use the address auditorr connects from — behind a reverse proxy, the internal one. You can add public URLs for links later in Settings.
       </p>
@@ -422,9 +386,9 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
           <Field label="Sonarr API Key" type="password" placeholder="paste API key…" value={data.SONARR_API_KEY}
             onChange={v => { onChange('SONARR_API_KEY', v); setSonarrStatus(null) }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button onClick={handleTestSonarr} style={btnSecondary()}>Test Sonarr</button>
+            <Button onClick={handleTestSonarr}>Test Sonarr</Button>
             {sonarrStatus && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: sonarrStatus.loading ? 'var(--text-dim)' : sonarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: sonarrStatus.loading ? 'var(--text-dim)' : sonarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                 {sonarrStatus.loading ? 'Testing…' : (sonarrStatus.ok ? '✓ ' : '✗ ') + sonarrStatus.msg}
               </span>
             )}
@@ -436,9 +400,9 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
           <Field label="Radarr API Key" type="password" placeholder="paste API key…" value={data.RADARR_API_KEY}
             onChange={v => { onChange('RADARR_API_KEY', v); setRadarrStatus(null) }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button onClick={handleTestRadarr} style={btnSecondary()}>Test Radarr</button>
+            <Button onClick={handleTestRadarr}>Test Radarr</Button>
             {radarrStatus && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: radarrStatus.loading ? 'var(--text-dim)' : radarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: radarrStatus.loading ? 'var(--text-dim)' : radarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                 {radarrStatus.loading ? 'Testing…' : (radarrStatus.ok ? '✓ ' : '✗ ') + radarrStatus.msg}
               </span>
             )}
@@ -447,8 +411,8 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
       </div>
 
       <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <button onClick={onBack} style={btnSecondary()}>← Back</button>
-        <button onClick={onComplete} style={btnPrimary(false)}>Finish Setup</button>
+        <Button onClick={onBack}>← Back</Button>
+        <Button variant="primary" onClick={onComplete}>Finish Setup</Button>
       </div>
 
       <SkipLink onSkip={onSkip} />
@@ -459,7 +423,7 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
 function SkipLink({ onSkip }) {
   return (
     <div style={{ textAlign: 'center', marginTop: 18 }}>
-      <button onClick={onSkip} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: 'var(--text-dim)', padding: 0, textDecoration: 'underline' }}>
+      <button onClick={onSkip} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: 0, textDecoration: 'underline' }}>
         Skip setup
       </button>
     </div>
@@ -495,8 +459,8 @@ export default function SetupWizard({ onComplete, onSkip, onEarlyStart }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24 }}>
           <img src="/favicon.ico" alt="" style={{ width: 22, height: 22, opacity: 0.85 }} onError={e => { e.currentTarget.style.display = 'none' }} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: 'var(--text)', letterSpacing: 0.5 }}>auditorr</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginLeft: 4 }}>setup</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)', letterSpacing: 0.5 }}>auditorr</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginLeft: 4 }}>setup</span>
         </div>
 
         <StepIndicator current={step} />

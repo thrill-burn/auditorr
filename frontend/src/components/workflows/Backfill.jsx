@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
-  LabeledChips, IndexerChips, FolderChips, SortPicker, CountPicker,
+  OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker,
   SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, ArrErrorsWarning,
   Button, MatchChips, MATCH_COLOR, ITEM_TITLE, tint,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
@@ -905,12 +905,12 @@ export default function Backfill({ onNavigate }) {
                   <div>
                     <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Download from</div>
                     <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = no restriction.</div>
-                    <IndexerChips options={indexers} value={downloadFrom} onChange={handleDownloadFromChange} />
+                    <IndexerFilter options={indexers} value={downloadFrom} onChange={handleDownloadFromChange} />
                   </div>
                   <div>
                     <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Must also be seeding on</div>
                     <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Release must also be listed on these — downloading it from one of them counts. <em>Any</em> = no restriction.</div>
-                    <IndexerChips options={indexers} value={seedingOn} onChange={handleSeedingOnChange} allLabel="Any" />
+                    <IndexerFilter options={indexers} value={seedingOn} onChange={handleSeedingOnChange} allLabel="Any" />
                   </div>
                 </div>
               </div>
@@ -922,7 +922,7 @@ export default function Backfill({ onNavigate }) {
                 <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                   The root folders configured in Sonarr/Radarr. <em>All</em> = search everything.
                 </div>
-                <FolderChips folders={folders} selected={liveFolders} onChange={setSelectedFolders} />
+                <FolderFilter folders={folders} selected={liveFolders} onChange={setSelectedFolders} />
               </div>
             )}
 
@@ -934,15 +934,15 @@ export default function Backfill({ onNavigate }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
-                  <LabeledChips options={QUALITY_RES_OPTIONS} value={resFilter} onChange={setResFilter} />
+                  <OptionFilter options={QUALITY_RES_OPTIONS} value={resFilter} onChange={setResFilter} />
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
-                  <LabeledChips options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
+                  <OptionFilter options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
-                  <LabeledChips options={HDR_OPTIONS} value={hdrFilter} onChange={setHdrFilter} />
+                  <OptionFilter options={HDR_OPTIONS} value={hdrFilter} onChange={setHdrFilter} />
                 </div>
               </div>
             </div>

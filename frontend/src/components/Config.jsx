@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { FixedSizeList } from 'react-window'
 import { api } from '../api'
 import { tint } from '../utils'
+import { Button, Segmented, Disclosure } from './workflows/shared'
 
 const AUDIT_ROW_H = 36
 const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 0.8fr 1fr'
@@ -39,13 +40,13 @@ const AuditRunRow = ({ index, style, data }) => {
       background: index % 2 === 0 ? 'transparent' : 'var(--surface2)',
       fontFamily: 'var(--mono)',
     }}>
-      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{timeStr}</div>
-      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)' }}>{run.trigger}</div>
-      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)' }}>{run.source || 'qbit'}</div>
-      <div style={{ padding: '0 12px', fontSize: 11, color: isOk ? 'var(--text)' : 'var(--text-dim)', fontWeight: isOk ? 600 : 400 }}>
+      <div style={{ padding: '0 12px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflow: 'hidden', whiteSpace: 'nowrap' }}>{timeStr}</div>
+      <div style={{ padding: '0 12px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{run.trigger}</div>
+      <div style={{ padding: '0 12px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{run.source || 'qbit'}</div>
+      <div style={{ padding: '0 12px', fontSize: 'var(--font-sm)', color: isOk ? 'var(--text)' : 'var(--text-dim)', fontWeight: isOk ? 600 : 400 }}>
         {isOk && run.health_score != null ? run.health_score : '—'}
       </div>
-      <div style={{ padding: '0 12px', fontSize: 11, color: 'var(--text-dim)' }}>
+      <div style={{ padding: '0 12px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
         {fmtDuration(run.duration_seconds)}
       </div>
       <div style={{ padding: '0 12px' }}>
@@ -53,7 +54,7 @@ const AuditRunRow = ({ index, style, data }) => {
             dropped tints, and a pill on every row of a long run list is more
             hue than the ration-colour rule allows (R9). */}
         <span style={{
-          padding: '2px 8px', fontSize: 11,
+          padding: '2px 8px', fontSize: 'var(--font-sm)',
           color: isOk ? 'var(--green)' : 'var(--red)',
         }}>
           {isOk ? 'ok' : run.error_message?.split(':')[0] || 'error'}
@@ -70,18 +71,12 @@ function DataBrowser({ onSelectMedia, onSelectTorrents }) {
     api.browseData().then(setResult).catch(() => setResult({ dirs: [], missing: true }))
   }, [])
 
-  const btnStyle = {
-    padding: '2px 8px', borderRadius: 'var(--r)', border: '1px solid var(--border2)',
-    background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)',
-    fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap',
-  }
-
   if (!result) return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 10 }}>Browsing /data…</div>
+    <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 10 }}>Browsing /data…</div>
   )
 
   if (result.missing || result.dirs.length === 0) return (
-    <div style={{ marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.55 }}>
+    <div style={{ marginTop: 10, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', lineHeight: 1.55 }}>
       {result.missing
         ? <span style={{ color: '#f59e0b' }}>⚠ /data is not mounted or is empty. Check your Docker volume configuration — auditorr expects your data to be mounted at /data.</span>
         : <span style={{ color: 'var(--text-dim)' }}>No subdirectories found in /data.</span>
@@ -97,11 +92,11 @@ function DataBrowser({ onSelectMedia, onSelectTorrents }) {
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" style={{ flexShrink: 0 }}>
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>/data/{dir}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>/data/{dir}</span>
           </div>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-            <button style={btnStyle} onClick={() => onSelectMedia('/data/' + dir)}>→ Media</button>
-            <button style={btnStyle} onClick={() => onSelectTorrents('/data/' + dir)}>→ Torrents</button>
+            <Button size="chip" variant="subtle" onClick={() => onSelectMedia('/data/' + dir)}>→ Media</Button>
+            <Button size="chip" variant="subtle" onClick={() => onSelectTorrents('/data/' + dir)}>→ Torrents</Button>
           </div>
         </div>
       ))}
@@ -113,12 +108,12 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
   const [focused, setFocused] = useState(false)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, ...style }}>
-      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{label}</label>
-      {hint && <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45 }}>{hint}</span>}
+      <label style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>{label}</label>
+      {hint && <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45 }}>{hint}</span>}
       <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
         {prefix && (
           <span style={{
-            position: 'absolute', left: 10, fontFamily: 'var(--mono)', fontSize: 13,
+            position: 'absolute', left: 10, fontFamily: 'var(--mono)', fontSize: 'var(--font-base)',
             color: 'var(--text-dim)', pointerEvents: 'none',
           }}>{prefix}</span>
         )}
@@ -127,17 +122,18 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
           onChange={e => onChange(e.target.value)}
           onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           style={{
-            padding: `8px ${suffix ? '32px' : '11px'} 8px ${prefix ? '24px' : '11px'}`,
+            height: 'var(--control-h-lg)',
+            padding: `0 ${suffix ? '32px' : '11px'} 0 ${prefix ? '24px' : '11px'}`,
             borderRadius: 'var(--r)',
             border: `1px solid ${focused ? 'var(--accent)' : 'var(--border2)'}`,
             background: 'var(--surface2)', color: 'var(--text)',
-            fontFamily: 'var(--mono)', fontSize: 13, outline: 'none',
+            fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', outline: 'none',
             transition: 'border 0.12s', width: '100%',
           }}
         />
         {suffix && (
           <span style={{
-            position: 'absolute', right: 10, fontFamily: 'var(--mono)', fontSize: 13,
+            position: 'absolute', right: 10, fontFamily: 'var(--mono)', fontSize: 'var(--font-base)',
             color: 'var(--text-dim)', pointerEvents: 'none',
           }}>{suffix}</span>
         )}
@@ -162,12 +158,12 @@ function ExternalUrlSection({ fields }) {
   const setCount = fields.filter(f => (f.value || '').trim()).length
   return (
     <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-      <button onClick={() => setOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-        {open ? '▼' : '▶'} External URLs (reverse proxy){setCount > 0 ? ` — ${setCount} set` : ''}
-      </button>
+      <Disclosure open={open} onClick={() => setOpen(o => !o)}>
+        External URLs (reverse proxy){setCount > 0 ? ` — ${setCount} set` : ''}
+      </Disclosure>
       {open && (
         <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, margin: 0 }}>
+          <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0 }}>
             Only needed if you reach these apps at a different address than auditorr does —
             a reverse proxy or Tailscale domain. auditorr keeps using the host above for its
             own API calls; this is only what the “open ↗” buttons link to.
@@ -183,7 +179,7 @@ function ExternalUrlSection({ fields }) {
               />
               {(f.value || '').trim() && (
                 <a href={f.value} target="_blank" rel="noopener noreferrer"
-                  style={{ display: 'inline-block', marginTop: 5, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}>
+                  style={{ display: 'inline-block', marginTop: 5, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)', textDecoration: 'none' }}>
                   open ↗
                 </a>
               )}
@@ -283,11 +279,11 @@ function WeightDonut({ points, hovered }) {
           style={{ transition: 'opacity 0.12s' }} />
       )))}
       <text x={CX} y={CY - 3} textAnchor="middle" dominantBaseline="middle"
-        style={{ fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700, fill: 'var(--text)' }}>
+        style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, fill: 'var(--text)' }}>
         100
       </text>
       <text x={CX} y={CY + 16} textAnchor="middle" dominantBaseline="middle"
-        style={{ fontFamily: 'var(--mono)', fontSize: 10, fill: 'var(--text-dim)' }}>
+        style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }}>
         pts
       </text>
     </svg>
@@ -297,38 +293,8 @@ function WeightDonut({ points, hovered }) {
 function Card({ title, children }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 24, marginBottom: 16 }}>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
       {children}
-    </div>
-  )
-}
-
-// Segmented selector — separate pill buttons, matching the app's standard
-// toggle style (Workflow torrent deletion, Theme, etc.). `value` is compared
-// to each option's `value` with ===; pass a normalized value for booleans.
-function SegToggle({ options, value, onChange, size = 'md' }) {
-  const pad = size === 'sm' ? '5px 12px' : '7px 18px'
-  const fontSize = size === 'sm' ? 11 : 12
-  return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      {options.map(opt => {
-        const active = value === opt.value
-        return (
-          <button
-            key={String(opt.value)}
-            onClick={() => onChange(opt.value)}
-            style={{
-              padding: pad, borderRadius: 'var(--r)', fontSize, fontWeight: 500,
-              border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-              background: active ? tint('var(--accent)', 9) : 'transparent',
-              color: active ? 'var(--accent)' : 'var(--text-dim)',
-              cursor: 'pointer', transition: 'all 0.12s',
-            }}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
     </div>
   )
 }
@@ -425,7 +391,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     })
   }, [auditRuns])
 
-  if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12 }}>Loading…</div>
+  if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 'var(--font-base)' }}>Loading…</div>
 
   const set = key => val => { setConf(c => ({ ...c, [key]: val })); setIsDirty(true) }
 
@@ -600,31 +566,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
   const formGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }
   const compactGrid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }
-  const ghostButton = {
-    padding: '6px 12px',
-    borderRadius: 'var(--r)',
-    border: '1px solid var(--border2)',
-    background: 'var(--surface2)',
-    color: 'var(--text)',
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: 'pointer',
-  }
-  const smallMonoButton = {
-    ...ghostButton,
-    fontFamily: 'var(--sans)',
-    fontSize: 12,
-  }
 
-  const toggleMediaPreset = id => {
-    setMediaServerPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
-    setIsDirty(true)
-  }
-
-  const toggleDiscPreset = id => {
-    setDiscRipPresets(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id])
-    setIsDirty(true)
-  }
 
   const setArrConnection = (index, key, value) => {
     setArrConnections(prev => prev.map((conn, i) => i === index ? { ...conn, [key]: value } : conn))
@@ -688,7 +630,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       <Card title="Torrent Source">
         {/* Source toggle */}
         <div style={{ marginBottom: 18 }}>
-          <SegToggle
+          <Segmented size="lg"
             options={[{ value: 'qbit', label: 'qBittorrent' }, { value: 'qui', label: 'qui' }]}
             value={conf.TORRENT_SOURCE}
             onChange={src => { set('TORRENT_SOURCE')(src); setTestStatus(null); setSourceInfo(null); setIsDirty(true) }}
@@ -706,7 +648,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           </>
         ) : (
           <>
-            <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 14 }}>
+            <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 14 }}>
               qui aggregates multiple qBittorrent instances behind one API endpoint — ideal for multi-instance setups sharing a common filesystem (e.g. mergerfs).
             </p>
             <Field label="Host URL" placeholder="http://192.168.1.x:7476" value={conf.QUI_HOST} onChange={v => { set('QUI_HOST')(v); setSourceInfo(null) }} style={{ marginBottom: 14 }} />
@@ -718,13 +660,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
           {testStatus && (testStatus.loading || !testStatus.ok) && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
               {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
             </span>
           )}
-          <button onClick={handleTest} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
-            Test Connection
-          </button>
+          <Button onClick={handleTest}>Test Connection</Button>
         </div>
         <ExternalUrlSection fields={isQui
           ? [{ key: 'QUI_EXTERNAL_URL', label: 'qui External URL', placeholder: 'https://qui.example.com',
@@ -733,20 +673,20 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                value: conf.QB_EXTERNAL_URL, onChange: set('QB_EXTERNAL_URL') }]} />
         {sourceInfo && testStatus?.ok && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)' }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--green)' }}>
               {isQui
                 ? `✓ Connected · qui${sourceInfo.version ? ` v${sourceInfo.version}` : ''} · ${sourceInfo.summary}`
                 : `✓ Connected · qBittorrent ${sourceInfo.version || ''}`}
             </div>
             {isQui && sourceInfo.skipped?.length > 0 && (
               <div style={{ marginTop: 6 }}>
-                <button onClick={() => setQuiSkippedOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-                  {quiSkippedOpen ? '▼' : '▶'} {sourceInfo.skipped.length} skipped instance{sourceInfo.skipped.length !== 1 ? 's' : ''}
-                </button>
+                <Disclosure open={quiSkippedOpen} onClick={() => setQuiSkippedOpen(o => !o)}>
+                  {sourceInfo.skipped.length} skipped instance{sourceInfo.skipped.length !== 1 ? 's' : ''}
+                </Disclosure>
                 {quiSkippedOpen && (
                   <div style={{ marginTop: 4, paddingLeft: 10, borderLeft: '2px solid var(--border2)' }}>
                     {sourceInfo.skipped.map((inst, i) => (
-                      <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                      <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
                         {inst.name || inst.id}: {inst._skip_reason}
                       </div>
                     ))}
@@ -758,13 +698,13 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>Workflow torrent deletion</div>
-            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>Workflow torrent deletion</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               Allow workflow pages to delete torrents and their files directly via {isQui ? 'qui' : 'qBittorrent'}. Off keeps auditorr read-only against your client.
             </div>
           </div>
           <div style={{ flexShrink: 0, marginLeft: 24 }}>
-            <SegToggle
+            <Segmented size="lg"
               options={[{ value: false, label: 'Disallowed' }, { value: true, label: 'Allowed' }]}
               value={!!conf.ALLOW_CLIENT_DELETE}
               onChange={v => set('ALLOW_CLIENT_DELETE')(v)}
@@ -778,11 +718,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           hint="The path qBittorrent reports via its API. May differ if qBit runs in its own container."
           placeholder="/data/torrents" value={conf.REMOTE_PATH} onChange={set('REMOTE_PATH')} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 14 }}>
-          <button onClick={handleFetchSavePath} style={{ padding: '4px 10px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer' }}>
+          <Button size="sm" onClick={handleFetchSavePath}>
             {savePathStatus === 'loading' ? 'Fetching…' : `Fetch from ${isQui ? 'qui' : 'qBittorrent'}`}
-          </button>
-          {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
-          {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ Could not connect</span>}
+          </Button>
+          {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
+          {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ Could not connect</span>}
         </div>
         <div style={formGrid}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -790,7 +730,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               hint="Where your final media library lives inside this container — e.g. /data/media"
               placeholder="/data/media" value={conf.MEDIA_PATH} onChange={v => { set('MEDIA_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
             {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: pathTestStatus.media_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: pathTestStatus.media_path?.ok ? 'var(--green)' : 'var(--red)' }}>
                 {pathTestStatus.media_path?.ok ? '✓ Found' : '✗ Not found inside container'}
               </span>
             )}
@@ -800,7 +740,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               hint="The path qBittorrent saves downloads on disk from this container's perspective."
               placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={v => { set('LOCAL_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
             {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: pathTestStatus.local_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: pathTestStatus.local_path?.ok ? 'var(--green)' : 'var(--red)' }}>
                 {pathTestStatus.local_path?.ok ? '✓ Found' : '✗ Not found inside container'}
               </span>
             )}
@@ -808,22 +748,20 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
           {!pathTestStatus && (
-            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Click Test Paths to verify these are visible inside the container</span>
+            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Click Test Paths to verify these are visible inside the container</span>
           )}
           {pathTestStatus === 'loading' && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Testing…</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Testing…</span>
           )}
           {pathTestStatus?.error && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>✗ {pathTestStatus.error}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ {pathTestStatus.error}</span>
           )}
-          <button onClick={handleTestPaths} style={{ padding: '7px 14px', borderRadius: 'var(--r)', border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)', fontSize: 12, cursor: 'pointer' }}>
-            Test Paths
-          </button>
+          <Button onClick={handleTestPaths}>Test Paths</Button>
         </div>
         <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <button onClick={() => setBrowserOpen(o => !o)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-            {browserOpen ? '▼' : '▶'} Browse container filesystem
-          </button>
+          <Disclosure open={browserOpen} onClick={() => setBrowserOpen(o => !o)}>
+            Browse container filesystem
+          </Disclosure>
           {browserOpen && (
             <DataBrowser
               onSelectMedia={v => { set('MEDIA_PATH')(v); setPathTestStatus(null); setPersistentWarnings([]) }}
@@ -840,7 +778,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           background: '#f59e0b12',
         }}>
           {saveWarnings.map((w, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontFamily: 'var(--mono)', fontSize: 12, color: '#f59e0b', lineHeight: 1.5 }}>
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: '#f59e0b', lineHeight: 1.5 }}>
               <span style={{ flexShrink: 0 }}>⚠</span>
               <span>Path warning — {w}</span>
             </div>
@@ -851,12 +789,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       <Card title="Watchdog & Scheduled Audits">
         <div style={formGrid}>
           <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Filesystem Watchdog</label>
-            <span style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 10, lineHeight: 1.45 }}>
+            <label style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Filesystem Watchdog</label>
+            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', display: 'block', marginBottom: 10, lineHeight: 1.45 }}>
               Re-audit automatically when files change. Disable to avoid constant rescans on large libraries with frequent downloads.
             </span>
             <div style={{ marginBottom: 14 }}>
-              <SegToggle
+              <Segmented size="lg"
                 options={[{ value: true, label: 'Enabled' }, { value: false, label: 'Disabled' }]}
                 value={watchdogEnabled}
                 onChange={v => { setWatchdogEnabled(v); setIsDirty(true) }}
@@ -877,7 +815,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       </Card>
 
       <Card title="Integrations">
-        <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
+        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
           Required for interactive search in the Media explorer. API keys found in each app under Settings → General.
         </p>
         <div style={formGrid}>
@@ -890,13 +828,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               value={conf.SONARR_REMOTE_PATH} onChange={set('SONARR_REMOTE_PATH')} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {sonarrTestStatus && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: sonarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: sonarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                   {sonarrTestStatus.loading ? 'Testing…' : (sonarrTestStatus.ok ? '✓ ' : '✗ ') + sonarrTestStatus.msg}
                 </span>
               )}
-              <button onClick={handleTestSonarr} style={ghostButton}>
-                Test Sonarr
-              </button>
+              <Button onClick={handleTestSonarr}>Test Sonarr</Button>
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -908,13 +844,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               value={conf.RADARR_REMOTE_PATH} onChange={set('RADARR_REMOTE_PATH')} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {radarrTestStatus && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: radarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: radarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                   {radarrTestStatus.loading ? 'Testing…' : (radarrTestStatus.ok ? '✓ ' : '✗ ') + radarrTestStatus.msg}
                 </span>
               )}
-              <button onClick={handleTestRadarr} style={ghostButton}>
-                Test Radarr
-              </button>
+              <Button onClick={handleTestRadarr}>Test Radarr</Button>
             </div>
           </div>
         </div>
@@ -925,12 +859,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             value: conf.RADARR_EXTERNAL_URL, onChange: set('RADARR_EXTERNAL_URL') },
         ]} />
         <div style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-          <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Additional Sonarr/Radarr instances</label>
-          <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 10 }}>
+          <label style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Additional Sonarr/Radarr instances</label>
+          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 10 }}>
             Add extra Sonarr or Radarr servers for split libraries such as 4K, anime, or kids. These are used <em>alongside</em> the primary Sonarr/Radarr above, not instead of them.
           </span>
           {arrConnections.length === 0 ? (
-            <div style={{ padding: '10px 12px', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', color: 'var(--text-dim)', fontSize: 11, marginBottom: 10 }}>
+            <div style={{ padding: '10px 12px', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', color: 'var(--text-dim)', fontSize: 'var(--font-sm)', marginBottom: 10 }}>
               No additional Arr instances configured.
             </div>
           ) : (
@@ -942,22 +876,21 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                   <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: 12, background: 'var(--surface2)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
-                        <SegToggle
-                          size="sm"
+                        <Segmented size="sm"
                           options={ARR_SERVICES.map(s => ({ value: s.id, label: s.label }))}
                           value={service}
                           onChange={id => setArrConnection(index, 'service', id)}
                         />
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {conn.id || `${service}-${index + 1}`}
                         </span>
                         {conn._stored_api_key && !conn.api_key && (
-                          <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--green)', padding: '1px 6px' }}>stored key</span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--green)', padding: '1px 6px' }}>stored key</span>
                         )}
                       </div>
-                      <button onClick={() => removeArrConnection(index)} style={smallMonoButton}>
+                      <Button size="sm" onClick={() => removeArrConnection(index)}>
                         Remove
-                      </button>
+                      </Button>
                     </div>
                     <div style={{ ...compactGrid, marginBottom: 10 }}>
                       <Field label="Label" placeholder={service === 'radarr' ? '4K Radarr' : 'Anime Sonarr'} value={conn.name} onChange={v => setArrConnection(index, 'name', v)} />
@@ -968,7 +901,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                       <Field label="API Key" type="password" placeholder={conn._stored_api_key ? '(stored - leave blank to keep current)' : 'paste API key...'} value={conn.api_key} onChange={v => setArrConnection(index, 'api_key', v)} />
                     </div>
                     {idChangedWithStoredKey && (
-                      <div style={{ fontSize: 11, color: 'var(--yellow)', marginBottom: 10 }}>
+                      <div style={{ fontSize: 'var(--font-sm)', color: 'var(--yellow)', marginBottom: 10 }}>
                         Changing the ID requires re-entering this instance's API key before saving.
                       </div>
                     )}
@@ -987,17 +920,17 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-            <button onClick={() => addArrConnection('sonarr')} style={smallMonoButton}>
+            <Button size="sm" onClick={() => addArrConnection('sonarr')}>
               Add Sonarr
-            </button>
-            <button onClick={() => addArrConnection('radarr')} style={smallMonoButton}>
+            </Button>
+            <Button size="sm" onClick={() => addArrConnection('radarr')}>
               Add Radarr
-            </button>
-            <button onClick={handleTestArrConnections} style={smallMonoButton}>
+            </Button>
+            <Button size="sm" onClick={handleTestArrConnections}>
               {arrTestStatus?.loading ? 'Testing...' : 'Test Arr Connections'}
-            </button>
+            </Button>
             {arrTestStatus && !arrTestStatus.loading && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: arrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: arrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                 {arrTestStatus.ok ? 'Connected' : `${arrTestStatus.msg || 'Connection check failed'}`}
               </span>
             )}
@@ -1005,7 +938,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           {arrTestStatus?.connections?.length > 0 && (
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
               {arrTestStatus.connections.map(conn => (
-                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: conn.ok ? 'var(--text-dim)' : 'var(--red)' }}>
+                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: conn.ok ? 'var(--text-dim)' : 'var(--red)' }}>
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {conn.ok ? 'ok' : 'error'} · {conn.name || conn.id} · {conn.service} · {conn.managed_file_count || 0} managed file{conn.managed_file_count === 1 ? '' : 's'}
                     {conn.message ? ` · ${conn.message}` : ''}
@@ -1027,10 +960,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       </Card>
 
       <Card title="Health Score">
-        <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
           How much each category counts toward your score out of 100. The numbers are relative —
           only their proportions matter, so you can type whatever expresses your priorities.
-          Set a category to <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>0</span> to
+          Set a category to <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)' }}>0</span> to
           stop scoring it entirely; it still appears on the dashboard, just unscored.
         </p>
 
@@ -1055,7 +988,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                     background: cat.color, opacity: off ? 0.3 : 1,
                   }} />
                   <span style={{
-                    flex: 1, fontSize: 12, minWidth: 0,
+                    flex: 1, fontSize: 'var(--font-base)', minWidth: 0,
                     color: off ? 'var(--text-dim)' : 'var(--text)',
                   }} title={cat.hint}>{cat.label}</span>
                   <input
@@ -1065,12 +998,12 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                     style={{
                       width: 62, padding: '5px 8px', borderRadius: 'var(--r)',
                       border: '1px solid var(--border2)', background: 'var(--surface2)',
-                      color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12,
+                      color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 'var(--font-base)',
                       outline: 'none', textAlign: 'right',
                     }}
                   />
                   <span style={{
-                    width: 74, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 11,
+                    width: 74, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
                     color: off ? 'var(--text-dim)' : cat.color,
                   }}>
                     {off ? 'not scored' : `${+pts.toFixed(1)} pts`}
@@ -1081,31 +1014,22 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             {/* Sits under the rows it resets, so its scope is unambiguous —
                 weights only, not the thresholds further down the card. */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
-              <button
+              <Button
+                size="sm" variant="ghost"
                 onClick={resetWeights}
                 disabled={weightsAreDefault}
                 title={weightsAreDefault ? 'Already at the default 70/10/10/10'
                                          : 'Restore the default 70/10/10/10 split'}
-                style={{
-                  padding: '5px 10px', borderRadius: 'var(--r)',
-                  border: '1px solid var(--border2)',
-                  background: 'transparent',
-                  color: weightsAreDefault ? 'var(--text-dim)' : 'var(--text)',
-                  fontSize: 11, fontFamily: 'var(--sans)',
-                  cursor: weightsAreDefault ? 'default' : 'pointer',
-                  opacity: weightsAreDefault ? 0.45 : 1,
-                  transition: 'opacity 0.12s, color 0.12s',
-                }}
               >
                 Reset to defaults
-              </button>
+              </Button>
             </div>
           </div>
         </div>
 
         {allWeightsZero && (
           <div style={{
-            fontSize: 11, color: 'var(--red)', fontFamily: 'var(--mono)',
+            fontSize: 'var(--font-sm)', color: 'var(--red)', fontFamily: 'var(--mono)',
             background: tint('var(--red)', 8), border: `1px solid ${tint('var(--red)', 20)}`,
             borderRadius: 'var(--r)', padding: '7px 10px', marginBottom: 18,
           }}>
@@ -1114,15 +1038,15 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         )}
 
         <div style={{
-          fontSize: 12, fontWeight: 600, color: 'var(--text)',
+          fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)',
           paddingTop: 18, marginTop: 10, marginBottom: 10,
           borderTop: '1px solid var(--border)',
         }}>Thresholds</div>
-        <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, marginBottom: 18 }}>
           Each threshold defines the size limit for that category relative to your total torrent library.
           Points are lost <em>linearly</em> as you approach the threshold — at exactly the threshold value that
           category's points are all gone.
-          For example, a <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>1%</span> threshold means
+          For example, a <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)' }}>1%</span> threshold means
           you start losing points immediately if any problem data exists, and lose them all once it reaches 1% of your library.
           Lower = stricter. Hardlinked Media has no threshold — it scores in direct proportion to how much of your library is hardlinked.
         </p>
@@ -1153,7 +1077,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             const max = weightPoints(weights)[key]
             if (!v || isNaN(v) || !(max > 0.05)) return null
             return (
-              <div key={label} style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '6px 10px' }}>
+              <div key={label} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '6px 10px' }}>
                 {label}: all {+max.toFixed(1)} pts lost at <span style={{ color: 'var(--accent)' }}>{v}%</span> of library
               </div>
             )
@@ -1162,18 +1086,18 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       </Card>
 
       <Card title="Excluded Files & Folders">
-        <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Paths or patterns to ignore</label>
-        <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
+        <label style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Paths or patterns to ignore</label>
+        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
           One rule per line. Use this for torrent categories you do not manage with Sonarr/Radarr, such as books, music, games, or other non-library downloads. Excluded items are ignored for scoring and Not Imported reporting.
         </span>
-        <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
-          Folder paths can be written however you recognize them: <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/data/torrents/books</span>, or <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/mnt/user/data/torrents/books</span>. File names, directory names, extensions, and glob patterns work too.
+        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
+          Folder paths can be written however you recognize them: <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>torrents/books</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>/data/torrents/books</span>, or <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>/mnt/user/data/torrents/books</span>. File names, directory names, extensions, and glob patterns work too.
         </span>
         {/* The Exclude buttons on Cleanup and Triage write literal: rules, so a
             user meets them here first — unexplained, a prefix on their own paths
             reads like a bug rather than the thing that makes those paths work. */}
-        <span style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
-          A rule starting <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>literal:</span> means exactly that path, with no glob interpretation — which is what a name containing <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>[</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>*</span> or <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>?</span> needs. End it with <span style={{ fontFamily: 'var(--mono)', fontSize: 11 }}>/</span> for a whole folder. The <b>Exclude</b> buttons on Cleanup and Triage write these for you.
+        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
+          A rule starting <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>literal:</span> means exactly that path, with no glob interpretation — which is what a name containing <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>[</span>, <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>*</span> or <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>?</span> needs. End it with <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>/</span> for a whole folder. The <b>Exclude</b> buttons on Cleanup and Triage write these for you.
         </span>
         <textarea
           value={exclusionPatterns}
@@ -1186,70 +1110,34 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             borderRadius: 'var(--r)',
             border: `1px solid ${exclusionFocused ? 'var(--accent)' : 'var(--border2)'}`,
             background: 'var(--surface2)', color: 'var(--text)',
-            fontFamily: 'var(--mono)', fontSize: 12,
+            fontFamily: 'var(--mono)', fontSize: 'var(--font-base)',
             outline: 'none', resize: 'vertical',
             transition: 'border 0.12s', boxSizing: 'border-box',
           }}
         />
         <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Full disc rip presets</div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
+          <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Full disc rip presets</div>
+          <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
             Ignore full-disc Blu-ray and DVD folder structures such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>BDMV</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>CERTIFICATE</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>VIDEO_TS</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>AUDIO_TS</span>. Standalone video files remain visible.
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {DISC_RIP_PRESETS.map(preset => {
-              const active = discRipPresets.includes(preset.id)
-              return (
-                <button
-                  key={preset.id}
-                  onClick={() => toggleDiscPreset(preset.id)}
-                  style={{
-                    padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12,
-                    border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-                    background: active ? tint('var(--accent)', 9) : 'transparent',
-                    color: active ? 'var(--accent)' : 'var(--text-dim)',
-                    cursor: 'pointer', transition: 'all 0.12s',
-                  }}
-                >
-                  {preset.label}
-                </button>
-              )
-            })}
-          </div>
+          <Segmented multiple size="lg" value={discRipPresets} onChange={v => { setDiscRipPresets(v); setIsDirty(true) }}
+            options={DISC_RIP_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))} />
         </div>
         <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Media server sidecar presets</div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
+          <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Media server sidecar presets</div>
+          <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
             Ignore metadata and artwork sidecars commonly written or read by media servers, such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.plexmatch</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.nfo</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>poster.jpg</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>fanart.jpg</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>folder.jpg</span>.
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {MEDIA_SERVER_PRESETS.map(preset => {
-              const active = mediaServerPresets.includes(preset.id)
-              return (
-                <button
-                  key={preset.id}
-                  onClick={() => toggleMediaPreset(preset.id)}
-                  style={{
-                    padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12,
-                    border: `1px solid ${active ? 'var(--accent)' : 'var(--border2)'}`,
-                    background: active ? tint('var(--accent)', 9) : 'transparent',
-                    color: active ? 'var(--accent)' : 'var(--text-dim)',
-                    cursor: 'pointer', transition: 'all 0.12s',
-                  }}
-                >
-                  {preset.label}
-                </button>
-              )
-            })}
-          </div>
+          <Segmented multiple size="lg" value={mediaServerPresets} onChange={v => { setMediaServerPresets(v); setIsDirty(true) }}
+            options={MEDIA_SERVER_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>File explorer visibility</div>
-            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Control whether excluded files appear in the file explorer.</div>
+            <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>File explorer visibility</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Control whether excluded files appear in the file explorer.</div>
           </div>
           <div style={{ flexShrink: 0, marginLeft: 24 }}>
-            <SegToggle
+            <Segmented size="lg"
               options={[{ value: false, label: 'Visible' }, { value: true, label: 'Hidden' }]}
               value={exclusionHideFromExplorer}
               onChange={v => { setExclusionHideFromExplorer(v); setIsDirty(true) }}
@@ -1261,11 +1149,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       <Card title="Appearance">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Theme</div>
-            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Choose between dark and light mode. Dark is the default.</div>
+            <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Theme</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Choose between dark and light mode. Dark is the default.</div>
           </div>
           <div style={{ flexShrink: 0, marginLeft: 24 }}>
-            <SegToggle
+            <Segmented size="lg"
               options={[{ value: 'dark', label: '🌙 Dark' }, { value: 'light', label: '☀️ Light' }]}
               value={theme}
               onChange={t => onThemeChange && onThemeChange(t)}
@@ -1276,15 +1164,15 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
       <Card title="Audit History">
         <div style={{ marginBottom: 14 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+          <span style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
             {dedupedRuns.length} audit runs. History is stored indefinitely in SQLite and survives restarts.
           </span>
         </div>
 
         {!auditRuns ? (
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', padding: '12px 0' }}>Loading…</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: '12px 0' }}>Loading…</div>
         ) : dedupedRuns.length === 0 ? (
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', padding: '12px 0' }}>No audit runs recorded yet.</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: '12px 0' }}>No audit runs recorded yet.</div>
         ) : (
           <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', overflow: 'hidden' }}>
             <div style={{
@@ -1310,38 +1198,27 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, borderTop: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             Last audit: {lastAuditTime}
           </span>
-          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             Watchdog (if enabled) re-audits on file changes. Scheduled interval runs independently regardless of watchdog state. Use the button below to trigger one manually.
           </span>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, marginLeft: 20 }}>
           {saveStatus && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: saveStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: saveStatus.ok ? 'var(--green)' : 'var(--red)' }}>
               {saveStatus.ok ? '✓ ' : '✗ '}{saveStatus.msg}
             </span>
           )}
-          <button onClick={handleSave} style={{ position: 'relative', padding: '7px 18px', borderRadius: 'var(--r)', border: 'none', background: 'var(--accent)', color: '#000', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+          <Button variant="primary" onClick={handleSave} style={{ position: 'relative' }}>
             {isDirty && <span style={{ position: 'absolute', top: 4, right: 4, width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'block' }} />}
             Save Settings
-          </button>
+          </Button>
           {onScan && (
-            <button
-              onClick={onScan}
-              disabled={isScanning}
-              style={{
-                padding: '7px 18px', borderRadius: 'var(--r)',
-                border: '1px solid var(--border2)',
-                background: 'transparent',
-                color: isScanning ? 'var(--text-dim)' : 'var(--text)',
-                fontSize: 12, fontWeight: 500, cursor: isScanning ? 'default' : 'pointer',
-                opacity: isScanning ? 0.5 : 1,
-              }}
-            >
+            <Button onClick={onScan} disabled={isScanning}>
               {isScanning ? 'Scanning…' : '▶ Run Audit'}
-            </button>
+            </Button>
           )}
         </div>
       </div>

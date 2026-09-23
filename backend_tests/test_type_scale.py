@@ -1,4 +1,4 @@
-"""Type on the workflow surfaces comes from the app's scale, never from a number (Phase 11, R8).
+"""Type in the frontend comes from the app's scale, never from a number (Phase 11, R8).
 
 TRIAGE T13 and TRUMPED TR17 were one finding filed twice: the workflow pages
 sized their text with hardcoded numbers, most of them off index.css's `--font-*`
@@ -8,11 +8,15 @@ written into each phase's brief did not hold the count, which went 177 → 220 �
 
 Every `fontSize` in a file in scope must be `'var(--font-<step>)'`, naming a step
 index.css defines. The steps are read from index.css, never copied here, so a
-change to the scale's values needs no edit to this test. Rounds.jsx is in scope
-as the reference conversion the rest follows.
+change to the scale's values needs no edit to this test.
 
-A glyph that is not text (an emoji, a close ×) keeps its number, and only
-through EXEMPTIONS, each naming its site and its count: an exemption that
+Scope is **every** `.jsx` file under `frontend/src`. It was the workflow pages,
+App.jsx, ImportProgress.jsx and Rounds.jsx until the UI pass of 2026-09-22
+converted the rest of the app — 329 literal sizes in 15 files, 29 of them off
+the scale — alongside the controls it moved onto the shared kit.
+
+A glyph that is not text (an emoji) or a display figure keeps its number, and
+only through EXEMPTIONS, each naming its site and its count: an exemption that
 matches a different number of sites fails, so the list cannot go stale or
 quietly cover a second site.
 
@@ -26,21 +30,26 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, 'frontend', 'src')
 INDEX_CSS = os.path.join(SRC, 'index.css')
 
-# Workflows by glob, so a new workflow page is in scope the day it is added.
-SCOPE = sorted(glob.glob(os.path.join(SRC, 'components', 'workflows', '*.jsx'))) + [
-    os.path.join(SRC, 'App.jsx'),                          # ScriptModal, the access-key notice
-    os.path.join(SRC, 'components', 'ImportProgress.jsx'),  # the Import Jobs panel
-    os.path.join(SRC, 'components', 'Rounds.jsx'),          # the reference conversion
-]
+# By glob, so a new page or component is in scope the day it is added.
+SCOPE = sorted(glob.glob(os.path.join(SRC, '**', '*.jsx'), recursive=True))
 
 # (file relative to frontend/src, text on the site's line, sites it must match, reason)
+#
+# The close × characters in App.jsx and ImportProgress.jsx were the exemptions
+# here until the UI pass (2026-09-22) gave every close control one line icon,
+# CloseButton; EmptyState's 🎉 went the same way the day before.
 EXEMPTIONS = [
-    # EmptyState's 🎉 (fontSize: 40) was the third exemption until the UI pass
-    # (2026-09-21) replaced it with a line icon, which has no font size.
-    ('App.jsx', "fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×", 1,
-     "ScriptModal's close × is a glyph sized as an icon"),
-    ('components/ImportProgress.jsx', "fontSize: 16, lineHeight: 1, padding: '0 2px'", 1,
-     "the Import Jobs panel's close × is a glyph sized as an icon"),
+    # The Dashboard's numerals are display figures, not text: the scale stops at
+    # --font-xl (20px, a page title), and forcing them onto it would erase the
+    # "Instrument" number treatment the dashboard is built around.
+    ('components/Dashboard.jsx', "fontSize: 42, fontWeight: 500", 1,
+     "the health dial's score, the page's largest display figure"),
+    ('components/Dashboard.jsx', "fontSize: size, fontWeight: 500", 1,
+     "HeroNumber's numeral, a display figure sized by its caller (33px on the cards)"),
+    ('components/Dashboard.jsx', "fontSize: Math.round(size * 0.55)", 1,
+     "HeroNumber's unit caption, proportional to its numeral"),
+    ('components/Dashboard.jsx', "{medals[i]}</span>", 1,
+     "the leaderboard's medal emoji is a glyph sized as an icon"),
 ]
 
 _VAR = re.compile(r"""^(['"])var\(--font-([a-z0-9-]+)\)\1$""")
@@ -110,12 +119,13 @@ def test_the_scope_and_the_scale_are_where_this_test_looks():
     # A moved file or a renamed variable would otherwise pass by reading nothing.
     workflows = [p for p in SCOPE if os.sep + 'workflows' + os.sep in p]
     assert len(workflows) >= 6, workflows
-    for path in SCOPE:
-        assert os.path.isfile(path), path
+    assert len(SCOPE) >= 25, f'scope collapsed to {len(SCOPE)} file(s)'
+    for rel in ('App.jsx', 'components/Dashboard.jsx', 'components/Config.jsx', 'components/FileExplorer.jsx'):
+        assert os.path.join(SRC, *rel.split('/')) in SCOPE, rel
     assert {'sm', 'base', 'md'} <= scale_steps(_read(INDEX_CSS))
 
 
-def test_every_size_on_the_workflow_surfaces_comes_from_the_scale():
+def test_every_size_in_the_frontend_comes_from_the_scale():
     _, bad, _ = _run()
     assert not bad, (
         f'{len(bad)} font size(s) off the type scale. Use fontSize: \'var(--font-<step>)\' with the step '

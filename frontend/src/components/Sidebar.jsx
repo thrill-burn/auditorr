@@ -180,7 +180,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               <circle cx="34" cy="100" r="10" fill="#f57c00" opacity="0.85"/>
             </svg>
           </div>
-          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, color: 'var(--text)', letterSpacing: '-0.3px' }}>auditorr</span>
+          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 'var(--font-lg)', color: 'var(--text)', letterSpacing: '-0.3px' }}>auditorr</span>
         </div>
       </div>
 
@@ -197,7 +197,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                   padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
                   background: isGroupActive ? 'var(--surface3)' : 'transparent',
                   color: isGroupActive ? 'var(--text)' : 'var(--text-dim)',
-                  fontSize: 13, fontWeight: isGroupActive ? 600 : 400,
+                  fontSize: 'var(--font-md)', fontWeight: isGroupActive ? 600 : 400,
                   cursor: 'pointer', transition: 'all 0.12s',
                   textAlign: 'left', width: '100%',
                 }}
@@ -222,7 +222,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                           padding: '6px 10px 6px 18px', borderRadius: 'var(--r)', border: 'none',
                            background: childActive ? 'var(--surface3)' : 'transparent',
                            color: childActive ? 'var(--text)' : 'var(--text-dim)',
-                          fontSize: 13, fontWeight: childActive ? 600 : 400,
+                          fontSize: 'var(--font-md)', fontWeight: childActive ? 600 : 400,
                           cursor: 'pointer', transition: 'all 0.12s',
                           textAlign: 'left', width: '100%',
                         }}
@@ -233,7 +233,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                             <span
                               title={`${count} item${count !== 1 ? 's' : ''} need attention`}
                               style={{
-                                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-pill)',
+                                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-pill)',
                                 background: child.accent ? 'transparent' : 'var(--surface2)',
                                 // A coloured count, not an outlined badge: this
                                 // border was a dropped tint and the number has
@@ -251,7 +251,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                               onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
                               title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
                               style={{
-                                fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 'var(--r-pill)',
+                                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 'var(--r-pill)',
                                 background: 'var(--accent)', color: '#fff',
                                 flexShrink: 0, lineHeight: 1.5, cursor: 'pointer',
                                 animation: 'sidebarBadgePulse 2s ease-in-out infinite',
@@ -276,7 +276,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
               background: isActive ? 'var(--surface3)' : 'transparent',
               color: isActive ? 'var(--text)' : 'var(--text-dim)',
-              fontSize: 13, fontWeight: isActive ? 600 : 400,
+              fontSize: 'var(--font-md)', fontWeight: isActive ? 600 : 400,
               cursor: 'pointer', transition: 'all 0.12s',
               textAlign: 'left', width: '100%',
             }}
@@ -301,11 +301,11 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               background: 'var(--surface2)', border: '1px solid var(--border2)',
               display: 'flex', flexDirection: 'column', gap: 2,
             }}>
-              <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <span className="ui-status-dot" style={{ width: 6, height: 6, background: scoreC }} />Health
               </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
-                {scoreDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
+                {scoreDisplay}<span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
               </span>
             </div>
 
@@ -316,11 +316,11 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 background: 'var(--surface2)', border: '1px solid var(--border2)',
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}>
-                <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <span className="ui-status-dot" style={{ width: 6, height: 6, background: 'var(--blue)' }} />Cross-seed
                 </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
-                  {csDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
+                  {csDisplay}<span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
                 </span>
               </div>
             )}
@@ -331,33 +331,33 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
         {isScanning ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>Scanning…</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>{progress}%</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>Scanning…</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>{progress}%</span>
             </div>
             <div style={{ height: 3, background: 'var(--border2)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
               <div style={{ width: progress + '%', height: '100%', background: 'var(--accent)', borderRadius: 'var(--r-pill)', transition: 'width 0.4s ease' }} />
             </div>
             {statusMessage && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
             )}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {lastScanStatus === 'error' && statusMessage && (
               <div style={{ padding: '5px 8px', borderRadius: 'var(--r-sm)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, marginBottom: 2 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
                   ✗ {statusMessage}
                 </span>
               </div>
             )}
             {lastAuditTime !== 'Never' && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>last run {lastAuditTime}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>last run {lastAuditTime}</span>
             )}
             {nextScanIn != null && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--yellow)' }}>⏱ next in {nextScanIn}s</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--yellow)' }}>⏱ next in {nextScanIn}s</span>
             )}
             {triggerLabel && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{triggerLabel}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{triggerLabel}</span>
             )}
           </div>
         )}

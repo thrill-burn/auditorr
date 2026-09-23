@@ -4,6 +4,7 @@ import AutoSizer from 'react-virtualized-auto-sizer'
 import { formatBytes, copyText, parseReleaseTitle, tint } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
+import { Button, Segmented, FlagToggle, CloseButton, Dot } from './workflows/shared'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ function clientLinkTitle(node, torrentSource) {
 function Tag({ color, children }) {
   return (
     <span style={{
-      padding: '1px 7px', fontSize: 11, fontWeight: 600,
+      padding: '1px 7px', fontSize: 'var(--font-sm)', fontWeight: 600,
       fontFamily: 'var(--mono)', color, whiteSpace: 'nowrap', flexShrink: 0,
     }}>{children}</span>
   )
@@ -86,7 +87,7 @@ function ArrSearchButton({ service, color, state, onClick }) {
       onClick={onClick}
       style={{
         background: 'none', border: 'none', padding: '1px 2px',
-        color, fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
+        color, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 600,
         cursor: 'pointer', flexShrink: 0, textDecoration: 'none',
       }}
       onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
@@ -97,75 +98,8 @@ function ArrSearchButton({ service, color, state, onClick }) {
   )
 }
 
-function Chip({ active, color, onClick, children, style }) {
-  color = color || 'var(--accent)'
-  style = style || {}
-  return (
-    <button onClick={onClick} style={Object.assign({
-      padding: '4px 12px', borderRadius: 'var(--r-pill)', fontSize: 12, fontWeight: 500,
-      border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
-      background: active ? tint('var(--accent)', 9) : 'transparent',
-      color: active ? 'var(--accent)' : 'var(--text-dim)',
-      cursor: 'pointer', transition: 'all 0.12s', whiteSpace: 'nowrap',
-      display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: 'var(--sans)',
-    }, style)}>
-      {color && <span className="ui-status-dot" style={{ width: 6, height: 6, background: color }} />}
-      {children}
-    </button>
-  )
-}
-
-function ChoiceButton({ active, tone, onClick, children, style, title }) {
-  const color = tone === 'exclude' ? 'var(--red)' : 'var(--green)'
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      style={Object.assign({
-        padding: '4px 10px',
-        borderRadius: 6,
-        fontSize: 12,
-        fontWeight: active ? 700 : 500,
-        border: `1px solid ${active ? color : 'var(--border2)'}`,
-        background: active ? 'var(--surface2)' : 'transparent',
-        color: active ? color : 'var(--text-dim)',
-        cursor: 'pointer',
-        transition: 'all 0.12s',
-        whiteSpace: 'nowrap',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        fontFamily: 'var(--sans)',
-      }, style)}
-    >
-      {children}
-    </button>
-  )
-}
-
-// Tri-state filter for an orthogonal boolean flag (duplicate / excluded).
-// Neither button pressed = 'any' (the flag doesn't constrain the view), '+' =
-// only files carrying it, '-' = hide them. Same +/- vocabulary as the tracker
-// panel below, which is where this component's idiom comes from.
-function FlagToggle({ label, noun, value, onChange }) {
-  return (
-    <div style={{ display: 'flex' }}>
-      <ChoiceButton active={value === 'only'} tone="include"
-        title={`Show only ${noun}`}
-        onClick={() => onChange(value === 'only' ? 'any' : 'only')}
-        style={{ borderRadius: '6px 0 0 6px', borderRight: 'none' }}>
-        + {label}
-      </ChoiceButton>
-      <ChoiceButton active={value === 'hide'} tone="exclude"
-        title={`Hide ${noun}`}
-        onClick={() => onChange(value === 'hide' ? 'any' : 'hide')}
-        style={{ borderRadius: '0 6px 6px 0' }}>
-        -
-      </ChoiceButton>
-    </div>
-  )
-}
+// A dot before a filter option's label, the size the old chips drew it.
+const optDot = color => <Dot color={color} size={6} />
 
 function seedCountValue(file) {
   return (file.trackers || []).filter(t => t !== 'None').length
@@ -200,30 +134,13 @@ function SeedCountMenu({ value, options, onChange }) {
 
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        style={{
-          height: 28,
-          padding: '0 10px',
-          borderRadius: 6,
-          border: '1px solid var(--border2)',
-          background: active ? 'var(--surface2)' : 'transparent',
-          color: active ? 'var(--text)' : 'var(--text-dim)',
-          cursor: 'pointer',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 7,
-          fontFamily: 'var(--sans)',
-          fontSize: 12,
-          fontWeight: active ? 600 : 500,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {active && <span className="ui-status-dot" style={{ width: 6, height: 6, background: value === 0 ? 'var(--yellow)' : 'var(--blue)' }} />}
+      {/* A menu trigger is a button; it has never looked like one. Raised when a
+          count is chosen, quiet when it is not. */}
+      <Button size="sm" variant={active ? 'secondary' : 'ghost'} pressed={open} onClick={() => setOpen(o => !o)}>
+        {active && optDot(value === 0 ? 'var(--yellow)' : 'var(--blue)')}
         <span>Seed count: {label}</span>
-        <span style={{ color: 'var(--text-dim)', fontSize: 10 }}>▾</span>
-      </button>
+        <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>▾</span>
+      </Button>
       {open && (
         <div style={{
           position: 'absolute',
@@ -253,7 +170,7 @@ function SeedCountMenu({ value, options, onChange }) {
                   width: '100%',
                   padding: '6px 8px',
                   border: 'none',
-                  borderRadius: 6,
+                  borderRadius: 'var(--r)',
                   background: selected ? 'var(--surface3)' : 'transparent',
                   color: selected ? 'var(--text)' : 'var(--text-dim)',
                   cursor: 'pointer',
@@ -262,16 +179,16 @@ function SeedCountMenu({ value, options, onChange }) {
                   justifyContent: 'space-between',
                   gap: 12,
                   fontFamily: 'var(--sans)',
-                  fontSize: 12,
+                  fontSize: 'var(--font-base)',
                   fontWeight: selected ? 700 : 500,
                   textAlign: 'left',
                 }}
               >
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-                  {opt.value !== null && <span className="ui-status-dot" style={{ width: 6, height: 6, background: opt.value === 0 ? 'var(--yellow)' : 'var(--blue)' }} />}
+                  {opt.value !== null && optDot(opt.value === 0 ? 'var(--yellow)' : 'var(--blue)')}
                   {opt.label}
                 </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{opt.count.toLocaleString()}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{opt.count.toLocaleString()}</span>
               </button>
             )
           })}
@@ -292,8 +209,8 @@ function FilterInput({ value, onChange, placeholder, width = 160 }) {
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={{
-        width, height: 28, padding: '0 10px',
-        borderRadius: 'var(--r)', fontSize: 12,
+        width, height: 'var(--control-h)', padding: '0 10px',
+        borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
         border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
         background: focused || value ? 'var(--surface2)' : 'transparent',
         color: 'var(--text)', fontFamily: 'var(--mono)',
@@ -315,8 +232,8 @@ function SizeInput({ value, onChange, placeholder }) {
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={{
-        width: 80, height: 28, padding: '0 8px',
-        borderRadius: 'var(--r)', fontSize: 12,
+        width: 80, height: 'var(--control-h)', padding: '0 8px',
+        borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
         border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
         background: focused || value ? 'var(--surface2)' : 'transparent',
         color: 'var(--text)', fontFamily: 'var(--mono)',
@@ -333,7 +250,7 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
 
-  const pathStyle = { fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', wordBreak: 'break-all', lineHeight: 1.65, padding: '4px 0' }
+  const pathStyle = { fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', wordBreak: 'break-all', lineHeight: 1.65, padding: '4px 0' }
 
   const POPOVER_W = 580
   const popoverStyle = anchorRect ? (() => {
@@ -376,18 +293,15 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
         style={popoverStyle}
       >
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 600, wordBreak: 'break-all', lineHeight: 1.5 }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text)', fontWeight: 600, wordBreak: 'break-all', lineHeight: 1.5 }}>
             {name}
           </span>
-          <button
-            onClick={onClose}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
-          >×</button>
+          <CloseButton onClick={onClose} />
         </div>
 
         {linkedPaths?.length > 0 && (
           <div style={{ marginBottom: duplicatePaths?.length > 0 ? 16 : 0 }}>
-            <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 6 }}>
               Hardlinks ({linkedPaths.length})
             </div>
             {linkedPaths.map((p, i) => (
@@ -398,7 +312,7 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
 
         {duplicatePaths?.length > 0 && (
           <div>
-            <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 6 }}>
               Duplicates ({duplicatePaths.length})
             </div>
             {duplicatePaths.map((p, i) => (
@@ -512,8 +426,8 @@ function FolderRow({ name, node, depth, openRef, onToggle, path }) {
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" style={{ flexShrink: 0 }}>
         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
       </svg>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 700, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(node.size)}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 700, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(node.size)}</span>
     </div>
   )
 }
@@ -580,12 +494,12 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
         </svg>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
         {hasPaths && (
           <button
             onClick={e => { e.stopPropagation(); onOpenPopup({ name, linkedPaths: node.linked_paths, duplicatePaths: node.duplicate_paths, anchorRect: e.currentTarget.getBoundingClientRect() }) }}
             title="Show hardlinks & duplicates"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 'var(--font-md)', lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
             onMouseEnter={e => e.currentTarget.style.opacity = '1'}
             onMouseLeave={e => e.currentTarget.style.opacity = '0.7'}
           >ⓘ</button>
@@ -599,28 +513,18 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
         {showSearchButtons && showRadarr && (
           <ArrSearchButton service="Radarr" color="var(--yellow)" state={radarrState} onClick={handleRadarrSearch} />
         )}
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
         {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
         {notImported && <Tag color="var(--red)">not imported</Tag>}
         <Tag color={isOrphan ? 'var(--yellow)' : node.status === 'Seeding' ? 'var(--green)' : 'var(--blue)'}>{(node.status||'').toLowerCase()}</Tag>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
           {(node.trackers||[]).join(' · ')}
         </span>
         {showSourceLink && (
-          <button
-            title={clientLinkTitle(node, torrentSource)}
-            onClick={e => {
-              e.stopPropagation()
-              openTorrentInClient(node, torrentSource, qbHost, quiHost, toast)
-            }}
-            style={{
-              background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,
-              color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11,
-              padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'border-color 0.1s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
-            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border2)'}
-          >{torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}</button>
+          <Button size="chip" variant="subtle" title={clientLinkTitle(node, torrentSource)}
+            onClick={e => { e.stopPropagation(); openTorrentInClient(node, torrentSource, qbHost, quiHost, toast) }}>
+            {torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}
+          </Button>
         )}
         <button
           title="Copy full path"
@@ -638,7 +542,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
           }}
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
-            color: 'var(--text-faint)', fontSize: 11, lineHeight: 1, flexShrink: 0,
+            color: 'var(--text-faint)', fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0,
             borderRadius: 3, transition: 'color 0.1s',
           }}
           onMouseEnter={e => e.currentTarget.style.color = 'var(--text-dim)'}
@@ -715,12 +619,12 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
             <polyline points="14 2 14 8 20 8"/>
           </svg>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basename}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basename}</span>
           {hasPaths && (
             <button
               onClick={e => { e.stopPropagation(); onOpenPopup({ name: basename, linkedPaths: node.linked_paths, duplicatePaths: node.duplicate_paths, anchorRect: e.currentTarget.getBoundingClientRect() }) }}
               title="Show hardlinks & duplicates"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 'var(--font-md)', lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
               onMouseEnter={e => e.currentTarget.style.opacity = '1'}
               onMouseLeave={e => e.currentTarget.style.opacity = '0.7'}
             >ⓘ</button>
@@ -734,28 +638,18 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           {showSearchButtons && showRadarr && (
             <ArrSearchButton service="Radarr" color="var(--yellow)" state={radarrState} onClick={handleRadarrSearch} />
           )}
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', minWidth: 64, textAlign: 'right' }}>{formatBytes(node.size)}</span>
           {isDupe      && <Tag color="var(--purple)">dupe</Tag>}
           {notImported && <Tag color="var(--red)">not imported</Tag>}
           <Tag color={isOrphan ? 'var(--yellow)' : node.status === 'Seeding' ? 'var(--green)' : 'var(--blue)'}>{(node.status||'').toLowerCase()}</Tag>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
             {(node.trackers||[]).join(' · ')}
           </span>
           {showSourceLink && (
-            <button
-              title={clientLinkTitle(node, torrentSource)}
-              onClick={e => {
-                e.stopPropagation()
-                openTorrentInClient(node, torrentSource, qbHost, quiHost, toast)
-              }}
-              style={{
-                background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 99,
-                color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 11,
-                padding: '1px 8px', cursor: 'pointer', flexShrink: 0, transition: 'border-color 0.1s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
-              onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border2)'}
-            >{torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}</button>
+            <Button size="chip" variant="subtle" title={clientLinkTitle(node, torrentSource)}
+              onClick={e => { e.stopPropagation(); openTorrentInClient(node, torrentSource, qbHost, quiHost, toast) }}>
+              {torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}
+            </Button>
           )}
           <button
             title="Copy full path"
@@ -773,7 +667,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
             }}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
-              color: 'var(--text-faint)', fontSize: 11, lineHeight: 1, flexShrink: 0,
+              color: 'var(--text-faint)', fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0,
               borderRadius: 3, transition: 'color 0.1s',
             }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--text-dim)'}
@@ -782,7 +676,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
         </div>
       </div>
       {/* Line 2: directory */}
-      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {dirname}
       </div>
     </div>
@@ -855,19 +749,15 @@ function toBytes(val, unit) {
 function SizeRangeFilter({ minVal, minUnit, maxVal, maxUnit, onMinVal, onMinUnit, onMaxVal, onMaxUnit, onClear }) {
   const hasValue = minVal || maxVal
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
       <SizeInput value={minVal} onChange={onMinVal} placeholder="min" />
       <UnitSelect value={minUnit} onChange={onMinUnit} />
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>–</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>–</span>
       <SizeInput value={maxVal} onChange={onMaxVal} placeholder="max" />
       <UnitSelect value={maxUnit} onChange={onMaxUnit} />
       {hasValue && (
-        <button onClick={onClear} style={{
-          padding: '2px 8px', borderRadius: 99, fontSize: 11,
-          border: '1px solid var(--border2)', background: 'transparent',
-          color: 'var(--text-dim)', cursor: 'pointer',
-        }}>✕</button>
+        <Button size="sm" variant="ghost" square onClick={onClear} title="Clear size range" ariaLabel="Clear size range">✕</Button>
       )}
     </div>
   )
@@ -879,7 +769,7 @@ function UnitSelect({ value, onChange }) {
       value={value}
       onChange={e => onChange(e.target.value)}
       style={{
-        height: 28, padding: '0 6px', borderRadius: 'var(--r)', fontSize: 11,
+        height: 'var(--control-h)', padding: '0 6px', borderRadius: 'var(--r)', fontSize: 'var(--font-sm)',
         border: '1px solid var(--border2)', background: 'var(--surface2)',
         color: 'var(--text-dim)', fontFamily: 'var(--mono)', cursor: 'pointer',
         outline: 'none',
@@ -896,6 +786,8 @@ function UnitSelect({ value, onChange }) {
 // "Duplicate" and "Excluded" are orthogonal booleans and live in FlagToggles
 // instead: as chips in this row they could only ever be selected *instead of* a
 // status, so "orphaned but not excluded" was inexpressible (issue #23).
+const DIVIDER = { width: 1, height: 18, background: 'var(--border2)', margin: '0 3px', flexShrink: 0 }
+
 const STATUS_FILTERS = [
   { id: 'all',      label: 'All' },
   { id: 'Seeding',  label: 'Seeding',  color: 'var(--green)' },
@@ -973,14 +865,10 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     setTick(t => t + 1)
   }, [])
 
-  const toggleTracker = useCallback((type, t) => {
-    if (type === 'inc') {
-      setTrackerInc(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t])
-      setTrackerExc(p => p.filter(x => x !== t))
-    } else {
-      setTrackerExc(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t])
-      setTrackerInc(p => p.filter(x => x !== t))
-    }
+  // A tracker is included, excluded or neither — never both.
+  const setTrackerFlag = useCallback((t, v) => {
+    setTrackerInc(p => v === 'only' ? (p.includes(t) ? p : [...p, t]) : p.filter(x => x !== t))
+    setTrackerExc(p => v === 'hide' ? (p.includes(t) ? p : [...p, t]) : p.filter(x => x !== t))
   }, [])
 
   const sizeMinBytes = useMemo(() => toBytes(sizeMinVal, sizeMinUnit), [sizeMinVal, sizeMinUnit])
@@ -1106,7 +994,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   }
 
   const emptyMsg = (
-      <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--sans)', fontSize:12 }}>
+      <div style={{ padding:40, textAlign:'center', color:'var(--text-dim)', fontFamily:'var(--sans)', fontSize:'var(--font-base)' }}>
       No files match the current filters.
     </div>
   )
@@ -1122,17 +1010,21 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           { label:'Orphaned',    val:stats.orphaned, size:stats.orphanedSize, color:'var(--yellow)' },
         ].map(c => (
           <div key={c.label} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--r)', boxShadow:'var(--elev-1)', padding:'10px 14px' }}>
-            <div style={{ fontFamily:'var(--sans)', fontSize:12, fontWeight:600, color:'var(--text)', textTransform:'none', letterSpacing:0, display:'flex', alignItems:'center', gap:7 }}>
+            <div style={{ fontFamily:'var(--sans)', fontSize:'var(--font-base)', fontWeight:600, color:'var(--text)', textTransform:'none', letterSpacing:0, display:'flex', alignItems:'center', gap:7 }}>
               {c.color !== 'var(--text)' && <span className="ui-status-dot" style={{ background:c.color }} />}
               {c.label}
             </div>
-            <div style={{ fontFamily:'var(--mono)', fontSize:22, fontWeight:700, color:'var(--text)' }}>{c.val.toLocaleString()}</div>
-            <div style={{ fontSize:11, color:'var(--text-dim)' }}>{formatBytes(c.size)}</div>
+            <div style={{ fontFamily:'var(--mono)', fontSize:'var(--font-xl)', fontWeight:700, color:'var(--text)' }}>{c.val.toLocaleString()}</div>
+            <div style={{ fontSize:'var(--font-sm)', color:'var(--text-dim)' }}>{formatBytes(c.size)}</div>
           </div>
         ))}
       </div>
 
-      {/* ── Toolbar ── */}
+      {/* ── Toolbar ──
+          A dense bar: every control in it is var(--control-h), 6px apart inside
+          a group and a divider between groups. Status, Import, View and Sort are
+          one-of-N, so they are Segmented; Duplicates and Excluded are flags on a
+          separate axis from Status (issue #23), so they stay FlagToggles. */}
       <div style={{
         background: 'var(--bg)',
         borderBottom: '1px solid var(--border)',
@@ -1141,110 +1033,68 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       }}>
         {/* Row 1: filter groups */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 0 6px' }}>
-          <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginRight: 2 }}>Status</span>
-          {STATUS_FILTERS.map(({ id, label, color }) => (
-            <Chip key={id} active={statusFilter===id} color={color}
-              onClick={() => setStatusFilter(id)}>{label}</Chip>
-          ))}
-          <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />
-          <FlagToggle label="Duplicates" noun="duplicate files"
-            value={dupFilter} onChange={setDupFilter} />
+          <span className="ui-field-label" style={{ color: 'var(--text-dim)' }}>Status</span>
+          <Segmented label="Status" value={statusFilter} onChange={setStatusFilter}
+            options={STATUS_FILTERS.map(({ id, label, color }) => ({ value: id, label, icon: color && optDot(color) }))} />
+          <div style={DIVIDER} />
+          <FlagToggle label="Duplicates" value={dupFilter} onChange={setDupFilter}
+            onlyTitle="Show only duplicate files" hideTitle="Hide duplicate files" />
           <FlagToggle
             label={'Excluded' + (exclFilter === 'any' && stats.excluded > 0 ? ` (${stats.excluded.toLocaleString()})` : '')}
-            noun="excluded files"
-            value={exclFilter} onChange={setExclChoice} />
+            value={exclFilter} onChange={setExclChoice}
+            onlyTitle="Show only excluded files" hideTitle="Hide excluded files" />
           {trackers.length > 0 && (
-            <Chip active={trackerPanelOpen} color="var(--blue)"
+            <Button size="sm" variant={trackerPanelOpen ? 'secondary' : 'ghost'} pressed={trackerPanelOpen}
               onClick={() => setShowTrackers(s => !s)}>
-              {'🔍 Trackers' + (activeTrackerCount > 0 ? ' (' + activeTrackerCount + ')' : '')}
-            </Chip>
+              {optDot('var(--blue)')}
+              {'Trackers' + (activeTrackerCount > 0 ? ' (' + activeTrackerCount + ')' : '')}
+            </Button>
           )}
-          {tab === 'torrents' && <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />}
           {tab === 'torrents' && <>
-            <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginLeft: 4 }}>Import</span>
-            <Chip active={importFilter==='all'} onClick={() => setImportFilter('all')}>All</Chip>
-            <Chip active={importFilter==='notImported'} color="var(--red)"
-              onClick={() => setImportFilter('notImported')}>Not imported</Chip>
+            <div style={DIVIDER} />
+            <span className="ui-field-label" style={{ color: 'var(--text-dim)' }}>Import</span>
+            <Segmented label="Import" value={importFilter} onChange={setImportFilter} options={[
+              { value: 'all', label: 'All' },
+              { value: 'notImported', label: 'Not imported', icon: optDot('var(--red)') },
+            ]} />
           </>}
-          <div style={{ width:1, height:18, background:'var(--border2)', margin:'0 2px' }} />
+          <div style={DIVIDER} />
           <SeedCountMenu value={seedCount} options={seedCountOptions} onChange={setSeedCount} />
           <div style={{ flex: 1 }} />
 
-          {/* View toggle */}
+          {/* View toggle. A name search or a reveal forces the flat view, so the
+              control shows Flat and is disabled rather than lying about it. */}
           {(() => {
             const forced = !!debouncedNameQuery.trim() || !!revealPath
             return (
-              <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 4 }}>
-                <span className="ui-field-label" style={{ color: 'var(--text-dim)', marginRight: 2 }}>View</span>
-                <button
-                  onClick={() => { if (!forced) { setUserFlat(false); localStorage.setItem('auditorr_view_flat', '0') } }}
-                  style={{
-                    padding: '4px 10px', borderRadius: 6, fontSize: 12,
-                    border: '1px solid var(--border2)',
-                    borderRight: 'none',
-                    background: !isFlat ? 'var(--surface2)' : 'transparent',
-                    color: !isFlat ? 'var(--text)' : 'var(--text-dim)',
-                    cursor: forced ? 'default' : 'pointer',
-                    opacity: forced ? 0.45 : 1,
-                  }}
-                >⊟ Tree</button>
-                <button
-                  onClick={() => { if (!forced) { setUserFlat(true); localStorage.setItem('auditorr_view_flat', '1') } }}
-                  style={{
-                    padding: '4px 10px', borderRadius: 6, fontSize: 12,
-                    border: '1px solid var(--border2)',
-                    background: isFlat ? 'var(--surface2)' : 'transparent',
-                    color: isFlat ? 'var(--text)' : 'var(--text-dim)',
-                    cursor: forced ? 'default' : 'pointer',
-                    opacity: forced ? 0.45 : 1,
-                  }}
-                >⊞ Flat</button>
+              <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 6 }}>
+                <span className="ui-field-label" style={{ color: 'var(--text-dim)' }}>View</span>
+                <Segmented label="View" value={isFlat ? 'flat' : 'tree'} disabled={forced}
+                  onChange={v => { setUserFlat(v === 'flat'); localStorage.setItem('auditorr_view_flat', v === 'flat' ? '1' : '0') }}
+                  options={[{ value: 'tree', label: '⊟ Tree' }, { value: 'flat', label: '⊞ Flat' }]} />
               </div>
             )
           })()}
 
           {isFlat && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 6 }}>
               <span className="ui-field-label" style={{ color: 'var(--text-dim)' }}>Sort</span>
-              <button
-                onClick={() => setSortBy('name')}
-                style={{
-                  padding: '4px 8px', borderRadius: 6, fontSize: 12,
-                  border: '1px solid var(--border2)',
-                  borderRight: 'none',
-                  background: sortBy === 'name' ? 'var(--surface2)' : 'transparent',
-                  color: sortBy === 'name' ? 'var(--text)' : 'var(--text-dim)',
-                  cursor: 'pointer',
-                }}
-              >Name</button>
-              <button
-                onClick={() => setSortBy('size')}
-                style={{
-                  padding: '4px 8px', borderRadius: 6, fontSize: 12,
-                  border: '1px solid var(--border2)',
-                  background: sortBy === 'size' ? 'var(--surface2)' : 'transparent',
-                  color: sortBy === 'size' ? 'var(--text)' : 'var(--text-dim)',
-                  cursor: 'pointer',
-                }}
-              >Size</button>
+              <Segmented label="Sort" value={sortBy} onChange={setSortBy}
+                options={[{ value: 'name', label: 'Name' }, { value: 'size', label: 'Size' }]} />
             </div>
           )}
         </div>
 
         {/* Row 2: search + size range, then the two actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 0 8px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <FilterInput value={nameQuery} onChange={setNameQuery} placeholder="🔎 search filename…" width={200} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 0 8px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FilterInput value={nameQuery} onChange={setNameQuery} placeholder="Search filename…" width={200} />
             {nameQuery && (
-              <button onClick={() => setNameQuery('')} style={{
-                padding: '2px 7px', borderRadius: 99, fontSize: 11,
-                border: '1px solid var(--border2)', background: 'transparent',
-                color: 'var(--text-dim)', cursor: 'pointer',
-              }}>✕</button>
+              <Button size="sm" variant="ghost" square onClick={() => setNameQuery('')} title="Clear search" ariaLabel="Clear search">✕</Button>
             )}
           </div>
 
-          <div style={{ width: 1, height: 18, background: 'var(--border2)' }} />
+          <div style={{ ...DIVIDER, margin: 0 }} />
 
           <SizeRangeFilter
             minVal={sizeMinVal}  minUnit={sizeMinUnit}
@@ -1255,28 +1105,22 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           />
 
           {(nameQuery || hasSizeFilter) && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>
               {filtered.length.toLocaleString()} match{filtered.length !== 1 ? 'es' : ''}
             </span>
           )}
 
           {/* Actions, not filters — they sit on this row so the filter row above
-              has room for the status chips and both flag toggles without wrapping. */}
+              has room for the status track and both flag toggles without wrapping. */}
           <div style={{ flex: 1 }} />
 
-          <button onClick={copyPaths} title={`Copy ${filtered.length} paths to clipboard`} style={{
-            padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
-            border: `1px solid ${copied ? 'var(--green)' : 'var(--border2)'}`,
-            background: copied ? tint('var(--green)', 9) : 'transparent',
-            color: copied ? 'var(--green)' : 'var(--text-dim)',
-            cursor: 'pointer', transition: 'all 0.15s',
-          }}>{copied ? '✓ Copied!' : 'Copy Paths'}</button>
-
-          <button onClick={exportCSV} style={{
-            padding: '4px 12px', borderRadius: 99, fontSize: 12, flexShrink: 0,
-            border: '1px solid var(--border2)', background: 'transparent',
-            color: 'var(--text-dim)', cursor: 'pointer',
-          }}>Export CSV</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Button size="sm" variant={copied ? undefined : 'subtle'} tone={copied ? 'var(--green)' : undefined}
+              onClick={copyPaths} title={`Copy ${filtered.length} paths to clipboard`}>
+              {copied ? '✓ Copied!' : 'Copy Paths'}
+            </Button>
+            <Button size="sm" variant="subtle" onClick={exportCSV}>Export CSV</Button>
+          </div>
         </div>
       </div>
 
@@ -1286,30 +1130,18 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           background: 'var(--surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)', padding: '12px 16px', marginBottom: 14, flexShrink: 0,
         }}>
-          <div style={{ fontFamily:'var(--sans)', fontSize:12, fontWeight:600, color:'var(--text)', letterSpacing:0, textTransform:'none', marginBottom:10 }}>
-            + include / - exclude
+          <div style={{ fontFamily:'var(--sans)', fontSize:'var(--font-base)', fontWeight:600, color:'var(--text)', letterSpacing:0, textTransform:'none', marginBottom:10 }}>
+            + include / − exclude
           </div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
             {trackers.map(t => (
-              <div key={t} style={{ display:'flex' }}>
-                <ChoiceButton active={trackerInc.includes(t)} tone="include"
-                  onClick={() => toggleTracker('inc', t)}
-                  style={{ borderRadius:'6px 0 0 6px', borderRight:'none' }}>
-                  + {t}
-                </ChoiceButton>
-                <ChoiceButton active={trackerExc.includes(t)} tone="exclude"
-                  onClick={() => toggleTracker('exc', t)}
-                  style={{ borderRadius:'0 6px 6px 0', padding:'4px 10px' }}>
-                  -
-                </ChoiceButton>
-              </div>
+              <FlagToggle key={t} label={t}
+                value={trackerInc.includes(t) ? 'only' : trackerExc.includes(t) ? 'hide' : 'any'}
+                onChange={v => setTrackerFlag(t, v)}
+                onlyTitle={`Show only files on ${t}`} hideTitle={`Hide files on ${t}`} />
             ))}
             {activeTrackerCount > 0 && (
-              <button onClick={() => { setTrackerInc([]); setTrackerExc([]) }} style={{
-                padding:'4px 10px', borderRadius:6, fontSize:11,
-                border:'1px solid var(--border2)', background:'transparent',
-                color:'var(--text-dim)', cursor:'pointer',
-              }}>clear</button>
+              <Button size="sm" variant="ghost" onClick={() => { setTrackerInc([]); setTrackerExc([]) }}>Clear</Button>
             )}
           </div>
         </div>
@@ -1358,7 +1190,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
         )}
       </div>
 
-      <div style={{ marginTop:8, fontFamily:'var(--mono)', fontSize:10, color:'var(--text-dim)', textAlign:'right' }}>
+      <div style={{ marginTop:8, fontFamily:'var(--mono)', fontSize:'var(--font-sm)', color:'var(--text-dim)', textAlign:'right' }}>
         {filtered.length.toLocaleString()} files · {formatBytes(stats.totalSize)}
       </div>
 

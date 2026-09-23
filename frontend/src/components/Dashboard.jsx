@@ -5,11 +5,12 @@ import ChangesPanel from './ChangesPanel'
 import { RangePresets, TrackerDropdown } from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
+import { Button, CloseButton, Segmented } from './workflows/shared'
 
 // Shared section-header label style — keeps every dashboard card title uniform.
 const SECTION_LABEL = {
   fontFamily: 'var(--sans)',
-  fontSize: 13,
+  fontSize: 'var(--font-md)',
   fontWeight: 600,
   color: 'var(--text)',
   letterSpacing: 0,
@@ -235,15 +236,15 @@ function HealthDial({ score, status, smartTrend, color }) {
           {showThresholdLabels && ticks.map((t, i) => (
             <g key={i} style={{ transition: 'opacity 0.12s ease' }}>
               <text x={t.label.x} y={t.label.y + 3} textAnchor="middle"
-                fontFamily="var(--mono)" fontSize="9" fill="var(--text-dim)" opacity="0.48">{t.value}</text>
+                fontFamily="var(--mono)" style={{ fontSize: 'var(--font-xs)' }} fill="var(--text-dim)" opacity="0.48">{t.value}</text>
             </g>
           ))}
         </svg>
         {/* Center readout — HTML overlay for crisp text + status chip */}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 42, fontWeight: 500, color: 'var(--text)', lineHeight: 1, letterSpacing: '-0.5px', fontVariantNumeric: 'tabular-nums' }}>{displayScore}</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>/ 100</span>
-          <span style={{ marginTop: 6, fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>/ 100</span>
+          <span style={{ marginTop: 6, fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text-dim)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 7, height: 7, borderRadius: 99, background: tipColor }} />
             {status}
           </span>
@@ -252,7 +253,7 @@ function HealthDial({ score, status, smartTrend, color }) {
       {delta != null && (
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 6,
-          fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600,
+          fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600,
           color: 'var(--text-dim)',
           lineHeight: 1.35,
         }}>
@@ -268,11 +269,11 @@ function GrafanaTooltip({ active, payload, label, color }) {
   if (!active || !payload?.length) return null
   return (
     <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 130 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>{payload[0].value}</span>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>/ 100</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 700, color: '#ebebeb' }}>{payload[0].value}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>/ 100</span>
       </div>
     </div>
   )
@@ -290,18 +291,18 @@ function UploadActivityTooltip({ active, payload, label }) {
   const total = payload.reduce((s, p) => s + (p.value || 0), 0)
   return (
     <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 160 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
       {items.map(p => (
         <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
           <div style={{ width: 8, height: 8, borderRadius: 2, background: p.fill, flexShrink: 0 }} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#ebebeb', flex: 1 }}>{p.name}</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{formatBytes(p.value)}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: '#ebebeb', flex: 1 }}>{p.name}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{formatBytes(p.value)}</span>
         </div>
       ))}
       {items.length > 1 && (
         <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>Total</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Total</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
         </div>
       )}
     </div>
@@ -364,8 +365,8 @@ function TrendPill({ trend }) {
   if (!trend) return null
   const m = TREND_META[trend.sentiment]
   return (
-    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: m.color, lineHeight: 1.35 }}>
-      <span style={{ fontSize: 10, lineHeight: 1, flexShrink: 0 }}>{m.icon}</span>
+    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: m.color, lineHeight: 1.35 }}>
+      <span style={{ fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>{m.icon}</span>
       {m.label}
     </div>
   )
@@ -451,13 +452,13 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
         <span style={{ display: 'flex', alignItems: 'flex-start', gap: 7, minHeight: 18 }}>
           <span className="ui-status-dot" style={{ background: color, marginTop: 5 }} />
-          <span style={{ fontFamily: 'var(--sans)', fontSize: 14, fontWeight: 500, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.25 }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', lineHeight: 1.25 }}>
             {label}
           </span>
         </span>
         <span style={{
           fontFamily: 'var(--mono)',
-          fontSize: 11,
+          fontSize: 'var(--font-sm)',
           color: 'var(--text-faint)',
           fontVariantNumeric: 'tabular-nums',
           whiteSpace: 'nowrap',
@@ -468,15 +469,15 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
       <div style={{ marginTop: 14 }}>
         <HeroNumber value={numPart} unit={unitPart} />
       </div>
-      <span style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
+      <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{sub}</span>
       <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
         <TrendPill trend={trend} />
       </div>
-      <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6 }}>{desc}</p>
+      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 10, lineHeight: 1.6 }}>{desc}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 'auto', paddingTop: 14 }}>
         {enrichedRows.map((row, rowIdx) => {
           const visibleActions = row.filter(a => !a.hidden)
-          if (visibleActions.length === 0) return <div key={rowIdx} style={{ height: 31 }} />
+          if (visibleActions.length === 0) return <div key={rowIdx} style={{ height: 'var(--control-h-lg)' }} />
           return (
             <div key={rowIdx} style={{ display: 'flex', gap: 6 }}>
               {visibleActions.map((a, i) => {
@@ -484,41 +485,26 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
                 // with a near-white label; only the small leading icon carries
                 // the card's workflow hue (color rationed to a pointed accent,
                 // like the status dot — never a fill — per the design system).
-                // Secondary = the "just look" view link: quiet until hover.
+                // Secondary = the "just look" view link: quiet until hover, so
+                // its hairline is withheld. Both are the kit's Button (UI pass,
+                // 2026-09-22), which is what gives them a real :hover.
                 const isPrimary = a.variant === 'primary'
-                const baseBg  = isPrimary ? 'var(--surface2)' : 'transparent'
-                const hoverBg = isPrimary ? 'var(--surface3)' : 'var(--surface2)'
-                const baseBorder = isPrimary ? 'var(--border2)' : 'transparent'
                 const icon = isPrimary ? WORKFLOW_ICONS[a.tab] : null
                 return (
-                  <button
+                  <Button
                     key={i}
+                    variant={isPrimary ? 'secondary' : 'ghost'}
                     onClick={() => handleAction(a)}
                     disabled={a.loading}
                     style={{
-                      flex: 1, padding: isPrimary ? '8px 10px' : '7px 10px', borderRadius: 'var(--r)',
-                      border: `1px solid ${baseBorder}`,
-                      background: a.loading ? 'var(--surface2)' : baseBg,
-                      color: a.loading ? 'var(--text-dim)' : (isPrimary ? 'var(--text)' : 'var(--text-dim)'),
-                      fontSize: isPrimary ? 12.5 : 12, fontWeight: isPrimary ? 600 : 500,
-                      cursor: a.loading ? 'default' : 'pointer', whiteSpace: 'nowrap',
-                      transition: 'background 0.15s, color 0.15s, border-color 0.15s',
-                      display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 7,
-                    }}
-                    onMouseEnter={e => {
-                      if (a.loading) return
-                      e.currentTarget.style.background = hoverBg
-                      if (!isPrimary) { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--border2)' }
-                    }}
-                    onMouseLeave={e => {
-                      if (a.loading) return
-                      e.currentTarget.style.background = baseBg
-                      if (!isPrimary) { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'transparent' }
+                      flex: 1, justifyContent: 'flex-start', gap: 7,
+                      fontWeight: isPrimary ? 600 : 500,
+                      ...(isPrimary ? null : { '--btn-border': 'transparent' }),
                     }}
                   >
                     {icon && <span style={{ display: 'inline-flex', flexShrink: 0, color: a.loading ? 'var(--text-dim)' : color }}>{icon}</span>}
                     {a.loading ? (a.loadingLabel || '…') : a.label}
-                  </button>
+                  </Button>
                 )
               })}
             </div>
@@ -588,13 +574,13 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
           return (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)' }}>
                 {seg.count === 0 ? 'Not Seeded (0×)' : `${seg.count}× seeded`}
               </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
                 {formatBytes(seg.size)} · {pct}%
               </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>click to filter →</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>click to filter →</span>
             </div>
           )
         })()}
@@ -613,7 +599,7 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
               style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
                 {seg.count === 0 ? '0× (not seeded)' : `${seg.count}×`} — {pct}%
               </span>
             </button>
@@ -655,8 +641,8 @@ function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
             <span style={{ fontSize: 16, flexShrink: 0 }}>{medals[i]}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{t.name}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', flexShrink: 0 }}>{t.count} files · {formatBytes(t.size)}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{t.name}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>{t.count} files · {formatBytes(t.size)}</span>
               </div>
               <div style={{ height: 4, background: 'var(--surface3)', borderRadius: 99, overflow: 'hidden' }}>
                 <div style={{ width: barPct + '%', height: '100%', background: colors[i], borderRadius: 99 }} />
@@ -731,35 +717,17 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
     { label: 'Not Imported', tabKey: 'not_imported',  value: formatBytes(notImportedSize),                              sub: `${notImportedCount} files`,                                               color: 'var(--red)'    },
   ]
 
-  const btnStyle = {
-    padding: '9px 14px', borderRadius: 7, border: '1px solid transparent',
-    background: 'transparent', color: 'var(--text-dim)',
-    fontSize: 13, fontWeight: 500, cursor: 'pointer', textAlign: 'left',
-    transition: 'background 0.15s, color 0.15s, border-color 0.15s', width: '100%',
-  }
-  const btnHover = e => {
-    e.currentTarget.style.background = 'var(--surface2)'
-    e.currentTarget.style.borderColor = 'var(--border2)'
-    e.currentTarget.style.color = 'var(--text)'
-  }
-  const btnLeave = e => {
-    e.currentTarget.style.background = 'transparent'
-    e.currentTarget.style.borderColor = 'transparent'
-    e.currentTarget.style.color = 'var(--text-dim)'
-  }
+  // The drill-downs to File Explorer: quiet full-width link rows, the same
+  // ghost-with-no-hairline the dashboard cards' "just look" actions use.
+  const NAV = { width: '100%', justifyContent: 'flex-start', fontWeight: 500, '--btn-border': 'transparent' }
 
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
         {onClose && (
-          <button
-            onClick={onClose}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, padding: '2px 6px', lineHeight: 1 }}
-            onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-dim)'}
-          >×</button>
+          <CloseButton onClick={onClose} />
         )}
       </div>
 
@@ -781,7 +749,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                   cursor: 'pointer', transition: 'border-color 0.12s, background 0.12s',
                 }}
               >
-                <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'none', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 }}>
+                <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'none', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 }}>
                   <span style={{ width: 6, height: 6, borderRadius: 99, background: s.color, flexShrink: 0 }} />
                   {s.label}
                 </div>
@@ -789,7 +757,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                   const { num, unit } = splitValueUnit(s.value)
                   return <HeroNumber value={num} unit={unit} size={22} />
                 })()}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
+                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
               </div>
             )
           })}
@@ -812,10 +780,10 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
+                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
                     <YAxis
                       width={44}
-                      tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
+                      tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }}
                       tickLine={false} axisLine={false}
                       domain={chartTab === 'seeding' ? ['auto', 'auto'] : [0, 'auto']}
                       tickFormatter={chartTab === 'yield'
@@ -828,8 +796,8 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
                         const val = payload[0].value
                         return (
                           <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>{fmtChartDate(label)}</div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 700, color: '#ebebeb' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 4 }}>{fmtChartDate(label)}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 700, color: '#ebebeb' }}>
                               {val != null ? activeTab.fmt(val) : '—'}
                             </div>
                           </div>
@@ -852,7 +820,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
               </div>
             </div>
           ) : (
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
               Upload data will appear after a few audits
             </div>
           )
@@ -861,22 +829,22 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
         {/* Navigation buttons */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {seedingCount > 0 && (
-            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+            <Button variant="ghost" style={NAV}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
-              View seeding files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({seedingCount} files · {formatBytes(seedingSize)})</span>
-            </button>
+              View seeding files <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>({seedingCount} files · {formatBytes(seedingSize)})</span>
+            </Button>
           )}
           {orphanedCount > 0 && (
-            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+            <Button variant="ghost" style={NAV}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
-              View orphaned files <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({orphanedCount} files · {formatBytes(orphanedSize)})</span>
-            </button>
+              View orphaned files <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>({orphanedCount} files · {formatBytes(orphanedSize)})</span>
+            </Button>
           )}
           {notImportedCount > 0 && (
-            <button style={btnStyle} onMouseEnter={btnHover} onMouseLeave={btnLeave}
+            <Button variant="ghost" style={NAV}
               onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
-              View not imported <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>({notImportedCount} files · {formatBytes(notImportedSize)})</span>
-            </button>
+              View not imported <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>({notImportedCount} files · {formatBytes(notImportedSize)})</span>
+            </Button>
           )}
         </div>
 
@@ -1137,11 +1105,11 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                     <path d="M8 6.5v3" stroke={a.color} strokeWidth="1.5" strokeLinecap="round" />
                     <circle cx="8" cy="11.6" r="0.9" fill={a.color} />
                   </svg>
-                  <span style={{ fontSize: 12, color: 'var(--text)' }}>{a.msg}</span>
+                  <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>{a.msg}</span>
                 </div>
-                <button onClick={() => onNavigate(a.action)} style={{ padding: '4px 12px', borderRadius: 6, border: `1px solid ${tint(a.color, 25)}`, background: tint(a.color, 8), color: a.color, fontSize: 11, fontWeight: 500, cursor: 'pointer', flexShrink: 0, marginLeft: 12 }}>
+                <Button size="sm" tone={a.color} onClick={() => onNavigate(a.action)} style={{ marginLeft: 12 }}>
                   {a.action.label} →
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -1169,8 +1137,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-              <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
-              <YAxis domain={[minScore, maxScore]} ticks={yTicks} allowDecimals={false} width={30} tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
+              <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
+              <YAxis domain={[minScore, maxScore]} ticks={yTicks} allowDecimals={false} width={30} tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} />
               <Tooltip content={<GrafanaTooltip color={c} />} cursor={{ stroke: tint(c, 25), strokeWidth: 1, strokeDasharray: '3 3' }} />
               <Area type="linear" dataKey="avg_score" stroke={c} strokeWidth={1.5} fill="url(#grafanaGrad)" dot={false} activeDot={{ r: 4, fill: c, stroke: 'var(--bg)', strokeWidth: 2 }} />
             </AreaChart>
@@ -1195,7 +1163,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                   <HeroNumber value={csMultDisplay} unit="×" />
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>avg seed multiplier</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>avg seed multiplier</span>
                 </div>
               </div>
             </div>
@@ -1216,20 +1184,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
             {filteredTrackerStats.length > 3 && (
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {filteredTrackerStats.slice(3).map(t => (
-                  <button
-                    key={t.name}
-                    onClick={() => setTrackerDetail(t.name)}
-                    style={{
-                      fontFamily: 'var(--sans)', fontSize: 11, fontWeight: 600, padding: '3px 8px',
-                      borderRadius: 6, border: '1px solid transparent',
-                      background: 'transparent', color: 'var(--text-dim)',
-                      cursor: 'pointer', transition: 'all 0.12s',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)'; e.currentTarget.style.borderColor = 'var(--border2)'; e.currentTarget.style.color = 'var(--text)' }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.color = 'var(--text-dim)' }}
-                  >
+                  <Button key={t.name} size="chip" variant="ghost" onClick={() => setTrackerDetail(t.name)}>
                     {t.name}
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}
@@ -1249,15 +1206,15 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
               {effectiveTrackers.length === 0
-                ? <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>No trackers selected</div>
+                ? <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No trackers selected</div>
                 : (
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={uploadChartData.data} margin={{ top: 4, right: 20, left: 4, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
+                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
                       <YAxis
                         width={44}
-                        tick={{ fontFamily: 'var(--mono)', fontSize: 11, fill: 'var(--text-dim)' }}
+                        tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }}
                         tickLine={false} axisLine={false}
                         tickFormatter={formatBytesCompact}
                       />
@@ -1284,16 +1241,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                 <div style={SECTION_LABEL}>
                   {yieldPanelTab === 'upload' ? 'Upload by tracker' : 'Library yield'}
                 </div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  {['upload', 'yield'].map(tab => (
-                    <button key={tab} onClick={() => setYieldPanelTab(tab)} style={{
-                      background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-                      fontFamily: 'var(--sans)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
-                      color: yieldPanelTab === tab ? 'var(--text)' : 'var(--text-dim)',
-                      fontWeight: yieldPanelTab === tab ? 700 : 400,
-                    }}>{tab}</button>
-                  ))}
-                </div>
+                <Segmented label="Panel" value={yieldPanelTab} onChange={setYieldPanelTab}
+                  options={[{ value: 'upload', label: 'Upload' }, { value: 'yield', label: 'Yield' }]} />
               </div>
               {yieldPanelTab === 'upload' ? (
                 <>
@@ -1303,7 +1252,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                       return <HeroNumber value={num} unit={unit} />
                     })()}
                   </div>
-                  <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                  <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
                     total uploaded · {uploadStats.period_days} day window
                   </p>
                 </>
@@ -1317,29 +1266,29 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                       const { num, unit } = splitValueUnit(filteredYield !== null ? (filteredYield * 100).toFixed(1) + '%' : '—')
                       return <HeroNumber value={num} unit={unit} />
                     })()}
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
                       over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
                     </span>
                   </div>
-                  <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
+                  <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
                     Upload volume relative to seeding size. Higher yield = your disk space is earning more.
                   </p>
                 </>
               )}
             </div>
             {effectiveTrackers.length === 0
-              ? <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>No trackers selected</div>
+              ? <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>No trackers selected</div>
               : yieldPanelTab === 'yield'
                 ? yieldRows.length > 0 && (
                     <div style={{ flex: 1, overflow: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>
                         <thead>
                           <tr>
                             {['Tracker', 'Uploaded', 'Seeding', 'Yield'].map(h => (
                               <th key={h} style={{
                                 textAlign: h === 'Tracker' ? 'left' : 'right',
                                 padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 11, textTransform: 'none',
+                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 'var(--font-sm)', textTransform: 'none',
                                 borderBottom: '1px solid var(--border)',
                               }}>{h}</th>
                             ))}
@@ -1353,7 +1302,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                                   onClick={() => setTrackerDetail(t.tracker)}
                                   onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)' }}
                                   onMouseLeave={e => { e.currentTarget.style.color = 'var(--text)' }}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
                                 >{t.tracker}</button>
                               </td>
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
@@ -1369,14 +1318,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                   )
                 : yieldRows.length > 0 && (
                     <div style={{ flex: 1, overflow: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>
                         <thead>
                           <tr>
                             {['Tracker', 'Total Uploaded'].map(h => (
                               <th key={h} style={{
                                 textAlign: h === 'Tracker' ? 'left' : 'right',
                                 padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 11, textTransform: 'none',
+                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 'var(--font-sm)', textTransform: 'none',
                                 borderBottom: '1px solid var(--border)',
                               }}>{h}</th>
                             ))}
@@ -1390,7 +1339,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                                   onClick={() => setTrackerDetail(t.tracker)}
                                   onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)' }}
                                   onMouseLeave={e => { e.currentTarget.style.color = 'var(--text)' }}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
+                                  style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
                                 >{t.tracker}</button>
                               </td>
                               <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>

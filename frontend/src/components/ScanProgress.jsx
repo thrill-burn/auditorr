@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { CloseButton } from './workflows/shared'
 
 const PULSE_STYLE = `
 @keyframes auditPulse {
@@ -36,14 +37,14 @@ const LOGO = (
 function PhaseBar({ label, fillPct, pulse, phaseStatus }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'none', letterSpacing: 0, width: 56, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text-dim)', textTransform: 'none', letterSpacing: 0, width: 56, flexShrink: 0 }}>{label}</span>
       <div style={{ flex: 1, height: 6, background: 'var(--border2)', borderRadius: 99, overflow: 'hidden' }}>
         <div
           className={pulse ? 'audit-pulse' : undefined}
           style={{ height: '100%', width: `${fillPct}%`, background: 'var(--accent)', borderRadius: 99, transition: 'width 0.3s ease' }}
         />
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', width: 130, flexShrink: 0, textAlign: 'right' }}>{phaseStatus}</span>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', width: 130, flexShrink: 0, textAlign: 'right' }}>{phaseStatus}</span>
     </div>
   )
 }
@@ -66,7 +67,7 @@ function LoadingResultsCard() {
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {LOGO}
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>Loading results…</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--accent)' }}>Loading results…</span>
         </div>
       </div>
 
@@ -76,7 +77,7 @@ function LoadingResultsCard() {
       </div>
 
       {/* Status */}
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
         Deserializing audit results…
       </div>
     </>
@@ -145,17 +146,11 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 {LOGO}
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 600, color: 'var(--accent)' }}>Scanning library…</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--accent)' }}>Scanning library…</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--accent)' }}>{progress}%</span>
-                <button
-                  onClick={() => setDismissed(true)}
-                  title="Dismiss"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', color: 'var(--text-dim)', fontSize: 16, lineHeight: 1, opacity: 0.6 }}
-                  onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                  onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
-                >×</button>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', color: 'var(--accent)' }}>{progress}%</span>
+                <CloseButton onClick={() => setDismissed(true)} title="Dismiss" />
               </div>
             </div>
 
@@ -165,14 +160,14 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
 
             {/* File counter */}
             {totalFiles > 0 && (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', textAlign: 'right' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'right' }}>
                 {scannedFiles.toLocaleString()} / {totalFiles.toLocaleString()} files
               </div>
             )}
 
             {/* Status message */}
             {statusMessage && (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {statusMessage}
               </div>
             )}

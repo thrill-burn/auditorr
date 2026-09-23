@@ -6,7 +6,7 @@ import { useToast } from '../Toast'
 import {
   WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
   ArrErrorsWarning, ActionBar, Button, Spinner, SpinKeyframes, SectionHeading, QualityChip, Checkbox,
-  ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning,
+  ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning, Segmented,
 } from './shared'
 
 const VERDICTS = [
@@ -1294,33 +1294,14 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
 }
 
 // A small two-way scope switch: delete just the recorded torrent, or the whole
-// hardlinked cross-seed group.
+// hardlinked cross-seed group. The destructive choice keeps its red label when
+// selected — colour as text, the one place hue earns a filter segment.
 function ScopeSwitch({ scope, groupSize, onChange }) {
-  const opts = [
-    { key: 'one', label: 'This torrent only' },
-    { key: 'all', label: `All ${groupSize} cross-seeds` },
-  ]
   return (
-    <div style={{ display: 'inline-flex', border: '1px solid var(--border2)', borderRadius: 6, overflow: 'hidden' }}>
-      {opts.map((o, idx) => {
-        const active = scope === o.key
-        return (
-          <button
-            key={o.key}
-            onClick={() => onChange(o.key)}
-            style={{
-              fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', padding: '3px 9px', cursor: 'pointer',
-              border: 'none', borderLeft: idx ? '1px solid var(--border2)' : 'none',
-              background: active ? (o.key === 'all' ? tint('var(--red)', 13) : 'var(--surface3)') : 'transparent',
-              color: active ? (o.key === 'all' ? 'var(--red)' : 'var(--text)') : 'var(--text-dim)',
-              fontWeight: active ? 700 : 400,
-            }}
-          >
-            {o.label}
-          </button>
-        )
-      })}
-    </div>
+    <Segmented value={scope} onChange={onChange} label="Removal scope" options={[
+      { value: 'one', label: 'This torrent only' },
+      { value: 'all', label: `All ${groupSize} cross-seeds`, tone: 'var(--red)' },
+    ]} />
   )
 }
 

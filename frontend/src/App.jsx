@@ -19,7 +19,7 @@ import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
 import { api } from './api'
 import { formatBytes } from './utils'
-import { Button, tint } from './components/workflows/shared'
+import { Button, CloseButton, tint } from './components/workflows/shared'
 
 
 // ── Script Modal ──────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
             <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{title}</div>
             {shownSubtitle && !error && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>{shownSubtitle}</div>}
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+          <CloseButton onClick={onClose} />
         </div>
         {!error && (
           <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 'var(--font-base)', color: 'var(--text-dim)', flexShrink: 0 }}>

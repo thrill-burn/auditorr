@@ -162,9 +162,9 @@ turn into an upgrade. Either way, each release shows its size against your file
 (`= exact`, `+1.2 GB`) and whether size, quality and HDR agree.
 
 Results can also be filtered by resolution (including **480p / SD**), source
-(including **DVD**) and HDR format. The chips go by the quality Sonarr/Radarr
+(including **DVD**) and HDR format. These filters go by the quality Sonarr/Radarr
 names each release with, so they mean the same on both — Radarr reports a DVD
-release with no resolution at all, and the SD chip still finds it.
+release with no resolution at all, and the SD option still finds it.
 
 ### Grabbing and importing
 
