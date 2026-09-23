@@ -44,6 +44,10 @@
      and md sizes are these two, so there is one small and one standard button. */
   --control-h:    28px;  /* dense toolbars: File Explorer */
   --control-h-lg: 34px;  /* page filter bars and forms: Dashboard, Trackers, Audit History, Config */
+  /* A selected segment (.seg-opt): a step lighter than its --surface3 track,
+     the same step light mode's white takes above its own track. */
+  --seg-on:    #2a2e33;
+  --seg-edge:  #3a3f46;
 }
 
 [data-theme="light"] {
@@ -67,6 +71,8 @@
   --elev-1:    0 1px 2px rgba(28, 25, 23, 0.08);
   --elev-2:    0 8px 22px rgba(28, 25, 23, 0.12);
   --shadow-pop: 0 18px 42px rgba(28, 25, 23, 0.16);
+  --seg-on:    #ffffff;
+  --seg-edge:  #ceccc7;
 }
 
 html, body, #root {
@@ -186,12 +192,16 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 @media (prefers-reduced-motion: reduce) { .wf-btn { transition: none; } }
 
 /* Segmented (shared.jsx): every filter row in the app, one choice or several.
-   An inset track whose selected segments are raised. The selected state carries
-   an inset hairline as well as the shadow, because on the dark theme's
-   near-black page the shadow draws nothing and a selected segment is otherwise
-   a fill one shade darker than its track, carried by its bold label alone.
-   Inset, so selecting never changes a size. The track is exactly the bar's
-   control height: the segment's min-height is that less the 3px padding. */
+   An inset track whose selected segments are raised: filled lighter than the
+   track (--seg-on) and edged with an inset hairline (--seg-edge). The dark
+   theme used to fill them with --surface, a shade *darker* than the track and
+   the colour of the card behind it, so they read as holes rather than keys —
+   and on its near-black page the shadow draws nothing. Inset, so selecting
+   never changes a size. Hovering an unselected segment washes it at 4% of the
+   text colour, as every Button already answers hover with a fill; any stronger
+   and on dark it lands on --seg-on, so a hovered option reads as selected. The
+   track is exactly the bar's control height: the segment's min-height is that
+   less the 3px padding. */
 .seg {
   display: inline-flex;
   align-items: center;
@@ -224,12 +234,15 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .seg-lg .seg-opt { min-height: calc(var(--control-h-lg) - 6px); padding: 4px 12px; }
 .seg-mono .seg-opt { font-family: var(--mono); }
-.seg-opt:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); }
+.seg-opt:hover:not(:disabled):not([aria-pressed="true"]) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
 .seg-opt[aria-pressed="true"] {
-  background: var(--surface);
+  background: var(--seg-on);
   color: var(--seg-fg, var(--text));
   font-weight: 700;
-  box-shadow: var(--elev-1), inset 0 0 0 1px var(--border2);
+  box-shadow: var(--elev-1), inset 0 0 0 1px var(--seg-edge);
 }
 .seg-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .seg-opt:disabled { opacity: 0.45; cursor: not-allowed; }

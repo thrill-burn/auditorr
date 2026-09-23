@@ -87,9 +87,10 @@ export const HDR_STYLE = {
 // `allSelects` is the same segment for a set of switches rather than a filter
 // (Config's presets), where [] means *none*: All is lit when every option is
 // chosen, and toggles between all and none. While it is lit the options render
-// unlit and a click picks that one alone, exactly as under a filter's All — a
-// track with every segment lit is one even shade, which on the dark theme is
-// indistinguishable from none lit, so "all" must never look like that.
+// unlit and a click picks that one alone, exactly as under a filter's All — so
+// "every one" is said by one segment rather than by checking each of six. (It
+// was built when the dark theme filled a selected segment darker than its
+// track, and a fully lit track looked the same as an empty one.)
 //
 // options: [{ value, label, icon?, title?, disabled?, tone? }]. `icon` renders
 // before the label (a status Dot, a chart swatch). `tone` colours the label of

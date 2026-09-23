@@ -909,7 +909,7 @@ export default function Backfill({ onNavigate }) {
                   </div>
                   <div>
                     <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Must also be seeding on</div>
-                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Release must also be listed on these — downloading it from one of them counts. <em>Any</em> = no restriction.</div>
+                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Release must also be listed on these. <em>Any</em> = no restriction.</div>
                     <IndexerFilter options={indexers} value={seedingOn} onChange={handleSeedingOnChange} allLabel="Any" />
                   </div>
                 </div>
