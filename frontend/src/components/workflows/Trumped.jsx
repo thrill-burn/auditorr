@@ -6,7 +6,7 @@ import { useToast } from '../Toast'
 import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
   WorkflowPage, WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
-  Checkbox, Spinner, SpinKeyframes, Button, Disclosure, QualityChip, MatchChips, ITEM_TITLE, tint,
+  Checkbox, Spinner, SpinKeyframes, Button, Disclosure, QualityChip, MatchChips, MONO_TITLE, tint,
   regKey, RegistrationWarning,
 } from './shared'
 
@@ -109,7 +109,7 @@ function CandidateRow({ cand, selected, onSelect }) {
     }}>
       <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
       {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
-      <span style={{ ...ITEM_TITLE, flex: 1, minWidth: 0, fontFamily: 'var(--mono)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
+      <span style={{ ...MONO_TITLE, flex: 1, minWidth: 0, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
       {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
       <MatchChips match={cand.match} fields={MATCH_FIELDS} />
       {sub && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)', flexShrink: 0 }}>{sub}</span>}
@@ -156,7 +156,7 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
         <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Grab this one</span>
         <span style={{ fontSize: 'var(--font-sm)', color: where.color }}>· {where.text}</span>
       </div>
-      <div style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', lineHeight: 1.45, overflowWrap: 'anywhere', marginBottom: 8 }}>
+      <div style={{ ...MONO_TITLE, lineHeight: 1.45, overflowWrap: 'anywhere', marginBottom: 8 }}>
         {cand.title}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -209,7 +209,7 @@ function GroupTable({ torrents }) {
               {link.mark}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.name}</div>
+              <div style={{ ...MONO_TITLE, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.name}</div>
               <div style={{ display: 'flex', gap: 10, marginTop: 2, flexWrap: 'wrap' }}>
                 <span title={t.hash} style={cell}>hash {String(t.hash).slice(0, 12)}…</span>
                 {showInstance && t.instance_name && <span style={cell}>on {t.instance_name}</span>}
@@ -291,7 +291,7 @@ function OnlyCopyModal({ info, clientName, busy, onCancel, onConfirm }) {
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
           {(info.torrents || []).map(t => (
             <div key={regKey(t)} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ ...ITEM_TITLE, flex: 1, minWidth: 0, fontFamily: 'var(--mono)', overflowWrap: 'anywhere' }}>{t.name}</span>
+              <span style={{ ...MONO_TITLE, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{t.name}</span>
               <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--red)', flexShrink: 0 }}>{formatBytes(t.only_copy_bytes || 0)}</span>
             </div>
           ))}

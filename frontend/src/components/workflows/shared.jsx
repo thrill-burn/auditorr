@@ -84,6 +84,13 @@ export const HDR_STYLE = {
 // "multi-select filters stay pill Chips" rule. `allLabel` puts a leading
 // All/Any segment that is lit when nothing else is and clears the rest.
 //
+// `allSelects` is the same segment for a set of switches rather than a filter
+// (Config's presets), where [] means *none*: All is lit when every option is
+// chosen, and toggles between all and none. While it is lit the options render
+// unlit and a click picks that one alone, exactly as under a filter's All — a
+// track with every segment lit is one even shade, which on the dark theme is
+// indistinguishable from none lit, so "all" must never look like that.
+//
 // options: [{ value, label, icon?, title?, disabled?, tone? }]. `icon` renders
 // before the label (a status Dot, a chart swatch). `tone` colours the label of
 // a selected segment — Triage's destructive "All cross-seeds" is red.
@@ -91,20 +98,24 @@ export const HDR_STYLE = {
 // mono: for readouts (7d/30d/90d); words are sans. Styling lives in index.css's
 // `.seg`, because the hover and the selected hairline cannot be inline.
 export function Segmented({
-  options, value, onChange, multiple = false, allLabel, size = 'sm', mono = false, disabled = false, label,
+  options, value, onChange, multiple = false, allLabel, allSelects = false, size = 'sm', mono = false, disabled = false, label,
 }) {
   const chosen = multiple ? (value || []) : value
-  const isOn = v => (multiple ? chosen.includes(v) : chosen === v)
+  const every = multiple && allSelects && options.length > 0 && options.every(o => chosen.includes(o.value))
+  const isOn = v => (multiple ? !every && chosen.includes(v) : chosen === v)
   const pick = v => {
     if (!multiple) onChange(v)
+    else if (every) onChange([v])
     else onChange(isOn(v) ? chosen.filter(x => x !== v) : [...chosen, v])
   }
+  const allOn = allSelects ? every : chosen.length === 0
+  const pickAll = () => onChange(allSelects && !every ? options.map(o => o.value) : [])
   const cls = 'seg' + (size === 'lg' ? ' seg-lg' : '') + (mono ? ' seg-mono' : '')
   return (
     <div role="group" aria-label={label} className={cls}>
       {multiple && allLabel != null && (
-        <button type="button" className="seg-opt" aria-pressed={chosen.length === 0} disabled={disabled}
-          onClick={() => onChange([])}>
+        <button type="button" className="seg-opt" aria-pressed={allOn} disabled={disabled}
+          onClick={pickAll}>
           {allLabel}
         </button>
       )}
@@ -333,6 +344,12 @@ export function CountPicker({ value, onChange, max }) {
 // Item titles pick their typeface by kind, as Rounds does: sans for a title
 // auditorr knows ("Heat (1995)"), mono for a raw path or release name.
 export const ITEM_TITLE = { fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)' }
+
+// A mono title sits one step lower, at --font-base. Geist Mono sets wider than
+// Geist at the same size, so at --font-md a release name read a step larger
+// than a sans title and two steps over the 11px paths beneath it (Cleanup's
+// folders, Dedupe's groups — the user's call, 2026-09-22).
+export const MONO_TITLE = { ...ITEM_TITLE, fontSize: 'var(--font-base)', fontFamily: 'var(--mono)' }
 
 export function SectionLabel({ children }) {
   return (

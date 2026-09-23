@@ -5,7 +5,7 @@ import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
   OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker,
   SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, ArrErrorsWarning,
-  Button, MatchChips, MATCH_COLOR, ITEM_TITLE, tint,
+  Button, MatchChips, MATCH_COLOR, ITEM_TITLE, MONO_TITLE, tint,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
 } from './shared'
@@ -516,12 +516,12 @@ function ResultItem({ item }) {
                 {r.info_url ? (
                   <a href={r.info_url} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}
-                    style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: tint('var(--text)', 30), textUnderlineOffset: 2 }}
+                    style={{ ...MONO_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: tint('var(--text)', 30), textUnderlineOffset: 2 }}
                     title={r.title}>
                     {r.title}
                   </a>
                 ) : (
-                  <span style={{ ...ITEM_TITLE, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  <span style={{ ...MONO_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     title={r.title}>
                     {r.title}
                   </span>

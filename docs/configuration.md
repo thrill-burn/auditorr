@@ -318,6 +318,9 @@ Two preset groups save you from writing common rules by hand:
 - **Media server files** — Plex, Jellyfin, Emby, Kodi and UMS metadata and
   artwork directories.
 
+Each group has an **All** option. When the whole group is on, **All** is the
+only option lit; click it again to switch the group off.
+
 ### Hide excluded files from the explorer
 
 Off by default: excluded files still appear in File Explorer, marked as

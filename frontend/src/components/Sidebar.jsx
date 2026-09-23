@@ -53,27 +53,10 @@ const NAV = [
     ),
   },
   {
-    id: 'workflows', label: 'Workflows',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/>
-        <line x1="7" y1="6" x2="17" y2="6"/>
-        <line x1="5.5" y1="7.8" x2="11" y2="16.2"/>
-        <line x1="18.5" y1="7.8" x2="13" y2="16.2"/>
-      </svg>
-    ),
-    children: [
-      // Same order as the dashboard metric cards they build on
-      { id: 'backfill', label: 'Backfill', accent: 'var(--blue)' },
-      { id: 'cleanup',  label: 'Cleanup',  accent: 'var(--yellow)', badgeKey: 'cleanup' },
-      { id: 'triage',   label: 'Triage',   accent: 'var(--red)',    badgeKey: 'triage' },
-      { id: 'dedupe',   label: 'Dedupe',   accent: 'var(--purple)', badgeKey: 'dedupe' },
-      { id: 'trumped',  label: 'Trumped',  accent: 'var(--green)' },
-    ],
-  },
-  {
     // Rounds — the ranked workflow list plus the side-quest prize layer.
-    // Sits directly below Workflows because it is the index for them, and
+    // Sits directly above Workflows because it is the index for them: the
+    // summary of what needs doing comes before the pages that do it, and stays
+    // in the same place whether or not the group below is expanded. It
     // deliberately carries no count badge: a page you visit, never one that nags.
     //
     // Named "Rounds", not "Next steps": next steps is wizard language and
@@ -94,6 +77,25 @@ const NAV = [
         <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
       </svg>
     ),
+  },
+  {
+    id: 'workflows', label: 'Workflows',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/>
+        <line x1="7" y1="6" x2="17" y2="6"/>
+        <line x1="5.5" y1="7.8" x2="11" y2="16.2"/>
+        <line x1="18.5" y1="7.8" x2="13" y2="16.2"/>
+      </svg>
+    ),
+    children: [
+      // Same order as the dashboard metric cards they build on
+      { id: 'backfill', label: 'Backfill', accent: 'var(--blue)' },
+      { id: 'cleanup',  label: 'Cleanup',  accent: 'var(--yellow)', badgeKey: 'cleanup' },
+      { id: 'triage',   label: 'Triage',   accent: 'var(--red)',    badgeKey: 'triage' },
+      { id: 'dedupe',   label: 'Dedupe',   accent: 'var(--purple)', badgeKey: 'dedupe' },
+      { id: 'trumped',  label: 'Trumped',  accent: 'var(--green)' },
+    ],
   },
   {
     id: 'config', label: 'Config',

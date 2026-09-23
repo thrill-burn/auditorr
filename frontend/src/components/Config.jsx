@@ -1120,7 +1120,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
             Ignore full-disc Blu-ray and DVD folder structures such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>BDMV</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>CERTIFICATE</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>VIDEO_TS</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>AUDIO_TS</span>. Standalone video files remain visible.
           </div>
-          <Segmented multiple size="lg" value={discRipPresets} onChange={v => { setDiscRipPresets(v); setIsDirty(true) }}
+          <Segmented multiple allLabel="All" allSelects size="lg" value={discRipPresets} onChange={v => { setDiscRipPresets(v); setIsDirty(true) }}
             options={DISC_RIP_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))} />
         </div>
         <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
@@ -1128,7 +1128,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, marginBottom: 9 }}>
             Ignore metadata and artwork sidecars commonly written or read by media servers, such as <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.plexmatch</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.nfo</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>poster.jpg</span>, <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>fanart.jpg</span>, and <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>folder.jpg</span>.
           </div>
-          <Segmented multiple size="lg" value={mediaServerPresets} onChange={v => { setMediaServerPresets(v); setIsDirty(true) }}
+          <Segmented multiple allLabel="All" allSelects size="lg" value={mediaServerPresets} onChange={v => { setMediaServerPresets(v); setIsDirty(true) }}
             options={MEDIA_SERVER_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>

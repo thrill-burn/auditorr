@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import {
   WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
-  Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete, StatBox, Dot, ITEM_TITLE, tint,
+  Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete, StatBox, Dot, MONO_TITLE, tint,
 } from './shared'
 
 // ── What each group is ────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ function DupGroup({ group, checked, onToggle }) {
         ) : (
           <span title={note || ''} style={{ width: 15, height: 15, borderRadius: 'var(--r-sm)', border: '1.5px dashed var(--border2)', flexShrink: 0, cursor: 'not-allowed' }} />
         )}
-        <span title={group.id} style={{ ...ITEM_TITLE, minWidth: 0, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span title={group.id} style={{ ...MONO_TITLE, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {name}
         </span>
         <span title={cause.title} style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>

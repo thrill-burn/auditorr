@@ -5,7 +5,7 @@ import { useToast } from '../Toast'
 import {
   WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
   Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete,
-  ConfirmExcludeModal, SectionHeading, StatBox, Dot, ITEM_TITLE, tint,
+  ConfirmExcludeModal, SectionHeading, StatBox, Dot, MONO_TITLE, tint,
 } from './shared'
 
 // Exclusion rules are built from real paths, so they are written as `literal:`
@@ -173,7 +173,7 @@ function FolderGroup({ group, selected, onToggleFile, onToggleKeys }) {
           style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.45, flexShrink: 0, color: 'var(--text-dim)' }}>
           <polyline points="9 18 15 12 9 6" />
         </svg>
-        <span title={group.folder} style={{ ...ITEM_TITLE, minWidth: 0, fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span title={group.folder} style={{ ...MONO_TITLE, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {group.folder}
         </span>
         {/* Why no folder rule is offered here. Saying so is what stops the
