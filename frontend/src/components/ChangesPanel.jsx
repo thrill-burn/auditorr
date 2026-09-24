@@ -138,14 +138,13 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
                 boxSizing: 'border-box',
                 overflow: 'hidden',
               }}>
+                {/* The category as a dot and a label, not a box — Audit
+                    History's Type cell, which this row repeats. */}
                 <div>
                   <span style={{
-                    fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600,
-                    color: 'var(--text)',
-                    border: '1px solid var(--border2)',
-                    borderRadius: 6, padding: '1px 7px',
-                    whiteSpace: 'nowrap',
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 500,
+                    color: 'var(--text)', whiteSpace: 'nowrap',
+                    display: 'inline-flex', alignItems: 'center', gap: 7,
                   }}>
                     <span className="ui-status-dot" style={{ width: 6, height: 6, background: row.cat.color }} />
                     {row.cat.label}

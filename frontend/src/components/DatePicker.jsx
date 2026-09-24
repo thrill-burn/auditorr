@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { tint } from '../utils'
-import { Button } from './workflows/shared'
+import { Button, IconButton } from './workflows/shared'
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DOW    = ['Su','Mo','Tu','We','Th','Fr','Sa']
 
 // The month arrows are line chevrons, like Disclosure's: as ‹ › characters they
-// needed a 16px glyph size the type scale does not have.
+// needed a 16px glyph size the type scale does not have. They sit in the kit's
+// IconButton, which is what gives them a real :hover.
 function Chevron({ dir }) {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
@@ -105,17 +106,11 @@ export default function DatePicker({ value, onChange, placeholder = 'Pick a date
         }}>
           {/* Month / year nav */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <button onClick={prevMonth} title="Previous month" aria-label="Previous month"
-              style={{ ...btnBase, display: 'inline-flex', padding: 6, color: 'var(--text-dim)' }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'none'}><Chevron dir="left" /></button>
+            <IconButton onClick={prevMonth} title="Previous month"><Chevron dir="left" /></IconButton>
             <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
               {MONTHS[viewMonth]} {viewYear}
             </span>
-            <button onClick={nextMonth} title="Next month" aria-label="Next month"
-              style={{ ...btnBase, display: 'inline-flex', padding: 6, color: 'var(--text-dim)' }}
-              onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'none'}><Chevron dir="right" /></button>
+            <IconButton onClick={nextMonth} title="Next month"><Chevron dir="right" /></IconButton>
           </div>
 
           {/* Day-of-week headers */}

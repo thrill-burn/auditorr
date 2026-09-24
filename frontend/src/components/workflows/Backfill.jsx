@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
-  OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker,
+  OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker, SearchInput,
   SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, ArrErrorsWarning,
   Button, MatchChips, MATCH_COLOR, ITEM_TITLE, MONO_TITLE, tint,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
@@ -952,7 +952,7 @@ export default function Backfill({ onNavigate }) {
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                 Which release is offered first for each candidate.
               </div>
-              <SortPicker options={RANK_OPTIONS} value={releaseRank} onChange={setReleaseRank} />
+              <SortPicker options={RANK_OPTIONS} value={releaseRank} onChange={setReleaseRank} label="Release ranking" />
             </div>
 
             <div>
@@ -960,23 +960,9 @@ export default function Backfill({ onNavigate }) {
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
                 How to order candidates when there are more than the search limit.
               </div>
-              <SortPicker options={SORT_OPTIONS} value={sort} onChange={setSort} />
+              <SortPicker options={SORT_OPTIONS} value={sort} onChange={setSort} label="Priority" />
               <div style={{ marginTop: 12 }}>
-                <input
-                  type="text"
-                  value={titleSearch}
-                  onChange={e => setTitleSearch(e.target.value)}
-                  placeholder="Filter by title…"
-                  style={{
-                    padding: '6px 10px', borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
-                    border: '1px solid var(--border)',
-                    background: 'var(--surface2)',
-                    color: 'var(--text)',
-                    fontFamily: 'inherit',
-                    width: 220, outline: 'none',
-                    opacity: titleSearch ? 1 : 0.7,
-                  }}
-                />
+                <SearchInput value={titleSearch} onChange={setTitleSearch} placeholder="Filter by title…" width={220} />
               </div>
             </div>
 

@@ -142,6 +142,42 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
   )
 }
 
+// The theme switch's moon and sun, as line icons like every other icon in the
+// app. They were the emoji 🌙 and ☀️, which draw in the OS emoji font at their
+// own size and colour and ignore the segment's selected state.
+const THEME_ICON = { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+  strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
+const THEME_ICONS = {
+  dark: <svg {...THEME_ICON}><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></svg>,
+  light: (
+    <svg {...THEME_ICON}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+    </svg>
+  ),
+}
+
+// A Health Score weight: `Field`'s box without its label, since the row it sits
+// in is the label. It was a hand-rolled 28px box among Config's 34px fields,
+// and showed nothing at all when focused.
+function WeightInput({ label, value, onChange }) {
+  const [focused, setFocused] = useState(false)
+  return (
+    <input
+      type="number" min="0" max="1000" value={value} aria-label={`${label} weight`}
+      onChange={e => onChange(e.target.value)}
+      onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      style={{
+        width: 64, height: 'var(--control-h-lg)', padding: '0 11px', borderRadius: 'var(--r)',
+        border: `1px solid ${focused ? 'var(--accent)' : 'var(--border2)'}`,
+        background: 'var(--surface2)', color: 'var(--text)',
+        fontFamily: 'var(--mono)', fontSize: 'var(--font-base)',
+        outline: 'none', textAlign: 'right', transition: 'border 0.12s',
+      }}
+    />
+  )
+}
+
 // Collapsed disclosure for the browser-facing link addresses.
 //
 // Named for the symptom, not the category: someone arrives here because their
@@ -978,7 +1014,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                   onMouseEnter={() => setHoveredWeight(cat.key)}
                   onMouseLeave={() => setHoveredWeight(null)}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '3px 8px',
                     borderRadius: 'var(--r)',
                     background: hoveredWeight === cat.key ? 'var(--surface2)' : 'transparent',
                     transition: 'background 0.12s',
@@ -991,16 +1027,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                     flex: 1, fontSize: 'var(--font-base)', minWidth: 0,
                     color: off ? 'var(--text-dim)' : 'var(--text)',
                   }} title={cat.hint}>{cat.label}</span>
-                  <input
-                    type="number" min="0" max="1000"
+                  <WeightInput
+                    label={cat.label}
                     value={weights[cat.key] ?? ''}
-                    onChange={e => { setWeights(w => ({ ...w, [cat.key]: e.target.value })); setIsDirty(true) }}
-                    style={{
-                      width: 62, padding: '5px 8px', borderRadius: 'var(--r)',
-                      border: '1px solid var(--border2)', background: 'var(--surface2)',
-                      color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 'var(--font-base)',
-                      outline: 'none', textAlign: 'right',
-                    }}
+                    onChange={v => { setWeights(w => ({ ...w, [cat.key]: v })); setIsDirty(true) }}
                   />
                   <span style={{
                     width: 74, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
@@ -1154,7 +1184,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           </div>
           <div style={{ flexShrink: 0, marginLeft: 24 }}>
             <Segmented size="lg"
-              options={[{ value: 'dark', label: '🌙 Dark' }, { value: 'light', label: '☀️ Light' }]}
+              options={[{ value: 'dark', label: 'Dark', icon: THEME_ICONS.dark }, { value: 'light', label: 'Light', icon: THEME_ICONS.light }]}
               value={theme}
               onChange={t => onThemeChange && onThemeChange(t)}
             />

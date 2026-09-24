@@ -201,7 +201,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    text colour, as every Button already answers hover with a fill; any stronger
    and on dark it lands on --seg-on, so a hovered option reads as selected. The
    track is exactly the bar's control height: the segment's min-height is that
-   less the 3px padding. */
+   less the 3px padding. A segment that is a div rather than a button (Backfill's
+   Custom depth, which holds an input) is marked chosen with data-on="true". */
 .seg {
   display: inline-flex;
   align-items: center;
@@ -234,11 +235,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .seg-lg .seg-opt { min-height: calc(var(--control-h-lg) - 6px); padding: 4px 12px; }
 .seg-mono .seg-opt { font-family: var(--mono); }
-.seg-opt:hover:not(:disabled):not([aria-pressed="true"]) {
+.seg-opt:hover:not(:disabled):not([aria-pressed="true"]):not([data-on="true"]) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }
-.seg-opt[aria-pressed="true"] {
+.seg-opt[aria-pressed="true"],
+.seg-opt[data-on="true"] {
   background: var(--seg-on);
   color: var(--seg-fg, var(--text));
   font-weight: 700;
@@ -266,6 +268,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   cursor: pointer;
   transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
 }
+.icon-btn-sm { width: 18px; height: 18px; }
 .icon-btn:hover { color: var(--text); background: var(--surface2); }
 .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 

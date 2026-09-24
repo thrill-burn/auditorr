@@ -4,7 +4,7 @@ import AutoSizer from 'react-virtualized-auto-sizer'
 import { formatBytes, copyText, parseReleaseTitle, tint } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
-import { Button, Segmented, FlagToggle, CloseButton, Dot } from './workflows/shared'
+import { Button, Segmented, FlagToggle, CloseButton, IconButton, SearchInput, Dot } from './workflows/shared'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -75,6 +75,31 @@ function Tag({ color, children }) {
       padding: '1px 7px', fontSize: 'var(--font-sm)', fontWeight: 600,
       fontFamily: 'var(--mono)', color, whiteSpace: 'nowrap', flexShrink: 0,
     }}>{children}</span>
+  )
+}
+
+// A file row's two icon actions, shared by the tree and flat rows. They were
+// the glyphs ⓘ and ⎘ in hand-rolled buttons, one copy per row renderer: fallback
+// font glyphs at two sizes and two baselines, and the copy one in --text-faint,
+// which on the light theme is #d6d3ce on white. Copying said nothing at all.
+const ICON = { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+  strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }
+
+function PathsButton({ name, node, onOpenPopup }) {
+  return (
+    <IconButton size="sm" title="Show hardlinks & duplicates"
+      onClick={e => { e.stopPropagation(); onOpenPopup({ name, linkedPaths: node.linked_paths, duplicatePaths: node.duplicate_paths, anchorRect: e.currentTarget.getBoundingClientRect() }) }}>
+      <svg {...ICON}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+    </IconButton>
+  )
+}
+
+function CopyPathButton({ path, toast }) {
+  return (
+    <IconButton size="sm" title="Copy full path"
+      onClick={e => { e.stopPropagation(); copyText(path || ''); toast('Path copied', 'success') }}>
+      <svg {...ICON}><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+    </IconButton>
   )
 }
 
@@ -198,37 +223,17 @@ function SeedCountMenu({ value, options, onChange }) {
   )
 }
 
-function FilterInput({ value, onChange, placeholder, width = 160 }) {
-  const [focused, setFocused] = useState(false)
-  return (
-    <input
-      type="text"
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      placeholder={placeholder}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      style={{
-        width, height: 'var(--control-h)', padding: '0 10px',
-        borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
-        border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
-        background: focused || value ? 'var(--surface2)' : 'transparent',
-        color: 'var(--text)', fontFamily: 'var(--mono)',
-        outline: 'none', transition: 'all 0.12s',
-      }}
-    />
-  )
-}
-
 function SizeInput({ value, onChange, placeholder }) {
   const [focused, setFocused] = useState(false)
   return (
     <input
       type="number"
       min="0"
+      step="any"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
+      aria-label={`${placeholder} size`}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={{
@@ -495,15 +500,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
           <polyline points="14 2 14 8 20 8"/>
         </svg>
         <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        {hasPaths && (
-          <button
-            onClick={e => { e.stopPropagation(); onOpenPopup({ name, linkedPaths: node.linked_paths, duplicatePaths: node.duplicate_paths, anchorRect: e.currentTarget.getBoundingClientRect() }) }}
-            title="Show hardlinks & duplicates"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 'var(--font-md)', lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
-            onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-            onMouseLeave={e => e.currentTarget.style.opacity = '0.7'}
-          >ⓘ</button>
-        )}
+        {hasPaths && <PathsButton name={name} node={node} onOpenPopup={onOpenPopup} />}
         {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
@@ -526,28 +523,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
             {torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}
           </Button>
         )}
-        <button
-          title="Copy full path"
-          onClick={e => {
-            e.stopPropagation()
-            const ta = document.createElement('textarea')
-            ta.value = node.path || ''
-            ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
-            document.body.appendChild(ta)
-            ta.focus(); ta.select()
-            try { document.execCommand('copy') } catch (_) {
-              navigator.clipboard?.writeText(node.path || '').catch(() => {})
-            }
-            document.body.removeChild(ta)
-          }}
-          style={{
-            background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
-            color: 'var(--text-faint)', fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0,
-            borderRadius: 3, transition: 'color 0.1s',
-          }}
-          onMouseEnter={e => e.currentTarget.style.color = 'var(--text-dim)'}
-          onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
-        >⎘</button>
+        <CopyPathButton path={node.path} toast={toast} />
       </div>
     </div>
   )
@@ -620,15 +596,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
             <polyline points="14 2 14 8 20 8"/>
           </svg>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basename}</span>
-          {hasPaths && (
-            <button
-              onClick={e => { e.stopPropagation(); onOpenPopup({ name: basename, linkedPaths: node.linked_paths, duplicatePaths: node.duplicate_paths, anchorRect: e.currentTarget.getBoundingClientRect() }) }}
-              title="Show hardlinks & duplicates"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 'var(--font-md)', lineHeight: 1, padding: '0 2px', flexShrink: 0, opacity: 0.7 }}
-              onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-              onMouseLeave={e => e.currentTarget.style.opacity = '0.7'}
-            >ⓘ</button>
-          )}
+          {hasPaths && <PathsButton name={basename} node={node} onOpenPopup={onOpenPopup} />}
           {node.excluded && <Tag color="var(--text-dim)">excluded</Tag>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
@@ -651,28 +619,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
               {torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}
             </Button>
           )}
-          <button
-            title="Copy full path"
-            onClick={e => {
-              e.stopPropagation()
-              const ta = document.createElement('textarea')
-              ta.value = node.path || ''
-              ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
-              document.body.appendChild(ta)
-              ta.focus(); ta.select()
-              try { document.execCommand('copy') } catch (_) {
-                navigator.clipboard?.writeText(node.path || '').catch(() => {})
-              }
-              document.body.removeChild(ta)
-            }}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px',
-              color: 'var(--text-faint)', fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0,
-              borderRadius: 3, transition: 'color 0.1s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.color = 'var(--text-dim)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}
-          >⎘</button>
+          <CopyPathButton path={node.path} toast={toast} />
         </div>
       </div>
       {/* Line 2: directory */}
@@ -746,37 +693,26 @@ function toBytes(val, unit) {
   return n * multiplier
 }
 
-function SizeRangeFilter({ minVal, minUnit, maxVal, maxUnit, onMinVal, onMinUnit, onMaxVal, onMaxUnit, onClear }) {
+// One unit for the whole range, as a track after both boxes (the user's pick
+// from `.internal/preview/kitchoices.html`, 2026-09-23). It was a native
+// <select> after each box: the browser's own arrow and menu, at 11px beside
+// 12px boxes, in a toolbar where every other choice is a Segmented. The boxes
+// take decimals, so 500 MB – 2 GB is 0.5 – 2 in GB.
+const SIZE_UNIT_OPTIONS = SIZE_UNITS.map(u => ({ value: u, label: u }))
+
+function SizeRangeFilter({ minVal, maxVal, unit, onMinVal, onMaxVal, onUnit, onClear }) {
   const hasValue = minVal || maxVal
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
       <SizeInput value={minVal} onChange={onMinVal} placeholder="min" />
-      <UnitSelect value={minUnit} onChange={onMinUnit} />
       <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>–</span>
       <SizeInput value={maxVal} onChange={onMaxVal} placeholder="max" />
-      <UnitSelect value={maxUnit} onChange={onMaxUnit} />
+      <Segmented mono label="Size unit" options={SIZE_UNIT_OPTIONS} value={unit} onChange={onUnit} />
       {hasValue && (
         <Button size="sm" variant="ghost" square onClick={onClear} title="Clear size range" ariaLabel="Clear size range">✕</Button>
       )}
     </div>
-  )
-}
-
-function UnitSelect({ value, onChange }) {
-  return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      style={{
-        height: 'var(--control-h)', padding: '0 6px', borderRadius: 'var(--r)', fontSize: 'var(--font-sm)',
-        border: '1px solid var(--border2)', background: 'var(--surface2)',
-        color: 'var(--text-dim)', fontFamily: 'var(--mono)', cursor: 'pointer',
-        outline: 'none',
-      }}
-    >
-      {SIZE_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-    </select>
   )
 }
 
@@ -849,10 +785,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     }
   }, [revealPath])
 
-  const [sizeMinVal,  setSizeMinVal]  = useState('')
-  const [sizeMinUnit, setSizeMinUnit] = useState('GB')
-  const [sizeMaxVal,  setSizeMaxVal]  = useState('')
-  const [sizeMaxUnit, setSizeMaxUnit] = useState('GB')
+  const [sizeMinVal, setSizeMinVal] = useState('')
+  const [sizeMaxVal, setSizeMaxVal] = useState('')
+  const [sizeUnit,   setSizeUnit]   = useState('GB')
 
   const [popup, setPopup] = useState(null)
   const openPopup = useCallback((data) => setPopup(data), [])
@@ -871,8 +806,8 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     setTrackerExc(p => v === 'hide' ? (p.includes(t) ? p : [...p, t]) : p.filter(x => x !== t))
   }, [])
 
-  const sizeMinBytes = useMemo(() => toBytes(sizeMinVal, sizeMinUnit), [sizeMinVal, sizeMinUnit])
-  const sizeMaxBytes = useMemo(() => toBytes(sizeMaxVal, sizeMaxUnit), [sizeMaxVal, sizeMaxUnit])
+  const sizeMinBytes = useMemo(() => toBytes(sizeMinVal, sizeUnit), [sizeMinVal, sizeUnit])
+  const sizeMaxBytes = useMemo(() => toBytes(sizeMaxVal, sizeUnit), [sizeMaxVal, sizeUnit])
   const nameLower    = debouncedNameQuery.trim().toLowerCase()
   const isFlat       = !!debouncedNameQuery.trim() || !!revealPath || userFlat
 
@@ -1088,7 +1023,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
         {/* Row 2: search + size range, then the two actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 0 8px', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FilterInput value={nameQuery} onChange={setNameQuery} placeholder="Search filename…" width={200} />
+            <SearchInput value={nameQuery} onChange={setNameQuery} placeholder="Search filename…" width={200} mono />
             {nameQuery && (
               <Button size="sm" variant="ghost" square onClick={() => setNameQuery('')} title="Clear search" ariaLabel="Clear search">✕</Button>
             )}
@@ -1097,10 +1032,8 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
           <div style={{ ...DIVIDER, margin: 0 }} />
 
           <SizeRangeFilter
-            minVal={sizeMinVal}  minUnit={sizeMinUnit}
-            maxVal={sizeMaxVal}  maxUnit={sizeMaxUnit}
-            onMinVal={setSizeMinVal}   onMinUnit={setSizeMinUnit}
-            onMaxVal={setSizeMaxVal}   onMaxUnit={setSizeMaxUnit}
+            minVal={sizeMinVal} maxVal={sizeMaxVal} unit={sizeUnit}
+            onMinVal={setSizeMinVal} onMaxVal={setSizeMaxVal} onUnit={setSizeUnit}
             onClear={() => { setSizeMinVal(''); setSizeMaxVal('') }}
           />
 

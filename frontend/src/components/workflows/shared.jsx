@@ -76,8 +76,8 @@ export const HDR_STYLE = {
 // bordered pairs, separate rectangles, two inset tracks at different radii —
 // and once tint() drew them properly a pill and a button looked equally
 // clickable. The rule now: **a pill is never interactive**. Filters are this
-// track; actions are `Button`; a single choice that needs a detail line is an
-// OptionCard; the any/only/hide flag is `FlagToggle`.
+// track, and so is a single choice whose options carry a detail (`SortPicker`,
+// `CountPicker`); actions are `Button`; the any/only/hide flag is `FlagToggle`.
 //
 // Multi-select is the same track with several segments lit — by the user's
 // choice over a row of separate toggle buttons, which retired CLAUDE.md's old
@@ -133,6 +133,10 @@ export function Segmented({
   )
 }
 
+// A segment's secondary text — a folder's count, a picker option's detail —
+// dimmed at 400 beside its label, so it stays quiet when the label goes to 700.
+const DETAIL = { opacity: 0.55, fontWeight: 400 }
+
 // Backfill's filter rows. `value` is a list; [] means no restriction.
 export function OptionFilter({ options, value, onChange, allLabel = 'Any' }) {
   return <Segmented multiple allLabel={allLabel} options={options} value={value} onChange={onChange} />
@@ -150,7 +154,7 @@ export function FolderFilter({ folders, selected, onChange }) {
     <Segmented multiple allLabel="All" value={selected} onChange={onChange}
       options={folders.map(({ name, count }) => ({
         value: name,
-        label: <>{name} <span style={{ opacity: 0.55, fontWeight: 400 }}>({count})</span></>,
+        label: <>{name} <span style={DETAIL}>({count})</span></>,
       }))} />
   )
 }
@@ -195,12 +199,47 @@ export function FlagToggle({ label, value, onChange, onlyTitle, hideTitle }) {
 }
 
 // ── Icon buttons ──────────────────────────────────────────────────────────────
-// A quiet square for a line icon. Styling is index.css's `.icon-btn`.
-export function IconButton({ onClick, title, pressed, children }) {
+// A quiet square for a line icon. Styling is index.css's `.icon-btn`. `size`
+// 'sm' is 18px, the height of a row's action chip, for icon actions inside a
+// list row (File Explorer's info and copy); the default 24px is for panels.
+export function IconButton({ onClick, title, pressed, size, children }) {
   return (
-    <button type="button" className="icon-btn" onClick={onClick} title={title} aria-label={title} aria-pressed={pressed}>
+    <button type="button" className={size === 'sm' ? 'icon-btn icon-btn-sm' : 'icon-btn'}
+      onClick={onClick} title={title} aria-label={title} aria-pressed={pressed}>
       {children}
     </button>
+  )
+}
+
+// ── Search input ──────────────────────────────────────────────────────────────
+// A text filter over a list: File Explorer's filename search, Audit History's
+// path search, Backfill's title filter. Clear until it holds a value, then a
+// faint fill and an accent hairline, so a filtered list says so; full accent
+// while focused. Mono for paths, sans for titles. size: 'sm' is
+// var(--control-h), 'lg' var(--control-h-lg), as Segmented's. Backfill's was the
+// one hand-copy that drifted: filled and at 70% opacity until typed in.
+export function SearchInput({ value, onChange, placeholder, width = 160, size = 'sm', mono = false }) {
+  const [focused, setFocused] = useState(false)
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        width, maxWidth: '100%',
+        height: size === 'lg' ? 'var(--control-h-lg)' : 'var(--control-h)',
+        padding: size === 'lg' ? '0 12px' : '0 10px',
+        borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
+        border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
+        background: focused || value ? 'var(--surface2)' : 'transparent',
+        color: 'var(--text)', fontFamily: mono ? 'var(--mono)' : 'var(--sans)',
+        outline: 'none', transition: 'all 0.12s',
+      }}
+    />
   )
 }
 
@@ -218,57 +257,27 @@ export function CloseButton({ onClick, title = 'Close', size = 14 }) {
   )
 }
 
-// ── Option cards ──────────────────────────────────────────────────────────────
-// A single-choice row of cards: Backfill's Release Ranking, Priority and Search
-// Depth. Every card is one shape — a sans name over a mono detail — at one
-// minimum width, so the three rows line up in columns instead of each card
-// being as wide as its own words. Search Depth was a different control (a
-// centred 20px number in a taller box) until R9 made it these cards.
-//
-// The line heights are fixed, not `normal`: a <button> resets line-height to
-// normal, and under normal a glyph drawn from a fallback font (the → of A → Z)
-// makes its line, and so its card, taller than the ones beside it.
-// Colours ride `.wf-btn`'s custom properties, which is what gives them a hover.
-const OPTION_ROW  = { display: 'flex', gap: 8, flexWrap: 'wrap' }
-const OPTION_CARD = {
-  flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 2,
-  minWidth: 170, padding: '8px 14px', borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)',
-  fontFamily: 'var(--sans)', textAlign: 'left',
-}
-const OPTION_NAME = { fontSize: 'var(--font-base)', fontWeight: 600, lineHeight: '16px' }
-const OPTION_SUB  = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', lineHeight: '14px' }
-const optionColors = active => ({
-  '--btn-bg': active ? 'var(--surface3)' : 'var(--surface)',
-  '--btn-bg-hover': active ? 'var(--surface3)' : 'var(--surface2)',
-  '--btn-border': active ? 'var(--accent)' : 'var(--border)',
-  '--btn-fg': 'var(--text)', '--btn-fg-hover': 'var(--text)', '--btn-filter-hover': 'none',
-})
-
-function OptionCard({ active, onClick, disabled, name, sub }) {
+// ── Option pickers ────────────────────────────────────────────────────────────
+// Backfill's Release Ranking, Priority and Search Depth: one choice where each
+// option carries a short detail. They are the same Segmented track as every
+// other row on that page, with the detail dimmed beside the name (`DETAIL`,
+// Root Folders' counts), so an option is 500, the chosen one 700 on the lifted
+// fill, at the page's 28px. They were OptionCards: a 50px card with a shadow, a
+// 600 name on every card whether chosen or not, and an orange edge on the
+// chosen one, right above the orange Generate button. The user's pick of four,
+// from `.internal/preview/pickeroptions.html` (2026-09-23).
+export function SortPicker({ options, value, onChange, label }) {
   return (
-    <button type="button" className="wf-btn" aria-pressed={active} onClick={onClick} disabled={disabled}
-      style={{ ...OPTION_CARD, ...optionColors(active) }}>
-      <span style={OPTION_NAME}>{name}</span>
-      <span style={OPTION_SUB}>{sub}</span>
-    </button>
+    <Segmented value={value} onChange={onChange} label={label}
+      options={options.map(opt => ({
+        value: opt.value,
+        label: <>{opt.label}<span style={DETAIL}>{opt.sub}</span></>,
+      }))} />
   )
 }
 
-// ── Sort picker ───────────────────────────────────────────────────────────────
-export function SortPicker({ options, value, onChange }) {
-  return (
-    <div style={OPTION_ROW}>
-      {options.map(opt => (
-        <OptionCard key={opt.value} active={value === opt.value} onClick={() => onChange(opt.value)}
-          name={opt.label} sub={opt.sub} />
-      ))}
-    </div>
-  )
-}
-
-// ── Count picker ──────────────────────────────────────────────────────────────
 // null means "all available". `max` is the real candidate count: at 0 the All
-// card is disabled rather than offering a number that is not there.
+// segment is disabled rather than offering a number that is not there.
 export function CountPicker({ value, onChange, max }) {
   const inputRef = useRef(null)
   const [inputVal, setInputVal] = useState(() =>
@@ -297,38 +306,38 @@ export function CountPicker({ value, onChange, max }) {
     if (!isNaN(n) && n >= 1) onChange(max > 0 ? Math.min(n, max) : n)
   }
 
-  // The custom card holds an input, so it is a div in the card's clothes rather
-  // than an OptionCard (an input may not sit inside a button). Its underline is
-  // an inset shadow, not a border, so it adds no height to the row.
+  // Segmented's own markup, because the Custom segment holds an input, and an
+  // input may not sit inside a button: it is a div in a segment's clothes,
+  // marked chosen with `data-on` (aria-pressed belongs to a button). Its
+  // underline is an inset shadow, not a border, so it adds no height.
   return (
-    <div style={OPTION_ROW}>
-      <OptionCard active={fiveActive} onClick={handleFive} name="Quick" sub="5 candidates" />
-
-      <div className="wf-btn" style={{ ...OPTION_CARD, ...optionColors(customActive), cursor: 'text' }}
+    <div role="group" aria-label="Search depth" className="seg">
+      <button type="button" className="seg-opt" aria-pressed={fiveActive} onClick={handleFive}>
+        Quick<span style={DETAIL}>5</span>
+      </button>
+      <div className="seg-opt" data-on={customActive} style={{ cursor: 'text' }}
         onClick={() => inputRef.current?.focus()}>
-        <span style={OPTION_NAME}>Custom</span>
-        <span style={{ ...OPTION_SUB, display: 'flex', alignItems: 'baseline', gap: 6 }}>
-          <input
-            ref={inputRef}
-            type="number"
-            min={1}
-            max={max || undefined}
-            value={inputVal}
-            onChange={handleInput}
-            placeholder="—"
-            aria-label="Custom number of candidates"
-            style={{
-              ...OPTION_SUB, color: 'var(--text)', width: '5ch', height: 14,
-              padding: 0, margin: 0, background: 'none', border: 'none', outline: 'none',
-              boxShadow: 'inset 0 -1px 0 var(--border2)',
-            }}
-          />
-          candidates
-        </span>
+        Custom
+        <input
+          ref={inputRef}
+          type="number"
+          min={1}
+          max={max || undefined}
+          value={inputVal}
+          onChange={handleInput}
+          placeholder="—"
+          aria-label="Custom number of candidates"
+          style={{
+            fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 400, color: 'var(--text)',
+            width: '5ch', height: 14, padding: 0, margin: 0, textAlign: 'center',
+            background: 'none', border: 'none', outline: 'none',
+            boxShadow: `inset 0 -1px 0 ${customActive ? 'var(--text-dim)' : 'var(--border2)'}`,
+          }}
+        />
       </div>
-
-      <OptionCard active={allActive} onClick={handleAll} disabled={max === 0}
-        name="All" sub={max > 0 ? `${max.toLocaleString()} candidates` : 'none available'} />
+      <button type="button" className="seg-opt" aria-pressed={allActive} onClick={handleAll} disabled={max === 0}>
+        All<span style={DETAIL}>{max.toLocaleString()}</span>
+      </button>
     </div>
   )
 }
@@ -524,23 +533,19 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
 }
 
 // ── Cross-link between sibling workflows ──────────────────────────────────────
+// A sentence, then the kit's small quiet button for the one part that goes
+// somewhere: Dashboard's "View orphaned media" shape. It was the whole
+// sentence as a hand-rolled button with a dashed edge (the only dashed control
+// in the app), 31px tall, an orange label (orange is the page's main action)
+// and a hover written into the DOM. The user's pick from
+// `.internal/preview/kitchoices.html`, 2026-09-23.
 export function WorkflowCrossLink({ text, linkLabel, count, onClick }) {
   if (!count) return null
   return (
-    <button
-      onClick={onClick}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-        padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 'var(--font-base)', cursor: 'pointer',
-        border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-dim)',
-        transition: 'all 0.12s',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--accent)' }}
-      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'var(--border2)' }}
-    >
-      {text}
-      <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{linkLabel} ({count}) →</span>
-    </button>
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
+      <span>{text}</span>
+      <Button size="sm" variant="ghost" onClick={onClick}>{linkLabel} ({count}) →</Button>
+    </div>
   )
 }
 

@@ -5,7 +5,7 @@ import AutoSizer from 'react-virtualized-auto-sizer'
 import { api } from '../api'
 import { formatBytes, tint } from '../utils'
 import { CHANGE_CATEGORIES } from './changeCategories'
-import { Button, Segmented, Dot } from './workflows/shared'
+import { Button, Segmented, SearchInput, Dot } from './workflows/shared'
 
 function useDebounce(value, delay) {
   const [debounced, setDebounced] = useState(value)
@@ -68,27 +68,24 @@ function ChangeRow({ index, style, data }) {
           )}
         </span>
       </div>
-      {/* Trigger */}
+      {/* Trigger and Type are text, not boxes (the user's pick from
+          `.internal/preview/kitchoices.html`, 2026-09-23). They were outlined
+          rectangles with bold text — the shape of a row's clickable chip — on
+          cells nothing can click, beside a path that can be clicked and had no
+          box. Type is the category filter's own dot and label; a box on every
+          row of a long list is more hue than ration-colour allows, which is
+          File Explorer's rule for its row tags too. */}
       <div>
         {row.trigger && (
-          <span style={{
-            fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
-            color: 'var(--text-dim)', background: 'var(--surface2)',
-            border: '1px solid var(--border2)', borderRadius: 'var(--r-sm)', padding: '1px 6px',
-            whiteSpace: 'nowrap',
-          }}>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
             {TRIGGER_LABELS[row.trigger] ?? row.trigger}
           </span>
         )}
       </div>
-      {/* Type */}
       <div>
         <span style={{
-          fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600,
-          color: 'var(--text)',
-          border: '1px solid var(--border2)',
-          borderRadius: 'var(--r)', padding: '1px 7px', whiteSpace: 'nowrap',
-          display: 'inline-flex', alignItems: 'center', gap: 6,
+          fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 500, color: 'var(--text)',
+          whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 7,
         }}>
           <span className="ui-status-dot" style={{ width: 6, height: 6, background: row.cat.color }} />
           {row.cat.label}
@@ -283,22 +280,7 @@ export default function ChangeLog({ onNavigate }) {
           <div style={{ width: 1, height: 18, background: 'var(--border2)', margin: '0 3px' }} />
 
           {/* Path search */}
-          <input
-            type="text"
-            value={pathQuery}
-            onChange={e => setPathQuery(e.target.value)}
-            placeholder="Search path…"
-            style={{
-              width: 200, height: 'var(--control-h-lg)', padding: '0 12px',
-              borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
-              border: `1px solid ${pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}`,
-              background: pathQuery ? 'var(--surface2)' : 'transparent',
-              color: 'var(--text)', fontFamily: 'var(--mono)',
-              outline: 'none', transition: 'all 0.12s',
-            }}
-            onFocus={e => e.target.style.borderColor = 'var(--accent)'}
-            onBlur={e => e.target.style.borderColor = pathQuery ? tint('var(--accent)', 40) : 'var(--border2)'}
-          />
+          <SearchInput value={pathQuery} onChange={setPathQuery} placeholder="Search path…" width={200} size="lg" mono />
           {pathQuery && (
             <Button variant="ghost" square onClick={() => setPathQuery('')} title="Clear search" ariaLabel="Clear search">✕</Button>
           )}
