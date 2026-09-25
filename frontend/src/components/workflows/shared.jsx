@@ -109,7 +109,10 @@ export function Segmented({
     else if (every) onChange([v])
     else onChange(isOn(v) ? chosen.filter(x => x !== v) : [...chosen, v])
   }
-  const allOn = allSelects ? every : chosen.length === 0
+  // Only a many-of-N track has an All segment. A single choice may hold null or
+  // undefined (the changes panel's "All", a date range no preset matches), and
+  // reading .length off it unmounted the whole app.
+  const allOn = multiple && (allSelects ? every : chosen.length === 0)
   const pickAll = () => onChange(allSelects && !every ? options.map(o => o.value) : [])
   const cls = 'seg' + (size === 'lg' ? ' seg-lg' : '') + (mono ? ' seg-mono' : '')
   return (
