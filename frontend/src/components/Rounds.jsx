@@ -45,7 +45,14 @@ import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot, C
 //
 // Cheese lives in the language and in restrained motion, never in pigment: no
 // gradients, no gold, no confetti. Rings use a plain var() paint plus
-// strokeOpacity; locked tiles are dashed and --text-faint. Do NOT reach for the
+// strokeOpacity; locked tiles are dashed with a --text-faint icon.
+//
+// Text is never --text-faint (2026-09-23). This page used it as a third grey
+// on 177 of its 335 text elements, the only page that did, and in the light
+// theme it is #d6d3ce on white, about 1.5:1: the "Risen 3 times" lines, rung
+// readouts and ladder names were all but invisible. Anything meant to be read
+// takes --text-dim like the workflow pages; faint is kept for a locked tile's
+// icon and a not-started tile's "—", which are decoration. Do NOT reach for the
 // `var(--x)55` alpha-suffix idiom here — it does not survive substitution inside
 // a property value, which is what made these fills invisible the first time.
 // See prompts/NEXT_STEPS.md.
@@ -55,10 +62,10 @@ import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot, C
 
 const STATE_META = {
   fix:      { label: 'Needs you',     color: 'var(--red)' },
-  blocked:  { label: 'Blocked',       color: 'var(--text-faint)' },
+  blocked:  { label: 'Blocked',       color: 'var(--text-dim)' },
   optimize: { label: 'Could improve', color: 'var(--yellow)' },
   maintain: { label: 'Clear',         color: 'var(--green)' },
-  standby:  { label: 'On standby',    color: 'var(--text-faint)' },
+  standby:  { label: 'On standby',    color: 'var(--text-dim)' },
 }
 
 // Lucide-style line icons, 24×24, stroke currentColor. One per ladder.
@@ -162,15 +169,20 @@ function useCountUp(target, ms = 900) {
 // One header shape for both halves of the prize section — themed ladder groups
 // and feat groups. Same component, so the two read as one system rather than
 // two lists that happen to sit near each other.
+//
+// Headings on this page take the workflow pages' roles (2026-09-23): a group
+// label, "Closest to unlocking" and the rank name are sub-headings at 13/600,
+// and a tile, rung, feat, record or checklist name is an item title at 13/500.
+// They were 12px at 700 and 600, two styles found on no other page.
 function GroupHeader({ label, count, total, blurb }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-      <span style={{ fontSize: 'var(--font-base)', fontWeight: 700, color: 'var(--text)' }}>{label}</span>
+      <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)' }}>{label}</span>
       <span style={{
         fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
         color: count === total ? 'var(--green)' : 'var(--text-dim)',
       }}>{count}/{total}</span>
-      {blurb && <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{blurb}</span>}
+      {blurb && <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{blurb}</span>}
       <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
     </div>
   )
@@ -202,11 +214,11 @@ function Medallion({ l, selected, onSelect }) {
         boxShadow: earned ? 'var(--elev-1)' : 'none',
       }}
     >
-      {/* Where you are out of how many there are. Mono, faint, out of the way. */}
+      {/* Where you are out of how many there are. Mono, dim, out of the way. */}
       <span style={{
         position: 'absolute', top: 6, right: 8,
         fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', lineHeight: 1,
-        color: l.maxed ? 'var(--green)' : 'var(--text-faint)',
+        color: l.maxed ? 'var(--green)' : 'var(--text-dim)',
       }}>
         {l.tier}/{l.tiers_total}
       </span>
@@ -231,14 +243,14 @@ function Medallion({ l, selected, onSelect }) {
           in mono so you can still tell which ladder you are looking at. */}
       <div style={{ textAlign: 'center', minWidth: 0, width: '100%' }}>
         <div title={l.tier_label || `${l.name} — not started`} style={{
-          fontSize: 'var(--font-base)', fontWeight: 600, lineHeight: 1.25,
+          fontSize: 'var(--font-md)', fontWeight: 500, lineHeight: 1.25,
           color: earned ? 'var(--text)' : 'var(--text-faint)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {l.tier_label || '—'}
         </div>
         <div style={{
-          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', marginTop: 3,
+          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 3,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {l.name}
@@ -252,7 +264,7 @@ function Medallion({ l, selected, onSelect }) {
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {l.value_label}
-          {l.measures && <span style={{ color: 'var(--text-faint)' }}> {l.measures}</span>}
+          {l.measures && <span style={{ color: 'var(--text-dim)' }}> {l.measures}</span>}
         </div>
       </div>
     </button>
@@ -281,7 +293,7 @@ function LadderDetail({ l, onClose }) {
             <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               {l.tier} / {l.tiers_total} rungs
             </span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               now {l.value_label}{l.measures ? ` ${l.measures}` : ''}
             </span>
           </div>
@@ -303,7 +315,7 @@ function LadderDetail({ l, onClose }) {
               border: `1px solid ${isNext ? 'var(--accent)' : 'transparent'}`,
             }}>
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
+                fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)',
                 minWidth: 16, textAlign: 'right', flexShrink: 0,
               }}>{t.n}</span>
               {t.earned
@@ -314,19 +326,19 @@ function LadderDetail({ l, onClose }) {
                   }} />}
               <span style={{
                 fontSize: 'var(--font-sm)', flex: 1, minWidth: 0,
-                color: t.earned ? 'var(--text)' : isNext ? 'var(--accent)' : 'var(--text-faint)',
+                color: t.earned ? 'var(--text)' : isNext ? 'var(--accent)' : 'var(--text-dim)',
                 fontWeight: isNext ? 600 : 400,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>{t.label}</span>
               <span style={{
                 fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', flexShrink: 0,
-                color: t.earned ? 'var(--text-dim)' : 'var(--text-faint)',
+                color: t.earned ? 'var(--text-dim)' : 'var(--text-dim)',
               }}>{t.at_label}</span>
             </div>
           )
         })}
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
         {l.maxed
           ? 'Maxed. There is nothing above this one.'
           : `Next rung ${l.next_n} of ${l.tiers_total} — ${l.next_label} at ${l.next_at_label}.`}
@@ -346,12 +358,12 @@ function RankReadout({ rank }) {
   const points = useCountUp(rank.points)
   return (
     <div style={{ textAlign: 'right', minWidth: 190, flexShrink: 0 }}>
-      <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>{rank.name}</div>
+      <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)' }}>{rank.name}</div>
       <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1.15 }}>
         {points.toLocaleString()}<span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
       </div>
       <div style={{ marginTop: 6 }}><Track pct={rank.pct} /></div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', marginTop: 5 }}>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 5 }}>
         {rank.next_name
           ? `${rank.next_name} at ${rank.next_at.toLocaleString()}`
           : 'nothing left to become'}
@@ -430,7 +442,7 @@ function Prizes({ data }) {
           says what you are climbing and how far up it sits. */}
       {closest.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text-dim)' }}>Closest to unlocking</span>
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text-dim)' }}>Closest to unlocking</span>
           {closest.map(l => (
             <button
               key={l.id}
@@ -445,13 +457,13 @@ function Prizes({ data }) {
                 <Icon name={l.id} size={14} />
               </span>
               <span style={{ minWidth: 180, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)', fontWeight: 600 }}>{l.next_label}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+                <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)', fontWeight: 500 }}>{l.next_label}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
                   {l.name} · rung {l.next_n} of {l.tiers_total}
                 </span>
               </span>
               <span style={{ flex: 1, minWidth: 60 }}><Track pct={l.pct} height={3} /></span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', minWidth: 110, textAlign: 'right' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', minWidth: 110, textAlign: 'right' }}>
                 {l.value_label} / {l.next_at_label}
               </span>
             </button>
@@ -484,11 +496,11 @@ function Prizes({ data }) {
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                         {f.earned && <Dot color="var(--green)" size={6} />}
-                        <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: f.earned ? 'var(--text)' : 'var(--text-faint)' }}>{f.label}</span>
+                        <span style={{ fontSize: 'var(--font-md)', fontWeight: 500, color: f.earned ? 'var(--text)' : 'var(--text-dim)' }}>{f.label}</span>
                         <span style={{ flex: 1 }} />
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>+{f.points}</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>+{f.points}</span>
                       </div>
-                      <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.45 }}>{f.desc}</span>
+                      <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45 }}>{f.desc}</span>
                     </div>
                   ))}
                 </div>
@@ -667,7 +679,7 @@ function Timeline({ data }) {
           return (
             <div key={e.key} style={{ display: 'flex', alignItems: 'stretch', gap: 10 }}>
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
+                fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)',
                 minWidth: 82, flexShrink: 0, paddingTop: 7, textAlign: 'right',
               }}>
                 {newDay ? day : ''}
@@ -691,14 +703,14 @@ function Timeline({ data }) {
                     short. When space runs out it is the ladder position beside
                     it that gives way, not this. */}
                 <span style={{
-                  fontSize: 'var(--font-base)', fontWeight: e.prior ? 400 : 600,
+                  fontSize: 'var(--font-md)', fontWeight: e.prior ? 400 : 500,
                   color: e.prior ? 'var(--text-dim)' : 'var(--text)',
                   flexShrink: e.prior ? 1 : 0,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{e.label}</span>
                 <span style={{
                   ...(e.metaMono ? { fontFamily: 'var(--mono)' } : null),
-                  fontSize: 'var(--font-sm)', color: 'var(--text-faint)',
+                  fontSize: 'var(--font-sm)', color: 'var(--text-dim)',
                   flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{e.meta}</span>
                 {/* What it took, in its own column rather than tacked onto the
@@ -719,18 +731,19 @@ function Timeline({ data }) {
                 )}
                 {/* Two figures, and the order is the point: what this one was
                     worth, then what you were on once you had it. The award is
-                    the fainter of the two — the running total is the column you
-                    read down, and it is the one that ties back to the rank at
-                    the top of the page. Fixed widths so both columns line up
+                    the fainter of the two (dim beside the total's full text
+                    colour, now that no text on this page is --text-faint) — the
+                    running total is the column you read down, and it is the one
+                    that ties back to the rank at the top of the page. Fixed widths so both columns line up
                     whatever the digit count. */}
                 <span style={{
                   fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
-                  color: 'var(--text-faint)', flexShrink: 0,
+                  color: 'var(--text-dim)', flexShrink: 0,
                   minWidth: 46, textAlign: 'right',
                 }}>{e.points != null ? `+${e.points}` : ''}</span>
                 <span style={{
                   fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)',
-                  color: 'var(--text-dim)', flexShrink: 0,
+                  color: 'var(--text)', flexShrink: 0,
                   minWidth: 68, textAlign: 'right',
                 }}>{e.total.toLocaleString()}</span>
               </div>
@@ -837,24 +850,28 @@ function WorkflowCard({ row, onNavigate, compact }) {
       }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
         <Dot color={row.accent} />
-        <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
-        <span style={{
-          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', padding: '2px 8px',
-          borderRadius: 'var(--r-pill)', border: `1px solid ${meta.color}`, color: meta.color,
-        }}>{meta.label}</span>
-        {/* Prose ("Clear once, then watch"), so sans. The pill beside it stays
-            mono: a status label is closer to data than to a sentence, and it
-            matches the chips on the workflow pages. */}
-        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{row.nature}</span>
+        {/* What the workflow does lives on its own page; here it is the name's
+            hover text, for whoever is new to the page. */}
+        <span title={row.teaching} style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
+        {/* The state as coloured mono text, not an outlined pill (2026-09-23):
+            a status nothing can click is text — Cleanup's "only copy", File
+            Explorer's row tags, Audit History's types — and an outlined shape
+            beside the card's one real button read as a second control. */}
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: meta.color }}>{meta.label}</span>
+        {/* Prose ("Clear once, then watch"), so sans. The state beside it is
+            mono: a status label is closer to data than to a sentence. */}
+        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{row.nature}</span>
       </div>
 
-      {/* One line of prose under the title, always — what the workflow does on
-          a row that wants something, what "clear" means on one that doesn't.
-          620px, because 780 at this size ran ~110 characters a line, twice what
-          the rest of the app sets prose at. */}
-      <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0 }}>
-        {row.summary}
-      </p>
+      {/* Prose under the title only on a card with no stat line: why it is
+          blocked, or what "clear" means for it. A card that wants something
+          goes straight to its foot — its old line restated the workflow page's
+          subtitle (`_summary` in rounds.py, the user's pick, 2026-09-23). */}
+      {row.summary && (
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.55, margin: 0 }}>
+          {row.summary}
+        </p>
+      )}
 
       {/* The foot: the numbers, then the way in — both on the card's left
           edge, in reading order. */}
@@ -867,24 +884,20 @@ function WorkflowCard({ row, onNavigate, compact }) {
               the body rung of the scale — a rung up it became the loudest
               thing on the card and out-shouted the title above it. */}
           {row.stat && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 500, color: 'var(--text)' }}>
               {row.stat}
             </span>
           )}
           {/* Sans, like every other sentence on this page. "Clean for 25
               days · no kills yet" is prose with a number in it, not a
-              readout; the mono it used to carry read as a third typeface. */}
+              readout; the mono it used to carry read as a third typeface.
+              `reward.detail` ("Risen 3 times. Drive it to zero again…") is its
+              hover text rather than a line of its own (2026-09-23): as a line
+              it restated this one. */}
           {row.reward && (
-            <span style={{ fontSize: 'var(--font-base)', color: row.stat ? 'var(--text-dim)' : 'var(--text)' }}>
+            <span title={row.reward.detail || undefined}
+              style={{ fontSize: 'var(--font-base)', color: row.stat ? 'var(--text-dim)' : 'var(--text)' }}>
               {row.reward.headline}
-            </span>
-          )}
-          {/* Optional, and empty on purpose for Backfill: its payout line
-              already carries the ratio and the idle bytes, and a second
-              sentence under it put a three-line foot next to Triage's one. */}
-          {row.reward?.detail && !compact && (
-            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', lineHeight: 1.5 }}>
-              {row.reward.detail}
             </span>
           )}
           {button}
@@ -925,15 +938,15 @@ function WorkflowCard({ row, onNavigate, compact }) {
             <Icon name={row.next_prize.ladder_id} size={16} />
           </span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>
+            <span style={{ fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)' }}>
               Next: {row.next_prize.label}
             </span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               {row.next_prize.ladder}
               {row.next_prize.n ? ` · rung ${row.next_prize.n} of ${row.next_prize.of}` : ''}
             </span>
             <Track pct={row.next_prize.pct} height={3} />
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               {row.next_prize.value_label} / {row.next_prize.at}
             </span>
           </div>
@@ -957,7 +970,7 @@ function Section({ title, sub, done, doneLine, children, defaultOpen = true }) {
       >
         {done && <Dot color="var(--green)" size={7} />}
         <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{title}</span>
-        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>{done ? doneLine : sub}</span>
+        <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{done ? doneLine : sub}</span>
         <span style={{ flex: 1, height: 1, background: 'var(--border)', minWidth: 12 }} />
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
           strokeLinecap="round" strokeLinejoin="round"
@@ -1008,10 +1021,10 @@ function SetupPanel({ setup, onNavigate }) {
               )}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 'var(--font-base)', color: s.done ? 'var(--text-dim)' : 'var(--text)', fontWeight: s.done ? 400 : 600 }}>{s.label}</div>
-              <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>{s.hint}</div>
+              <div style={{ fontSize: 'var(--font-md)', color: s.done ? 'var(--text-dim)' : 'var(--text)', fontWeight: s.done ? 400 : 500 }}>{s.label}</div>
+              <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2, lineHeight: 1.5 }}>{s.hint}</div>
             </div>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: s.done ? 'var(--green)' : 'var(--text-faint)', flexShrink: 0 }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: s.done ? 'var(--green)' : 'var(--text-dim)', flexShrink: 0 }}>
               +{s.points}
             </span>
           </div>
@@ -1095,8 +1108,9 @@ export default function Rounds({ onNavigate }) {
           {byId.trumped && (
             <Section
               title="On demand"
-              sub="Only when a tracker asks."
-              /* Collapsed until you have actually done one. Once there is a
+              /* No sub: it said "Only when a tracker asks.", word for word the
+                 Trumped card's own line just below it, the only card in it.
+                 Collapsed until you have actually done one. Once there is a
                  Kingmaker tally to show, hiding it behind a closed section
                  means the only user who earned it never sees it. */
               defaultOpen={(byId.trumped.reward?.tally || 0) > 0}
@@ -1125,7 +1139,7 @@ export default function Rounds({ onNavigate }) {
       {data.stage !== 'setup' && <Timeline data={data} />}
 
       {health?.score != null && (
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
           Library health {health.score} · {health.status} · {data.audits} audit{data.audits === 1 ? '' : 's'} on record
           {data.streak_90 > 0 && ` · ${data.streak_90} day${data.streak_90 === 1 ? '' : 's'} at 90+`}
         </div>

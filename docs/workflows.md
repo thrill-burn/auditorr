@@ -257,7 +257,7 @@ copy** or **could not check** — and its age. Within each pile the oldest comes
 first: a file that has sat there for years is likelier junk than one from this
 week. A file hardlinked at two places in your torrent folder — a cross-seed
 whose torrents are both gone — is one row listing both paths, because its space
-is freed only when both are deleted. **Freed at most** is an upper bound; the
+is freed only when both are deleted. **Frees up to** is a maximum; the
 script reports what it actually frees.
 
 Files are grouped by release folder so you review whole releases rather than

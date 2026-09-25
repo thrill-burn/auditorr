@@ -196,7 +196,7 @@ export default function Dedupe({ onNavigate, onScript }) {
       <WorkflowHeader
         title="Dedupe"
         accent="var(--purple)"
-        blurb="Identical files stored as separate copies. Where one sits in your torrent folder and the other in your library, linking them also makes the torrent read as imported. The script checks every file again before touching it — same disk, same bytes, no hardlinks it can't see — links only what passes, and chooses the copy to keep when it runs."
+        blurb="Identical files stored as separate copies. The script hardlinks them, checking every file again before it touches one."
         /* Re-reads itself when an audit lands — see `useAuditComplete`. */
       />
 

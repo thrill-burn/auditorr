@@ -195,11 +195,20 @@ def test_no_audit_yet_is_setup_stage():
     assert st['hero'] is None
 
 
-def test_every_row_has_teaching_copy_and_a_summary():
-    st = rounds.build_state(_cfg(), _results(_details()), _runs())
-    for r in st['rows']:
-        assert r['teaching'] and len(r['teaching']) > 40
-        assert r['summary']
+def test_every_row_has_teaching_copy_and_only_a_quiet_row_a_summary():
+    """Every row carries `teaching` (the page shows it as hover text on the
+    workflow name). The summary line is only for a card with no stat line —
+    blocked, clear or on standby — since on a card that wants something it
+    restated the workflow page's own subtitle above the number (2026-09-23)."""
+    for det in (_details(), _details(orphaned_torrent_count=12, orphaned_torrent_size=500 * GB, or_score=4.5)):
+        st = rounds.build_state(_cfg(), _results(det), _runs())
+        for r in st['rows']:
+            assert r['teaching'] and len(r['teaching']) > 40
+            if r['state'] in ('blocked', 'maintain', 'standby'):
+                assert r['summary'], r['id']
+            else:
+                assert r['summary'] == '', r['id']
+    assert any(r['summary'] == '' for r in st['rows']), 'the dirty case must reach an action state'
 
 
 def test_only_rows_with_something_to_count_carry_a_stat_line():

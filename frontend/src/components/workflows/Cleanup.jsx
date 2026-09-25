@@ -46,18 +46,22 @@ const STATE = {
   },
 }
 
+// One sentence a pile: the one fact its heading cannot say (2026-09-23, the
+// user's pick from `.internal/preview/density.html`). They were two or three,
+// restating the tiles and heading above them; the unverified pile's repeated
+// the warning box word for word, which already says why — this says when.
 const PILES = [
   {
     id: 'keeps_copy', title: 'Your library keeps a copy', color: 'var(--green)',
-    blurb: 'Deleting these loses nothing and frees nothing — another link to the same data stays on disk. Clearing this pile is what tidies a torrent folder.',
+    blurb: 'Another link holds the same data, so deleting these frees nothing and loses nothing.',
   },
   {
     id: 'only_copy', title: 'This is the only copy', color: 'var(--red)',
-    blurb: 'Deleting these is permanent. Oldest first: a file that has sat here for years is likelier junk than one from this week. A folder that also holds library copies sits here, with each file marked.',
+    blurb: 'Deleting these is permanent. Oldest first.',
   },
   {
     id: 'unverified', title: 'Could not check', color: 'var(--yellow)',
-    blurb: 'auditorr could not fully ask your torrent client on the last scan, so these may belong to a live torrent. They become selectable after a scan that reads every torrent’s file list.',
+    blurb: 'Selectable after a scan that reads every torrent’s file list.',
   },
 ]
 
@@ -374,7 +378,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
       <WorkflowHeader
         title="Cleanup"
         accent="var(--yellow)"
-        blurb="Files in your torrent folder that no torrent in your client claims, split by whether anything else still holds the data and listed oldest first. Generate a delete script for your selection — your client is checked again before it is built — or exclude the ones you put there on purpose."
+        blurb="Files in your torrent folder that no torrent claims. Your client is checked again before a delete script is built."
         /* Re-reads itself when an audit lands — see `useAuditComplete`. */
       />
 
@@ -409,8 +413,10 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
               sub={`${formatBytes(only.size)} · deleting is permanent`} />
             <StatBox label="Total" value={formatBytes(report.total_size)}
               sub={`${plural(totalFiles, 'file')}${report.path_count > totalFiles ? ` at ${report.path_count} paths` : ''} · ${plural(groups.length, 'folder')}`} />
-            <StatBox label="Freed at most" value={formatBytes(report.freeable_size)}
-              sub="an upper bound — the script reports what it frees" />
+            {/* Dedupe's words for the same kind of figure, so the two pages
+                that write scripts say "maximum" one way. */}
+            <StatBox label="Frees up to" value={formatBytes(report.freeable_size)}
+              sub="a maximum — the script reports what it frees" />
             {unchecked.count > 0 && (
               <StatBox dot="var(--yellow)" label="Could not check" value={unchecked.count}
                 sub={`${formatBytes(unchecked.size)} · not selectable`} />

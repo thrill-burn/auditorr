@@ -622,8 +622,10 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           <CopyPathButton path={node.path} toast={toast} />
         </div>
       </div>
-      {/* Line 2: directory */}
-      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {/* Line 2: directory. --text-dim, not --text-faint: faint is #d6d3ce on
+          white in the light theme, and the folder is how two files of the same
+          name are told apart. */}
+      <div style={{ paddingLeft: 24, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {dirname}
       </div>
     </div>

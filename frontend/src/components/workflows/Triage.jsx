@@ -1042,7 +1042,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       <WorkflowHeader
         title="Triage"
         accent="var(--red)"
-        blurb="Every torrent that needs your attention: dead on the tracker (imported or not), quality superseded, import failures, or not in your library at all — and what to do about each."
+        blurb="Torrents that need attention — dead, superseded, not imported or not in your library — and what to do about each."
         /* No Refresh button: the page re-reads itself when an audit lands
            (`useAuditComplete`), which is the only event that can change what it
            shows. A button here would have been a stale page with a button. */

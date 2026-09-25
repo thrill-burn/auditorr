@@ -575,7 +575,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
       <WorkflowHeader
         title="Trumped"
         accent={ACCENT}
-        blurb="When a tracker trumps one of your releases, paste the PM here: auditorr finds the whole hardlink group (every cross-seed), removes it from the client with its files, and grabs the replacement through Sonarr/Radarr — the manual multi-step swap, automated and confirmed at every step."
+        blurb="Paste a trump PM: auditorr finds every cross-seed of the old release, removes them, and grabs the replacement."
         right={(parsed || picks) && <Button onClick={reset}>↺ Start over</Button>}
       />
 
