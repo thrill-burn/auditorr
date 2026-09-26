@@ -62,6 +62,22 @@ async function reqText(path, opts = {}, retried = false) {
   return { text: await res.text(), headers: res.headers }
 }
 
+// A render error the error boundary caught, sent to the server log. Not `req`:
+// a 401 there opens a key prompt, which is the wrong thing to show over a crash
+// screen. Resolves true when the server logged it and false otherwise, and
+// never throws.
+export async function reportClientError(body) {
+  try {
+    const secret = getSecret()
+    const headers = { 'Content-Type': 'application/json' }
+    if (secret) headers['X-Auditorr-Secret'] = secret
+    const res = await fetch('/api/debug/client_error', { method: 'POST', headers, body: JSON.stringify(body) })
+    return res.ok
+  } catch (_) {
+    return false
+  }
+}
+
 export const api = {
   results:        ()     => req('/results'),
   nextSteps:      ()     => req('/next_steps'),

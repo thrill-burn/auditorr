@@ -453,6 +453,38 @@ def debug_report():
     return jsonify(report)
 
 
+# Field caps for a reported frontend error. A render error's message is one
+# short sentence and the component chain a handful of names; anything longer is
+# not worth a ring-buffer slot that a server-side line could have used.
+_CLIENT_ERROR_CAPS = {'page': 40, 'name': 60, 'message': 500, 'where': 300}
+
+
+@app.route('/api/debug/client_error', methods=['POST'])
+@require_auth
+def client_error():
+    """One log line for a render error the frontend's error boundary caught.
+
+    Without it a crash exists only in the browser that had it: a blank page on
+    the user's side and nothing in `docker logs` or `/api/debug/report`. The
+    report's sanitizer runs over this line like any other, so a path that ends
+    up in a message is hashed there. Newlines are flattened here, because a
+    newline in the message would start a forged line in `docker logs`.
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get('message'), str):
+        return jsonify({'status': 'error', 'code': 'bad_request',
+                        'message': 'message is required'}), 400
+    fields = {}
+    for key, cap in _CLIENT_ERROR_CAPS.items():
+        value = data.get(key)
+        value = ' '.join(value.split()) if isinstance(value, str) else ''
+        fields[key] = value[:cap - 1] + '…' if len(value) > cap else value
+    log.error("Frontend render error on page '%s': %s: %s%s",
+              fields['page'] or '?', fields['name'] or 'Error', fields['message'],
+              f" (in {fields['where']})" if fields['where'] else '')
+    return jsonify({'status': 'ok'})
+
+
 @app.route('/api/results')
 @require_auth
 def get_results():

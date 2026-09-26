@@ -15,6 +15,7 @@ import Trumped      from './components/workflows/Trumped'
 import ScanProgress    from './components/ScanProgress'
 import ImportProgress, { WATCH_ACTIVE } from './components/ImportProgress'
 import ErrorBanner  from './components/ErrorBanner'
+import ErrorBoundary from './components/ErrorBoundary'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
 import { api } from './api'
@@ -515,84 +516,90 @@ function AppInner() {
               animation: 'slideIn 0.6s ease',
             }} />
           )}
-          {tab === 'dashboard' && (
-            <Dashboard
-              data={results?.dashboard ? {
-                ...results.dashboard,
-                tracker_file_stats: results.tracker_file_stats,
-                not_imported_paths: results.not_imported_paths,
-              } : null}
-              changes={changes}
-              onNavigate={handleNavigate}
-              isRefreshing={isRefreshing}
-              onScript={setScriptModal}
-              timeRange={timeRange}
-              setTimeRange={setTimeRange}
-              selectedTrackers={selectedTrackers}
-              setSelectedTrackers={setSelectedTrackers}
-              allTrackers={allTrackers}
-              onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
-            />
-          )}
-          {/* Tab id stays `next-steps` — it is in users' bookmarks. Only the
-              component was renamed to match what the page calls itself. */}
-          {tab === 'next-steps' && (
-            <Rounds onNavigate={handleTabChange} />
-          )}
-          {(tab === 'media' || tab === 'torrents') && (
-            <FileExplorer
-              key={navKey}
-              files={tab === 'media' ? mediaFiles : torrentFiles}
-              trackers={results?.trackers || []}
-              tab={tab}
-              initialStatus={pendingNav?.status}
-              initialImportFilter={pendingNav?.importFilter}
-              initialTracker={pendingNav?.tracker}
-              initialSeedCount={pendingNav?.seedCount}
-              revealPath={revealPath}
-            />
-          )}
-          {tab === 'trackers' && (
-            <Trackers
-              trackerFileStats={results?.tracker_file_stats || {}}
-              onNavigate={handleNavigate}
-              timeRange={timeRange}
-              allTrackers={allTrackers}
-            />
-          )}
-          {tab === 'changes' && (
-            <ChangeLog onNavigate={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }} />
-          )}
-          {tab === 'config' && (
-            <Config
-              lastAuditTime={scanState.last_audit_time}
-              isScanning={scanState.is_scanning}
-              onConfigSaved={fetchResults}
-              onScan={handleScan}
-              theme={theme}
-              onThemeChange={setTheme}
-            />
-          )}
-          {tab === 'backfill' && (
-            <Backfill onNavigate={handleNavigate} />
-          )}
-          {tab === 'triage' && (
-            <Triage onNavigate={handleNavigate}
-              cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0}
-              trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
-          )}
-          {tab === 'cleanup' && (
-            <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
-              triageCount={triageRowCount(results?.dashboard?.current?.details)} />
-          )}
-          {tab === 'dedupe' && (
-            <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />
-          )}
-          {tab === 'trumped' && (
-            <Trumped key={navKey} onNavigate={handleNavigate}
-              initialOldTitle={pendingNav?.oldTitle}
-              triageDeadSeeds={deadSeedCount(results?.dashboard?.current?.details)} />
-          )}
+          {/* A page that throws while rendering shows its error here and leaves
+              the sidebar working. Keyed by tab so switching page clears it; each
+              page already unmounts when its tab closes, so the key remounts
+              nothing that would have stayed mounted. */}
+          <ErrorBoundary key={tab} scope="page" page={tab}>
+            {tab === 'dashboard' && (
+              <Dashboard
+                data={results?.dashboard ? {
+                  ...results.dashboard,
+                  tracker_file_stats: results.tracker_file_stats,
+                  not_imported_paths: results.not_imported_paths,
+                } : null}
+                changes={changes}
+                onNavigate={handleNavigate}
+                isRefreshing={isRefreshing}
+                onScript={setScriptModal}
+                timeRange={timeRange}
+                setTimeRange={setTimeRange}
+                selectedTrackers={selectedTrackers}
+                setSelectedTrackers={setSelectedTrackers}
+                allTrackers={allTrackers}
+                onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
+              />
+            )}
+            {/* Tab id stays `next-steps` — it is in users' bookmarks. Only the
+                component was renamed to match what the page calls itself. */}
+            {tab === 'next-steps' && (
+              <Rounds onNavigate={handleTabChange} />
+            )}
+            {(tab === 'media' || tab === 'torrents') && (
+              <FileExplorer
+                key={navKey}
+                files={tab === 'media' ? mediaFiles : torrentFiles}
+                trackers={results?.trackers || []}
+                tab={tab}
+                initialStatus={pendingNav?.status}
+                initialImportFilter={pendingNav?.importFilter}
+                initialTracker={pendingNav?.tracker}
+                initialSeedCount={pendingNav?.seedCount}
+                revealPath={revealPath}
+              />
+            )}
+            {tab === 'trackers' && (
+              <Trackers
+                trackerFileStats={results?.tracker_file_stats || {}}
+                onNavigate={handleNavigate}
+                timeRange={timeRange}
+                allTrackers={allTrackers}
+              />
+            )}
+            {tab === 'changes' && (
+              <ChangeLog onNavigate={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }} />
+            )}
+            {tab === 'config' && (
+              <Config
+                lastAuditTime={scanState.last_audit_time}
+                isScanning={scanState.is_scanning}
+                onConfigSaved={fetchResults}
+                onScan={handleScan}
+                theme={theme}
+                onThemeChange={setTheme}
+              />
+            )}
+            {tab === 'backfill' && (
+              <Backfill onNavigate={handleNavigate} />
+            )}
+            {tab === 'triage' && (
+              <Triage onNavigate={handleNavigate}
+                cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0}
+                trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
+            )}
+            {tab === 'cleanup' && (
+              <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
+                triageCount={triageRowCount(results?.dashboard?.current?.details)} />
+            )}
+            {tab === 'dedupe' && (
+              <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />
+            )}
+            {tab === 'trumped' && (
+              <Trumped key={navKey} onNavigate={handleNavigate}
+                initialOldTitle={pendingNav?.oldTitle}
+                triageDeadSeeds={deadSeedCount(results?.dashboard?.current?.details)} />
+            )}
+          </ErrorBoundary>
         </div>
       </div>
       {scriptModal && (
