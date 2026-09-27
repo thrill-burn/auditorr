@@ -25,6 +25,7 @@ drops the details only a scan can measure.
 """
 import json
 import os
+import re
 import sqlite3
 from contextlib import ExitStack
 from unittest.mock import patch
@@ -185,6 +186,13 @@ def test_the_figures_with_five_consumers_do_not_move(tmp_path):
     assert diff['score_delta'] == 0.0
 
 
+def _without_clock(script):
+    """The two header lines that read the clock, masked. The parity below is
+    about the data source, and two builds a moment apart straddle a second
+    boundary often enough to have failed CI on the v1.8.0 release commit."""
+    return re.sub(rb'^(# Generated: |GENERATED_AT=).*$', rb'\1<clock>', script, flags=re.M)
+
+
 def test_the_page_and_the_script_are_the_same_from_either_source(tmp_path):
     """Parity: built from the compact row, or from both full rows as every
     database before Phase 14 serves them, the page payload and the generated
@@ -204,7 +212,7 @@ def test_the_page_and_the_script_are_the_same_from_either_source(tmp_path):
     assert len(page_row['groups']) == 4
     assert page_row == page_full
     assert script_row.status_code == script_full.status_code == 200
-    assert script_row.get_data() == script_full.get_data()
+    assert _without_clock(script_row.get_data()) == _without_clock(script_full.get_data())
     assert dict(script_row.headers)['X-Auditorr-Groups'] == dict(script_full.headers)['X-Auditorr-Groups']
 
 
