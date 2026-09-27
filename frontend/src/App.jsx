@@ -13,28 +13,71 @@ import Cleanup      from './components/workflows/Cleanup'
 import Dedupe       from './components/workflows/Dedupe'
 import Trumped      from './components/workflows/Trumped'
 import ScanProgress    from './components/ScanProgress'
-import ImportProgress  from './components/ImportProgress'
+import ImportProgress, { WATCH_ACTIVE } from './components/ImportProgress'
 import ErrorBanner  from './components/ErrorBanner'
+import ErrorBoundary from './components/ErrorBoundary'
 import ChangesPanel from './components/ChangesPanel'
 import { ToastProvider, useToast } from './components/Toast'
 import { api } from './api'
+import { formatBytes } from './utils'
+import { Button, CloseButton, tint } from './components/workflows/shared'
 
 
 // ── Script Modal ──────────────────────────────────────────────────────────────
-function _btnStyle(bg, color) {
-  return { padding: '7px 14px', borderRadius: 6, border: '1px solid var(--border2)', background: bg, color, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+
+// What the server says about a script it just built. Cleanup's delete script
+// sends a verification time (it re-checks the selection against the torrent
+// client immediately before building it); Dedupe's sends the groups and files it
+// actually scripted, which leave out any group that changed since the scan.
+function scriptMeta(headers) {
+  const num = k => Number(headers.get(k) || 0)
+  if (headers?.get?.('X-Auditorr-Groups')) {
+    return {
+      kind:      'dedupe',
+      groups:    num('X-Auditorr-Groups'),
+      files:     num('X-Auditorr-Files'),
+      freesUpTo: num('X-Auditorr-Frees-Up-To'),
+    }
+  }
+  const at = headers?.get?.('X-Auditorr-Verified-At')
+  if (!at) return null
+  return {
+    verifiedAt: Number(at),
+    dropped:    num('X-Auditorr-Dropped'),
+    files:      num('X-Auditorr-Files'),
+    freeable:   num('X-Auditorr-Freeable'),
+  }
 }
 
 function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
   const [script, setScript] = useState(null)
+  const [meta, setMeta] = useState(null)
+  const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  // One request per modal open. StrictMode runs effects twice in development,
+  // and for Cleanup every request is a fresh round of torrent-client listings.
+  const requested = useRef(null)
 
   useEffect(() => {
+    if (requested.current === body) return
+    requested.current = body
     api.actionScript(scriptType, body)
-      .then(text => { setScript(text); setLoading(false) })
-      .catch(e => { setScript(`# Error loading script: ${e.message}`); setLoading(false) })
+      .then(({ text, headers }) => { setScript(text); setMeta(scriptMeta(headers)); setLoading(false) })
+      // A refusal is not a script. It used to render inside the code box as
+      // `# Error loading script: …` — copyable, downloadable, and shaped like
+      // something to run.
+      .catch(e => { setError(e.message || 'Could not build the script'); setLoading(false) })
   }, [scriptType, body])
+
+  // The page computed its subtitle from the selection; the server's count is the
+  // one that holds after files a torrent now claims were dropped (Cleanup), or
+  // after groups that changed since the scan were left out (Dedupe).
+  const plural = (n, w) => `${n} ${w}${n !== 1 ? 's' : ''}`
+  const shownSubtitle = !meta ? subtitle
+    : meta.kind === 'dedupe'
+      ? `${plural(meta.groups, 'group')} · ${plural(meta.files, 'file')} · frees up to ${formatBytes(meta.freesUpTo)}`
+      : `${plural(meta.files, 'file')} · up to ${formatBytes(meta.freeable)} freed`
 
   const handleCopy = () => {
     const ta = document.createElement('textarea')
@@ -94,27 +137,44 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
       >
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexShrink: 0 }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 2 }}>{subtitle}</div>}
+            <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{title}</div>
+            {shownSubtitle && !error && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>{shownSubtitle}</div>}
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 20, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+          <CloseButton onClick={onClose} />
         </div>
-        <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 12, color: 'var(--text-dim)', flexShrink: 0 }}>
-          ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
-        </div>
+        {!error && (
+          <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 'var(--font-base)', color: 'var(--text-dim)', flexShrink: 0 }}>
+            ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
+            {meta && (
+              <div style={{ marginTop: 6 }}>
+                Checked against your torrent client at {new Date(meta.verifiedAt * 1000).toLocaleTimeString()} — run it soon; it warns if it is more than a day old.
+                {meta.dropped > 0 && (
+                  <span style={{ color: 'var(--yellow)' }}>
+                    {' '}{meta.dropped} selected file{meta.dropped !== 1 ? 's are' : ' is'} in use by a torrent now and {meta.dropped !== 1 ? 'were' : 'was'} left out.
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
           {loading ? (
-            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>Loading…</div>
+            <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>Checking…</div>
+          ) : error ? (
+            <div style={{ padding: '12px 14px', background: tint('var(--red)', 6), border: `1px solid ${tint('var(--red)', 19)}`, borderRadius: 'var(--r)', fontSize: 'var(--font-base)', lineHeight: 1.6 }}>
+              <div style={{ color: 'var(--red)', fontWeight: 600, marginBottom: 4 }}>No script was built</div>
+              <div style={{ color: 'var(--text)' }}>{error}</div>
+            </div>
           ) : (
-            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
+            <pre style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{script}</pre>
           )}
         </div>
-        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
-          <button onClick={onClose} style={_btnStyle('var(--surface2)', 'var(--text-dim)')}>Close</button>
-          {!loading && script && (
+        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', display: 'flex', gap: 8, justifyContent: 'flex-end', flexShrink: 0 }}>
+          <Button variant="ghost" onClick={onClose}>Close</Button>
+          {!loading && !error && script && (
             <>
-              <button onClick={handleDownload} style={_btnStyle('var(--surface2)', 'var(--text)')}>Download .sh</button>
-              <button onClick={handleCopy} style={_btnStyle('var(--accent)', '#0a0a0a')}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</button>
+              <Button onClick={handleDownload}>Download .sh</Button>
+              <Button variant="primary" onClick={handleCopy}>{copied ? '✓ Copied!' : 'Copy to clipboard'}</Button>
             </>
           )}
         </div>
@@ -145,6 +205,13 @@ function triageRowCount(details) {
   if (!details) return 0
   if (details.triage_counts) return details.triage_counts.total
   return (details.not_imported_count || 0) + (details.dead_seed_count || 0)
+}
+
+// Triage's dead seeds, per torrent — the rows a missed trump PM ends up as.
+function deadSeedCount(details) {
+  if (!details) return 0
+  if (details.triage_counts) return details.triage_counts.dead_seeds || 0
+  return details.dead_seed_count || 0
 }
 
 function AppInner() {
@@ -360,6 +427,8 @@ function AppInner() {
       importFilter: action.importFilter || null,
       tracker: action.tracker || null,
       seedCount: action.seedCount != null ? action.seedCount : null,
+      // Triage's "Trumped?" chip pre-fills the trumped release name.
+      oldTitle: action.oldTitle || null,
     }
     setPendingNav(nav)
     setHashTab(action.tab)
@@ -373,7 +442,8 @@ function AppInner() {
     (pendingNav?.status || '') +
     (pendingNav?.importFilter || '') +
     (pendingNav?.tracker || '') +
-    (pendingNav?.seedCount != null ? String(pendingNav.seedCount) : '')
+    (pendingNav?.seedCount != null ? String(pendingNav.seedCount) : '') +
+    (pendingNav?.oldTitle || '')
 
   // Server is fail-closed: AUDITORR_REQUIRE_AUTH is set but no AUDITORR_SECRET
   // is configured. Nothing in the app can work, so take over the page with
@@ -381,7 +451,7 @@ function AppInner() {
   // answers again (secret set + restart).
   if (authBlocked) {
     const envChip = {
-      fontFamily: 'var(--mono)', fontSize: 12, background: 'var(--surface2)',
+      fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', background: 'var(--surface2)',
       border: '1px solid var(--border)', borderRadius: 4, padding: '1px 5px',
     }
     return (
@@ -392,9 +462,9 @@ function AppInner() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <span style={{ width: 8, height: 8, borderRadius: 99, background: 'var(--red)', flexShrink: 0 }} />
-            <span style={{ fontSize: 15, fontWeight: 600 }}>Access key required</span>
+            <span style={{ fontSize: 'var(--font-lg)', fontWeight: 600 }}>Access key required</span>
           </div>
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.6, margin: 0 }}>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6, margin: 0 }}>
             <code style={envChip}>AUDITORR_REQUIRE_AUTH</code> is set, but no access key is
             configured. Set <code style={envChip}>AUDITORR_SECRET</code> in the container
             environment and restart — this page will pick it up automatically and ask for
@@ -420,7 +490,7 @@ function AppInner() {
         statusMessage={scanState.status_message}
         score={results?.dashboard?.score}
         crossSeedMultiplier={crossSeedMultiplier}
-        activeImportCount={activeImports.filter(j => !['done', 'error'].includes(j.status)).length}
+        activeImportCount={activeImports.filter(j => WATCH_ACTIVE.includes(j.status)).length}
         onOpenImportPanel={() => setImportPanelOpen(true)}
         workflowCounts={(() => {
           const det = results?.dashboard?.current?.details
@@ -428,7 +498,10 @@ function AppInner() {
           return {
             triage:  triageRowCount(det),
             cleanup: det.orphaned_torrent_count || 0,
-            dedupe:  det.duplicate_count        || 0,
+            // Groups, as the page lists them (Phase 14). `duplicate_count` counts
+            // files and is only the fallback, for details a scan wrote before
+            // the group count existed.
+            dedupe:  det.dedupe_group_count ?? det.duplicate_count ?? 0,
           }
         })()}
       />
@@ -443,81 +516,90 @@ function AppInner() {
               animation: 'slideIn 0.6s ease',
             }} />
           )}
-          {tab === 'dashboard' && (
-            <Dashboard
-              data={results?.dashboard ? {
-                ...results.dashboard,
-                tracker_file_stats: results.tracker_file_stats,
-                not_imported_paths: results.not_imported_paths,
-              } : null}
-              changes={changes}
-              onNavigate={handleNavigate}
-              isRefreshing={isRefreshing}
-              onScript={setScriptModal}
-              timeRange={timeRange}
-              setTimeRange={setTimeRange}
-              selectedTrackers={selectedTrackers}
-              setSelectedTrackers={setSelectedTrackers}
-              allTrackers={allTrackers}
-              onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
-            />
-          )}
-          {/* Tab id stays `next-steps` — it is in users' bookmarks. Only the
-              component was renamed to match what the page calls itself. */}
-          {tab === 'next-steps' && (
-            <Rounds onNavigate={handleTabChange} />
-          )}
-          {(tab === 'media' || tab === 'torrents') && (
-            <FileExplorer
-              key={navKey}
-              files={tab === 'media' ? mediaFiles : torrentFiles}
-              trackers={results?.trackers || []}
-              tab={tab}
-              initialStatus={pendingNav?.status}
-              initialImportFilter={pendingNav?.importFilter}
-              initialTracker={pendingNav?.tracker}
-              initialSeedCount={pendingNav?.seedCount}
-              revealPath={revealPath}
-            />
-          )}
-          {tab === 'trackers' && (
-            <Trackers
-              trackerFileStats={results?.tracker_file_stats || {}}
-              onNavigate={handleNavigate}
-              timeRange={timeRange}
-              allTrackers={allTrackers}
-            />
-          )}
-          {tab === 'changes' && (
-            <ChangeLog onNavigate={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }} />
-          )}
-          {tab === 'config' && (
-            <Config
-              lastAuditTime={scanState.last_audit_time}
-              isScanning={scanState.is_scanning}
-              onConfigSaved={fetchResults}
-              onScan={handleScan}
-              theme={theme}
-              onThemeChange={setTheme}
-            />
-          )}
-          {tab === 'backfill' && (
-            <Backfill onNavigate={handleNavigate} />
-          )}
-          {tab === 'triage' && (
-            <Triage onNavigate={handleNavigate}
-              cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0} />
-          )}
-          {tab === 'cleanup' && (
-            <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
-              triageCount={triageRowCount(results?.dashboard?.current?.details)} />
-          )}
-          {tab === 'dedupe' && (
-            <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />
-          )}
-          {tab === 'trumped' && (
-            <Trumped onNavigate={handleNavigate} />
-          )}
+          {/* A page that throws while rendering shows its error here and leaves
+              the sidebar working. Keyed by tab so switching page clears it; each
+              page already unmounts when its tab closes, so the key remounts
+              nothing that would have stayed mounted. */}
+          <ErrorBoundary key={tab} scope="page" page={tab}>
+            {tab === 'dashboard' && (
+              <Dashboard
+                data={results?.dashboard ? {
+                  ...results.dashboard,
+                  tracker_file_stats: results.tracker_file_stats,
+                  not_imported_paths: results.not_imported_paths,
+                } : null}
+                changes={changes}
+                onNavigate={handleNavigate}
+                isRefreshing={isRefreshing}
+                onScript={setScriptModal}
+                timeRange={timeRange}
+                setTimeRange={setTimeRange}
+                selectedTrackers={selectedTrackers}
+                setSelectedTrackers={setSelectedTrackers}
+                allTrackers={allTrackers}
+                onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
+              />
+            )}
+            {/* Tab id stays `next-steps` — it is in users' bookmarks. Only the
+                component was renamed to match what the page calls itself. */}
+            {tab === 'next-steps' && (
+              <Rounds onNavigate={handleTabChange} />
+            )}
+            {(tab === 'media' || tab === 'torrents') && (
+              <FileExplorer
+                key={navKey}
+                files={tab === 'media' ? mediaFiles : torrentFiles}
+                trackers={results?.trackers || []}
+                tab={tab}
+                initialStatus={pendingNav?.status}
+                initialImportFilter={pendingNav?.importFilter}
+                initialTracker={pendingNav?.tracker}
+                initialSeedCount={pendingNav?.seedCount}
+                revealPath={revealPath}
+              />
+            )}
+            {tab === 'trackers' && (
+              <Trackers
+                trackerFileStats={results?.tracker_file_stats || {}}
+                onNavigate={handleNavigate}
+                timeRange={timeRange}
+                allTrackers={allTrackers}
+              />
+            )}
+            {tab === 'changes' && (
+              <ChangeLog onNavigate={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }} />
+            )}
+            {tab === 'config' && (
+              <Config
+                lastAuditTime={scanState.last_audit_time}
+                isScanning={scanState.is_scanning}
+                onConfigSaved={fetchResults}
+                onScan={handleScan}
+                theme={theme}
+                onThemeChange={setTheme}
+              />
+            )}
+            {tab === 'backfill' && (
+              <Backfill onNavigate={handleNavigate} />
+            )}
+            {tab === 'triage' && (
+              <Triage onNavigate={handleNavigate}
+                cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0}
+                trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
+            )}
+            {tab === 'cleanup' && (
+              <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
+                triageCount={triageRowCount(results?.dashboard?.current?.details)} />
+            )}
+            {tab === 'dedupe' && (
+              <Dedupe onNavigate={handleNavigate} onScript={setScriptModal} />
+            )}
+            {tab === 'trumped' && (
+              <Trumped key={navKey} onNavigate={handleNavigate}
+                initialOldTitle={pendingNav?.oldTitle}
+                triageDeadSeeds={deadSeedCount(results?.dashboard?.current?.details)} />
+            )}
+          </ErrorBoundary>
         </div>
       </div>
       {scriptModal && (

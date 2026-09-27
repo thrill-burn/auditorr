@@ -4,6 +4,7 @@ import { RangePresets } from './FilterBar'
 import MultiLineChart from './MultiLineChart'
 import CompareTable from './CompareTable'
 import { api } from '../api'
+import { Segmented } from './workflows/shared'
 
 // Categorical series palette — one stable hue per tracker. Color IS the data
 // here: this is the one place auditorr spends hue freely (a chart series).
@@ -73,25 +74,16 @@ function buildHistory(uploadStats, trackers) {
   return { dates, labels: dates.map(fmtDate), seriesByMetric }
 }
 
-// ── Metric switcher (segmented, mutually exclusive) ──────────────────────────
+// ── Metric switcher ──────────────────────────────────────────────────────────
+// One of five, so the shared track. The square swatch is the metric's chart
+// colour, kept square so it reads as a series key rather than a status dot.
 function MetricSwitch({ value, onChange }) {
   return (
-    <div style={{ display: 'inline-flex', background: 'var(--surface3)', border: '1px solid var(--border2)', borderRadius: 7, padding: 2, gap: 2, flexWrap: 'wrap' }}>
-      {METRICS.map(m => {
-        const active = value === m.key
-        return (
-          <button key={m.key} onClick={() => onChange(m.key)} style={{
-            padding: '6px 14px', fontSize: 13, fontWeight: active ? 600 : 500, borderRadius: 5, border: 'none',
-            background: active ? 'var(--surface)' : 'transparent', boxShadow: active ? 'var(--elev-1)' : 'none',
-            color: active ? 'var(--text)' : 'var(--text-dim)',
-            display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', transition: 'all 0.12s',
-          }}>
-            <span style={{ width: 7, height: 7, borderRadius: 2, background: m.color }} />
-            {m.label}
-          </button>
-        )
-      })}
-    </div>
+    <Segmented size="lg" label="Metric" value={value} onChange={onChange}
+      options={METRICS.map(m => ({
+        value: m.key, label: m.label,
+        icon: <span style={{ width: 7, height: 7, borderRadius: 2, background: m.color, flexShrink: 0 }} />,
+      }))} />
   )
 }
 
@@ -189,7 +181,7 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
           Both scope the chart and the table's Uploaded/Yield columns. */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <RangePresets isActive={v => activePreset === v} onSelect={applyPreset} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
           <DatePicker value={dateFrom} onChange={setDateFrom} placeholder="From" align="right" />
           <span>—</span>
           <DatePicker value={dateTo} onChange={setDateTo} placeholder="To" align="right" />
@@ -200,7 +192,7 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
           <MetricSwitch value={metricKey} onChange={setMetricKey} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--text-dim)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: visCount ? 'var(--green)' : 'var(--text-faint)' }} />
             <span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{visCount}</span> of {allTrackers.length} trackers on chart</span>
           </div>
@@ -209,7 +201,7 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
           <MultiLineChart series={chartSeries} dates={labels} unit={metric.unit} baseline={metric.baseline} hovered={hovered} />
           {!hasHistory && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>Trend data will appear after a few audits</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>Trend data will appear after a few audits</span>
             </div>
           )}
         </div>

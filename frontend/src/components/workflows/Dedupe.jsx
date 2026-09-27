@@ -2,80 +2,135 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import {
-  WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
-  Checkbox, ActionBar, ActionButton, SpinKeyframes, useAuditComplete,
+  WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError,
+  Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete, StatBox, Dot, MONO_TITLE, tint,
 } from './shared'
 
-function StatBox({ label, value, sub, color }) {
-  return (
-    <div style={{
-      padding: '12px 16px', borderRadius: 9, flex: 1, minWidth: 140,
-      background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
-    }}>
-      <div style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
-        {label}
-      </div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
-    </div>
-  )
+// ── What each group is ────────────────────────────────────────────────────────
+//
+// A group is a set of identical files — one row per file (inode), every path of
+// it listed — and no copy is marked as the one kept. The script decides that
+// when it runs, per disk, by link count, and checks every file again before it
+// touches any (DEDUPE §5.4). So there is no KEEP/LINK chip here any more, and
+// nothing is selected for you: which copy survives, and whose owner and
+// permissions every path ends up with, is a run-time decision you choose into.
+//
+// Status and cause are computed server-side (`scripts.build_dedupe_report`) and
+// never re-derived here. Ration colour: status is a dot and its text, never a
+// fill; the cause is plain dim text. A group with nothing to say carries no
+// status at all.
+const STATUS = {
+  // No label. On a pooled share (Unraid, mergerfs) every copy reports one disk
+  // whichever drive it is on, so "same disk" would be a claim — and the script
+  // checks each link itself when it runs. A caution here was on every group of
+  // the commonest install, for normal operation (removed 2026-09-15).
+  linkable: { label: null },
+  cross_device: {
+    label: 'different disks', color: 'var(--blue)',
+    note: () => 'These copies report different disks. The script links the copies that share a disk and leaves the rest alone.',
+  },
+  unverifiable: {
+    label: 'could not check', color: 'var(--yellow)',
+    note: g => (UNVERIFIABLE[g.reason] || UNVERIFIABLE.stat_failed)(g),
+  },
+  stale: {
+    label: 'changed since the scan', color: 'var(--text-dim)',
+    note: () => 'A copy has gone since the last scan, so this group cannot be selected. It clears on the next scan.',
+  },
 }
 
+const UNVERIFIABLE = {
+  stat_failed: () => 'auditorr could not read one of these files just now. The script checks every file itself before touching it.',
+  outside_script_root: () => 'One copy is outside the folder the script runs from, so the script leaves that copy out and links the rest.',
+}
+
+// Decision 2 (a), 2026-09-15: the cause is stated from the group's own paths,
+// and the page makes no claim about which kind dominates a library (QA-11 is
+// unmeasured). The paths say where the copies sit, never who made them: a copy
+// made by hand for an upload has the same shape as an import that copied.
+const CAUSE = {
+  missing_hardlink: {
+    label: 'missing hardlink',
+    title: 'A torrent file and a library file holding the same bytes, never hardlinked — an import that copied, or a copy made by hand. Linking them frees the space and makes the torrent read as imported.',
+  },
+  copies: {
+    label: 'duplicate copies',
+    title: 'The same bytes stored more than once. Linking them frees the space.',
+  },
+}
+
+const plural = (n, word) => `${n} ${word}${n !== 1 ? 's' : ''}`
+const selectable = g => g.selectable !== false && g.status !== 'stale'
+
 function DupGroup({ group, checked, onToggle }) {
-  const canonical  = group.files.find(f => f.canonical)
-  const duplicates = group.files.filter(f => !f.canonical)
-  const filename   = (canonical?.path || '').replace(/\\/g, '/').split('/').pop()
+  const canSelect = selectable(group)
+  const status = STATUS[group.status] || STATUS.unverifiable
+  const note = status.note ? status.note(group) : null
+  const cause = CAUSE[group.cause] || CAUSE.copies
+  const name = (group.id || '').split('/').pop()
 
   return (
-    <div
-      onClick={() => !group.cross_fs && onToggle()}
-      style={{
-        background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 9, boxShadow: 'var(--elev-1)',
-        overflow: 'hidden', cursor: group.cross_fs ? 'default' : 'pointer',
-        opacity: group.cross_fs ? 0.6 : 1,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: checked ? 'var(--accent)06' : 'var(--surface2)' }}>
-        {group.cross_fs ? (
-          <span title="Cannot hardlink across filesystems" style={{ width: 15, flexShrink: 0, textAlign: 'center', fontSize: 11, color: 'var(--text-dim)' }}>—</span>
-        ) : (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)',
+      overflow: 'hidden',
+    }}>
+      <div
+        onClick={canSelect ? onToggle : undefined}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', flexWrap: 'wrap', cursor: canSelect ? 'pointer' : 'default', background: checked ? tint('var(--accent)', 2) : 'var(--surface2)' }}
+      >
+        {canSelect ? (
           <Checkbox checked={checked} onChange={onToggle} />
-        )}
-        <span title={canonical?.path} style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {filename}
-        </span>
-        {group.cross_fs ? (
-          <span
-            title="These copies live on different filesystems — hardlinks can't span mounts, so this group is skipped"
-            style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 7px', borderRadius: 99, flexShrink: 0, border: '1px solid var(--border2)', color: 'var(--text-dim)' }}
-          >
-            cross-filesystem
-          </span>
         ) : (
-          <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--green)', flexShrink: 0 }}>
-            +{formatBytes(group.recoverable_size)}
+          <span title={note || ''} style={{ width: 15, height: 15, borderRadius: 'var(--r-sm)', border: '1.5px dashed var(--border2)', flexShrink: 0, cursor: 'not-allowed' }} />
+        )}
+        <span title={group.id} style={{ ...MONO_TITLE, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {name}
+        </span>
+        <span title={cause.title} style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>
+          {cause.label}
+        </span>
+        <span style={{ flex: 1 }} />
+        {status.label && (
+          <span title={note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: status.color, flexShrink: 0 }}>
+            <Dot color={status.color} />{status.label}
           </span>
         )}
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-          {group.files.length} copies
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+          {group.file_count} copies
+        </span>
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 96, textAlign: 'right' }}>
+          frees up to {formatBytes(group.frees_up_to)}
         </span>
       </div>
 
-      {group.files.map((f, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px 6px 36px', borderTop: '1px solid var(--border)' }}>
-          <span style={{
-            fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 6px', borderRadius: 4, flexShrink: 0,
-            background: f.canonical ? 'var(--green)18' : 'var(--surface3)',
-            color: f.canonical ? 'var(--green)' : 'var(--text-dim)',
-            border: `1px solid ${f.canonical ? 'var(--green)40' : 'var(--border2)'}`,
-          }}>
-            {f.canonical ? 'KEEP' : 'LINK'}
-          </span>
-          <span title={f.path} style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontFamily: 'var(--mono)', color: f.canonical ? 'var(--text)' : 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {f.path}
-          </span>
-          <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-            {formatBytes(f.size)}
+      {/* Every group that is not plainly linkable says what to expect, inline. */}
+      {note && (
+        <div style={{ padding: '6px 14px 6px 36px', borderTop: '1px solid var(--border)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
+          {note}
+        </div>
+      )}
+
+      {group.members.map(m => (
+        <div key={m.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '6px 14px 6px 36px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {m.paths.map(p => (
+              <div key={p.path} style={{ display: 'flex', alignItems: 'center', gap: 8, lineHeight: '16px' }}>
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 48 }}>
+                  {p.tree === 'media' ? 'library' : 'torrent'}
+                </span>
+                <span title={p.path} style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.path}
+                </span>
+              </div>
+            ))}
+            {m.paths.length > 1 && (
+              <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>
+                One file at {m.paths.length} paths — the script replaces all of them together, or none.
+              </div>
+            )}
+          </div>
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, lineHeight: '16px' }}>
+            {formatBytes(m.size)}
           </span>
         </div>
       ))}
@@ -87,17 +142,15 @@ export default function Dedupe({ onNavigate, onScript }) {
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
-  const [selected, setSelected] = useState(() => new Set())   // group ids
+  // Group ids. Never pre-selected (decision 2, 2026-09-15 — Cleanup's rule).
+  const [selected, setSelected] = useState(() => new Set())
 
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
+    setSelected(new Set())
     api.dedupeReport()
-      .then(data => {
-        setReport(data)
-        // All linkable groups selected by default — dedupe keeps every path alive
-        setSelected(new Set((data.groups || []).filter(g => !g.cross_fs).map(g => g.id)))
-      })
+      .then(setReport)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
@@ -108,10 +161,11 @@ export default function Dedupe({ onNavigate, onScript }) {
   useAuditComplete(load)
 
   const groups = report?.groups || []
-  const linkable = useMemo(() => groups.filter(g => !g.cross_fs), [groups])
-  const selectedGroups = useMemo(() => linkable.filter(g => selected.has(g.id)), [linkable, selected])
-  const selectedRecoverable = selectedGroups.reduce((s, g) => s + g.recoverable_size, 0)
-  const crossFsCount = groups.length - linkable.length
+  const choosable = useMemo(() => groups.filter(selectable), [groups])
+  const staleCount = groups.length - choosable.length
+  const selectedGroups = useMemo(() => choosable.filter(g => selected.has(g.id)), [choosable, selected])
+  const selFiles = selectedGroups.reduce((s, g) => s + g.file_count, 0)
+  const selFrees = selectedGroups.reduce((s, g) => s + g.frees_up_to, 0)
 
   const toggle = useCallback(id => {
     setSelected(prev => {
@@ -121,25 +175,28 @@ export default function Dedupe({ onNavigate, onScript }) {
     })
   }, [])
 
+  const allChosen = choosable.length > 0 && choosable.every(g => selected.has(g.id))
   const toggleAll = useCallback(() => {
-    setSelected(prev => prev.size === linkable.length ? new Set() : new Set(linkable.map(g => g.id)))
-  }, [linkable])
+    setSelected(allChosen ? new Set() : new Set(choosable.map(g => g.id)))
+  }, [allChosen, choosable])
+
+  const selectionLine = `${plural(selectedGroups.length, 'group')} · ${plural(selFiles, 'file')} · frees up to ${formatBytes(selFrees)}`
 
   const handleScript = () => {
     onScript({
       scriptType: 'dedupe',
       title: 'Dedupe Script',
-      subtitle: `${selectedGroups.length} group${selectedGroups.length !== 1 ? 's' : ''} · ${formatBytes(selectedRecoverable)} recoverable`,
-      body: { groups: [...selected] },
+      subtitle: selectionLine,
+      body: { groups: selectedGroups.map(g => g.id) },
     })
   }
 
   return (
-    <div className="fade-in" style={{ padding: '28px 28px 48px', display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <WorkflowPage>
       <WorkflowHeader
         title="Dedupe"
         accent="var(--purple)"
-        blurb="Bit-for-bit identical files that don't share an inode — true copies wasting disk space. The generated script verifies each pair with cmp, then replaces the copy with a hardlink: every path survives and every torrent keeps seeding."
+        blurb="Identical files stored as separate copies. The script hardlinks them, checking every file again before it touches one."
         /* Re-reads itself when an audit lands — see `useAuditComplete`. */
       />
 
@@ -150,28 +207,30 @@ export default function Dedupe({ onNavigate, onScript }) {
       {!loading && !error && groups.length === 0 && (
         <EmptyState
           title="No duplicates"
-          sub="No identical files without a shared inode were found in your last audit. Your disk space is fully deduplicated."
+          sub="No identical files without a shared inode were found in your last audit."
         />
       )}
 
       {!loading && groups.length > 0 && (
         <>
+          {/* Decision 2 (a): both numbers lead, and the bytes are always a maximum. */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <StatBox label="Duplicate Groups" value={groups.length} sub={crossFsCount > 0 ? `${crossFsCount} skipped (cross-filesystem)` : null} />
-            <StatBox label="Recoverable" value={formatBytes(report.total_recoverable)} color="var(--green)" sub="if all groups are hardlinked" />
+            <StatBox label="Would share a copy" value={plural(report.file_count, 'file')}
+              sub={`in ${plural(choosable.length, 'group')}${staleCount ? ` · ${staleCount} changed since the scan` : ''}`} />
+            <StatBox label="Frees up to" value={formatBytes(report.frees_up_to)}
+              sub="a maximum — the script reports what it frees" />
+            <StatBox label="Missing hardlinks" value={report.missing_hardlink_count}
+              sub="groups pairing a torrent file with a library copy" />
             {report.excluded_count > 0 && (
               <StatBox label="Excluded" value={report.excluded_count} sub="hidden by your exclusion rules" />
             )}
           </div>
 
-          {linkable.length > 0 && (
+          {choosable.length > 0 && (
             <div>
-              <button onClick={toggleAll} style={{
-                fontSize: 12, padding: '5px 14px', borderRadius: 99, cursor: 'pointer',
-                border: '1px solid var(--border2)', background: 'transparent', color: 'var(--text-dim)',
-              }}>
-                {selected.size === linkable.length ? 'Deselect all' : 'Select all'}
-              </button>
+              <Button size="sm" variant="ghost" onClick={toggleAll}>
+                {allChosen ? 'Deselect all' : `Select all (${choosable.length})`}
+              </Button>
             </div>
           )}
 
@@ -182,15 +241,15 @@ export default function Dedupe({ onNavigate, onScript }) {
           </div>
 
           {selectedGroups.length > 0 && (
-            <ActionBar summary={`${selectedGroups.length} group${selectedGroups.length !== 1 ? 's' : ''} selected · ${formatBytes(selectedRecoverable)} recoverable`}>
-              <ActionButton primary onClick={handleScript}>
+            <ActionBar summary={`${selectionLine} selected`}>
+              <Button variant="primary" onClick={handleScript}>
                 Generate Dedupe Script
-              </ActionButton>
+              </Button>
             </ActionBar>
           )}
         </>
       )}
       <SpinKeyframes />
-    </div>
+    </WorkflowPage>
   )
 }

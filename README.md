@@ -3,6 +3,7 @@
 **An audit tool for hardlinked media libraries using qBittorrent / qui + Sonarr / Radarr.**
 A dashboard with health score, per-tracker analytics, and cross-seed effectiveness 
 tells you what's wrong with your library. Five automated workflows fix it.
+Built to stay light on memory, it runs on **500+ TB** libraries.
 
 <p align="center">
   <a href="docs/configuration.md">Configuration</a> ·
@@ -18,20 +19,14 @@ tells you what's wrong with your library. Five automated workflows fix it.
 
 ---
 
-## What's new in 1.7.3
+## What's new in 1.8.0
 
-- **Every Sonarr / Radarr instance is read now ([#22](https://github.com/thrill-burn/auditorr/issues/22))** - your primary pair and the *Additional instances* list are merged rather than either/or. Upgrading is the whole fix.
-- **File Explorer can say "not" ([#23](https://github.com/thrill-burn/auditorr/issues/23))** - *Duplicates* and *Excluded* get their own `+` / `-` [toggles](docs/configuration.md#excluded-files--folders), so **orphaned but not excluded** is one click.
-- **Workflow pages keep up** - act on a row and the sidebar, dashboard and other pages follow straight away, instead of waiting for the next audit.
-- **[Rounds](#rounds) keeps score for a tidy library too** - a dated record of every prize you've earned, eleven new ladders, and workflow prizes rebased onto work done rather than bytes held.
+- **Safer workflows** - all five were reviewed end to end. A torrent client or Sonarr / Radarr that doesn't answer can no longer make files look orphaned, unimported or safe to delete; auditorr says "could not check" instead of guessing. [Full list](CHANGELOG.md).
+- **Bad scans aren't saved** - if your client stops answering, a drive isn't mounted yet, or torrents vanish overnight, your last good results stay put and auditorr tells you what to fix.
+- **Deletes and hardlinks check again before acting** - Cleanup asks your client again before building a delete script, Triage and Trumped keep any file something still uses, and Trumped grabs the replacement before removing anything. Both scripts now have `--dry-run` and are safe to run twice.
+- **One consistent UI** - every button, filter and heading comes from one set, and warning boxes that had silently lost their borders are back.
 
-Upgrading from 1.7.0 or earlier? 1.7.1 [closed off-LAN API access by default](docs/remote-access.md) - LAN is unaffected.
-
-## What's new in 1.7.0
-
-- **Optimized for large libraries** - backend memory optimizations, tested on libraries up to **500 TB**.
-- **Four new workflows** - Backfill is now joined by Cleanup, Triage, Dedupe, and Trumped, so every dashboard problem has a fix.
-- **A rebuilt UI** - a top-to-bottom design pass with consistent buttons and spacing, and a calmer library-health dial.
+Upgrading needs no configuration changes. From 1.7.0 or earlier? 1.7.1 [closed off-LAN API access by default](docs/remote-access.md) - LAN is unaffected.
 
 ---
 
@@ -74,12 +69,10 @@ which one to open.
 
 ### Rounds
 
-Every workflow in one ranked list, in a fixed order you walk again and again:
-**Baseline** you clear once and then watch, **Ongoing** never has a last item,
-**On demand** waits for a tracker to ask. Under it sits a shelf of **useless
-prizes** — 650+ named tiers and 109 feats in the spirit of Progress Quest,
-awarded for work you were going to do anyway and never taken back — and a dated
-record of every one you've earned.
+Every workflow in one list, in a fixed order: **Baseline** to clear and then
+watch, **Ongoing** that never runs out, and **On demand** for when a tracker
+asks. Underneath sit 750+ **useless prizes** in the spirit of Progress Quest,
+awarded for work you were going to do anyway and never taken back.
 
 <p>
   <a href="docs/rounds.png"><img src="docs/rounds.png" alt="Rounds" width="100%" /></a>
@@ -130,9 +123,9 @@ replaces copies with hardlinks, verified with `cmp` before linking.
 
 Automates the private-tracker trump swap. Paste the tracker's "this release has
 been trumped" PM; auditorr parses the old and new release names, finds the
-entire hardlink group (every cross-seed of the old content), removes it from the
-client with its files, and grabs the exact replacement through Sonarr/Radarr —
-wizard-style, confirmed at every step.
+entire hardlink group (every cross-seed of the old content), grabs the exact
+replacement through Sonarr/Radarr, and only then removes the old group from the
+client with its files — wizard-style, confirmed at every step.
 
 <p>
   <a href="docs/workflow-trumped.png"><img src="docs/workflow-trumped.png" alt="Trumped workflow" width="100%" /></a>

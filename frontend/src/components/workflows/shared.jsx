@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { tint } from '../../utils'
 
 // ── Staying current ───────────────────────────────────────────────────────────
 //
@@ -30,11 +32,18 @@ export function useAuditComplete(onComplete) {
   }, [])
 }
 
+// ── Tints ─────────────────────────────────────────────────────────────────────
+// `tint()` moved to utils.js once the rest of the app needed it too; it is
+// re-exported here because every workflow page imports it from the kit.
+export { tint }
+
 // ── Shared option lists ───────────────────────────────────────────────────────
 export const QUALITY_RES_OPTIONS = [
   { value: '2160p', label: '2160p / 4K' },
   { value: '1080p', label: '1080p'      },
   { value: '720p',  label: '720p'       },
+  // SD: 480p and 576p, and a DVD with no resolution of its own (Radarr reports 0).
+  { value: '480p',  label: '480p / SD'  },
 ]
 export const QUALITY_SOURCE_OPTIONS = [
   { value: 'remux',  label: 'Remux'  },
@@ -42,6 +51,7 @@ export const QUALITY_SOURCE_OPTIONS = [
   { value: 'webdl',  label: 'WEB-DL' },
   { value: 'webrip', label: 'WEBRip' },
   { value: 'hdtv',   label: 'HDTV'   },
+  { value: 'dvd',    label: 'DVD'    },
 ]
 export const HDR_OPTIONS = [
   { value: 'DV',     label: 'Dolby Vision' },
@@ -59,108 +69,218 @@ export const HDR_STYLE = {
   'HLG':    { bg: '#0f766e20', color: '#2dd4bf' },
 }
 
-// ── Chip ──────────────────────────────────────────────────────────────────────
-export function Chip({ active, onClick, children }) {
+// ── Segmented ─────────────────────────────────────────────────────────────────
+//
+// Every filter row in the app, whether it takes one choice or several (UI pass,
+// 2026-09-22). There were fifteen control shapes doing five jobs — pills,
+// bordered pairs, separate rectangles, two inset tracks at different radii —
+// and once tint() drew them properly a pill and a button looked equally
+// clickable. The rule now: **a pill is never interactive**. Filters are this
+// track, and so is a single choice whose options carry a detail (`SortPicker`,
+// `CountPicker`); actions are `Button`; the any/only/hide flag is `FlagToggle`.
+//
+// Multi-select is the same track with several segments lit — by the user's
+// choice over a row of separate toggle buttons, which retired CLAUDE.md's old
+// "multi-select filters stay pill Chips" rule. `allLabel` puts a leading
+// All/Any segment that is lit when nothing else is and clears the rest.
+//
+// `allSelects` is the same segment for a set of switches rather than a filter
+// (Config's presets), where [] means *none*: All is lit when every option is
+// chosen, and toggles between all and none. While it is lit the options render
+// unlit and a click picks that one alone, exactly as under a filter's All — so
+// "every one" is said by one segment rather than by checking each of six. (It
+// was built when the dark theme filled a selected segment darker than its
+// track, and a fully lit track looked the same as an empty one.)
+//
+// options: [{ value, label, icon?, title?, disabled?, tone? }]. `icon` renders
+// before the label (a status Dot, a chart swatch). `tone` colours the label of
+// a selected segment — Triage's destructive "All cross-seeds" is red.
+// size: 'sm' is var(--control-h) (dense toolbars), 'lg' is var(--control-h-lg).
+// mono: for readouts (7d/30d/90d); words are sans. Styling lives in index.css's
+// `.seg`, because the hover and the selected hairline cannot be inline.
+export function Segmented({
+  options, value, onChange, multiple = false, allLabel, allSelects = false, size = 'sm', mono = false, disabled = false, label,
+}) {
+  const chosen = multiple ? (value || []) : value
+  const every = multiple && allSelects && options.length > 0 && options.every(o => chosen.includes(o.value))
+  const isOn = v => (multiple ? !every && chosen.includes(v) : chosen === v)
+  const pick = v => {
+    if (!multiple) onChange(v)
+    else if (every) onChange([v])
+    else onChange(isOn(v) ? chosen.filter(x => x !== v) : [...chosen, v])
+  }
+  // Only a many-of-N track has an All segment. A single choice may hold null or
+  // undefined (the changes panel's "All", a date range no preset matches), and
+  // reading .length off it unmounted the whole app.
+  const allOn = multiple && (allSelects ? every : chosen.length === 0)
+  const pickAll = () => onChange(allSelects && !every ? options.map(o => o.value) : [])
+  const cls = 'seg' + (size === 'lg' ? ' seg-lg' : '') + (mono ? ' seg-mono' : '')
   return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '3px 10px', borderRadius: 'var(--r-pill)', fontSize: 12, cursor: 'pointer',
-        border: active ? '1px solid var(--accent)' : '1px solid var(--border2)',
-        background: active ? 'var(--accent)18' : 'transparent',
-        color: active ? 'var(--accent)' : 'var(--text-dim)',
-        fontWeight: active ? 600 : 400,
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-// ── Labeled chips (options with separate display labels) ─────────────────────
-export function LabeledChips({ options, value, onChange, allLabel = 'Any' }) {
-  const noneSelected = value.length === 0
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>{allLabel}</Chip>
-      {options.map(opt => {
-        const active = value.includes(opt.value)
-        return (
-          <Chip key={opt.value} active={active}
-            onClick={() => onChange(active ? value.filter(v => v !== opt.value) : [...value, opt.value])}>
-            {opt.label}
-          </Chip>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Indexer chips ─────────────────────────────────────────────────────────────
-export function IndexerChips({ options, value, onChange, allLabel = 'All' }) {
-  const noneSelected = value.length === 0
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>{allLabel}</Chip>
-      {options.map(opt => {
-        const active = value.includes(opt)
-        return (
-          <Chip key={opt} active={active}
-            onClick={() => onChange(active ? value.filter(v => v !== opt) : [...value, opt])}>
-            {opt}
-          </Chip>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Folder chips ──────────────────────────────────────────────────────────────
-export function FolderChips({ folders, selected, onChange }) {
-  const noneSelected = selected.length === 0
-  const toggle = name => onChange(selected.includes(name) ? selected.filter(f => f !== name) : [...selected, name])
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-      <Chip active={noneSelected} onClick={() => onChange([])}>All</Chip>
-      {folders.map(({ name, count }) => (
-        <Chip key={name} active={selected.includes(name)} onClick={() => toggle(name)}>
-          {name} <span style={{ opacity: 0.55 }}>({count})</span>
-        </Chip>
+    <div role="group" aria-label={label} className={cls}>
+      {multiple && allLabel != null && (
+        <button type="button" className="seg-opt" aria-pressed={allOn} disabled={disabled}
+          onClick={pickAll}>
+          {allLabel}
+        </button>
+      )}
+      {options.map(opt => (
+        <button key={String(opt.value)} type="button" className="seg-opt"
+          aria-pressed={isOn(opt.value)} disabled={disabled || opt.disabled} title={opt.title}
+          style={opt.tone ? { '--seg-fg': opt.tone } : undefined}
+          onClick={() => pick(opt.value)}>
+          {opt.icon}
+          {opt.label}
+        </button>
       ))}
     </div>
   )
 }
 
-// ── Sort picker ───────────────────────────────────────────────────────────────
-export function SortPicker({ options, value, onChange }) {
+// A segment's secondary text — a folder's count, a picker option's detail —
+// dimmed at 400 beside its label, so it stays quiet when the label goes to 700.
+const DETAIL = { opacity: 0.55, fontWeight: 400 }
+
+// Backfill's filter rows. `value` is a list; [] means no restriction.
+export function OptionFilter({ options, value, onChange, allLabel = 'Any' }) {
+  return <Segmented multiple allLabel={allLabel} options={options} value={value} onChange={onChange} />
+}
+
+export function IndexerFilter({ options, value, onChange, allLabel = 'All' }) {
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      {options.map(opt => {
-        const active = value === opt.value
-        return (
-          <button
-            key={opt.value}
-            onClick={() => onChange(opt.value)}
-            style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
-              padding: '8px 14px', borderRadius: 'var(--r)', cursor: 'pointer', minWidth: 110,
-              border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-              background: active ? 'var(--surface3)' : 'var(--surface)',
-              color: 'var(--text)',
-              boxShadow: 'var(--elev-1)',
-            }}
-          >
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{opt.label}</span>
-            <span style={{ fontSize: 11, marginTop: 2, opacity: 0.6, fontFamily: 'var(--mono)' }}>{opt.sub}</span>
-          </button>
-        )
-      })}
+    <Segmented multiple allLabel={allLabel} value={value} onChange={onChange}
+      options={options.map(o => ({ value: o, label: o }))} />
+  )
+}
+
+export function FolderFilter({ folders, selected, onChange }) {
+  return (
+    <Segmented multiple allLabel="All" value={selected} onChange={onChange}
+      options={folders.map(({ name, count }) => ({
+        value: name,
+        label: <>{name} <span style={DETAIL}>({count})</span></>,
+      }))} />
+  )
+}
+
+// ── Flag toggle ───────────────────────────────────────────────────────────────
+// A tri-state filter for an orthogonal boolean: 'any' (neither pressed — the
+// flag does not constrain), 'only' (+), 'hide' (−). File Explorer's Duplicates
+// and Excluded, and its per-tracker include/exclude. It is a pair and not a
+// Segmented because it is not a choice among options: "orphaned but not
+// excluded" is a status *and* a flag, which is why issue #23 split them.
+const FLAG = {
+  minHeight: 'var(--control-h)', padding: '4px 10px', fontFamily: 'var(--sans)',
+  fontSize: 'var(--font-base)', lineHeight: 1.25,
+}
+const flagLook = (on, color) => ({
+  fontWeight: on ? 600 : 500,
+  '--btn-bg': on ? 'var(--surface2)' : 'transparent',
+  '--btn-border': on ? color : 'var(--border2)',
+  '--btn-fg': on ? color : 'var(--text-dim)',
+  '--btn-bg-hover': on ? 'var(--surface3)' : 'var(--surface2)',
+  '--btn-fg-hover': on ? color : 'var(--text)',
+  '--btn-filter-hover': 'none',
+})
+
+export function FlagToggle({ label, value, onChange, onlyTitle, hideTitle }) {
+  const only = value === 'only'
+  const hide = value === 'hide'
+  return (
+    <div role="group" style={{ display: 'inline-flex', flexShrink: 0 }}>
+      <button type="button" className="wf-btn" aria-pressed={only} title={onlyTitle}
+        onClick={() => onChange(only ? 'any' : 'only')}
+        style={{ ...FLAG, ...flagLook(only, 'var(--green)'), borderRadius: 'var(--r) 0 0 var(--r)', borderRight: 'none' }}>
+        + {label}
+      </button>
+      <button type="button" className="wf-btn" aria-pressed={hide} title={hideTitle}
+        onClick={() => onChange(hide ? 'any' : 'hide')}
+        style={{ ...FLAG, ...flagLook(hide, 'var(--red)'), borderRadius: '0 var(--r) var(--r) 0' }}>
+        −
+      </button>
     </div>
   )
 }
 
-// ── Count picker ──────────────────────────────────────────────────────────────
-// null means "all available"
+// ── Icon buttons ──────────────────────────────────────────────────────────────
+// A quiet square for a line icon. Styling is index.css's `.icon-btn`. `size`
+// 'sm' is 18px, the height of a row's action chip, for icon actions inside a
+// list row (File Explorer's info and copy); the default 24px is for panels.
+export function IconButton({ onClick, title, pressed, size, children }) {
+  return (
+    <button type="button" className={size === 'sm' ? 'icon-btn icon-btn-sm' : 'icon-btn'}
+      onClick={onClick} title={title} aria-label={title} aria-pressed={pressed}>
+      {children}
+    </button>
+  )
+}
+
+// ── Search input ──────────────────────────────────────────────────────────────
+// A text filter over a list: File Explorer's filename search, Audit History's
+// path search, Backfill's title filter. Clear until it holds a value, then a
+// faint fill and an accent hairline, so a filtered list says so; full accent
+// while focused. Mono for paths, sans for titles. size: 'sm' is
+// var(--control-h), 'lg' var(--control-h-lg), as Segmented's. Backfill's was the
+// one hand-copy that drifted: filled and at 70% opacity until typed in.
+export function SearchInput({ value, onChange, placeholder, width = 160, size = 'sm', mono = false }) {
+  const [focused, setFocused] = useState(false)
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        width, maxWidth: '100%',
+        height: size === 'lg' ? 'var(--control-h-lg)' : 'var(--control-h)',
+        padding: size === 'lg' ? '0 12px' : '0 10px',
+        borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
+        border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
+        background: focused || value ? 'var(--surface2)' : 'transparent',
+        color: 'var(--text)', fontFamily: mono ? 'var(--mono)' : 'var(--sans)',
+        outline: 'none', transition: 'all 0.12s',
+      }}
+    />
+  )
+}
+
+// One close control for every modal, popover and panel. It was a × character at
+// 20px in three places, 16px in two and a 13px icon in Rounds — and the two
+// characters inside the type guard's scope each needed an exemption.
+export function CloseButton({ onClick, title = 'Close', size = 14 }) {
+  return (
+    <IconButton onClick={onClick} title={title}>
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        strokeWidth="2.25" strokeLinecap="round" aria-hidden="true">
+        <path d="M18 6 6 18M6 6l12 12" />
+      </svg>
+    </IconButton>
+  )
+}
+
+// ── Option pickers ────────────────────────────────────────────────────────────
+// Backfill's Release Ranking, Priority and Search Depth: one choice where each
+// option carries a short detail. They are the same Segmented track as every
+// other row on that page, with the detail dimmed beside the name (`DETAIL`,
+// Root Folders' counts), so an option is 500, the chosen one 700 on the lifted
+// fill, at the page's 28px. They were OptionCards: a 50px card with a shadow, a
+// 600 name on every card whether chosen or not, and an orange edge on the
+// chosen one, right above the orange Generate button. The user's pick of four,
+// from `.internal/preview/pickeroptions.html` (2026-09-23).
+export function SortPicker({ options, value, onChange, label }) {
+  return (
+    <Segmented value={value} onChange={onChange} label={label}
+      options={options.map(opt => ({
+        value: opt.value,
+        label: <>{opt.label}<span style={DETAIL}>{opt.sub}</span></>,
+      }))} />
+  )
+}
+
+// null means "all available". `max` is the real candidate count: at 0 the All
+// segment is disabled rather than offering a number that is not there.
 export function CountPicker({ value, onChange, max }) {
   const inputRef = useRef(null)
   const [inputVal, setInputVal] = useState(() =>
@@ -189,31 +309,18 @@ export function CountPicker({ value, onChange, max }) {
     if (!isNaN(n) && n >= 1) onChange(max > 0 ? Math.min(n, max) : n)
   }
 
-  const cardStyle = (active) => ({
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    padding: '10px 22px', borderRadius: 'var(--r)', minWidth: 90,
-    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
-    background: active ? 'var(--surface3)' : 'var(--surface)',
-    color: 'var(--text)',
-    boxShadow: 'var(--elev-1)',
-  })
-
-  const numStyle = (active) => ({
-    fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', lineHeight: '26px',
-    height: 26, display: 'flex', alignItems: 'center',
-    color: 'var(--text)',
-  })
-
-  const subStyle = { fontSize: 11, marginTop: 3, fontFamily: 'var(--mono)', opacity: 0.7 }
-
+  // Segmented's own markup, because the Custom segment holds an input, and an
+  // input may not sit inside a button: it is a div in a segment's clothes,
+  // marked chosen with `data-on` (aria-pressed belongs to a button). Its
+  // underline is an inset shadow, not a border, so it adds no height.
   return (
-    <div style={{ display: 'flex', gap: 10 }}>
-      <button onClick={handleFive} style={{ ...cardStyle(fiveActive), cursor: 'pointer', border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: fiveActive ? 'var(--accent)' : 'var(--border)' }}>
-        <span style={numStyle(fiveActive)}>5</span>
-        <span style={subStyle}>quick</span>
+    <div role="group" aria-label="Search depth" className="seg">
+      <button type="button" className="seg-opt" aria-pressed={fiveActive} onClick={handleFive}>
+        Quick<span style={DETAIL}>5</span>
       </button>
-
-      <div style={{ ...cardStyle(customActive), cursor: 'text' }} onClick={() => inputRef.current?.focus()}>
+      <div className="seg-opt" data-on={customActive} style={{ cursor: 'text' }}
+        onClick={() => inputRef.current?.focus()}>
+        Custom
         <input
           ref={inputRef}
           type="number"
@@ -222,38 +329,187 @@ export function CountPicker({ value, onChange, max }) {
           value={inputVal}
           onChange={handleInput}
           placeholder="—"
+          aria-label="Custom number of candidates"
           style={{
-            ...numStyle(customActive),
-            width: 54, textAlign: 'center',
+            fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 400, color: 'var(--text)',
+            width: '5ch', height: 14, padding: 0, margin: 0, textAlign: 'center',
             background: 'none', border: 'none', outline: 'none',
-            padding: 0, margin: 0, fontWeight: 700,
+            boxShadow: `inset 0 -1px 0 ${customActive ? 'var(--text-dim)' : 'var(--border2)'}`,
           }}
         />
-        <span style={subStyle}>custom</span>
       </div>
-
-      <button
-        onClick={handleAll}
-        disabled={max === 0}
-        style={{ ...cardStyle(allActive), cursor: max === 0 ? 'not-allowed' : 'pointer', opacity: max === 0 ? 0.4 : 1, border: 'none', borderWidth: 1, borderStyle: 'solid', borderColor: allActive ? 'var(--accent)' : 'var(--border)' }}
-      >
-        <span style={numStyle(allActive)}>{max > 0 ? max : '—'}</span>
-        <span style={subStyle}>all</span>
+      <button type="button" className="seg-opt" aria-pressed={allActive} onClick={handleAll} disabled={max === 0}>
+        All<span style={DETAIL}>{max.toLocaleString()}</span>
       </button>
-
-      <style>{`
-        input[type=number]::-webkit-inner-spin-button,
-        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-        input[type=number] { -moz-appearance: textfield; }
-      `}</style>
     </div>
   )
 }
 
-// ── Section label ─────────────────────────────────────────────────────────────
+// ── Headings ──────────────────────────────────────────────────────────────────
+//
+// Three weights, one per role, taken from Triage (UI pass, 2026-09-21): a
+// section heading is 700, a sub-heading 600, an item's title 500 — all at
+// --font-md, so the hierarchy is weight alone and R8's sizes do not move.
+// Cleanup's piles and Backfill's section labels were 600, level with their own
+// sub-labels; Cleanup's and Dedupe's item titles were a mono 600 heavier than
+// the heading above them. Rounds and Trumped were already here.
+//
+// Item titles pick their typeface by kind, as Rounds does: sans for a title
+// auditorr knows ("Heat (1995)"), mono for a raw path or release name.
+export const ITEM_TITLE = { fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)' }
+
+// A mono title sits one step lower, at --font-base. Geist Mono sets wider than
+// Geist at the same size, so at --font-md a release name read a step larger
+// than a sans title and two steps over the 11px paths beneath it (Cleanup's
+// folders, Dedupe's groups — the user's call, 2026-09-22).
+export const MONO_TITLE = { ...ITEM_TITLE, fontSize: 'var(--font-base)', fontFamily: 'var(--mono)' }
+
 export function SectionLabel({ children }) {
   return (
-    <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 700, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', marginBottom: 8 }}>
+      {children}
+    </div>
+  )
+}
+
+export function Dot({ color, size = 7 }) {
+  return <span className="ui-status-dot" style={{ width: size, height: size, background: color }} />
+}
+
+// A pile / verdict / bucket heading over a list: [checkbox] [dot] title meta,
+// then its description set under the title rather than under the checkbox.
+//
+// `check` is `{ checked, indeterminate, onChange }`, or `null` for a section
+// with nothing selectable — which still reserves the slot, so the dots of every
+// section on a page sit in one column. `sub` is the second level: no dot, the
+// title in its hue at 600.
+export function SectionHeading({ title, dot, color, meta, desc, check, sub = false }) {
+  const indent = (check !== undefined ? 25 : 0) + (dot ? 17 : 0)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: sub ? 4 : 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {check ? <Checkbox checked={check.checked} indeterminate={check.indeterminate} onChange={check.onChange} />
+          : check === null ? <span style={{ width: 15, height: 15, flexShrink: 0 }} /> : null}
+        {dot && <Dot color={dot} />}
+        <span style={{ fontSize: 'var(--font-md)', fontWeight: sub ? 600 : 700, color: color || 'var(--text)' }}>{title}</span>
+        {meta != null && (
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{meta}</span>
+        )}
+      </div>
+      {desc && (
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: `0 0 ${sub ? 4 : 2}px ${indent}px`, lineHeight: 1.5, maxWidth: 960 }}>
+          {desc}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Stat box ──────────────────────────────────────────────────────────────────
+// Cleanup's and Dedupe's summary tiles were two copies that had drifted (12 vs
+// 9 radius). Hue, where there is one, is the dot beside the label.
+export function StatBox({ label, value, sub, dot }) {
+  return (
+    <div style={{
+      padding: '12px 16px', borderRadius: 'var(--rl)', flex: 1, minWidth: 140,
+      background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--elev-1)',
+    }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', color: 'var(--text)', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 7 }}>
+        {dot && <Dot color={dot} />}
+        {label}
+      </div>
+      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{sub}</div>}
+    </div>
+  )
+}
+
+// ── Release evidence ──────────────────────────────────────────────────────────
+// A quality label and its HDR tag. `unknown` renders the absence as a readout
+// (Triage's rows say "unknown") rather than as nothing (Trumped's candidates).
+export function QualityChip({ label, hdr, dim, unknown = false }) {
+  const hdrInfo = HDR_STYLE[hdr]
+  if (!label && !hdrInfo) {
+    return unknown
+      ? <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', opacity: 0.5 }}>unknown</span>
+      : null
+  }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {label && (
+        <span style={{
+          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-sm)',
+          background: dim ? 'var(--surface2)' : 'var(--surface3)',
+          border: '1px solid var(--border2)',
+          color: dim ? 'var(--text-dim)' : 'var(--text)', whiteSpace: 'nowrap',
+        }}>
+          {label}
+        </span>
+      )}
+      {hdrInfo && (
+        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, padding: '1px 4px', borderRadius: 3, background: hdrInfo.bg, color: hdrInfo.color, whiteSpace: 'nowrap' }}>
+          {hdr}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// How a release compares with the file it would replace or match, field by
+// field. Hue as text only, never a fill: green agrees, red differs, amber is a
+// partial overlap. `fields` is [[key, LABEL], …] — each page asks its own
+// question (Backfill: size/quality/HDR; Trumped: the PM's title fields).
+export const MATCH_COLOR = { same: 'var(--green)', diff: 'var(--red)', partial: 'var(--yellow)' }
+const MATCH_MARK = { same: '✓', diff: '✗', partial: '~' }
+
+export function MatchChips({ match, fields, titleSuffix = '' }) {
+  if (!match) return null
+  const items = fields.filter(([k]) => match[k])
+  if (!items.length) return null
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, flexShrink: 0 }}>
+      {items.map(([k, label]) => (
+        <span key={k} title={`${label}: ${match[k]}${titleSuffix}`} style={{
+          fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, letterSpacing: 0.3,
+          color: MATCH_COLOR[match[k]] || 'var(--text-dim)',
+        }}>{label}{MATCH_MARK[match[k]] || ''}</span>
+      ))}
+    </span>
+  )
+}
+
+// ── Disclosure ────────────────────────────────────────────────────────────────
+// A text toggle for a folded list, chevron after the label — Rounds' "Show all
+// feats" shape, which Trumped's "Other releases ▸" now shares.
+export function Disclosure({ open, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-expanded={open}
+      style={{
+        alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+        fontSize: 'var(--font-base)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6,
+      }}
+    >
+      {children}
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+        strokeLinecap="round" strokeLinejoin="round"
+        style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s', opacity: 0.5 }}>
+        <polyline points="9 18 15 12 9 6" />
+      </svg>
+    </button>
+  )
+}
+
+// ── Workflow page ─────────────────────────────────────────────────────────────
+// The frame every workflow page sits in: the app's page gutter (Rounds' too),
+// and room at the foot for the sticky action bar.
+export function WorkflowPage({ gap = 22, maxWidth, children }) {
+  return (
+    <div className="fade-in" style={{
+      padding: 'var(--page-gutter) var(--page-gutter) 48px', display: 'flex', flexDirection: 'column', gap,
+      ...(maxWidth ? { maxWidth } : null),
+    }}>
       {children}
     </div>
   )
@@ -264,12 +520,12 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--sans)', fontSize: 13, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'left', marginBottom: 4 }}>Workflows</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', textAlign: 'left', marginBottom: 4 }}>Workflows</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>
+          <span style={{ fontSize: 'var(--font-xl)', fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{title}</span>
         </div>
         {blurb && (
-          <p style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 960 }}>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.6, maxWidth: 960 }}>
             {blurb}
           </p>
         )}
@@ -280,33 +536,34 @@ export function WorkflowHeader({ title, blurb, accent, right }) {
 }
 
 // ── Cross-link between sibling workflows ──────────────────────────────────────
+// A sentence, then the kit's small quiet button for the one part that goes
+// somewhere: Dashboard's "View orphaned media" shape. It was the whole
+// sentence as a hand-rolled button with a dashed edge (the only dashed control
+// in the app), 31px tall, an orange label (orange is the page's main action)
+// and a hover written into the DOM. The user's pick from
+// `.internal/preview/kitchoices.html`, 2026-09-23.
 export function WorkflowCrossLink({ text, linkLabel, count, onClick }) {
   if (!count) return null
   return (
-    <button
-      onClick={onClick}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-        padding: '6px 12px', borderRadius: 'var(--r)', fontSize: 12, cursor: 'pointer',
-        border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-dim)',
-        transition: 'all 0.12s',
-      }}
-      onMouseEnter={e => { e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.borderColor = 'var(--accent)' }}
-      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.borderColor = 'var(--border2)' }}
-    >
-      {text}
-      <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{linkLabel} ({count}) →</span>
-    </button>
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
+      <span>{text}</span>
+      <Button size="sm" variant="ghost" onClick={onClick}>{linkLabel} ({count}) →</Button>
+    </div>
   )
 }
 
 // ── Empty / success state ─────────────────────────────────────────────────────
-export function EmptyState({ emoji = '🎉', title, sub }) {
+// A line icon, not the 🎉 it used to be: the design system allows emoji only as
+// functional status glyphs in dense rows, never as decoration.
+export function EmptyState({ title, sub }) {
   return (
     <div style={{ padding: '64px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
-      <div style={{ fontSize: 40, lineHeight: 1 }}>{emoji}</div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginTop: 6 }}>{title}</div>
-      {sub && <div style={{ fontSize: 12.5, color: 'var(--text-dim)', maxWidth: 420, lineHeight: 1.6 }}>{sub}</div>}
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="1.75"
+        strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" />
+      </svg>
+      <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)', marginTop: 6 }}>{title}</div>
+      {sub && <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', maxWidth: 420, lineHeight: 1.6 }}>{sub}</div>}
     </div>
   )
 }
@@ -314,7 +571,7 @@ export function EmptyState({ emoji = '🎉', title, sub }) {
 // ── Loading spinner row ───────────────────────────────────────────────────────
 export function LoadingRow({ label = 'Loading…' }) {
   return (
-    <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 13 }}>
+    <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>
       <Spinner />
       {label}
       <SpinKeyframes />
@@ -322,9 +579,9 @@ export function LoadingRow({ label = 'Loading…' }) {
   )
 }
 
-export function Spinner({ size = 12 }) {
+export function Spinner({ size = 12, weight = 2 }) {
   return (
-    <span style={{ display: 'inline-block', width: size, height: size, borderRadius: '50%', border: '2px solid var(--accent)', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+    <span style={{ display: 'inline-block', flexShrink: 0, width: size, height: size, borderRadius: '50%', border: `${weight}px solid var(--accent)`, borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
   )
 }
 
@@ -336,7 +593,7 @@ export function SpinKeyframes() {
 export function WorkflowError({ message }) {
   if (!message) return null
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--red)10', border: '1px solid var(--red)30', borderRadius: 'var(--r)', color: 'var(--red)', fontSize: 13 }}>
+    <div style={{ padding: '10px 14px', background: tint('var(--red)', 6), border: `1px solid ${tint('var(--red)', 19)}`, borderRadius: 'var(--r)', color: 'var(--red)', fontSize: 'var(--font-base)' }}>
       {message}
     </div>
   )
@@ -347,9 +604,65 @@ export function WorkflowError({ message }) {
 export function WorkflowWarning({ children }) {
   if (!children) return null
   return (
-    <div style={{ padding: '10px 14px', background: 'var(--yellow)10', border: '1px solid var(--yellow)30', borderRadius: 'var(--r)', color: 'var(--yellow)', fontSize: 13, lineHeight: 1.5 }}>
+    <div style={{ padding: '10px 14px', background: tint('var(--yellow)', 6), border: `1px solid ${tint('var(--yellow)', 19)}`, borderRadius: 'var(--r)', color: 'var(--yellow)', fontSize: 'var(--font-base)', lineHeight: 1.5 }}>
       {children}
     </div>
+  )
+}
+
+// Sonarr/Radarr instances that did not answer, or answered with only part of
+// their library. Shared because the consequence is the same on every page that
+// resolves anything against an arr: the rows that instance manages are simply
+// absent, which is indistinguishable from an instance that manages nothing.
+// `extra` is the per-page sentence about what that absence does *here*.
+export function ArrErrorsWarning({ errors, extra }) {
+  if (!errors?.length) return null
+  const nPartial = errors.filter(e => e.partial).length
+  const nDown    = errors.length - nPartial
+  const clauses = []
+  if (nDown)    clauses.push(`${nDown} Sonarr/Radarr instance${nDown !== 1 ? 's' : ''} could not be read`)
+  if (nPartial) clauses.push(`${nPartial} ${nDown ? '' : `Sonarr/Radarr instance${nPartial !== 1 ? 's' : ''} `}`
+                           + `answered with only part of ${nPartial !== 1 ? 'their libraries' : 'its library'}`)
+  return (
+    <WorkflowWarning>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{clauses.join(', ')}</div>
+      <div>
+        {extra}{extra ? ' ' : ''}
+        {errors.map(e => `${e.name || e.connection_id || 'unnamed'}: ${e.message}`).join(' · ')}
+      </div>
+    </WorkflowWarning>
+  )
+}
+
+// A torrent registration's key — the same string `sources.registration_key`
+// builds server-side (S05). A hash is not an identity: the same torrent can be
+// registered on two qui instances at two save paths, and every map keyed by hash
+// alone kept whichever came first. The bare hash where there is no instance
+// (qBittorrent), which is also what every server answer is keyed by there.
+export function regKey(t) {
+  if (!t) return ''
+  if (t.reg) return t.reg
+  return t.instance_id == null ? String(t.hash || '') : `${t.instance_id}:${t.hash}`
+}
+
+// A request refused because a torrent is registered on more than one instance
+// and the request did not say which (409 `registration_ambiguous`). Nothing was
+// done; the sentence names the instances, since that is what the user acts on.
+export function RegistrationWarning({ refusal }) {
+  const ambiguous = refusal?.ambiguous
+  if (!ambiguous?.length) return null
+  const names = [...new Set(ambiguous.flatMap(a => a.instances || []))]
+  return (
+    <WorkflowWarning>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        {ambiguous.length} torrent{ambiguous.length !== 1 ? 's are' : ' is'} registered on more than one instance
+      </div>
+      <div>
+        {names.join(', ')} each hold {ambiguous.length !== 1 ? 'these torrents' : 'this torrent'}, and auditorr will
+        not pick one of them for you — nothing was done. Remove the extra registration in your client, or act on
+        the row that belongs to the instance you mean.
+      </div>
+    </WorkflowWarning>
   )
 }
 
@@ -387,27 +700,191 @@ export function ActionBar({ children, summary }) {
       padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
       boxShadow: 'var(--shadow-pop)',
     }}>
-      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)' }}>{summary}</div>
+      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
       <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>{children}</div>
     </div>
   )
 }
 
-export function ActionButton({ onClick, disabled, danger, primary, children, title }) {
-  const color = danger ? 'var(--red)' : primary ? 'var(--accent)' : 'var(--text)'
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
+// ── Exclude confirmation ──────────────────────────────────────────────────────
+//
+// No exclusion is written without the user seeing the exact string first.
+// Cleanup and Triage both build patterns from real paths, and a construction
+// bug there is invisible by nature: the toast says "added" whether the rule
+// matches the file, matches nothing, or matches half the folder. This is the
+// one part of that fix that generalises — it also covers the residual the
+// ≥2-segment folder rule leaves behind (an install whose library folders carry
+// the release name gets both trees from a release-folder pattern too).
+//
+// Shared because the two pages need the same dialog, following the
+// ConfirmDeleteModal idiom next door rather than inventing a second one.
+
+// Mirrors db.EXCLUSION_PATTERN_MAX_CHARS. The server is authoritative and
+// refuses over-long patterns with a count; this only warns before the round trip.
+const MAX_PATTERN_CHARS = 200
+
+export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, onConfirm }) {
+  const tooLong = patterns.filter(p => p.length > MAX_PATTERN_CHARS)
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onCancel() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+
+  // Portal to <body> for the same reason ConfirmDeleteModal does: the page's
+  // fade-in leaves a transform, which makes position:fixed resolve against the
+  // page instead of the viewport.
+  return createPortal(
+    <div
+      onClick={onCancel}
       style={{
-        fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)',
-        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.45 : 1,
-        border: `1px solid ${danger ? 'var(--red)40' : primary ? 'var(--accent)' : 'var(--border2)'}`,
-        background: danger ? 'var(--surface2)' : primary ? 'var(--accent)' : 'var(--surface2)',
-        color: primary ? '#0a0a0a' : color,
+        position: 'fixed', inset: 0, zIndex: 200, display: 'flex',
+        alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.55)',
       }}
     >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 'min(620px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 96px)',
+          display: 'flex', flexDirection: 'column',
+          background: 'var(--surface)', border: '1px solid var(--border2)',
+          borderRadius: 12, boxShadow: '0 16px 60px rgba(0,0,0,0.5)',
+        }}
+      >
+        <div style={{ padding: '18px 20px 0' }}>
+          <div style={{ fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>
+            Add {patterns.length} exclusion rule{patterns.length !== 1 ? 's' : ''}
+          </div>
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.6, margin: '10px 0 0' }}>
+            {subtitle} Excluded files are left out of scoring, workflows and duplicate
+            detection from the next audit on — nothing is deleted. These land in
+            <b> Config → Excluded Files &amp; Folders</b>, where you can edit or remove them.
+          </p>
+          {note && (
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: '8px 0 0', lineHeight: 1.5 }}>
+              {note}
+            </p>
+          )}
+          {/* Says what will happen and offers a route that exists. It used to
+              read "select the whole release folder instead" — which is wrong
+              whenever auditorr has already declined to use that folder, and
+              those are exactly the rows that end up here. A refusal message
+              that recommends an impossible action is worse than none. */}
+          {tooLong.length > 0 && (
+            <p style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', margin: '8px 0 0', lineHeight: 1.5 }}>
+              {tooLong.length} rule{tooLong.length !== 1 ? 's are' : ' is'} longer than {MAX_PATTERN_CHARS} characters
+              and will be refused. auditorr uses one rule for the whole release folder
+              wherever that is safe; these are the files where it is not, so they need a
+              rule per file and the path itself is too long. Add a shorter rule by hand in
+              Config → Excluded Files &amp; Folders — a <span style={{ fontFamily: 'var(--mono)' }}>contains:</span> rule
+              on a distinctive part of the name is usually enough.
+            </p>
+          )}
+        </div>
+        <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
+          {patterns.map((p, i) => {
+            const over = p.length > MAX_PATTERN_CHARS
+            return (
+              <div key={`${p}-${i}`} title={p} style={{
+                padding: '6px 12px', borderBottom: i < patterns.length - 1 ? '1px solid var(--border)' : 'none',
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', wordBreak: 'break-all',
+                color: over ? 'var(--yellow)' : 'var(--text)',
+              }}>
+                {p}
+                {over && <span style={{ opacity: 0.8 }}> · {p.length} chars</span>}
+              </div>
+            )
+          })}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
+          <span style={{ flex: 1 }} />
+          <Button onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button variant="primary" onClick={onConfirm} disabled={busy}>
+            {busy ? 'Excluding…' : `Add ${patterns.length} rule${patterns.length !== 1 ? 's' : ''}`}
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+// ── Button ────────────────────────────────────────────────────────────────────
+//
+// Every button on the workflow surfaces, the script modal and Rounds (UI pass,
+// 2026-09-21). There were fourteen hand-rolled styles — seven paddings, five
+// radii, two weights, white and near-black text on the same orange — and none
+// had a hover. The design system's `Button` is the model.
+//
+// Variants:
+//   primary    orange fill, dark text. At most one per view: the forward action,
+//              never a destructive one.
+//   secondary  the raised surface. The default.
+//   danger     red text on a faint red wash with a red hairline — quiet, per the
+//              ration-colour rule, and the hairline it always meant to have.
+//   ghost      transparent, dim text: a quiet control beside a louder one.
+//   subtle     a neutral row chip: raised, dim text.
+//   `tone`     any theme colour: its text and hairline, on an 8% wash. Row chips
+//              that carry a hue (Grab, radarr ↗, Dedupe ↗, Failed ↺).
+//
+// Sizes:
+//   md    every standalone button — action bars, modal footers, page headers,
+//         wizard steps, Rounds' "Open …".
+//   sm    a small control inside a panel or a sentence (Retry, Select all).
+//   chip  an action inside a row — R8's "action chip", at --font-sm like the
+//         tags it sits beside, so a slot that swaps a chip for a tag keeps its size.
+//
+// Colours arrive as custom properties and index.css's `.wf-btn` applies them,
+// because an inline `background` would outrank the `:hover` rule. Pass `href`
+// for a link that looks like a button (the arr and client chips).
+//
+// md and sm are exactly index.css's two control heights (UI pass, 2026-09-22),
+// so a button sits level with the inputs and segmented tracks in any bar. They
+// rendered 33 and 25px before, one step short of each; the user chose to grow
+// them everywhere over fencing the heights inside filter bars, which would have
+// left two different "small" buttons in the app.
+//
+// `square` makes an icon-only button as wide as it is tall (the ✕ that clears a
+// search, the changes panel's collapse); give it an `ariaLabel`. `pressed` marks
+// a toggle (File Explorer's Trackers panel) for assistive tech — the caller
+// picks the variant that shows it.
+const BUTTON_SIZE = {
+  md:   { fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)', minHeight: 'var(--control-h-lg)' },
+  sm:   { fontSize: 'var(--font-base)', fontWeight: 500, padding: '4px 10px', borderRadius: 'var(--r)', minHeight: 'var(--control-h)' },
+  chip: { fontSize: 'var(--font-sm)', fontWeight: 500, padding: '1px 7px', borderRadius: 'var(--r-sm)', fontFamily: 'var(--mono)' },
+}
+const SQUARE = { md: 'var(--control-h-lg)', sm: 'var(--control-h)' }
+
+const BUTTON_LOOK = {
+  primary:   { bg: 'var(--accent)', border: 'var(--accent)', fg: '#0a0a0a', filter: 'brightness(1.08)' },
+  secondary: { bg: 'var(--surface2)', border: 'var(--border2)', fg: 'var(--text)', bgHover: 'var(--surface3)' },
+  danger:    { bg: tint('var(--red)', 7), border: tint('var(--red)', 25), fg: 'var(--red)', bgHover: tint('var(--red)', 12) },
+  ghost:     { bg: 'transparent', border: 'var(--border2)', fg: 'var(--text-dim)', bgHover: 'var(--surface2)', fgHover: 'var(--text)' },
+  subtle:    { bg: 'var(--surface2)', border: 'var(--border2)', fg: 'var(--text-dim)', bgHover: 'var(--surface3)', fgHover: 'var(--text)' },
+}
+
+const toneLook = c => ({ bg: tint(c, 8), border: tint(c, 30), fg: c, bgHover: tint(c, 14) })
+
+export function Button({
+  variant = 'secondary', size = 'md', tone, href, target, rel,
+  onClick, disabled, title, ariaLabel, pressed, square = false, style, children,
+}) {
+  const look = tone ? toneLook(tone) : (BUTTON_LOOK[variant] || BUTTON_LOOK.secondary)
+  const css = {
+    fontFamily: 'var(--sans)', lineHeight: 1.25, ...(BUTTON_SIZE[size] || BUTTON_SIZE.md),
+    ...(square && SQUARE[size] ? { padding: 0, width: SQUARE[size] } : null),
+    '--btn-bg': look.bg, '--btn-border': look.border, '--btn-fg': look.fg,
+    '--btn-bg-hover': look.bgHover || look.bg, '--btn-fg-hover': look.fgHover || look.fg,
+    '--btn-filter-hover': look.filter || 'none',
+    ...style,
+  }
+  if (href) {
+    return <a className="wf-btn" href={href} target={target} rel={rel} onClick={onClick} title={title} aria-label={ariaLabel} style={css}>{children}</a>
+  }
+  return (
+    <button className="wf-btn" type="button" onClick={onClick} disabled={disabled} title={title}
+      aria-label={ariaLabel} aria-pressed={pressed} style={css}>
       {children}
     </button>
   )

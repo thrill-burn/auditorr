@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { Button, Segmented } from './workflows/shared'
 
 export const RANGE_PRESETS = [
   { value: 7,  label: '7d'  },
@@ -7,29 +8,16 @@ export const RANGE_PRESETS = [
   { value: 0,  label: 'All' },
 ]
 
-// Segmented range-preset selector (7d/30d/90d/All). The single source of truth
-// for this control, shared by the Dashboard filter row and the Trackers page so
-// the two can never drift in size or style. 34px tall (28 + 3px track padding),
-// matching the DatePicker and Trackers-dropdown heights.
+// Range-preset selector (7d/30d/90d/All), shared by the Dashboard filter row
+// and the Trackers page. It was the inset track every filter row in the app now
+// uses, which is why `Segmented` is built from it; mono because the labels are
+// readouts. `isActive` is a predicate because Trackers derives the active
+// preset from a free date range, where none may match.
 export function RangePresets({ options = RANGE_PRESETS, isActive, onSelect }) {
+  const active = options.find(o => isActive(o.value))
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: 3, background: 'var(--surface3)', borderRadius: 'var(--r)' }}>
-      {options.map(o => {
-        const active = isActive(o.value)
-        return (
-          <button key={o.value} onClick={() => onSelect(o.value)} style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            minHeight: 28, padding: '4px 12px', borderRadius: 'var(--r)',
-            border: 'none', cursor: 'pointer',
-            fontFamily: 'var(--mono)', fontSize: 12, letterSpacing: 0, textTransform: 'none',
-            background: active ? 'var(--surface)' : 'transparent',
-            boxShadow: active ? 'var(--elev-1)' : 'none',
-            color: active ? 'var(--text)' : 'var(--text-dim)',
-            fontWeight: active ? 700 : 500, transition: 'all 0.12s',
-          }}>{o.label}</button>
-        )
-      })}
-    </div>
+    <Segmented size="lg" mono label="Date range" value={active ? active.value : undefined}
+      onChange={onSelect} options={options} />
   )
 }
 
@@ -53,27 +41,21 @@ export function TrackerDropdown({ selectedTrackers, allTrackers, onTrackersChang
 
   return (
     <div ref={dropdownRef} style={{ position: 'relative' }}>
-      <button onClick={() => setDropdownOpen(o => !o)} style={{
-        display: 'inline-flex', alignItems: 'center', minHeight: 34,
-        background: 'transparent', border: '1px solid var(--border2)', cursor: 'pointer',
-        padding: '4px 12px', borderRadius: 'var(--r)',
-        fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, letterSpacing: 0, textTransform: 'none',
-        color: 'var(--text-dim)',
-      }}>
+      <Button variant="ghost" pressed={dropdownOpen} onClick={() => setDropdownOpen(o => !o)}>
         Trackers ({effectiveTrackers.length}/{allTrackers.length})
-      </button>
+      </Button>
       {dropdownOpen && (
         <div style={{
           position: 'absolute', right: 0, top: '100%', marginTop: 6,
           background: 'var(--surface2)', border: '1px solid var(--border)',
-          borderRadius: 8, padding: '8px 0', minWidth: 180, zIndex: 100,
+          borderRadius: 8, padding: '8px 0', minWidth: 180, zIndex: 100, boxShadow: 'var(--shadow-pop)',
         }}>
-          <div style={{ display: 'flex', gap: 8, padding: '0 10px 8px', borderBottom: '1px solid var(--border)' }}>
-            <button onClick={() => onTrackersChange(allTrackers)} style={{ background: 'transparent', border: '1px solid var(--border2)', cursor: 'pointer', padding: '6px 12px', borderRadius: 'var(--r)', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>Select all</button>
-            <button onClick={() => onTrackersChange([])} style={{ background: 'transparent', border: '1px solid var(--border2)', cursor: 'pointer', padding: '6px 12px', borderRadius: 'var(--r)', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text-dim)' }}>Clear</button>
+          <div style={{ display: 'flex', gap: 6, padding: '0 10px 8px', borderBottom: '1px solid var(--border)' }}>
+            <Button size="sm" onClick={() => onTrackersChange(allTrackers)}>Select all</Button>
+            <Button size="sm" variant="ghost" onClick={() => onTrackersChange([])}>Clear</Button>
           </div>
           {allTrackers.map(tracker => (
-            <label key={tracker} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: 12, color: 'var(--text)' }}>
+            <label key={tracker} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', cursor: 'pointer', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--text)' }}>
               <input
                 type="checkbox"
                 checked={effectiveTrackers.includes(tracker)}

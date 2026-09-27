@@ -1,0 +1,4 @@
+# Test-only dependencies. Not installed in the image — requirements.txt is.
+# CI's `test` job (.github/workflows/docker.yml) installs both.
+-r requirements.txt
+pytest>=9,<10

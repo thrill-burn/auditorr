@@ -529,6 +529,10 @@ def _library_stats():
     out = {}
     for tab in ('media', 'torrents'):
         out[tab] = db_get_meta(f'file_results_{tab}_stats')
+    # The publish that wrote them (S04): its `id` is the scan's `ran_at`, and each
+    # stats row above carries the same value as `generation` when every piece
+    # came from one scan. Counts and a timestamp only.
+    out['generation'] = db_get_meta('audit_generation')
     try:
         results = db_load_results()
         dash = results.get('dashboard') or {}
@@ -612,6 +616,35 @@ def build_debug_report(version):
                 {**h, 'message': sanitize_text(h.get('message'))}
                 for h in (state.get('phase_history') or [])
             ],
+        },
+        # How completely the torrent client could be asked on the last scan, and
+        # why a scan was refused if one was. Notes carry hashes and save paths,
+        # so they go through the same sanitizer as every other path in here.
+        'source_health': {
+            '_readme': (
+                'baseline: the client and disk counts of the last scan that '
+                'persisted. reference: one point a day, the largest counts persisted '
+                'that day, for the last 7 days — a collapse is measured against the '
+                'largest of them. last_report: completeness of the last scan that '
+                'persisted, with a filesystem block per root (files walked, folders '
+                'that could not be listed); torrent_count is registrations, '
+                'distinct_torrents the infohashes behind them, and multi_registered '
+                'how many are on more than one qui instance. last_anomaly: why a '
+                'scan refused to persist (cleared by a clean scan).'
+            ),
+            'baseline':    db_get_meta('source_baseline'),
+            'reference':   db_get_meta('source_reference'),
+            'last_report': (lambda r: {
+                **r, 'notes': [sanitize_text(n) for n in (r.get('notes') or [])],
+                'instances_failed': [
+                    {'name': sanitize_text(f.get('name')),
+                     'reason': sanitize_text(f.get('reason'))}
+                    for f in (r.get('instances_failed') or [])
+                ],
+            } if r else None)(db_get_meta('last_source_report')),
+            'last_anomaly': (lambda a: {
+                **a, 'message': sanitize_text(a.get('message')),
+            } if a else None)(db_get_meta('last_source_anomaly')),
         },
         'crash_evidence': {
             'consecutive_aborted_scans': db_get_meta('consecutive_aborted_scans', 0),

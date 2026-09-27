@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from audit import _is_triage_relevant, count_triage_items
 import app
+import arr
 
 
 def _rec(**over):
@@ -73,15 +74,15 @@ def _phase1(records, has_subset=True):
     sources.fetch_torrent_details is patched to explode: phase 1 must never
     contact the torrent client.
     """
-    def _load(tab):
+    def _load(tab, conn=None):
         return records
     def _boom(*a, **k):
         raise AssertionError("phase 1 must not call the torrent client")
     with patch.object(app, 'db_load_config', return_value={}), \
          patch.object(app, 'db_has_file_results', return_value=has_subset), \
          patch.object(app, 'db_load_file_results', side_effect=_load) as load_mock, \
-         patch.object(app, 'fetch_arr_media_index', return_value=[]), \
-         patch.object(app, 'fetch_arr_all_titles', return_value=[]), \
+         patch.object(app, 'fetch_arr_media_index_result', return_value=([], [])), \
+         patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
          patch.object(app, 'normalize_arr_connections', return_value=[]), \
          patch.object(app.sources, 'fetch_torrent_details', side_effect=_boom):
         client = app.app.test_client()
@@ -207,6 +208,193 @@ class TriageCountTests(unittest.TestCase):
                          {'not_imported': 1, 'dead_seeds': 0,
                           'dead_registrations': 0, 'total': 1})
         self.assertEqual(self._rows(records), 1)
+
+
+def _phase1_library(records, media_index):
+    """Phase 1 with a real arr media index behind it.
+
+    Every other test here passes the arr fetches as [], so the library-matching
+    block — the part that decides whether the Force import button renders — is
+    never exercised by them.
+    """
+    with patch.object(app, 'db_load_config', return_value={}), \
+         patch.object(app, 'db_has_file_results', return_value=True), \
+         patch.object(app, 'db_load_file_results', return_value=records), \
+         patch.object(app, 'fetch_arr_media_index_result', return_value=(media_index, [])), \
+         patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
+         patch.object(app, 'normalize_arr_connections', return_value=[]), \
+         patch.object(app.sources, 'fetch_torrent_details',
+                      side_effect=AssertionError('phase 1 must not call the client')):
+        return app.app.test_client().get('/api/workflows/triage').get_json()['items']
+
+
+def _media(**over):
+    base = {'connection_id': 'c1', 'connection_name': 'main', 'service': 'radarr',
+            'title': '', 'year': None, 'path': '', 'relative_path': '',
+            'arr_id': 1, 'file_id': 1, 'title_slug': 'slug',
+            'file_quality_name': 'WEBDL-1080p', 'file_hdr': ''}
+    base.update(over)
+    return base
+
+
+class TriageLibraryTypeGateTests(unittest.TestCase):
+    """The service preference is a gate, not a tiebreak.
+
+    It used to end `... or lib_rows`, falling back to the wrong-type rows
+    whenever the right type had none. A TV episode of a series absent from
+    Sonarr then matched the same-titled film in Radarr and came back
+    `superseded` with quality_cmp 'same' — which is exactly the condition that
+    renders Force import, and force_import_files posts replaceExistingFiles
+    against the movie's id. One episode written over a library film, past every
+    rejection spec. Fargo, Hannibal, Dune, Shogun: the collisions are ordinary.
+    """
+
+    def test_an_episode_never_matches_a_same_titled_movie(self):
+        items = _phase1_library(
+            [_rec(hash='EP', path='tv/Fargo/Fargo.S05E01.1080p.WEB-DL.mkv')],
+            [_media(service='radarr', title='Fargo', year=1996, arr_id=42,
+                    path='/media/movies/Fargo (1996)/Fargo.1996.1080p.WEB-DL.mkv',
+                    relative_path='Fargo.1996.1080p.WEB-DL.mkv')])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['verdict'], 'not_in_library')
+        # No library payload means no arr_id, so nothing can be force-imported
+        # over: canForceImport is quality_cmp === 'same' && arr_id && conn.
+        self.assertIsNone(items[0]['library'])
+
+    def test_a_movie_never_matches_a_same_titled_series(self):
+        """The reverse direction — milder, but it points the arr link and the
+        'upgrade your library copy' copy at the wrong title."""
+        items = _phase1_library(
+            [_rec(hash='MV', path='radarr/Dune (2021)/Dune.2021.2160p.Remux.mkv')],
+            [_media(service='sonarr', title='Dune', year=2021, arr_id=9,
+                    path='/media/tv/Dune/Season 01/Dune.S01E01.mkv',
+                    relative_path='Dune.S01E01.mkv')])
+        self.assertEqual(items[0]['verdict'], 'not_in_library')
+        self.assertIsNone(items[0]['library'])
+
+    def test_the_right_type_still_matches(self):
+        """The gate must not cost the working path: a movie still finds its
+        Radarr file and still reports a quality comparison."""
+        items = _phase1_library(
+            [_rec(hash='MV', path='radarr/Movie (2020)/Movie.2020.1080p.WEB-DL.mkv')],
+            [_media(service='radarr', title='Movie', year=2020, arr_id=7,
+                    path='/media/movies/Movie (2020)/Movie.2020.1080p.WEB-DL.mkv',
+                    relative_path='Movie.2020.1080p.WEB-DL.mkv')])
+        self.assertEqual(items[0]['verdict'], 'superseded')
+        self.assertEqual(items[0]['library']['service'], 'radarr')
+        self.assertEqual(items[0]['library']['arr_id'], 7)
+        self.assertEqual(items[0]['library']['quality_cmp'], 'same')
+
+    def test_an_episode_still_matches_its_own_series(self):
+        items = _phase1_library(
+            [_rec(hash='EP', path='tv/Show/Show.S01E02.1080p.WEB-DL.mkv')],
+            [_media(service='sonarr', title='Show', year=2019, arr_id=5,
+                    path='/media/tv/Show/Season 01/Show.S01E02.1080p.WEB-DL.mkv',
+                    relative_path='Season 01/Show.S01E02.1080p.WEB-DL.mkv')])
+        self.assertEqual(items[0]['verdict'], 'superseded')
+        self.assertEqual(items[0]['library']['service'], 'sonarr')
+        self.assertEqual(items[0]['library']['arr_id'], 5)
+
+
+def _phase1_titles(records, all_titles):
+    """Phase 1 with managed arr titles but no library files — the
+    import_pending / not_in_library boundary."""
+    with patch.object(app, 'db_load_config', return_value={}), \
+         patch.object(app, 'db_has_file_results', return_value=True), \
+         patch.object(app, 'db_load_file_results', return_value=records), \
+         patch.object(app, 'fetch_arr_media_index_result', return_value=([], [])), \
+         patch.object(app, 'fetch_arr_all_titles_result', return_value=(all_titles, [])), \
+         patch.object(app, 'normalize_arr_connections', return_value=[]), \
+         patch.object(app.sources, 'fetch_torrent_details',
+                      side_effect=AssertionError('phase 1 must not call the client')):
+        return app.app.test_client().get('/api/workflows/triage').get_json()['items']
+
+
+class TriageAlternateTitleTests(unittest.TestCase):
+    """A release named in its original language must find the arr's item.
+
+    Field report: a Spanish-language series released as
+    `No.tengo.miedo.S01…` against a Sonarr that stores it as "I'm Not Afraid".
+    The titles match on nothing, so the verdict was `not_in_library` — whose
+    copy read "junk can be deleted" — for a series Sonarr was actively managing
+    and had already grabbed. The torrent held the only copy of 33 GB, and it
+    was deleted on the strength of that verdict.
+
+    Sonarr and Radarr both carry the mapping in `alternateTitles`; they have to,
+    since it is how they matched the grab. auditorr just never read it.
+    """
+
+    SONARR = [{'service': 'sonarr', 'connection_id': 'c1', 'arr_id': 12,
+               'title': "I'm Not Afraid", 'title_slug': 'im-not-afraid',
+               'year': 2025, 'has_file': False,
+               'alt_titles': ['No tengo miedo']}]
+
+    def _verdict(self, path, titles=None):
+        items = _phase1_titles([_rec(hash='ES', path=path)],
+                              self.SONARR if titles is None else titles)
+        return items[0]['verdict'], items[0]
+
+    def test_original_language_release_is_import_pending_not_unknown(self):
+        verdict, item = self._verdict(
+            'tv/No.tengo.miedo.S01.2160p.NF.WEB-DL/'
+            'No.tengo.miedo.S01E01.The.Witch.2160p.NF.WEB-DL.mkv')
+        self.assertEqual(verdict, 'import_pending')
+        # And it resolves to the arr's own item, so Rescan has somewhere to go.
+        self.assertEqual(item['library']['service'], 'sonarr')
+        self.assertEqual(item['library']['arr_id'], 12)
+
+    def test_the_english_title_still_matches(self):
+        verdict, _ = self._verdict(
+            'tv/Im.Not.Afraid.S01E01.2160p.WEB-DL.mkv')
+        self.assertEqual(verdict, 'import_pending')
+
+    def test_without_the_alternate_title_it_is_still_unknown(self):
+        """The alias is what does the work — with no alternateTitles the arr
+        genuinely has never heard of this name."""
+        bare = [{**self.SONARR[0], 'alt_titles': []}]
+        verdict, item = self._verdict(
+            'tv/No.tengo.miedo.S01E01.2160p.WEB-DL.mkv', titles=bare)
+        self.assertEqual(verdict, 'not_in_library')
+        self.assertIsNone(item['library'])
+
+    def test_an_unrelated_release_is_not_dragged_in_by_an_alias(self):
+        verdict, _ = self._verdict('tv/Some.Other.Show.S01E01.1080p.WEB-DL.mkv')
+        self.assertEqual(verdict, 'not_in_library')
+
+
+class TitleAliasKeyTests(unittest.TestCase):
+    def test_alias_maps_to_the_canonical_keys(self):
+        alias = arr.title_alias_keys([
+            {'title': "I'm Not Afraid", 'alt_titles': ['No tengo miedo']}])
+        self.assertIn('no tengo miedo', alias)
+        self.assertTrue(alias['no tengo miedo'] & arr.title_match_keys("I'm Not Afraid"))
+
+    def test_a_title_never_aliases_to_itself(self):
+        alias = arr.title_alias_keys([
+            {'title': 'The Office', 'alt_titles': ['The Office']}])
+        self.assertEqual(alias, {})
+
+    def test_canonical_keys_come_first(self):
+        """Order is load-bearing: every consumer resolves with next(), so an
+        exact title match must outrank a translated one."""
+        alias = {'b': {'z'}}
+        out = arr.with_title_aliases({'b'}, alias)
+        self.assertEqual(out, ['b', 'z'])
+
+    def test_no_aliases_is_a_passthrough(self):
+        self.assertEqual(sorted(arr.with_title_aliases({'a', 'b'}, {})), ['a', 'b'])
+
+    def test_alt_titles_are_deduped_and_capped(self):
+        item = {'alternateTitles': [{'title': 'A'}, {'title': 'a'}, {'title': 'B'}]}
+        self.assertEqual(arr._alt_titles(item), ['A', 'B'])
+        many = {'alternateTitles': [{'title': f'T{i}'} for i in range(200)]}
+        self.assertEqual(len(arr._alt_titles(many)), arr._MAX_ALT_TITLES)
+
+    def test_missing_or_odd_shapes_are_safe(self):
+        self.assertEqual(arr._alt_titles({}), [])
+        self.assertEqual(arr._alt_titles({'alternateTitles': None}), [])
+        self.assertEqual(arr.title_alias_keys(None), {})
+        self.assertEqual(arr.title_alias_keys([{'title': '', 'alt_titles': ['x']}]), {})
 
 
 class TriageVerifyEndpointTests(unittest.TestCase):

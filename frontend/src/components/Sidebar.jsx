@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { scoreColor } from '../utils'
+import { scoreColor, tint } from '../utils'
 
 const NAV = [
   {
@@ -53,27 +53,10 @@ const NAV = [
     ),
   },
   {
-    id: 'workflows', label: 'Workflows',
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/>
-        <line x1="7" y1="6" x2="17" y2="6"/>
-        <line x1="5.5" y1="7.8" x2="11" y2="16.2"/>
-        <line x1="18.5" y1="7.8" x2="13" y2="16.2"/>
-      </svg>
-    ),
-    children: [
-      // Same order as the dashboard metric cards they build on
-      { id: 'backfill', label: 'Backfill', accent: 'var(--blue)' },
-      { id: 'cleanup',  label: 'Cleanup',  accent: 'var(--yellow)', badgeKey: 'cleanup' },
-      { id: 'triage',   label: 'Triage',   accent: 'var(--red)',    badgeKey: 'triage' },
-      { id: 'dedupe',   label: 'Dedupe',   accent: 'var(--purple)', badgeKey: 'dedupe' },
-      { id: 'trumped',  label: 'Trumped',  accent: 'var(--green)' },
-    ],
-  },
-  {
     // Rounds — the ranked workflow list plus the side-quest prize layer.
-    // Sits directly below Workflows because it is the index for them, and
+    // Sits directly above Workflows because it is the index for them: the
+    // summary of what needs doing comes before the pages that do it, and stays
+    // in the same place whether or not the group below is expanded. It
     // deliberately carries no count badge: a page you visit, never one that nags.
     //
     // Named "Rounds", not "Next steps": next steps is wizard language and
@@ -94,6 +77,25 @@ const NAV = [
         <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
       </svg>
     ),
+  },
+  {
+    id: 'workflows', label: 'Workflows',
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/>
+        <line x1="7" y1="6" x2="17" y2="6"/>
+        <line x1="5.5" y1="7.8" x2="11" y2="16.2"/>
+        <line x1="18.5" y1="7.8" x2="13" y2="16.2"/>
+      </svg>
+    ),
+    children: [
+      // Same order as the dashboard metric cards they build on
+      { id: 'backfill', label: 'Backfill', accent: 'var(--blue)' },
+      { id: 'cleanup',  label: 'Cleanup',  accent: 'var(--yellow)', badgeKey: 'cleanup' },
+      { id: 'triage',   label: 'Triage',   accent: 'var(--red)',    badgeKey: 'triage' },
+      { id: 'dedupe',   label: 'Dedupe',   accent: 'var(--purple)', badgeKey: 'dedupe' },
+      { id: 'trumped',  label: 'Trumped',  accent: 'var(--green)' },
+    ],
   },
   {
     id: 'config', label: 'Config',
@@ -140,7 +142,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
 
   return (
     <>
-    <style>{`@keyframes sidebarBadgePulse { 0%,100% { opacity:0.8 } 50% { opacity:1; box-shadow:0 0 6px var(--accent)60 } }`}</style>
+    <style>{`@keyframes sidebarBadgePulse { 0%,100% { opacity:0.8 } 50% { opacity:1 } }`}</style>
     <aside style={{
       width: 'var(--sidebar-w)', flexShrink: 0,
       background: 'var(--surface)', borderRight: '1px solid var(--border)',
@@ -180,7 +182,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               <circle cx="34" cy="100" r="10" fill="#f57c00" opacity="0.85"/>
             </svg>
           </div>
-          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 15, color: 'var(--text)', letterSpacing: '-0.3px' }}>auditorr</span>
+          <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 'var(--font-lg)', color: 'var(--text)', letterSpacing: '-0.3px' }}>auditorr</span>
         </div>
       </div>
 
@@ -197,7 +199,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                   padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
                   background: isGroupActive ? 'var(--surface3)' : 'transparent',
                   color: isGroupActive ? 'var(--text)' : 'var(--text-dim)',
-                  fontSize: 13, fontWeight: isGroupActive ? 600 : 400,
+                  fontSize: 'var(--font-md)', fontWeight: isGroupActive ? 600 : 400,
                   cursor: 'pointer', transition: 'all 0.12s',
                   textAlign: 'left', width: '100%',
                 }}
@@ -222,7 +224,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                           padding: '6px 10px 6px 18px', borderRadius: 'var(--r)', border: 'none',
                            background: childActive ? 'var(--surface3)' : 'transparent',
                            color: childActive ? 'var(--text)' : 'var(--text-dim)',
-                          fontSize: 13, fontWeight: childActive ? 600 : 400,
+                          fontSize: 'var(--font-md)', fontWeight: childActive ? 600 : 400,
                           cursor: 'pointer', transition: 'all 0.12s',
                           textAlign: 'left', width: '100%',
                         }}
@@ -233,9 +235,12 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                             <span
                               title={`${count} item${count !== 1 ? 's' : ''} need attention`}
                               style={{
-                                fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-pill)',
+                                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 'var(--r-pill)',
                                 background: child.accent ? 'transparent' : 'var(--surface2)',
-                                border: `1px solid ${child.accent || 'var(--border2)'}40`,
+                                // A coloured count, not an outlined badge: this
+                                // border was a dropped tint and the number has
+                                // always read as plain text (R9).
+                                border: child.accent ? 'none' : '1px solid var(--border2)',
                                 color: child.accent || 'var(--text-dim)',
                                 flexShrink: 0, lineHeight: 1.5,
                               }}
@@ -248,7 +253,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                               onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
                               title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
                               style={{
-                                fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 'var(--r-pill)',
+                                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 'var(--r-pill)',
                                 background: 'var(--accent)', color: '#fff',
                                 flexShrink: 0, lineHeight: 1.5, cursor: 'pointer',
                                 animation: 'sidebarBadgePulse 2s ease-in-out infinite',
@@ -273,7 +278,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               padding: '9px 10px', borderRadius: 'var(--r)', border: 'none',
               background: isActive ? 'var(--surface3)' : 'transparent',
               color: isActive ? 'var(--text)' : 'var(--text-dim)',
-              fontSize: 13, fontWeight: isActive ? 600 : 400,
+              fontSize: 'var(--font-md)', fontWeight: isActive ? 600 : 400,
               cursor: 'pointer', transition: 'all 0.12s',
               textAlign: 'left', width: '100%',
             }}
@@ -298,11 +303,11 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
               background: 'var(--surface2)', border: '1px solid var(--border2)',
               display: 'flex', flexDirection: 'column', gap: 2,
             }}>
-              <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <span className="ui-status-dot" style={{ width: 6, height: 6, background: scoreC }} />Health
               </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
-                {scoreDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
+                {scoreDisplay}<span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontWeight: 400 }}>/100</span>
               </span>
             </div>
 
@@ -313,11 +318,11 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                 background: 'var(--surface2)', border: '1px solid var(--border2)',
                 display: 'flex', flexDirection: 'column', gap: 2,
               }}>
-                <span style={{ fontFamily: 'var(--sans)', fontSize: 12, fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', letterSpacing: 0, textTransform: 'none', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <span className="ui-status-dot" style={{ width: 6, height: 6, background: 'var(--blue)' }} />Cross-seed
                 </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
-                  {csDisplay}<span style={{ fontSize: 11, color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)', lineHeight: 1 }}>
+                  {csDisplay}<span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontWeight: 400 }}>×</span>
                 </span>
               </div>
             )}
@@ -328,33 +333,33 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
         {isScanning ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>Scanning…</span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)' }}>{progress}%</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>Scanning…</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>{progress}%</span>
             </div>
             <div style={{ height: 3, background: 'var(--border2)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
               <div style={{ width: progress + '%', height: '100%', background: 'var(--accent)', borderRadius: 'var(--r-pill)', transition: 'width 0.4s ease' }} />
             </div>
             {statusMessage && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
             )}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {lastScanStatus === 'error' && statusMessage && (
-              <div style={{ padding: '5px 8px', borderRadius: 'var(--r-sm)', background: 'var(--red)12', border: '1px solid var(--red)30', marginBottom: 2 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
+              <div style={{ padding: '5px 8px', borderRadius: 'var(--r-sm)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, marginBottom: 2 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
                   ✗ {statusMessage}
                 </span>
               </div>
             )}
             {lastAuditTime !== 'Never' && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-faint)' }}>last run {lastAuditTime}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>last run {lastAuditTime}</span>
             )}
             {nextScanIn != null && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--yellow)' }}>⏱ next in {nextScanIn}s</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--yellow)' }}>⏱ next in {nextScanIn}s</span>
             )}
             {triggerLabel && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{triggerLabel}</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{triggerLabel}</span>
             )}
           </div>
         )}

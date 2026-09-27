@@ -122,43 +122,210 @@ seeding torrent — a trumped release, a dead tracker, a rip you made yourself.
 They cost you disk space and return nothing.
 
 Backfill matches those files against your Sonarr/Radarr library, then searches
-your indexers for a version that is actually seeding. Sonarr episodes are
-grouped by series and season so you search for a season pack rather than
-twelve episodes.
-
-Results are filtered by resolution, source and HDR format, then sorted by
-custom format score, quality, and seeders. Grabbing hands the release to
-Sonarr/Radarr, which downloads and imports it normally — the new torrent
-hardlinks into the library and the file stops being orphaned.
+your indexers for a version that is actually seeding.
 
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
+### Season packs and single episodes
+
+A Sonarr season is searched as **one season pack only when every episode file
+Sonarr holds in that season is unseeded**. Otherwise each unseeded episode is
+searched on its own. The rows say which: `S01 season pack · 10 ep`, or `S01E05`.
+
+This matters more than it looks. A pack grabbed to backfill one episode of a
+season whose other nine are already seeding downloads the whole season, and
+importing it replaces all ten library files — so the nine torrents that were
+hardlinked to them become orphans, and the health score falls on two counts at
+once. An episode search can still turn up a season pack or a multi-episode
+release, and those are left off an episode row. Where Sonarr hasn't numbered
+every file of a show, auditorr can't show that a season is fully unseeded, so
+it searches episode by episode.
+
+A release offered on a row has to cover **exactly** what that row's file holds,
+in the **same season**. A file holding two episodes (`S01E01E02`) is only
+offered two-episode releases: Sonarr replaces the whole existing file when it
+imports, so a single-episode release would delete the other episode's file. And
+a release for the same episode number in another season (`S02E01`, or the
+special `S00E01`) isn't offered for `S01E01`, nor another season's pack for a
+season-pack row. A release Sonarr couldn't match to any episode is still shown.
+
+### Ranking
+
+**Best available (upgrade)** (the default) keeps Sonarr/Radarr's own order —
+custom format score, quality, seeders — the order your quality profile already
+tunes. **Closest to my file** instead puts first the release that looks like the
+file you already have: an exact size match, then one within 1% (a scene
+torrent's `.nfo` and sample), then the same quality, then the same HDR, then the
+most seeders. That's the release your file came from, so grabbing it gets you a
+seed without changing what the library holds — pick it when a backfill shouldn't
+turn into an upgrade. Either way, each release shows its size against your file
+(`= exact`, `+1.2 GB`) and whether size, quality and HDR agree.
+
+Results can also be filtered by resolution (including **480p / SD**), source
+(including **DVD**) and HDR format. These filters go by the quality Sonarr/Radarr
+names each release with, so they mean the same on both — Radarr reports a DVD
+release with no resolution at all, and the SD option still finds it.
+
+### Grabbing and importing
+
+Grabbing hands the release to Sonarr/Radarr, which downloads and imports it
+normally — the new torrent hardlinks into the library and the file stops being
+orphaned. When the arr parks the download because it isn't an upgrade (usual
+for a backfill, since you already have this content), auditorr imports it
+anyway — but only over the episodes that row was for, and always as a copy, so
+nothing is moved out from under a seeding torrent. If the arr doesn't say where
+the download is, or auditorr can't tell which episodes the row covered, it stops
+and asks you to finish the import in Sonarr/Radarr rather than guessing.
+
+auditorr follows the download in the **Import Jobs** panel at the bottom right,
+and says **Imported** only when the arr's file for that movie — or for those
+episodes — actually changed. Everything else gets its own answer rather than a
+green tick: *Download failed* (the arr says so, with its reason), *Never queued*,
+*No new file* (it left the queue without one — removed or blocklisted in the
+arr), *Could not check* (the queue couldn't be read), *Still downloading* (after
+two hours; the arr will import it when it finishes — auditorr never forces an
+import of a file still being written), and *Unconfirmed* (it imported, but the
+arr's file couldn't be read to prove it). Where the indexer gives one, the
+release's info hash is used to tell this download apart from another of the same
+title in the queue; with two indistinguishable downloads for one item, auditorr
+won't force either.
+
+Once Sonarr/Radarr accepts a grab, that candidate leaves the page — and isn't
+searched again by your next run — until the next scan. If that scan still finds
+the file unseeded (say it ran before the download imported), the candidate comes
+back, and grabbing it again is refused while the first download is in the queue.
+
+A grab that fails because the release has dropped out of the arr's cache is
+searched again and retried once. Any other failure is shown as it is — a
+timeout may be a grab that actually went through, and retrying it would
+download the release twice. For the same reason, a release already in the
+arr's queue isn't grabbed again unless you click **anyway**.
+
+### Runs
+
+A search keeps running if you leave the page, and Backfill picks it back up when
+you come back in the same browser tab. Starting a second search while one is
+running shows you the running one instead of stopping it. A search nobody is
+watching stops itself after ten minutes, and a finished one is kept for an hour.
+
+### The rest of the page
+
+**Root Folders** are the root folders configured in Sonarr/Radarr; a file under
+none of them is grouped under **Other**.
+
+**Search Depth** reports two different units in two sentences: candidates (a
+season pack is one) and files. Of the unseeded files that didn't match your
+library, it separates subtitles, artwork and other files no arr indexes from
+**video files that didn't match**, which are the number worth acting on. If
+little of your library matched, a path mapping is the usual cause. If most of
+it did, those videos are files Sonarr/Radarr don't track at those paths — a
+title they don't manage, or manage somewhere else. Where one of those videos has
+the same file name as a file Sonarr/Radarr does hold, the page shows the two
+paths together — yours and the arr's — which usually makes a path-mapping
+mismatch obvious. Nothing is shown for a video no arr file shares a name with.
+
 **Indexer strategy** lets you say "download from these indexers, but only if the
 release is also on that one" — useful when you want to satisfy one tracker's
-seeding requirements using another's copy. Filter preferences persist between
-visits.
+seeding requirements using another's copy. Downloading a release from one of
+those indexers counts as it being listed there. Filter preferences persist
+between visits.
 
 ---
 
 ## Cleanup
 
 **Targets orphaned torrent files**: files sitting in your torrent folder that
-your client has no torrent for. Nothing is seeding them and nothing is
+no torrent in your client claims. Nothing is seeding them and nothing is
 protecting them.
 
-They're grouped by release folder so you review whole releases rather than
-individual files. Select what you want gone and generate a delete script — plain
-bash, using paths relative to your torrent directory, with a working-directory
-guard at the top. Read it, then run it wherever you like.
+Cleanup is the one workflow whose result can't be undone — its script deletes
+files — so the page is organised around one question: **does anything else
+still hold this data?**
+
+- **Your library keeps a copy** comes first. Another hardlink to the file stays
+  on disk — normally your media library's copy — so deleting the torrent-folder
+  path loses nothing, and frees nothing either. Clearing this pile is what tidies
+  a torrent folder.
+- **This is the only copy** comes second. Deleting these is permanent.
+- **Could not check** appears only when your client didn't fully answer on the
+  last scan. Those files might belong to a live torrent, so they're shown but
+  can't be selected until a scan reads every torrent's file list.
+
+Every file carries its state — **library copy**, **linked elsewhere** (a
+hardlink outside your torrent and media folders, such as a snapshot), **only
+copy** or **could not check** — and its age. Within each pile the oldest comes
+first: a file that has sat there for years is likelier junk than one from this
+week. A file hardlinked at two places in your torrent folder — a cross-seed
+whose torrents are both gone — is one row listing both paths, because its space
+is freed only when both are deleted. **Frees up to** is a maximum; the
+script reports what it actually frees.
+
+Files are grouped by release folder so you review whole releases rather than
+individual files, and nothing is ever selected for you.
 
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
 
+### The delete script
+
+Select what you want gone and generate a delete script — plain bash, using paths
+relative to your torrent directory. **Right before building it, auditorr asks
+your torrent client about the selection again.** Any file a torrent claims now —
+a cross-seed tool injected one since the scan, or you re-added a torrent — is
+left out, and both the dialog and the script's header say how many. If your
+client, or any qui instance, doesn't answer, no script is built.
+
+The script:
+
+- checks that it's running in your torrent folder;
+- warns if it was generated more than a day ago (it doesn't refuse — the clock on
+  the machine running it isn't auditorr's);
+- counts every file as **deleted**, **already gone** or **FAILED**. A delete that
+  fails — a read-only mount, a permission problem — is reported as a failure,
+  never as done, and the script exits non-zero;
+- removes release folders it emptied — never a category folder, and never one
+  that still holds anything;
+- is safe to run again: a second run reports everything as already gone.
+
+Run it with `--dry-run` first to see what it would do without touching anything:
+`bash orphaned_torrents_delete.sh --dry-run`.
+
+### Excluding a group
+
 If a group is something you put there deliberately, **Exclude** it instead and
-it stops being counted against you.
+it stops being counted against you. You're shown the exact rules first; they
+land in [Config → Excluded Files](configuration.md#excluded-files--folders).
+
+A fully selected release folder becomes one folder rule, but only where auditorr
+has checked that's safe. Otherwise the group's header says why, and excluding
+writes one rule per file:
+
+- **category folder** — the folder shares its name with one at the top of your
+  media library (`movies/`, say — where qBittorrent saves single-file torrents by
+  default), so a folder rule would hide library files too;
+- **shared with a torrent** — the folder also holds files a torrent in your
+  client still uses;
+- **unchecked files** — it holds files the last scan couldn't check;
+- **top level** — the files sit at the top of your torrent folder;
+- **not yet checked** — the last scan predates the check; the next one settles it.
+
+A release folder saved with no category directory above it gets a folder rule
+like any other.
 
 > Cleanup deals only with files your client doesn't know about. If a torrent
 > exists, it belongs to [Triage](#triage) — deleting files under a live torrent
 > just makes it recheck and download them again.
+
+**Files still being downloaded are not orphans, even when their path says
+otherwise.** Two optional qBittorrent settings move a file away from where the
+client's file list says it will end up: *Append .!qB extension to incomplete
+files* renames it while it's in flight, and a separate incomplete directory puts
+it somewhere else entirely until it finishes. Either one breaks the path match
+auditorr uses, so a file being actively written could appear here at whatever
+partial size it had reached — and deleting that makes your client error the
+torrent and start over. auditorr now accounts for both spellings and follows the
+client's own answer for where a torrent's data currently lives. Neither setting
+is part of the [TRaSH](https://trash-guides.info/) layout, so a by-the-guide
+install was never affected.
 
 ---
 
@@ -177,7 +344,56 @@ they need six different responses.
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
 | **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). |
 | **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Trigger a rescan. |
-| **Not in library** | Neither arr knows about it. | Import it, exclude it, or remove it. |
+| **Could not check** | A Sonarr/Radarr instance didn't answer, so whether your library holds these is unknown. Only appears while something is unreachable. | Fix the connection and reload. Don't act on these meanwhile. |
+| **Not in library** | Neither arr knows about it, under its own title or any alternate title they hold. | Import it, exclude it, or remove it — but note these files are the only copy. |
+
+*Not in library* means "no arr has ever heard of this", so it is deliberately
+**unreachable while any arr is unreachable** — those rows go to *Could not
+check* instead, under a banner naming the instance. The distinction matters
+because that bucket's files are the only copy you have, and "we couldn't ask" is
+not an answer. Positive matches are unaffected: a title that *did* resolve still
+reads *Superseded* or *Import pending* as normal.
+
+**Downloads that haven't finished are not listed.** A torrent at 0% has no
+library file, which is the literal definition of the Not Imported pile, so the
+newest thing in your client used to arrive here at its full final size with a
+delete button under it. auditorr now asks your client whether the payload is
+actually complete — a separate question from whether the torrent is paused,
+seeding or downloading, since a *paused* half-finished torrent looks exactly
+like a paused finished one — and leaves unfinished ones alone until they're
+done. If your client gives no usable completion figure at all, the row is still
+shown, tagged **completion unknown**: a row you can see and judge beats one that
+quietly vanished.
+
+Titles are matched against the **alternate titles** Sonarr and Radarr already
+store, not just the one they display. That matters for non-English content,
+which is almost always released under its original-language name: a season
+released as `No.tengo.miedo.S01…` resolves to the series Sonarr calls *I'm Not
+Afraid*, and reads as *Import pending* rather than *Not in library*. An exact
+title match always takes priority.
+
+**One verdict per torrent, earned by all of its files.** A season pack is one
+decision, but its episodes don't always agree — one may already be in your
+library while another is still waiting to import. Every video file is judged,
+and the row takes the verdict whose action deletes least (*Could not check*,
+then *Import pending*, then *Superseded*, then *Not in library*). A row whose
+files disagree says so: `18 files · 3 verdicts`.
+
+**A row shows the whole torrent.** A row can list only part of its torrent — a
+partly imported season shows the episodes that didn't import — while removing
+it removes everything. Where the two differ the row says
+`10 of 18 files · 40 GB of 72 GB`, and the size beside the row (and in the
+selection bar) is the torrent's.
+
+**Two instances holding the same title.** If a 1080p and a 4K Sonarr both have
+the episode, the row names both — `on TV · also TV 4K` — and says which one a
+rescan or a force import goes to: the instance whose file is the same quality as
+the torrent, when there is one. A row like that never pre-selects a whole
+cross-seed group for removal.
+
+Each row also shows when your client added the torrent, and **Dead
+Registration** rows say where the data is still alive: your library, a seeding
+cross-seed, or both.
 
 ### How Triage loads
 
@@ -190,6 +406,13 @@ snapshot (a torrent that was dead last night may be fine now), while everything
 else can. Recovered torrents disappear from the list as their batch confirms
 them. If verification fails you get an explicit "showing audit-time data" notice
 and a Retry button, never a quiet guess.
+
+A torrent you've removed from your client since the last scan drops out the same
+way, as soon as its batch answers. On qui, a torrent whose instance didn't answer
+is left as it was, never treated as gone.
+
+The page lists the largest torrents first, up to a limit; past it, a banner says
+how many are shown out of how many.
 
 ### Rescan vs force import
 
@@ -211,6 +434,11 @@ decided and tells you in plain words:
 
 > Nothing will import — Not a quality revision upgrade for existing movie file(s)
 
+After a rescan the row watches Sonarr/Radarr for the file to land, and clears
+the moment it does. A TV row watches the episodes it is for, not the whole series
+— Sonarr importing some other episode of a busy show doesn't count — and a check
+that can't reach the arr never counts as the file landing.
+
 **Force import** is the way past it. It uses the arr's own *Import Anyway*,
 replacing the library file with this release. It appears on superseded items
 that are the **same quality** as the file you already have — typically after a
@@ -228,6 +456,24 @@ handles one deliberate file at a time.
 > changes your library rather than your torrent client, so it's deliberately
 > narrow.
 
+### Exclude
+
+**Exclude** hides a torrent's files from future audits — it's "stop telling me
+about this", not "fix this", and it deletes nothing. You're shown the exact
+rules before they're written.
+
+Where auditorr can establish that a folder holds nothing but this torrent's
+files, you get **one rule for the folder**. Otherwise you get one rule per file.
+Two things stop the folder form being used: the torrent is **partly imported**,
+so its release folder also holds the files that imported fine; or the folder
+holds something else as well — another torrent, an orphan, or it's a category
+directory shared with your media library.
+
+It isn't offered on **Dead Registration** rows at all. Those rows are about a
+registration your tracker dropped, but the files under them belong to a
+cross-seed that is alive and still seeding — hiding the file wouldn't retire the
+registration, and the registration is what needs removing.
+
 ### Exclusion suggestions
 
 When torrents linger only because of files Sonarr/Radarr will never import,
@@ -244,17 +490,118 @@ can see and undo it. Subtitles and Extras are deliberately never suggested.
 **Targets duplicate files**: bit-for-bit identical files that don't share an
 inode, i.e. two real copies burning two lots of disk space.
 
-Review the duplicate groups, select the ones you want collapsed, and generate a
-script that replaces each copy with a hardlink to a single kept file. The script
-runs `cmp` on every pair before linking, so it will refuse to collapse anything
-that isn't genuinely identical.
+Where one copy is in your torrent folder and the other in your library, the two
+were never hardlinked: Sonarr or Radarr copied the file when it imported it
+(hardlinks turned off, or an import that crossed a filesystem), or it was copied
+by hand — to make an upload torrent, say. Linking those two frees the space and
+makes the torrent read as imported: the library file stops counting as unseeded,
+and your health score rises. Each group says which shape it is — **missing
+hardlink**, or **duplicate copies** (the same bytes twice in one folder) — but
+not who made the copy, and auditorr doesn't claim either shape is the common one
+in your library.
+
+A group is a set of identical files. Every path of each file is listed — a file
+already hardlinked into your library shows its torrent path and its library path
+together, and a cross-seed shows every tracker directory it sits in. They go
+together or not at all, which is what the line under a file with more than one
+path means. No copy is marked as the one to keep: the script decides that when
+it runs.
+
+The headline says how many files would share a copy and how much that frees
+**at most**. It is a maximum because only the script, running on the machine
+that holds the files, can tell whether two copies really share a disk and
+whether a file has hardlinks auditorr doesn't know about. Nothing is selected
+for you.
+
+The **Dedupe badge** in the sidebar counts the groups the page lists as of the
+last scan — including any that have changed since. The duplicate figure in your
+health score and on the dashboard counts files, so the two numbers differ. If
+you add an exclusion rule, the page applies it straight away and the badge
+catches up on the next scan (or when you save Config, on a library under
+200,000 files).
+
+Most groups carry no label: the script checks every copy when it runs. On a
+pooled share (an Unraid share, mergerfs) that includes copies on different
+drives — the share makes the link if it can, and the script leaves alone any it
+refuses. A group that needs a word says so:
+
+| | What it means | Selectable |
+| --- | --- | --- |
+| **different disks** | The copies are on separate filesystems. The script links the copies that share one and leaves the rest alone. | yes |
+| **could not check** | A file couldn't be read, or one copy sits outside the folder the script runs from and is left out of it. | yes |
+| **changed since the scan** | A copy has gone since the last scan. Scan again. | no |
 
 <p><img src="workflow-dedupe.png" alt="Dedupe workflow" width="100%" /></p>
 
+### What the script does
+
+The script is the part that decides, because it runs where the files are. Run it
+from the folder it names at the top. For each group it:
+
+1. looks at every listed path again, and leaves alone a symlink, a missing file,
+   a file whose size changed, or a file that looks unfinished (sparse — on a
+   compressed filesystem, where a finished file can look like that, pass
+   `--allow-sparse`);
+2. groups the copies by the disk they report, and never tries a link between two
+   (a pooled share reports one disk for all its drives — see below);
+3. keeps the copy whose owner and permissions most copies share, then the one
+   with the most hardlinks. A copy with a different owner or permissions is left
+   alone, because every path of a linked file takes the kept copy's;
+4. leaves alone a copy with hardlinks the script doesn't list — replacing only
+   some of a file's paths frees nothing, and would split a torrent file from its
+   library copy. The script lists every path in your torrent and media folders,
+   so this is a link outside them (a snapshot, a backup tree) or a path an
+   exclusion rule hides, which isn't auditorr's to replace;
+5. compares each copy with the kept one byte for byte (`cmp`);
+6. makes the new hardlink under a temporary name beside the file, checks that it
+   really is a hardlink of the kept copy, then renames it over the original.
+   Nothing is removed before its replacement exists, and no path is ever
+   missing, so a seeding torrent never sees a gap.
+
+A pooled share (an Unraid share, mergerfs) reports one disk for all its drives,
+so the script tries those links and lets the filesystem answer. An Unraid share
+can simply make one: it puts the link on the kept copy's drive — creating the
+folder there if that drive doesn't have it — and the rename removes the other
+drive's copy, leaving that drive's folder behind, empty. Your files look the same
+through the share; only which drive holds them changes. Where the filesystem refuses one (a mergerfs pool
+can, depending on how it is set up), the script tries the copies that failed against each other, so copies
+that share a drive still get linked, and leaves alone whatever is left. A
+filesystem that answers a link with a copy or a symlink changes nothing: the
+check in step 6 catches it before the rename.
+
+Every file gets an outcome — linked, already linked, left alone (with the
+reason), or **FAILED** — and space counts as freed only once every link to a copy
+has been replaced. It is safe to run twice: the second run reports everything as
+already linked. If a run is interrupted, or a rename fails part-way, nothing is
+missing; run it again and it finishes. `bash dedupe.sh --dry-run` checks and
+compares everything and changes nothing. The script needs GNU `stat` (any Linux,
+not macOS), and says up front how much it will read — `cmp` reads both copies of
+every file, which on a spinning array can take hours. When it finishes, auditorr
+notices the changes and scans again shortly.
+
+### What detection skips
+
 Disc rips generate enormous numbers of identically-sized structural files, so
-detection skips excluded files, skips size groups above 200 files, and records
-at most 10 siblings per file. If you rip discs, turn on the disc-rip exclusion
-preset and this page gets dramatically more useful.
+detection skips excluded files and size groups above 200 files. Each file
+remembers at most 10 of its identical siblings; a larger group is still shown
+whole, because the page joins what every file remembers. If you rip discs, turn
+on the disc-rip exclusion preset and this page gets dramatically more useful.
+
+Files are matched by size, then by a fingerprint of their start, middle and end,
+so two encodes that share only a container header and trailer aren't offered.
+
+**Unfinished downloads are never offered**, and this is the one case where the
+script's `cmp` check cannot protect you. qBittorrent doesn't pad a file out as
+it downloads — it writes a **sparse** file, which reports its full final size
+while the parts not yet written read as zeros. Two unfinished files of the same
+size whose written parts don't overlap therefore genuinely *are* identical at
+that moment: same size, same fingerprint, and `cmp` agrees. Hardlink them and
+both torrents write into one file and both are ruined. So detection now requires
+your client to confirm a torrent is finished, and anything it can't confirm is
+left out — that costs you some disk space you might have reclaimed, which is
+the cheaper mistake by a wide margin. The script checks for this itself as well,
+leaving alone any file that looks sparse, so it doesn't rest on your client's
+answer alone.
 
 ---
 
@@ -268,17 +615,69 @@ by hand.
 Paste the PM. auditorr parses the old and new release names and walks you
 through it:
 
-1. **Confirm the group.** auditorr queries your client live for torrents
+1. **Pick the tracker that sent the PM** (optional). Its torrents and its copy
+   of the replacement come first.
+2. **Confirm the group.** auditorr queries your client live for torrents
    matching the old release, and shows you a ranked list of candidates. You
    confirm which are really yours before anything is touched.
-2. **Expand to cross-seeds.** Each confirmed torrent is expanded into every
-   torrent sharing the same payload — the whole group that has to go together.
-3. **Pick the replacement.** The new title is matched against your Sonarr/Radarr
-   library and searched. auditorr shows the exact match it found *and* a ranked
-   list of alternatives, with per-field agree/disagree chips so you can see
-   what matched.
-4. **Execute.** The old group is removed via the client, the replacement is
-   grabbed through Sonarr/Radarr, and a re-audit runs.
+3. **Expand to cross-seeds.** Each confirmed torrent is expanded into every
+   torrent sharing its files, followed all the way through — a torrent sharing
+   files with a cross-seed is in the group too. That is the whole set that has
+   to go together.
+4. **Pick the replacement.** auditorr finds the Sonarr/Radarr entry from the
+   files the group is hardlinked to, falling back to the new release's name,
+   and searches it. The exact replacement on the PM's tracker is shown as
+   **Grab this one**; the rest are folded under *Other releases*. If a second
+   Sonarr/Radarr instance also holds the group's files (a 4K Radarr beside your
+   main one, say), step 4 says so — `on Radarr · also Radarr 4K` — naming the
+   instance the search and the grab go to.
+5. **Execute.** The replacement is grabbed through Sonarr/Radarr **first**, and
+   the old group is removed via the client only once the arr has accepted it —
+   so a grab that fails leaves your files exactly where they were. auditorr then
+   follows the download into your library — it shows up in the **Import Jobs**
+   panel at the bottom right, like a Backfill grab — and re-audits once it
+   actually imports. Every step is reported: if the grab succeeds and the
+   removal doesn't, you're told the replacement is on its way and the old
+   torrents are still in your client.
+
+### What the confirm step tells you
+
+- **Library link.** For each torrent: **✓ linked** — a link to its files exists
+  outside the group, normally your library copy, so it survives the removal;
+  **✗ only copy** — nothing outside the group holds at least one file, and
+  removing it destroys it; **? unchecked** — auditorr couldn't see the file
+  (check your torrent path mapping). An *only copy* asks you again, naming how
+  much data would be destroyed. This is what makes "delete with files" safe, so
+  auditorr checks it rather than assuming it.
+- **Incomplete group.** If a torrent that might share these files didn't return
+  a file list, the group is marked incomplete and removing it needs your
+  acknowledgement. If a torrent-client instance doesn't answer at all, the swap
+  stops instead.
+- **The tracker's own verdict.** A torrent your tracker already reports as
+  unregistered is the tracker confirming the trump.
+- **Rows can't be deselected.** Cross-seeds sharing a path point at the same
+  files, so removing one with its files breaks the rest. To keep a registration
+  on a tracker that hasn't trumped the release, remove the others in your client
+  and use **Grab only**.
+
+Right before deleting, auditorr resolves the group **again** — and once more
+after the grab, because a replacement saved onto the same files joins the group,
+and removing it with its files would delete the replacement. If a torrent has
+gone, stopped sharing the files, or joined the group since you confirmed it,
+nothing is removed and you're told the old torrents are still in your client.
+
+Clicking **Execute** twice, or retrying a request that never answered, runs the
+swap once: the page stamps each confirmation with an id, and the server replays
+the first answer instead of grabbing a second copy.
+
+**Grab only** works without
+[Workflow torrent deletion](configuration.md#workflow-torrent-deletion-allow_client_delete)
+turned on: it grabs the replacement and leaves the old torrents to you. A
+replacement already in the arr's queue isn't grabbed twice unless you say so.
+
+Dead seeds in [Triage](#triage) carry a **Trumped? ↗** button that opens this
+page with the release filled in — a dead seed is often a trump whose PM you
+missed.
 
 <p><img src="workflow-trumped.png" alt="Trumped workflow" width="100%" /></p>
 
@@ -307,11 +706,31 @@ Cross-seeding comes in two shapes, and they behave differently:
 - **Distinct hardlinks** — each torrent has its own path, all pointing at the
   same data. Delete one link and the others are fine.
 
-The default file handling is **auto**, which resolves the live paths and deletes
-a torrent's files only where no *surviving* torrent still references them. A
-shared-path cross-seed keeps its file; a distinct-hardlink cross-seed drops only
-its own link; nothing is left orphaned either way.
+auditorr resolves every torrent's live file list and deletes a torrent's files
+only where it has **established** that nothing staying in your client uses them:
 
-The confirmation dialog shows every torrent's hash, tracker, seeding time, size,
-and file paths, and marks which members share a path — so "deleting one is
-always safe for the others" is never something you have to assume.
+- torrents are compared by the files they hold, never by size — a cross-seed
+  carrying one extra `.nfo` counts — and a cross-seed of a cross-seed counts too;
+- a shared-path cross-seed that stays keeps its file; a distinct-hardlink one
+  drops only its own link;
+- wherever auditorr **couldn't check** — a torrent's file list didn't load, a
+  neighbouring torrent's didn't, or there were more near matches than it checks
+  at once — the torrent is removed and **its files are kept**. The dialog says so
+  before you confirm. The worst that can leave is an orphaned file, and Cleanup
+  checks your client again before it will delete one.
+
+**What the dialog shows is what happens.** When you confirm, auditorr checks the
+groups again. If a cross-seed joined or left, or a torrent shown keeping its
+files would now have them deleted, nothing is removed and the dialog shows you
+the new answer. A change towards keeping files goes ahead, and the result says
+so. The **Remove** button itself states the outcome — *keep files*, *and their
+files*, or *delete files of N*.
+
+Afterwards auditorr looks at your client again. Rows whose torrent is gone
+clear; a torrent that is still listed, or sits on an instance that didn't answer,
+stays, marked **removal unconfirmed**, until the next scan.
+
+The confirmation dialog shows every torrent's hash, tracker, seeding time, size
+and file paths, and marks each one's files as deleted or kept, with the reason —
+so "deleting one is always safe for the others" is never something you have to
+assume.

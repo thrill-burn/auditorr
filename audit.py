@@ -2,6 +2,7 @@ import os
 import gc
 import math
 import time
+import posixpath
 import hashlib
 import logging
 import threading
@@ -9,6 +10,7 @@ from datetime import datetime, timedelta
 
 import sources
 from exclusions import is_excluded, compile_exclusions
+from scripts import dedupe_group_count, dedupe_row
 from media_server_exclusions import expand_exclusion_patterns
 
 from db import (
@@ -17,9 +19,10 @@ from db import (
     db_load_results, db_save_results, db_save_audit,
     db_save_upload_snapshot, db_get_upload_snapshots, db_get_recent_runs,
     db_save_change_log_entry,
-    db_save_file_results,
-    db_save_file_signatures, db_load_file_signatures,
+    db_save_file_results, db_prepare_file_results,
+    db_save_file_signatures, db_load_file_signatures, db_prepare_file_signatures,
     db_get_meta, db_set_meta, db_update_meta, db_delete_meta,
+    db_publish,
 )
 import rounds
 from state import get_state, set_state, update_progress
@@ -34,12 +37,24 @@ log = logging.getLogger(__name__)
 
 
 def get_fast_hash(filepath, size, chunk_size=65536):
+    """md5 of the first, middle and last `chunk_size` bytes; the whole file when
+    it is no bigger than the three chunks.
+
+    The middle chunk is DEDUPE F7. Two encodes sharing a container header and
+    trailer collided on head + tail, so they were offered as duplicates, counted
+    in the headline and `duplicate_count`, and found to differ only by the
+    script's `cmp` after reading both files in full. An extra chunk can only
+    split a candidate set, never join one, and the hash is never persisted, so
+    nothing migrates.
+    """
     try:
         hasher = hashlib.md5()
         with open(filepath, 'rb') as f:
-            if size <= chunk_size * 2:
+            if size <= chunk_size * 3:
                 hasher.update(f.read())
             else:
+                hasher.update(f.read(chunk_size))
+                f.seek(size // 2 - chunk_size // 2)
                 hasher.update(f.read(chunk_size))
                 f.seek(-chunk_size, 2)
                 hasher.update(f.read(chunk_size))
@@ -58,7 +73,13 @@ def _is_excluded(rel_path, filename, patterns):
     return is_excluded(rel_path, rel_path, filename, patterns)
 
 
-def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None):
+_ROOT_NAMES = {'Torrent': 'torrents', 'Media': 'media'}
+# A directory this many segments or fewer below a root is a category or a release
+# folder, and one that cannot be listed hides whole releases (S03).
+_UNLISTABLE_SHALLOW_DEPTH = 2
+
+
+def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None, walk_report=None):
     # Returns an ordered list of file_keys (one per filesystem entry, including
     # cross-seed duplicates) instead of full record dicts. Per-file metadata
     # (rel_path, size, excluded) is folded directly into inode_map to
@@ -72,10 +93,37 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
     # inode_map entry is ~8 bytes x every file in the library, which is the
     # known RAM hotspot. A scalar costs nothing.
     oldest_mtime = None
-    if not os.path.exists(base_path):
-        log.warning(f"Path does not exist, skipping: {base_path}")
+    # S03 (the 2026-09-10 outside review) — what this walk could not see. A root
+    # that did not exist returned an empty walk with zero stat errors, and
+    # `os.walk` had no `onerror`, so a directory that could not be listed dropped
+    # everything beneath it without a word. `walk_report`, when a dict, is filled
+    # in place — an out-parameter like `fetch_file_map`'s `unresolved_roots`, so
+    # the four values every caller unpacks stay as they were. Counts and
+    # booleans only: the audit persists it, and it reaches /api/debug/report.
+    walk = walk_report if walk_report is not None else {}
+    root_name = _ROOT_NAMES.get(source_label, source_label)
+    walk.update(configured=bool(base_path), exists=bool(base_path) and os.path.isdir(base_path),
+                files=0, stat_errors=0, unlistable=0, unlistable_shallow=0)
+    if not walk['exists']:
+        if base_path:
+            log.warning("The %s root is not a directory inside the container — skipping its walk",
+                        root_name)
         return key_order, scanned, stat_errors, oldest_mtime
-    for root, _, files in os.walk(base_path):
+
+    def _unlistable(err):
+        walk['unlistable'] += 1
+        where = getattr(err, 'filename', None)
+        try:
+            rel = os.path.relpath(os.fspath(where), base_path) if where else '.'
+            depth = len([s for s in rel.replace('\\', '/').split('/') if s not in ('', '.')])
+        except (TypeError, ValueError):
+            depth = 0
+        if depth <= _UNLISTABLE_SHALLOW_DEPTH:
+            walk['unlistable_shallow'] += 1
+        log.warning("Could not list a directory %d level(s) below the %s root (%s)",
+                    depth, root_name, type(err).__name__)
+
+    for root, _, files in os.walk(base_path, onerror=_unlistable):
         for filename in files:
             full_path = os.path.join(root, filename)
             try:
@@ -126,6 +174,17 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         # inode so a dead cross-seed sibling survives the merge.
                         for h, c in (qbit_info.get('unreg_claimants') or {}).items():
                             info['unreg_claimants'][h] = c
+                        # Completion (R2). Sparse — absent means complete, which
+                        # is almost every record, and an extra key on every
+                        # inode_map entry is the RAM hotspot this walk is
+                        # careful about. Sticky across an inode's paths for the
+                        # same reason it is sticky in the source layer: a
+                        # cross-seed still writing to these bytes must not have
+                        # them hardlinked out from under it.
+                        if qbit_info.get('incomplete'):
+                            info['incomplete'] = True
+                        if qbit_info.get('completion_unknown'):
+                            info['completion_unknown'] = True
                         cur = info['status']
                         if qbit_info['status'] == 'Seeding' or cur == 'Seeding':
                             info['status'] = 'Seeding'
@@ -146,11 +205,13 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 log.warning(f"Could not stat {full_path}: {e}")
                 stat_errors += 1
             scanned += 1
+            walk['files'] += 1
             if total_ref is not None:
                 total_ref[0] += 1
                 if total_ref[0] % 500 == 0:
                     set_state(total_files=total_ref[0])
             update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
+    walk['stat_errors'] = stat_errors
     return key_order, scanned, stat_errors, oldest_mtime
 
 
@@ -163,6 +224,12 @@ DUP_GROUP_LIMIT = 200
 # identical files stores k*(k-1) path strings — quadratic, and the reason
 # file_results JSON used to exceed SQLite's 1 GB limit on large libraries.
 DUP_PATHS_PER_FILE = 10
+# And at most this many of its *own* other paths (`_dedupe_paths`, F18). A
+# different bound from the one above and deliberately looser: this one is linear
+# in how many times a single file is hardlinked, not quadratic in a group's
+# size. Truncating it costs a reclaim and never safety — the generated script
+# re-reads `stat -c %h` and leaves alone any file it cannot replace whole.
+DEDUPE_PATHS_PER_FILE = 20
 
 
 def _info_excluded(info):
@@ -172,11 +239,31 @@ def _info_excluded(info):
     return info['media_excluded']
 
 
+def _info_incomplete(info):
+    """Whether this inode might not hold a whole file yet (DEDUPE F6).
+
+    Both spellings disqualify it, and the asymmetry is the whole argument.
+    qBittorrent does not preallocate by default — it writes **sparse** files,
+    which report the final `st_size` while unwritten regions read as zeros. Two
+    unfinished files of equal size whose written regions do not overlap land in
+    the same size group, produce the same head+tail fast hash, and **pass the
+    `cmp` in the generated script**, because at that moment both really are
+    zeros there. `cmp` is the last line of defence for every other failure mode
+    in Dedupe and it cannot help here, so the guard has to be upstream: two
+    torrents hardlinked onto one inode both write to it, both are corrupt, and
+    there is no recovery.
+
+    So a missed reclaim is the cost of being wrong one way, and two destroyed
+    torrents the cost of being wrong the other. "Could not determine" excludes.
+    """
+    return bool(info.get('incomplete') or info.get('completion_unknown'))
+
+
 def _build_duplicate_map(inode_map):
     """O(n) duplicate detection: group by size, then file identity, then hash representatives only."""
     size_groups = {}
     for file_key, info in inode_map.items():
-        if info['size'] > 0 and not _info_excluded(info):
+        if info['size'] > 0 and not _info_excluded(info) and not _info_incomplete(info):
             size_groups.setdefault(info['size'], []).append(file_key)
 
     duplicate_map = {}
@@ -215,7 +302,166 @@ def _build_duplicate_map(inode_map):
     return duplicate_map
 
 
-def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map):
+def _norm_abs(path):
+    p = str(path or '').replace('\\', '/')
+    return posixpath.normpath(p) if p else ''
+
+
+def _path_under(path, root):
+    """`path` is `root` or inside it. Both already `_norm_abs`'d; a root of '' or
+    '/' contains everything."""
+    if root in ('', '/'):
+        return True
+    return path == root or path.startswith(root + '/')
+
+
+def unverified_spec(report, unresolved_roots):
+    """Which orphans the scan could not ask about, or None (CLEANUP §5.3).
+
+    Since Phase 2 a failed listing claims whatever sits at its roots, so a
+    per-file unknown is reachable in exactly two cases, and both are derived
+    here rather than guessed:
+
+    * **`all`** — the scan persisted even though a client instance failed. The
+      plausibility guard refuses that on every trigger but a manual scan, which
+      is the explicit override; a torrent on the instance that did not answer is
+      invisible, so every orphan of that scan is `unverified`.
+    * **`roots`** — torrents whose listing failed *and* whose disk fallback found
+      nothing (`listing_unresolved`). Their files could be anywhere under their
+      save path, so every orphan under it is `unverified`. Blunt when it fires —
+      it can cover a whole category dir — but near-empty on a sane install, the
+      fail-safe direction, and gone on the next clean scan.
+
+    `unresolved_roots` comes out of `sources.fetch_file_map` in memory only; the
+    persisted source report carries counts and must stay free of paths.
+    """
+    failed = bool((report or {}).get('instances_failed'))
+    roots = sorted({_norm_abs(r) for r in (unresolved_roots or []) if r})
+    if not failed and not roots:
+        return None
+    return {'all': failed, 'roots': roots}
+
+
+def _torrent_tree_base(info):
+    """The walk's own prefix for this inode's torrent paths, or None.
+
+    `torrent_rel_path` is `os.path.relpath(first path, LOCAL_PATH)` and the first
+    entry of `torrent_paths` is that path, both from one `os.walk` — so the base
+    is a string suffix-strip, and every other torrent path of the inode shares
+    it. No `relpath` over mixed separators (the `_local_to_abs` trap), and no
+    `LOCAL_PATH` threaded through.
+    """
+    paths = info.get('torrent_paths') or []
+    rel = info.get('torrent_rel_path')
+    if not paths or not rel or not paths[0].endswith(rel):
+        return None
+    return paths[0][:len(paths[0]) - len(rel)]
+
+
+def _stamp_orphan(record, info, compiled_exclusions, unverified):
+    """What Cleanup needs about one orphaned inode that only the walk knows.
+
+    Sparse, and written **only on non-excluded orphans** — the `dead_siblings` /
+    `incomplete` rule: a field on every torrent-file record multiplies across
+    the library and grows `files_json`. Bounded by the orphan count, and run once
+    per scan where the page used to stat per load.
+
+    * `mtime`, `nlink` — one `os.stat` of the walked path (C9, C6). Not a field
+      on `inode_map`, which every file would pay for (`_walk_directory`'s
+      `oldest_mtime` note). A failed stat leaves both absent, and absence reads
+      as the alarming state downstream (`app._cleanup_state`).
+    * `other_paths` — the inode's *other* torrent-tree paths, relative and posix
+      (C5). `_assemble_records` emits one record per inode, and it used to keep
+      only the first path: a distinct-hardlink cross-seed whose registrations
+      had both gone listed one file, and the second could never be cleaned up
+      through the workflow at all. An excluded sibling path is not listed — it
+      is not the user's to delete — and `nlink` then counts it as a link that
+      survives.
+    * `unverified` — see `unverified_spec`.
+    """
+    paths = info.get('torrent_paths') or []
+    if paths:
+        try:
+            st = os.stat(paths[0])
+            record["mtime"] = int(st.st_mtime)
+            record["nlink"] = int(st.st_nlink)
+        except (OSError, ValueError, OverflowError):
+            pass
+    base = _torrent_tree_base(info)
+    others = []
+    for p in paths[1:]:
+        if base is None or not p.startswith(base):
+            continue
+        rel = p[len(base):].replace('\\', '/')
+        if compiled_exclusions is not None and \
+                compiled_exclusions.match(p, rel, os.path.basename(p)):
+            continue
+        others.append(rel)
+    if others:
+        record["other_paths"] = others
+    if unverified and (unverified.get('all') or any(
+            _path_under(_norm_abs(p), root) for p in paths for root in unverified['roots'])):
+        record["unverified"] = True
+
+
+def _extra_torrent_paths(inode_map):
+    """Every torrent-tree path that is *not* on a record: `(rel posix | None, orphan)`.
+
+    A record carries its inode's first walked path only, so a live
+    distinct-hardlink cross-seed's second path sits under some folder while
+    appearing on no record at all. Lazy on purpose — the exclusivity test
+    consumes it path by path and accumulates nothing. `None` means a path could
+    not be placed relative to the torrent tree (not reachable by construction);
+    the consumer then refuses every folder rather than guess.
+    """
+    for info in inode_map.values():
+        paths = info.get('torrent_paths') or []
+        if len(paths) < 2 or info.get('torrent_rel_path') is None:
+            continue
+        base = _torrent_tree_base(info)
+        orphan = info.get('status') == 'Orphaned'
+        for p in paths[1:]:
+            if base is None or not p.startswith(base):
+                yield None, orphan
+            else:
+                yield p[len(base):].replace('\\', '/'), orphan
+
+
+def _dedupe_paths(tree_paths):
+    """This inode's *other* paths in the record's own tree (DEDUPE F18).
+
+    A record spells one path of its own tree — the first the walk saw — and
+    `linked_paths` spells every path of the other tree, so an inode walked in
+    both trees is already described in full by its pair of records. What no
+    record names is a **second path in the record's own tree**: a cross-seed
+    hardlinked into two tracker directories and never imported, which on a
+    cross-seeding box is the ordinary case rather than the exotic one.
+
+    Dedupe is the consumer that needs every path of a copy, because its script
+    replaces all of a file's paths or none of them (§5.4). With the second path
+    missing the script read `st_nlink` 2 against one listed path and left the
+    file alone — safe, and nothing reclaimed. **Joloxx9 found this (PR #24)**,
+    on `main`, where the same gap instead *split* the file and claimed the bytes.
+
+    Sparse, and only on records the duplicate map named — the
+    `dead_siblings`/`incomplete` rule: a key on every record multiplies across
+    the library and grows `files_json`. Excluded paths are deliberately **not**
+    filtered out here, unlike `_stamp_orphan`'s `other_paths`: `_build_dup_groups`
+    drops them against the rules as they are *now*, which is how it already
+    treats `linked_paths`, so a pattern removed in Config takes effect on the
+    next page load rather than on the next scan.
+    """
+    return tree_paths[1:1 + DEDUPE_PATHS_PER_FILE]
+
+
+def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map,
+                      compiled_exclusions=None, unverified=None):
+    if unverified:
+        # Normalised once here as well as in `unverified_spec`: every comparison
+        # below is against `_norm_abs` paths, and a root spelled any other way
+        # would silently mark nothing — the unsafe direction.
+        unverified = {'all': bool(unverified.get('all')),
+                      'roots': [_norm_abs(r) for r in (unverified.get('roots') or []) if r]}
     torrent_files_data = []
     seen_torrent_keys = set()
     for file_key in torrent_key_order:
@@ -257,6 +503,24 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         }
         if dead_siblings:
             record["dead_siblings"] = dead_siblings
+        if file_key in duplicate_map:
+            extra = _dedupe_paths(info['torrent_paths'])
+            if extra:
+                record["dedupe_paths"] = extra
+        # Completion, written only when it is not "complete" — the same sparse
+        # shape as dead_siblings above, and for the reason `seeding_time`
+        # established: a field on every file record multiplies across every file
+        # of every torrent and grows files_json, the known RAM hotspot. This is
+        # deliberately NOT a fourth value of `status`, which is read by
+        # _is_not_imported_torrent, _is_triage_relevant, count_triage_items, the
+        # File Explorer filters and Cleanup — widening that vocabulary would
+        # touch all of them.
+        if info.get('incomplete'):
+            record["incomplete"] = True
+        elif info.get('completion_unknown'):
+            record["completion_unknown"] = True
+        if info['status'] == 'Orphaned' and not info['torrent_excluded']:
+            _stamp_orphan(record, info, compiled_exclusions, unverified)
         torrent_files_data.append(record)
     media_files_data = []
     seen_media_keys = set()
@@ -266,7 +530,7 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         seen_media_keys.add(file_key)
         info    = inode_map[file_key]
         file_id = f"{file_key[0]}:{file_key[1]}"
-        media_files_data.append({
+        record = {
             "path": info['media_rel_path'], "size": info['size'], "inode": file_key[1],
             "file_id": file_id,
             "status": info['status'], "imported": True,
@@ -274,8 +538,314 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             "linked_paths": info['torrent_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
             "excluded": info['media_excluded'],
-        })
+        }
+        if file_key in duplicate_map:
+            extra = _dedupe_paths(info['media_paths'])
+            if extra:
+                record["dedupe_paths"] = extra
+        media_files_data.append(record)
+    _mark_whole_torrents(torrent_files_data, media_files_data)
+    _mark_cleanup_folders(torrent_files_data, media_files_data,
+                          extra_paths=_extra_torrent_paths(inode_map))
     return torrent_files_data, media_files_data
+
+
+def _media_root_names(media_files_data):
+    """Lower-cased names of the directories at the top of the media library.
+
+    The C7 half of both folder-rule tests (Triage's `_mark_whole_torrents` and
+    Cleanup's `_mark_cleanup_folders`): a one-segment folder sharing its name
+    with one of these matches *both* walks, because `_matches_prefix` matches a
+    prefix anywhere in the path. One computation, two consumers.
+    """
+    return {p.split('/', 1)[0].lower()
+            for p in (str(m.get('path') or '').replace('\\', '/') for m in media_files_data)
+            if '/' in p}
+
+
+# Precedence when a candidate folder is refused for more than one reason: the
+# most fundamental answer is the one the page shows.
+_FOLDER_REFUSAL_RANK = {'unverified': 1, 'live_torrent': 2, 'not_established': 3, 'media_root': 4}
+
+
+def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
+    """Stamp the folder a Cleanup exclusion rule may name (C16 + Cleanup's C7).
+
+    Cleanup groups orphans at `dir_segs[:2]`, and a fully selected group can be
+    excluded with one subtree rule. That rule used to be offered by **depth**
+    (`loose` below two segments), and nothing tested whether anything *other*
+    than orphans lived under the folder. So one stray orphan inside a live
+    torrent's release folder — a sample a repack dropped — made a one-file group
+    whose rule hid the live torrent (C16, TRIAGE T6's bug on the side Phase 5 did
+    not fix). Depth also refused the reference box's one-segment release
+    folders, torrents saved with no category directory.
+
+    **The field name is Triage's, deliberately: `excl_folder`** — one name, one
+    meaning, *the folder a rule for this row may name*. Orphans are never
+    `_is_triage_relevant` (they carry no hash), so the two stamps cannot
+    collide. The candidate is the group folder, and it is safe only when:
+
+    1. **Exclusivity** — every *non-excluded* torrent-tree path under it belongs
+       to an orphan. Tested over **paths**, not records: a live cross-seed's
+       second hardlink sits on no record (`extra_paths`). An excluded record
+       does not disqualify — a folder rule cannot hide what is hidden, which is
+       what keeps a tombstone from blocking it (see `_mark_whole_torrents`). A
+       live inode's extra path is treated as not excluded, since only its first
+       path's flag is known. An `unverified` orphan disqualifies it too: it may
+       be a live torrent's file.
+    2. **Not a media-tree root name**, at one segment (C7).
+
+    Phase 5 recorded that "an orphan has no torrent to test exclusivity
+    against". True of Triage's hash-owned test and not of the property:
+    exclusivity against the *folder* is testable here, where every path is
+    visible — so ROADMAP's "small persisted set" of media-root names is not
+    needed either, because the audit has the media list in hand.
+
+    Positive evidence only. `excl_folder` when safe; otherwise `excl_refused`
+    (`media_root` | `live_torrent` | `unverified` | `not_established`) so the
+    page can say why. **Absent both, the page falls back to per-file rules** —
+    a database whose last audit predates these fields looks exactly like that.
+    Written only on non-excluded orphans, and `O(paths × 2)` dict lookups.
+    """
+    candidates = {}
+    for r in torrent_files_data:
+        if r.get('status') != 'Orphaned' or r.get('excluded'):
+            continue
+        segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
+        if segs:
+            candidates.setdefault('/'.join(segs[:2]), None)
+    if not candidates:
+        return
+
+    def refuse(path, reason):
+        segs = str(path or '').replace('\\', '/').split('/')[:-1]
+        for k in (1, 2):
+            if len(segs) < k:
+                break
+            folder = '/'.join(segs[:k])
+            if folder in candidates:
+                cur = candidates[folder]
+                if cur is None or _FOLDER_REFUSAL_RANK[reason] > _FOLDER_REFUSAL_RANK[cur]:
+                    candidates[folder] = reason
+
+    for r in torrent_files_data:
+        if r.get('excluded'):
+            continue
+        if r.get('status') != 'Orphaned':
+            refuse(r.get('path'), 'live_torrent')
+        elif r.get('unverified'):
+            for p in [r.get('path')] + list(r.get('other_paths') or []):
+                refuse(p, 'unverified')
+    for rel, orphan in extra_paths:
+        if rel is None:
+            for folder in candidates:
+                if candidates[folder] is None:
+                    candidates[folder] = 'not_established'
+            break
+        if not orphan:
+            refuse(rel, 'live_torrent')
+
+    media_roots = _media_root_names(media_files_data)
+    for folder in candidates:
+        if '/' not in folder and folder.lower() in media_roots:
+            candidates[folder] = 'media_root'
+
+    for r in torrent_files_data:
+        if r.get('status') != 'Orphaned' or r.get('excluded'):
+            continue
+        segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
+        if not segs:
+            continue
+        folder = '/'.join(segs[:2])
+        reason = candidates.get(folder)
+        if reason is None:
+            r["excl_folder"] = folder
+        else:
+            r["excl_refused"] = reason
+
+
+def torrent_record_key(record):
+    """The registration a torrent-file record belongs to, or None (S05).
+
+    Triage's rows, its badge (`count_triage_items`) and the two audit stamps that
+    describe a row (`_stamp_torrent_files`, `_mark_whole_torrents`) all group
+    records into torrents, and all four grouped by **hash**. The same torrent on
+    two qui instances at two save paths then became one row carrying both
+    instances' files and the first instance's id — verified as one registration,
+    removed as one, and listing the other's files as going with it. The key is
+    `sources.registration_key`, which is the bare hash on qbit and on any record
+    with no instance, so a one-client install groups exactly as it did.
+
+    **`dead_registration_hashes` deliberately stays keyed by hash.** Its set is
+    persisted in `ns_progress['last_dead_regs']` and diffed on the next scan, so
+    changing the spelling would read every stored hash as retired and pay a
+    one-off burst of shovel credit for nothing. The cost of leaving it is that two
+    registrations of one dead hash retire as one — a missed point, never a false one.
+    """
+    h = record.get('hash')
+    return sources.registration_key(record.get('instance_id'), h) if h else None
+
+
+def _stamp_torrent_files(row_records, files_of):
+    """`torrent_files` — how many files a torrent has, where its Triage row shows fewer (T5).
+
+    A Triage row lists a subset: a partially imported torrent contributes only
+    its not-imported files, and an excluded file never appears. The delete
+    beside the row removes the whole torrent, so the row says "10 of 18 files".
+    Counted here because only the audit sees every record of a hash — the
+    compact `triage` row does not carry the rest. The torrent's *size* comes
+    live from verify instead (`sources.fetch_torrent_details`' `size`).
+
+    **Sparse**: written only on row records whose torrent has more files than
+    the row shows — a fraction of the Triage pile, which is itself a fraction
+    of the library. "Files" is what the audit walked for that hash, so a path a
+    healthier cross-seed claims is counted on that torrent, not this one.
+    """
+    not_imported, dead_seed = {}, {}
+    for r in row_records:
+        bucket = not_imported if _is_not_imported_torrent(r) else dead_seed
+        key = torrent_record_key(r)
+        bucket[key] = bucket.get(key, 0) + 1
+    for r in row_records:
+        h = torrent_record_key(r)
+        shown = not_imported.get(h) or dead_seed.get(h, 0)
+        if files_of.get(h, 0) > shown:
+            r['torrent_files'] = files_of[h]
+
+
+def _mark_whole_torrents(torrent_files_data, media_files_data):
+    """Stamp the two facts Triage needs to build a folder exclusion safely (T6).
+
+    `whole_torrent` — the torrent is *homogeneous*, every file in the same
+    imported state, so the Triage row covers all of it. A partially-imported
+    torrent contributes only its not-imported files to Triage, so from there it
+    looks whole, while its common folder is the release folder that also holds
+    the imported ones. Excluding that folder drops files from the walk that were
+    never the problem, and they leave the health score with them.
+
+    `excl_folder` — the folder that is actually safe to exclude as a subtree, or
+    absent. **This replaced a "≥2 path segments" rule, which was a proxy for the
+    real question and measurably the wrong one.** The reference install has
+    torrents saved with no category directory at all, so their release folder
+    sits one segment deep; the depth rule refused it and fell back to nine
+    per-file rules of ~205 characters each — which the 200-character config cap
+    then refused, while the confirm dialog told the user to select the release
+    folder, the very thing the rule had just declined to do. A dead end, found
+    by `.internal/probe_m_remaining.py --only phase5` on real data.
+
+    The two properties the depth rule was standing in for, now tested directly:
+
+    1. **Exclusivity** — nothing outside this torrent lives under the folder.
+       That is what stops `movies/` (a category dir holding many unrelated
+       torrents) being offered, and it holds whatever the depth is.
+    2. **Not a media-tree root name** — the C7 half. A one-segment folder that
+       shares its name with a directory at the top of the media library matches
+       *both* walks, because `_matches_prefix` matches a prefix anywhere in the
+       path. Deeper folders cannot collide that way, so the test only applies at
+       one segment. The residual §0.5 records stays as recorded and accepted: an
+       install whose library folders carry the release name (no arr rename) can
+       still be matched by a release-folder pattern.
+
+    Three deliberate choices:
+
+    - **Positive evidence, not a "partial" flag.** An absent stamp means "not
+      established" and falls back to per-file exact rules. Absence must never
+      read as "safe" — that is R1 one layer up, and a database whose last audit
+      predates these fields has exactly that absence.
+    - **Written only on records Triage can act on** (`_is_triage_relevant`, the
+      same subset the compact row keeps). A field on every torrent-file record
+      multiplies across every file of every torrent and grows `files_json` —
+      the rule `seeding_time`, `dead_siblings` and `incomplete` all follow.
+    - **Path collection is bounded by the Triage pile, not by the library.**
+      Pass 1 accumulates only booleans; only hashes that survive it collect
+      their paths. The exclusivity walk that follows is dict lookups with no
+      accumulation, so this stays O(files x depth) in time and O(pile) in space
+      on a library where the pile is a fraction of a percent of the records.
+    """
+    # Pass 1 — homogeneity, which hashes Triage can act on at all, and how many
+    # files each torrent has against how many its Triage row will show.
+    imported_states, relevant = {}, set()
+    files_of, row_records = {}, []
+    # Keyed by registration (`torrent_record_key`, S05), which is the hash
+    # wherever a torrent is registered once.
+    for r in torrent_files_data:
+        h = torrent_record_key(r)
+        if not h:
+            continue
+        imported_states.setdefault(h, set()).add(bool(r.get('imported')))
+        files_of[h] = files_of.get(h, 0) + 1
+        if _is_triage_relevant(r):
+            relevant.add(h)
+            if _is_not_imported_torrent(r) or _is_dead_seed_torrent(r):
+                row_records.append(r)
+    _stamp_torrent_files(row_records, files_of)
+    del row_records, files_of
+    whole = {h for h in relevant if len(imported_states[h]) == 1}
+    if not whole:
+        return
+
+    # Pass 2 — the candidate folder per whole hash: its files' deepest common
+    # directory. Only these hashes' paths are held, which is what bounds this.
+    segs_by_hash = {}
+    for r in torrent_files_data:
+        h = torrent_record_key(r)
+        if h in whole:
+            segs_by_hash.setdefault(h, []).append(
+                str(r.get('path') or '').replace('\\', '/').split('/')[:-1])
+    candidates = {}                       # folder -> owning hash, or None if shared
+    for h, seg_lists in segs_by_hash.items():
+        if any(not s for s in seg_lists):     # a file at the torrent-tree root
+            continue
+        common = seg_lists[0]
+        for segs in seg_lists[1:]:
+            i = 0
+            while i < len(common) and i < len(segs) and common[i] == segs[i]:
+                i += 1
+            common = common[:i]
+        if not common:
+            continue
+        folder = '/'.join(common)
+        if folder in candidates and candidates[folder] != h:
+            candidates[folder] = None
+        else:
+            candidates.setdefault(folder, h)
+    del segs_by_hash
+
+    # Pass 3 — exclusivity. One walk of every record, dict lookups only: any
+    # candidate folder with a file from another torrent under it is disqualified.
+    #
+    # An already-excluded file does not disqualify anything: a folder rule cannot
+    # hide what is hidden. That matters more than it sounds — a filesystem
+    # tombstone left in a release folder by an interrupted move is excluded (see
+    # media_server_exclusions.TOMBSTONE_PATTERNS) and would otherwise block the
+    # real torrent's folder-level exclusion for as long as the handle stayed open.
+    for r in torrent_files_data:
+        if r.get('excluded'):
+            continue
+        h = torrent_record_key(r)
+        segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
+        for i in range(1, len(segs) + 1):
+            folder = '/'.join(segs[:i])
+            owner = candidates.get(folder)
+            if owner is not None and owner != h:
+                candidates[folder] = None
+
+    # Pass 4 — the C7 half, which only bites at one segment.
+    media_roots = _media_root_names(media_files_data)
+    safe = {}
+    for folder, owner in candidates.items():
+        if owner is None:
+            continue
+        if '/' not in folder and folder.lower() in media_roots:
+            continue
+        safe[owner] = folder
+
+    for r in torrent_files_data:
+        h = r.get('hash')
+        if h in whole and _is_triage_relevant(r):
+            r["whole_torrent"] = True
+            if h in safe:
+                r["excl_folder"] = safe[h]
 
 
 # ---------------------------------------------------------------------------
@@ -319,8 +889,26 @@ def _library_shape(scoring_media):
     return {'title_count': len(title_keys), 'uhd_bytes': uhd_bytes}
 
 
+# Details a scan measures that `process_health_metrics` cannot derive from the
+# stored lists: seeding time comes from the client, the oldest media file from
+# the walk's own stat calls. The config-save recompute rebuilds the dashboard
+# from the lists alone and **carries these forward** — it dropped them until
+# Phase 14, so Rounds' Atlas, Old Faithful and Provenance tiles read 0 from a
+# config save until the next scan. (`dedupe_group_count` is recomputed there
+# instead, from the lists the recompute already holds.)
+SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days')
+
+
 def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
-                           extra_details=None):
+                           extra_details=None, history_sink=None):
+    """The dashboard for one scan.
+
+    `history_sink`, when given, receives the updated history instead of it being
+    written here. The audit passes one so the history point lands **inside** the
+    publish transaction (S04): the hourly/daily series is accumulated, so a point
+    written for a scan whose inventory never published is the same kind of
+    fiction CLEANUP §10 refuses for a refused scan.
+    """
     history = db_load_history()
     now     = datetime.now()
     or_ratio  = float(cfg.get('OR_RATIO',  0.01))
@@ -376,6 +964,11 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
             "total_torrents_size": total_torrents_size, "orphaned_torrent_size": orphaned_torrent_size,
             "not_imported_size": not_imported_size, "duplicate_size": dup_size,
             "orphaned_torrent_count": sum(1 for f in scoring_torrents if f['status'] == 'Orphaned'),
+            # Cleanup's Excluded box. Counted here rather than carried on the
+            # compact `cleanup` row, which holds only what the page acts on —
+            # see app._cleanup_records. Per record, i.e. per inode.
+            "orphaned_excluded_count": sum(1 for f in torrent_files
+                                           if f['status'] == 'Orphaned' and f.get('excluded')),
             "not_imported_count": sum(1 for f in scoring_torrents if not f['imported'] and f['status'] != 'Orphaned'),
             "dead_seed_count": sum(1 for f in scoring_torrents
                                    if f['imported'] and f['status'] != 'Orphaned'
@@ -417,7 +1010,7 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
                 history['daily_stats'].append({"date": day, "avg_score": round(sum(scores)/len(scores),1),
                                                "min_score": min(scores), "max_score": max(scores)})
         history['daily_stats'] = history['daily_stats'][-90:]
-        db_save_history(history)
+        (history_sink or db_save_history)(history)
     combined_chart = list(history['daily_stats'])
     recent_groups  = {}
     for s in history['hourly_stats']:
@@ -439,13 +1032,17 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
 # Upload / yield stats
 # ---------------------------------------------------------------------------
 
-def compute_upload_stats(days=30, from_date=None, to_date=None):
+def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
     """Compute per-tracker upload deltas and yield from stored snapshots.
 
     Returns None if fewer than 2 snapshots exist (not enough data for deltas).
     Pass from_date/to_date (ISO date strings) to query a specific range instead of days.
+    `conn` reads through an open transaction — the audit computes its yield
+    summary inside the publish, after writing this scan's own snapshot, which is
+    what keeps the stored figure identical to the pre-Phase-13 ordering.
     """
-    rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date)
+    rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
+                                   conn=conn)
     if len(rows) < 2:
         return None
 
@@ -581,9 +1178,9 @@ def compute_upload_stats(days=30, from_date=None, to_date=None):
     }
 
 
-def _build_yield_summary():
+def _build_yield_summary(conn=None):
     """Lightweight yield summary for embedding in /api/results."""
-    stats = compute_upload_stats(30)
+    stats = compute_upload_stats(30, conn=conn)
     if stats is None:
         return None
     top = next((t for t in stats['tracker_yields'] if t['yield'] is not None), None)
@@ -841,10 +1438,27 @@ def _compute_tracker_file_stats(torrent_files):
 
 
 def _is_not_imported_torrent(f):
+    """A torrent file that ought to be in the library and is not (TRIAGE T4).
+
+    An **unfinished download is not one of these**, and used to be. A torrent at
+    0% is not-imported by definition — the arr cannot import what does not exist
+    yet — so a brand-new grab was the newest thing in the client and also a
+    Triage row at its full final size, verdict `not_in_library`, with a delete
+    button under copy reading "junk can be deleted". `status` could not rescue
+    it either: a **paused** incomplete reads 'Paused', exactly like a paused
+    complete one, which is why this tests the completion flag and not the state
+    string.
+
+    `completion_unknown` is deliberately *not* excluded here. Where the client
+    exposed no usable completion field the row stays visible carrying its
+    status, because auditorr never hides anything silently (T3/T15's rule) — the
+    honest failure is a row you can see and judge, not a row that vanished.
+    """
     return (
         not f.get('excluded')
         and not f.get('imported')
         and f.get('status') != 'Orphaned'
+        and not f.get('incomplete')
     )
 
 
@@ -855,7 +1469,10 @@ def _is_triage_relevant(f):
     Persisted as the compact 'triage' file_results row at save time so the
     Triage page never deserializes the full torrent list (a few hundred MB of
     object graph on large libraries) for the ~2% of records it acts on.
-    Must stay in lockstep with the filters in app.workflows_triage.
+    Must stay in lockstep with the filters in app.workflows_triage — the rule
+    exists in three places (here, `_is_not_imported_torrent` above and
+    `count_triage_items` below) and when they disagree the page, the stored
+    subset and the sidebar badge each report a different number.
     """
     if f.get('excluded'):
         return False
@@ -864,8 +1481,24 @@ def _is_triage_relevant(f):
     if f.get('status') == 'Orphaned':
         return False
     if not f.get('imported'):
-        return True
+        return not f.get('incomplete')
     return f.get('tracker_health') == 'unregistered'
+
+
+def _is_cleanup_relevant(f):
+    """Torrent-file records the Cleanup workflow reads: non-excluded orphans.
+
+    Persisted as the compact 'cleanup' file_results row, the way 'triage' is, so
+    neither the Cleanup page nor its delete script deserializes the full torrent
+    list for the ~1% of records it acts on (CLEANUP C10). **Must stay in lockstep
+    with the details' `orphaned_torrent_count`** (orphans among the non-excluded
+    records, in `process_health_metrics`) and with `app._cleanup_records`'
+    fallback, which applies this same predicate to the full list — when they
+    disagree, the page, the stored subset and the sidebar badge each report a
+    different number. Excluded orphans are counted into the details
+    (`orphaned_excluded_count`) rather than carried here.
+    """
+    return f.get('status') == 'Orphaned' and not f.get('excluded')
 
 
 def _is_dead_seed_torrent(f):
@@ -921,6 +1554,7 @@ def count_triage_items(torrent_files):
     Live re-verification can still drop rows that recovered, so this is the
     audit-time figure: what the page renders before /triage/verify lands.
     """
+    # Per registration, as the page groups (S05) — `torrent_record_key`.
     not_imported, dead_seeds, dead_reg = set(), set(), set()
     for f in torrent_files:
         if f.get('excluded'):
@@ -928,11 +1562,11 @@ def count_triage_items(torrent_files):
         # Dead siblings ride on any record, orphaned and imported ones included.
         for s in (f.get('dead_siblings') or []):
             if s.get('hash'):
-                dead_reg.add(s['hash'])
+                dead_reg.add(sources.registration_key(s.get('instance_id'), s['hash']))
         if _is_not_imported_torrent(f):
-            not_imported.add(f.get('hash') or f['path'])
+            not_imported.add(torrent_record_key(f) or f['path'])
         elif _is_dead_seed_torrent(f):
-            dead_seeds.add(f.get('hash') or f['path'])
+            dead_seeds.add(torrent_record_key(f) or f['path'])
     # A partially-imported torrent is triaged as not-imported, not as a dead
     # seed, and a hash already listed in its own right is not also a sibling row.
     dead_seeds -= not_imported
@@ -957,6 +1591,241 @@ def _save_error_status(message):
     curr = db_load_results()
     curr["status"] = message
     db_save_results(curr)
+
+
+# ---------------------------------------------------------------------------
+# Source plausibility guard
+# ---------------------------------------------------------------------------
+
+# "Orphaned" is not a property of a file. It is the *absence of evidence* in one
+# torrent-client API snapshot, joined to the filesystem by string equality of
+# absolute paths, and acted on later by a bash script with no access to the
+# client. Everything below exists because absence of evidence arrives by several
+# routes that look identical from here — a client still loading its session, a
+# rebuilt container with an empty session directory, a qui instance that did not
+# answer, a WebUI that timed out on half the library — and every one of them
+# ends with the whole torrent tree rendered in Cleanup, in green, under one
+# `Select all`. Nothing else in auditorr stands between that and `rm`.
+
+# Below this many torrents the proportional rules are noise: a four-torrent
+# client dropping to one is a 75% collapse and also a completely ordinary
+# Tuesday.
+_GUARD_MIN_BASELINE = 25
+# A scan that lost more than half of either count against the last scan that
+# persisted. Deliberately blunt — the rule has to be explicable in the sentence
+# the user is shown.
+_GUARD_DROP_FRACTION = 0.5
+# Torrents whose file listing failed *and* whose payload could not be found on
+# disk. These are the ones with no evidence either way.
+_GUARD_UNRESOLVED_FRACTION = 0.25
+# S02, the user's decision 2 (a) in Phase 12 (2026-09-15). A collapse is measured
+# against the largest count persisted in this many days, not only against the
+# last scan that persisted — or a client losing torrents in instalments, or a
+# pruning script run twice, passes each time: 100 → 60 → 36 is two 40% drops.
+_GUARD_REFERENCE_DAYS = 7
+_REFERENCE_FIELDS = ('torrent_count', 'file_map_size', 'torrent_files', 'media_files')
+
+# Decision 1 (a): what a manual scan may accept. A change in what the client or
+# the disk holds can be real — a library really does shrink — and accepting it
+# stays one click away. Every other code is a read that failed, and asking for a
+# scan is not authority to believe one: those refuse on every trigger.
+_ACCEPTABLE_BY_HAND = frozenset({
+    'torrent_count_collapse', 'file_map_collapse', 'client_blackout', 'disk_collapse',
+})
+
+
+def _pct(part, whole):
+    return int(round(part * 100.0 / whole)) if whole else 0
+
+
+def source_plausibility(report, baseline, disk_file_count=None):
+    """Is this scan's view of the client trustworthy enough to act on?
+
+    Returns None when it is, or {'code', 'message', 'detail'} when it is not.
+    `disk_file_count` is the number of files the torrent-tree walk found, and is
+    only needed for the blackout rule; pass None to run the rules that do not
+    need the walk (so a hopeless scan can bail before paying for it).
+
+    The three rules, in the order they are cheapest to evaluate:
+
+      collapse   the client answered, but with far fewer torrents or files than
+                 `baseline` — the reference, the largest counts persisted in
+                 the last `_GUARD_REFERENCE_DAYS` days (`reference_counts`)
+      blind      too much of the client could not be asked at all
+      blackout   the client claims nothing while the disk holds files
+
+    `blackout` deliberately needs **no baseline**, because the worst case has
+    none: a first-ever scan that lands while qBittorrent is still loading its
+    session has nothing to compare against, and "compare against the previous
+    scan" would wave it straight through.
+    """
+    torrents = int(report.get('torrent_count') or 0)
+    mapped   = int(report.get('file_map_size') or 0)
+    failed_instances = report.get('instances_failed') or []
+
+    prev_torrents = int((baseline or {}).get('torrent_count') or 0)
+    prev_mapped   = int((baseline or {}).get('file_map_size') or 0)
+
+    if failed_instances:
+        names = ', '.join(f.get('name', '?') for f in failed_instances[:3])
+        return {
+            'code': 'instances_unavailable',
+            'message': (f"{len(failed_instances)} of {report.get('instances_total', '?')} "
+                        f"torrent-client instance(s) did not answer, or listed only part of "
+                        f"their torrents ({names}). Every torrent missing from the answer "
+                        f"would have been classified as orphaned."),
+            'detail': {'instances_failed': failed_instances},
+        }
+
+    if prev_torrents >= _GUARD_MIN_BASELINE and \
+            torrents < prev_torrents * (1 - _GUARD_DROP_FRACTION):
+        return {
+            'code': 'torrent_count_collapse',
+            'message': (f"The torrent client reported {torrents} torrent(s), down from "
+                        f"{prev_torrents} (the most in the last {_GUARD_REFERENCE_DAYS} days) — "
+                        f"a {_pct(prev_torrents - torrents, prev_torrents)}% drop."),
+            'detail': {'torrent_count': torrents, 'previous': prev_torrents},
+        }
+
+    if prev_mapped >= _GUARD_MIN_BASELINE and \
+            mapped < prev_mapped * (1 - _GUARD_DROP_FRACTION):
+        return {
+            'code': 'file_map_collapse',
+            'message': (f"The torrent client accounted for {mapped} file(s), down from "
+                        f"{prev_mapped} (the most in the last {_GUARD_REFERENCE_DAYS} days) — "
+                        f"a {_pct(prev_mapped - mapped, prev_mapped)}% drop."),
+            'detail': {'file_map_size': mapped, 'previous': prev_mapped},
+        }
+
+    unresolved = int(report.get('listing_unresolved') or 0)
+    if torrents and unresolved > torrents * _GUARD_UNRESOLVED_FRACTION:
+        return {
+            'code': 'listings_unavailable',
+            'message': (f"{unresolved} of {torrents} torrent(s) ({_pct(unresolved, torrents)}%) "
+                        f"would not report their files, and their payload could not be found on "
+                        f"disk either. There is no evidence either way about those files."),
+            'detail': {'listing_unresolved': unresolved, 'torrent_count': torrents},
+        }
+
+    if disk_file_count and mapped == 0:
+        return {
+            'code': 'client_blackout',
+            'message': (f"The torrent client accounted for no files at all, while the torrent "
+                        f"directory holds {disk_file_count}. Every one of them would have been "
+                        f"classified as orphaned."),
+            'detail': {'disk_file_count': disk_file_count, 'torrent_count': torrents},
+        }
+
+    return None
+
+
+def _reference_cutoff(now=None):
+    return ((now or datetime.now()) - timedelta(days=_GUARD_REFERENCE_DAYS)).date().isoformat()
+
+
+def reference_counts(points, baseline, now=None):
+    """The counts a scan is measured against (S02, decision 2 (a)).
+
+    The largest of each field persisted in the last `_GUARD_REFERENCE_DAYS`
+    days, and the last persisted `baseline`. The baseline is folded in because
+    every install upgrading into this has one and no points yet, and its first
+    scan must not be waved through for want of them. A missing field reads 0,
+    which no rule measures against.
+    """
+    cutoff = _reference_cutoff(now)
+    ref = {f: int((baseline or {}).get(f) or 0) for f in _REFERENCE_FIELDS}
+    for point in points or []:
+        if str(point.get('day') or '') >= cutoff:
+            for f in _REFERENCE_FIELDS:
+                ref[f] = max(ref[f], int(point.get(f) or 0))
+    return ref
+
+
+def advance_reference(points, counts, now=None, reset=False):
+    """`points` with a persisted scan's `counts` folded in.
+
+    One point a day holding that day's largest counts, pruned to the window, so
+    the stored row is at most `_GUARD_REFERENCE_DAYS + 1` small dicts — never
+    per-file data. `reset`: a manual scan accepted a change, and the window
+    restarts from this scan, or the next scheduled scan would refuse the same
+    drop again.
+    """
+    day = counts.get('day') or (now or datetime.now()).date().isoformat()
+    cutoff = _reference_cutoff(now)
+    earlier = [] if reset else [p for p in points or [] if str(p.get('day') or '') >= cutoff]
+    today = {'day': day}
+    for f in _REFERENCE_FIELDS:
+        today[f] = max([int(counts.get(f) or 0)] +
+                       [int(p.get(f) or 0) for p in earlier if p.get('day') == day])
+    return sorted([p for p in earlier if p.get('day') != day] + [today], key=lambda p: p['day'])
+
+
+def _root_state(path):
+    """A root before its walk: configured, and a directory. No walk counts yet."""
+    return {'configured': bool(path), 'exists': bool(path) and os.path.isdir(path)}
+
+
+def filesystem_plausibility(root, block, reference, file_map_size=0):
+    """S03 — can one root's walk be believed? None, or an anomaly shaped like
+    `source_plausibility`'s.
+
+    `root` is 'torrents' or 'media', and is all that is said about where: the
+    anomaly is persisted and reaches /api/debug/report, so it carries a root's
+    name and counts, never its path.
+
+      root_missing     a configured root that is not a directory inside the
+                       container — walked, it read as an empty tree
+      root_unlistable  a directory within `_UNLISTABLE_SHALLOW_DEPTH` segments of
+                       the root could not be listed: at a category or release
+                       depth it hides whole releases. Deeper ones are counted on
+                       the report and in the status line, not refused
+      disk_collapse    the walk found far fewer files than the reference; or the
+                       torrent folder is empty while the client accounts for
+                       files in it, which needs no baseline for the reason
+                       `client_blackout` needs none — the worst case, a first
+                       scan landing on an empty bind mount, has none
+
+    A block with no walk counts yet (the check before the walks) runs only the
+    first rule. An unconfigured root is not a missing one.
+    """
+    block = block or {}
+    label = 'torrent' if root == 'torrents' else 'media'
+    if block.get('configured') and not block.get('exists'):
+        return {
+            'code': 'root_missing',
+            'message': (f"The {label} folder is not there — it does not exist inside the "
+                        f"container, or is not a folder. Walked, it would have read as empty."),
+            'detail': {'root': root},
+        }
+    if 'files' not in block:
+        return None
+    if block.get('unlistable_shallow'):
+        return {
+            'code': 'root_unlistable',
+            'message': (f"{block['unlistable_shallow']} folder(s) at a category or release "
+                        f"level in the {label} folder could not be listed. Everything under "
+                        f"them would have been missing from the scan."),
+            'detail': {'root': root, 'unlistable': block.get('unlistable', 0),
+                       'unlistable_shallow': block['unlistable_shallow'],
+                       'files': block.get('files', 0)},
+        }
+    files = int(block.get('files') or 0)
+    ref = int((reference or {}).get('torrent_files' if root == 'torrents' else 'media_files') or 0)
+    if ref >= _GUARD_MIN_BASELINE and files < ref * (1 - _GUARD_DROP_FRACTION):
+        return {
+            'code': 'disk_collapse',
+            'message': (f"The {label} folder holds {files} file(s), down from {ref} (the most "
+                        f"in the last {_GUARD_REFERENCE_DAYS} days) — a {_pct(ref - files, ref)}% drop."),
+            'detail': {'root': root, 'files': files, 'previous': ref},
+        }
+    if root == 'torrents' and files == 0 and file_map_size >= _GUARD_MIN_BASELINE:
+        return {
+            'code': 'disk_collapse',
+            'message': (f"The torrent folder is empty, while the torrent client accounts for "
+                        f"{file_map_size} file(s) in it."),
+            'detail': {'root': root, 'files': 0, 'file_map_size': file_map_size},
+        }
+    return None
 
 
 # Serializes read-modify-write of the scan marker between the audit thread
@@ -1036,6 +1905,121 @@ def _scan_peak_rss():
         return None
 
 
+class _PublishFailed(Exception):
+    """The scan computed a whole answer and could not store it (S04).
+
+    The publish is one transaction, so a failure part-way rolls the whole thing
+    back: the *previous* generation is still whole and readable, which is the
+    point. This exists to say so in the run record rather than reporting a
+    generic `Audit error`, and — like `_SourceAnomaly` — to leave the crash-loop
+    breaker alone: the process declined to write, it did not die.
+    """
+
+
+class _SourceAnomaly(Exception):
+    """The client's answer is not trustworthy enough to classify orphans from.
+
+    Carried as an exception purely so the happy path stays linear — it is not an
+    error in the sense the other handlers mean. The scan exits *normally*, which
+    matters: `run_audit_process`'s `finally` clears `scan_marker`, and a marker
+    left behind is read at the next boot as a process killed mid-scan and counts
+    toward `consecutive_aborted_scans`. At two, automatic scanning stops. A
+    safety guard that disabled scanning would be a worse bug than the one it
+    guards against.
+    """
+
+    def __init__(self, anomaly):
+        super().__init__(anomaly['message'])
+        self.anomaly = anomaly
+
+
+def _accept_or_refuse(anomaly, trigger):
+    """Raise `_SourceAnomaly` unless there is none, or a manual scan may accept it."""
+    if not anomaly:
+        return None
+    if trigger != 'manual' or anomaly['code'] not in _ACCEPTABLE_BY_HAND:
+        raise _SourceAnomaly(anomaly)
+    log.warning("Source anomaly on a manual scan, accepted as a real change: %s",
+                anomaly['message'])
+    return anomaly
+
+
+def _guard_scan(report, baseline, trigger, disk_file_count=None):
+    """Raise `_SourceAnomaly` if this scan must not persist; else return an
+    anomaly a manual scan accepted, or None.
+
+    The user's decision 1 (a) in Phase 12 (2026-09-15). A manual scan used to be
+    the override for every rule, on the watchdog's precedent that explicit intent
+    wins — a failed instance included, so Triage, Backfill, the health score and
+    the change log read a scan missing a whole instance as the truth (S02). It
+    still accepts a change in what the client or the disk holds
+    (`_ACCEPTABLE_BY_HAND`), and never a read that failed: an instance that did
+    not answer or listed short, listings that could not be read, a root that is
+    missing or could not be listed. Startup accepts nothing — a startup scan
+    following a container rebuild is exactly the case the guard exists for.
+    """
+    return _accept_or_refuse(source_plausibility(report, baseline, disk_file_count), trigger)
+
+
+def _guard_filesystem(root, block, reference, trigger, file_map_size=0):
+    """`_guard_scan` for one root's walk (S03), with the same exit."""
+    return _accept_or_refuse(
+        filesystem_plausibility(root, block, reference, file_map_size), trigger)
+
+
+# What a refusal tells the user to do. A change a manual scan may accept says so;
+# a failed read says what to fix instead, because a manual scan will not accept
+# it (decision 1 (a)) and "run a scan manually" would not help.
+_ACCEPT_BY_HAND_TEXT = "If this is expected, run a scan manually to accept it."
+_ANOMALY_FIXES = {
+    'instances_unavailable': ("Check that every qui instance is connected and answering, then "
+                              "scan again. A manual scan will not accept a listing that failed."),
+    'listings_unavailable':  ("Check the torrent path mapping (Remote and Local torrent path) and "
+                              "that the client is answering, then scan again. A manual scan will "
+                              "not accept listings that failed."),
+    'root_missing':          ("Check that the folder is mounted into the container — an array or a "
+                              "network share that has not finished mounting looks like this — then "
+                              "scan again. A manual scan will not accept a missing folder."),
+    'root_unlistable':       ("Check that the user auditorr runs as can read the folder, then scan "
+                              "again. A manual scan will not accept a folder it could not list."),
+}
+
+
+def _record_source_anomaly(anomaly, trigger, cfg, scan_start, persist=True):
+    """Report a refused scan and leave every stored figure as it was."""
+    fix = (_ACCEPT_BY_HAND_TEXT if anomaly['code'] in _ACCEPTABLE_BY_HAND
+           else _ANOMALY_FIXES.get(anomaly['code'], "Fix the cause, then scan again."))
+    msg = (f"Source anomaly: {anomaly['message']} Nothing from this scan was saved — "
+           f"the file lists, health score and change log still describe the last "
+           f"scan that completed. {fix}")
+    log.warning(msg)
+    try:
+        db_set_meta('last_source_anomaly', {
+            'at':      datetime.now().isoformat(timespec='seconds'),
+            'trigger': trigger,
+            'code':    anomaly['code'],
+            'message': anomaly['message'],
+            'detail':  anomaly.get('detail') or {},
+        })
+    except Exception as e:
+        log.warning(f"Could not record source anomaly: {e}")
+    if persist:
+        _save_error_status(msg)
+        db_save_audit(trigger, None, 'anomaly', msg, {},
+                      source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                      duration_seconds=round(time.time() - scan_start, 1),
+                      peak_rss_mb=_scan_peak_rss())
+    # The process is healthy — it declined to write, it did not die. Leaving the
+    # crash-loop streak standing would let a run of anomalies trip the breaker.
+    try:
+        db_set_meta('consecutive_aborted_scans', 0)
+    except Exception:
+        pass
+    # The code rides the state so the startup retry can tell a missing root
+    # (minutes to mount) from a client still loading its session (seconds).
+    set_state(status_message=msg, last_scan_status="error", anomaly_code=anomaly['code'])
+
+
 def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
@@ -1045,7 +2029,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     scan_start = time.time()
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
               status_message="Connecting to torrent source...", last_scan_status="running",
-              phase="connecting", phase_history=[])
+              phase="connecting", phase_history=[], anomaly_code=None)
     try:
         db_set_meta('scan_marker', {
             'started_at': datetime.now().isoformat(timespec='seconds'),
@@ -1059,8 +2043,29 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     threading.Thread(target=_memory_sampler, args=(sampler_stop,), daemon=True,
                      name="audit-memory-sampler").start()
     try:
-        qbit_file_map, trackers, tracker_snapshot = sources.fetch_file_map(cfg)
+        # Save roots of listings that failed with nothing found on disk — in
+        # memory only, never on the persisted report (see `unverified_spec`).
+        unresolved_roots = []
+        qbit_file_map, trackers, tracker_snapshot, source_report = sources.fetch_file_map(
+            cfg, unresolved_roots=unresolved_roots)
         set_state(source_file_count=len(qbit_file_map))
+        # Everything downstream treats "no client entry for this path" as proof
+        # of orphanhood. Check the client's answer against the counts last
+        # believed *before* paying for two full filesystem walks — the collapse
+        # and blind rules need neither.
+        source_baseline  = db_get_meta('source_baseline')
+        reference_points = db_get_meta('source_reference')
+        reference        = reference_counts(reference_points, source_baseline)
+        # Anomalies a manual scan accepted. Any one restarts the reference window
+        # from this scan once it persists (decision 2 (a)).
+        accepted = [_guard_scan(source_report, reference, trigger)]
+        # S03 — the filesystem half of R1. A root that is not there is free to
+        # check, so both are checked before either walk: a hopeless scan pays for
+        # neither, and a missing root never walks as an empty tree.
+        filesystem = {'torrents': _root_state(cfg.get('LOCAL_PATH', '')),
+                      'media':    _root_state(cfg.get('MEDIA_PATH', ''))}
+        for root in ('torrents', 'media'):
+            _guard_filesystem(root, filesystem[root], reference, trigger)
         total_ref = [0]
         set_state(total_files=0)
         _enter_phase("disk", "Scanning torrent directory...")
@@ -1070,12 +2075,29 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         torrent_key_order, scanned, torrent_errors, _ = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
-            compiled_exclusions=compiled_excl)
+            compiled_exclusions=compiled_excl, walk_report=filesystem['torrents'])
+        # The blackout rule needs the disk side — "the client claims nothing
+        # while LOCAL_PATH holds files" — so it runs at the first point that
+        # number exists, and before the media walk, the assemble phase and every
+        # write. On a manual scan this re-reports an anomaly the pre-walk call
+        # already accepted; the second line carries the disk count. The torrent
+        # root's own checks run here too, for the same reason.
+        accepted.append(_guard_scan(source_report, reference, trigger,
+                                    disk_file_count=len(torrent_key_order)))
+        accepted.append(_guard_filesystem(
+            'torrents', filesystem['torrents'], reference, trigger,
+            file_map_size=int(source_report.get('file_map_size') or 0)))
         _enter_phase("disk", "Scanning media directory...")
         media_key_order, _, media_errors, oldest_media_mtime = _walk_directory(
             cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
-            compiled_exclusions=compiled_excl)
+            compiled_exclusions=compiled_excl, walk_report=filesystem['media'])
+        # The media root's checks: after its walk, before the assemble phase and
+        # every write.
+        accepted.append(_guard_filesystem('media', filesystem['media'], reference, trigger))
+        # Counts and booleans per root, named — never a path: the report is
+        # persisted and reaches /api/debug/report.
+        source_report['filesystem'] = filesystem
         stat_errors = torrent_errors + media_errors
         # The source file map is only consulted during the walks — release it
         # (~300 MB at 650K files) before the memory-heavy assemble/save phases.
@@ -1083,9 +2105,17 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         _enter_phase("post", "Detecting duplicates...")
         duplicate_map = _build_duplicate_map(inode_map)
         _enter_phase("post", "Assembling file records...")
+        _unverified = unverified_spec(source_report, unresolved_roots)
         torrent_files_data, media_files_data = _assemble_records(
-            torrent_key_order, media_key_order, inode_map, duplicate_map)
+            torrent_key_order, media_key_order, inode_map, duplicate_map,
+            compiled_exclusions=compiled_excl, unverified=_unverified)
         del torrent_key_order, media_key_order, inode_map, duplicate_map
+        if _unverified:
+            log.warning("Audit: %d orphaned file(s) marked unverified — the client could not "
+                        "be fully asked on this scan (%s)",
+                        sum(1 for f in torrent_files_data if f.get('unverified')),
+                        'an instance did not answer' if _unverified['all']
+                        else f"{len(_unverified['roots'])} unresolved save path(s)")
         _enter_phase("post", "Computing health metrics...")
         # Prize-layer inputs that only exist outside the file records: seeding
         # time rides the source layer's torrent list, oldest_media_age_days the
@@ -1098,9 +2128,19 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             'oldest_media_age_days': (
                 max(0, int((time.time() - oldest_media_mtime) // 86400))
                 if oldest_media_mtime else 0),
+            # The groups the Dedupe page lists (Phase 14) — the sidebar badge's
+            # number. `duplicate_count` counts files and feeds the health score,
+            # the change log, Singleton and Clone Hunter, so it stays as it is;
+            # the badge reads this and falls back to it where absent.
+            'dedupe_group_count': dedupe_group_count(torrent_files_data, media_files_data, cfg),
         }
+        # The history point is staged rather than written: it joins the publish
+        # below, because the hourly/daily series accumulates and a point left
+        # behind by a publish that failed is the fiction CLEANUP §10 refuses.
+        staged_history = []
         dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg,
-                                                    extra_details=_extra_details)
+                                                    extra_details=_extra_details,
+                                                    history_sink=staged_history.append)
         cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
         tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
         not_imported_paths = _not_imported_paths(torrent_files_data)
@@ -1114,9 +2154,14 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             "tracker_file_stats": tracker_file_stats,
             "not_imported_paths": not_imported_paths,
         }
-        # Save upload snapshot — only on successful audits
-        # Augment with per-tracker file health stats so daily seeding/orphaned trends
-        # can be plotted from the same snapshot rows.
+        # The upload snapshot, augmented with per-tracker file health stats so
+        # daily seeding/orphaned trends can be plotted from the same rows.
+        # **Built here, written in the publish below** (S04): it is a
+        # *differenced* series, so a row stored for a scan whose file lists never
+        # landed is a dip the next scan silently spends as one enormous upload
+        # day — CLEANUP §10's argument, arriving through a partial publish
+        # instead of a refused scan.
+        upload_snapshot = None
         try:
             aug = {k: (dict(v) if isinstance(v, dict) else v) for k, v in tracker_snapshot.items()}
             for tracker, fstats in tracker_file_stats.items():
@@ -1137,17 +2182,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 'total_media_size':      det['total_media_size'],
                 'duplicate_size':        det['duplicate_size'],
             }
-            db_save_upload_snapshot(aug, source=cfg.get('TORRENT_SOURCE', 'qbit'))
+            upload_snapshot = aug
         except Exception as e:
-            log.warning(f"Could not save upload snapshot: {e}")
-
-        # Compute yield summary for results
-        try:
-            yield_summary = _build_yield_summary()
-        except Exception as e:
-            log.warning(f"Could not compute yield summary: {e}")
-            yield_summary = None
-        result["yield_summary"] = yield_summary
+            log.warning(f"Could not build upload snapshot: {e}")
 
         # Compute diff against compact signatures of the previous scan — BEFORE overwriting.
         # Signatures are {path: bitmask}, so this never deserializes the previous full
@@ -1162,6 +2199,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # the previous scan's hash set, and the progress pass below needs the
         # same record to latch against.
         _ns_prev = db_get_meta('ns_progress')
+        diff = None
         try:
             prev_sigs = {
                 'media':    db_load_file_signatures('media'),
@@ -1178,42 +2216,17 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 prev_score = (db_load_results().get('dashboard') or {}).get('score')
                 diff = compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
                 del prev_sigs, curr_snap
-                if diff:
-                    db_save_change_log_entry(
-                        ran_at=ran_at,
-                        health_score=dashboard_stats['score'],
-                        trigger=trigger,
-                        source=cfg.get('TORRENT_SOURCE', 'qbit'),
-                        diff=diff,
-                    )
             else:
                 log.info("No previous file signatures stored — change log skipped this run, "
                          "resumes on the next audit.")
         except Exception as e:
-            log.warning(f"Could not save change log entry: {e}")
-        # Persist file lists separately so /api/results only loads summary data
-        _enter_phase("post", "Saving file results...")
-        db_save_file_results('media',    media_files_data)
-        db_save_file_results('torrents', torrent_files_data)
-        # Compact Triage working set (references, not copies) — lets the
-        # Triage page skip deserializing the full torrent list.
-        db_save_file_results('triage',
-                             [f for f in torrent_files_data if _is_triage_relevant(f)])
-        db_save_file_signatures('media',    file_signatures(media_files_data))
-        db_save_file_signatures('torrents', file_signatures(torrent_files_data))
-        _enter_phase("post", "Saving audit results...")
-        db_save_results(result)
-        # Snapshot stores only dashboard stats — no file lists (eliminates 300MB+ per row)
-        snapshot = {"dashboard": dashboard_stats}
-        db_save_audit(trigger, dashboard_stats['score'], 'ok', None, snapshot,
-                      source=cfg.get('TORRENT_SOURCE', 'qbit'),
-                      duration_seconds=round(time.time() - scan_start, 1),
-                      ran_at=ran_at, peak_rss_mb=_scan_peak_rss())
+            log.warning(f"Could not compute the change log entry: {e}")
         # Advance the Next steps reward counters (cumulative shovel count,
-        # hardlink high-water mark, clean-state streaks). Kept here rather than
-        # in the endpoint so /api/next_steps never recomputes history — it is
-        # polled, and this is a single small app_meta row.
+        # hardlink high-water mark, clean-state streaks). Computed here and
+        # written in the publish, so /api/next_steps never recomputes history —
+        # it is polled, and this is a single small app_meta row.
         # NB: `update_progress` is also a state.py import, hence the namespace.
+        _ns_next = None
         try:
             _ns_det  = dashboard_stats['current']['details']
             # Built with the *previous* progress so prior latches still apply;
@@ -1231,19 +2244,127 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
                 dead_regs=dead_registration_hashes(torrent_files_data),
                 runs=_ns_runs)
-            # Written through a locked read-modify-write, merging the event
-            # counters as they stand *now*: `_ns_prev` was read at the top of
-            # this phase, and a trump or backfill credited since then would
-            # otherwise be erased by this write. See rounds.merge_event_counters.
-            db_update_meta('ns_progress',
-                           lambda latest: rounds.merge_event_counters(_ns_next, latest))
         except Exception as e:
-            log.warning(f"Could not update Next steps progress: {e}")
-        # Scan finished — clear the crash-loop streak so future startups scan normally
+            log.warning(f"Could not compute Next steps progress: {e}")
+        # This scan's view of the client and the disk is now the one every stored
+        # figure is built from, so it becomes what the next scan is measured
+        # against — advanced **only** on a scan that persisted, so a refused
+        # collapse never becomes the next scan's baseline. That alone did
+        # nothing about two *accepted* 40% declines, each of which passed against
+        # the scan before it (100 → 60 → 36). This comment used to claim it did;
+        # the 2026-09-10 outside review's S02 showed otherwise. The reference is
+        # what catches instalments — the largest counts persisted in the last
+        # `_GUARD_REFERENCE_DAYS` days — and a manual scan that accepted a change
+        # restarts it from itself (decisions 1 and 2 (a), 2026-09-15).
+        counts = {
+            'torrent_count': source_report.get('torrent_count', 0),
+            'file_map_size': source_report.get('file_map_size', 0),
+            'torrent_files': filesystem['torrents'].get('files', 0),
+            'media_files':   filesystem['media'].get('files', 0),
+        }
+
+        # ── Compress, then publish (S04, decisions 1/2/4 — 2026-09-15) ────────
+        # Everything above is computed; nothing above this line has been stored.
+        # The six blobs are built **outside** the transaction because
+        # compression is the expensive half and the write is the cheap one
+        # (measured: 21 s against 0.1 s per tab at 650,000 files — see
+        # db.PreparedFileResults), so the write lock is held for a fraction of a
+        # second even on the largest library. The previous generation is never
+        # read, here or anywhere in a scan, so this holds no second inventory:
+        # the extra peak is the compressed blobs alone, 46 MB measured at that size
+        # against a record list already costing several GB.
+        _enter_phase("post", "Saving file results...")
+        staged = [
+            ('media',    db_prepare_file_results(media_files_data)),
+            ('torrents', db_prepare_file_results(torrent_files_data)),
+            # Compact Triage working set (references, not copies) — lets the
+            # Triage page skip deserializing the full torrent list.
+            ('triage',   db_prepare_file_results(
+                [f for f in torrent_files_data if _is_triage_relevant(f)])),
+            # Compact Cleanup working set, after the orphan stamps (C10): the
+            # page and the delete script read this, never the full torrent list.
+            ('cleanup',  db_prepare_file_results(
+                [f for f in torrent_files_data if _is_cleanup_relevant(f)])),
+            # Compact Dedupe working set (R6, Phase 14): the page and the script
+            # read this, never both full lists. References, keyed by tree.
+            ('dedupe',   db_prepare_file_results(
+                dedupe_row(torrent_files_data, media_files_data))),
+        ]
+        staged_sigs = [
+            ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),
+            ('torrents', db_prepare_file_signatures(file_signatures(torrent_files_data))),
+        ]
+        _enter_phase("post", "Saving audit results...")
+        # One transaction. Every piece of this scan lands, or none does — so a
+        # reader can never join two generations and an interruption leaves the
+        # last complete scan whole (S04). `ran_at` names the generation; each
+        # file_results stats row carries it, which is what lets the probe say
+        # whether every stored piece came from one scan.
         try:
-            db_set_meta('consecutive_aborted_scans', 0)
-        except Exception:
-            pass
+            with db_publish() as pub:
+                if upload_snapshot is not None:
+                    db_save_upload_snapshot(upload_snapshot,
+                                            source=cfg.get('TORRENT_SOURCE', 'qbit'), conn=pub)
+                # Read back through the same transaction, so the summary still
+                # includes this scan's own snapshot exactly as it did when the
+                # snapshot was committed before this was computed.
+                try:
+                    result["yield_summary"] = _build_yield_summary(conn=pub)
+                except Exception as e:
+                    log.warning(f"Could not compute yield summary: {e}")
+                    result["yield_summary"] = None
+                if diff:
+                    db_save_change_log_entry(
+                        ran_at=ran_at,
+                        health_score=dashboard_stats['score'],
+                        trigger=trigger,
+                        source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                        diff=diff,
+                        conn=pub,
+                    )
+                for tab, prepared in staged:
+                    db_save_file_results(tab, prepared, conn=pub, generation=ran_at)
+                for tab, prepared in staged_sigs:
+                    db_save_file_signatures(tab, prepared, conn=pub)
+                for hist in staged_history:
+                    db_save_history(hist, conn=pub)
+                db_save_results(result, conn=pub)
+                # Snapshot stores only dashboard stats — no file lists
+                # (eliminates 300MB+ per row)
+                db_save_audit(trigger, dashboard_stats['score'], 'ok', None,
+                              {"dashboard": dashboard_stats},
+                              source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                              duration_seconds=round(time.time() - scan_start, 1),
+                              ran_at=ran_at, peak_rss_mb=_scan_peak_rss(), conn=pub)
+                if _ns_next is not None:
+                    # A read-modify-write on the publish's own connection,
+                    # merging the event counters as they stand *now*: `_ns_prev`
+                    # was read at the top of this phase, and a trump or backfill
+                    # credited since then would otherwise be erased by this
+                    # write. `db_publish` holds `_meta_lock`, so a credit landing
+                    # mid-publish waits and merges rather than being lost.
+                    # See rounds.merge_event_counters.
+                    db_update_meta('ns_progress',
+                                   lambda latest: rounds.merge_event_counters(_ns_next, latest),
+                                   conn=pub)
+                db_set_meta('source_baseline', {
+                    'at': ran_at, 'source': source_report.get('source'), **counts}, conn=pub)
+                db_set_meta('source_reference', advance_reference(
+                    reference_points, counts, reset=any(accepted)), conn=pub)
+                db_set_meta('last_source_report', source_report, conn=pub)
+                db_set_meta('audit_generation', {
+                    'id': ran_at, 'trigger': trigger,
+                    'media': len(media_files_data), 'torrents': len(torrent_files_data)},
+                    conn=pub)
+                if not source_report.get('partial'):
+                    db_delete_meta('last_source_anomaly', conn=pub)
+                # Scan finished — clear the crash-loop streak so future startups
+                # scan normally.
+                db_set_meta('consecutive_aborted_scans', 0, conn=pub)
+        except Exception as e:
+            raise _PublishFailed(str(e)) from e
+        finally:
+            del staged, staged_sigs
         rss = process_rss_mb()
         log.info(f"Audit complete: {len(torrent_files_data)} torrent file(s), "
                  f"{len(media_files_data)} media file(s), {len(trackers)} tracker(s), "
@@ -1251,8 +2372,47 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                  + (f", rss={rss} MB" if rss is not None else ""))
         if stat_errors:
             log.warning(f"Audit complete with {stat_errors} unreadable file(s) — check earlier warnings.")
-        status_msg = f"Audit complete. {stat_errors} file(s) could not be read — check logs." if stat_errors else "Audit complete."
+        # Folders deeper than a release folder that could not be listed: counted
+        # and shown, not refused (S03 refuses only near the root).
+        unlistable = sum(block.get('unlistable', 0) for block in filesystem.values())
+        if unlistable:
+            log.warning("Audit complete with %d folder(s) that could not be listed — "
+                        "check earlier warnings.", unlistable)
+        problems = ([f"{stat_errors} file(s) could not be read"] if stat_errors else []) + \
+                   ([f"{unlistable} folder(s) could not be listed"] if unlistable else [])
+        status_msg = (f"Audit complete. {' and '.join(problems)} — check logs." if problems
+                      else "Audit complete.")
         set_state(status_message=status_msg, last_scan_status="ok")
+    except _SourceAnomaly as e:
+        # Not an error path: the scan ran, decided its own inputs were not
+        # trustworthy, and declined to overwrite good data with them. Nothing is
+        # written except the reason — see `_record_source_anomaly`.
+        _record_source_anomaly(e.anomaly, trigger, cfg, scan_start,
+                               persist=persist_source_errors)
+    except _PublishFailed as e:
+        # The transaction rolled back, so the last scan that completed is still
+        # whole — file lists, signatures, upload snapshots and change log all
+        # from one generation. Reported as an error run, on a fresh connection,
+        # because the publish's own connection is gone.
+        msg = (f"Audit error: the scan finished but could not be saved ({e}). Nothing from "
+               f"this scan was stored — the file lists, health score and change log still "
+               f"describe the last scan that completed. Check that the data volume is "
+               f"writable and has free space, then scan again.")
+        log.error(msg)
+        try:
+            _save_error_status(msg)
+            db_save_audit(trigger, None, 'error', msg, {},
+                          source=cfg.get('TORRENT_SOURCE', 'qbit'),
+                          duration_seconds=round(time.time() - scan_start, 1),
+                          peak_rss_mb=_scan_peak_rss())
+            # The process declined to write, it did not die — same reading as a
+            # refused scan (CLEANUP §8). Leaving the streak standing would let a
+            # run of failed publishes trip the crash-loop breaker and stop
+            # automatic scanning altogether.
+            db_set_meta('consecutive_aborted_scans', 0)
+        except Exception as e2:
+            log.error(f"Could not persist the failed-publish status: {e2}")
+        set_state(status_message=msg, last_scan_status="error")
     except sources.SourceConnectionError as e:
         msg = str(e)
         log.error(msg)

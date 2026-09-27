@@ -87,7 +87,8 @@ at boot means the previous scan died.
 
 After **two consecutive** killed scans auditorr stops scanning automatically —
 both the startup audit and the watchdog — so it doesn't sit in a restart loop
-forever. It stays paused until a **manual scan completes successfully**.
+forever. It stays paused until a **manual scan completes successfully** — that's
+**▶ Run Audit**, at the foot of the Config page.
 
 **Fix:**
 
@@ -107,6 +108,105 @@ forever. It stays paused until a **manual scan completes successfully**.
 The debug report's memory section records peak RSS per scan and which phase each
 aborted scan died in, which tells you whether you're close to the limit or far
 over it.
+
+---
+
+## A scan refused to save its results
+
+**Symptom:** the status message starts with *Source anomaly*, Audit History shows
+a run marked `anomaly`, and every figure still describes the last scan that
+completed.
+
+That is deliberate. "Orphaned" is not something auditorr reads off a file — it
+means *no torrent in your client claims this path*, worked out by joining your
+client's answer to what is on disk. A scan whose view of either is implausible
+would rewrite your file lists, health score and change log with a fiction, and
+some of that can't be taken back. So auditorr keeps the last good scan and tells
+you which check failed:
+
+| The message says | What it means | What to do |
+|---|---|---|
+| …instance(s) did not answer, or listed only part of their torrents | a qui instance failed, or its listing stopped short of the total it advertised | get every instance connected and answering, then scan again |
+| …would not report their files, and their payload could not be found on disk | more than a quarter of your torrents' file listings failed | check [Path Mappings](configuration.md#path-mappings), and that the client is answering |
+| The torrent client reported N torrent(s), down from… | far fewer torrents than lately — a real removal, or a client that lost its session | if the drop is real, run a **manual scan** to accept it |
+| The torrent client accounted for no files at all… | the client answered with nothing while your torrent folder is full | as above |
+| The torrent/media folder is not there | the folder isn't mounted into the container | fix the mount, then scan again |
+| …folder(s) at a category or release level could not be listed | a permissions problem | give the user auditorr runs as read access to it |
+| The torrent/media folder holds N file(s), down from… | far fewer files than lately — a real deletion, or a mount that came back empty | if it's real, run a **manual scan** to accept it |
+
+**A manual scan accepts a change; it never accepts a failed read.** A library
+really can shrink, and a manual scan is how you say so. But asking for a refresh
+doesn't make an unanswered instance, an incomplete listing or a missing folder
+any more readable, so those refuse however the scan was started, and the message
+says what to fix instead.
+
+Counts are compared against the **largest of the last seven days**, not just
+against the previous scan, so a client losing torrents in instalments is caught
+rather than accepted 40% at a time. Accepting a drop by hand restarts that
+window from the scan you accepted.
+
+**If a folder wasn't mounted yet at startup**, auditorr retries at one, two and
+five minutes before recording a failure — an array or a network share can take
+that long. A scan is otherwise next attempted on the scheduled interval, so if
+you fixed a mount, start a scan yourself rather than waiting for it.
+
+The debug report's `source_health` section carries the last report (including how
+many files were walked per root and any folders that couldn't be listed), the
+reference counts and the last refusal.
+
+---
+
+## A scan finished but "could not be saved"
+
+**Symptom:** the status message says *the scan finished but could not be saved*,
+and Audit History shows an `error` run.
+
+A scan stores its results in one go: the file lists, the health score, the change
+log, the upload history, your Rounds progress and the counts the next scan is
+checked against all land together, or none of them do. When saving fails part-way
+— the data volume filled up, or became read-only — **nothing from that scan is
+kept**, and every page still shows the last scan that completed, whole.
+
+It used to keep whatever had been written before the failure, so a page could
+end up joining half of one scan to half of another: a file shown as unseeded in
+Backfill and not imported in Triage at the same time, or an upload chart with a
+spike that never happened.
+
+**What to do:** check that the volume mounted at `/app/data` is writable and has
+free space, then start a scan. The failed run doesn't count towards the
+crash-loop breaker — auditorr declined to save, it didn't crash — so automatic
+scanning carries on.
+
+---
+
+## A torrent is registered on more than one qui instance
+
+**Symptom:** removing a torrent in Triage, or confirming a group in Trumped, says
+*registered on more than one instance* and names them, and nothing happens.
+
+The same torrent can be added to two qui instances — two clients seeding it, or
+one copy on each of two disks. Those are two separate registrations: each has its
+own upload total, can sit at its own save path, and can be removed without the
+other. auditorr treats them that way. Triage lists each one on its own row,
+Trumped shows both in the group with the instance beside each, and a removal
+checks that *the registration you removed* is gone rather than whether the
+torrent is still anywhere.
+
+Where a request names the torrent but not which instance holds it, auditorr
+refuses rather than picking one. **What to do:** act on the row for the instance
+you mean, or remove the extra registration in qui first.
+
+Two things follow that you may notice:
+
+- **Files are kept if another instance still uses them.** Removing one
+  registration of a torrent that two instances share at the same path keeps the
+  files, because the other one is still seeding them.
+- **Upload totals count each instance**, since each really did upload. Seeding
+  size counts the files on disk once where two instances share them, and twice
+  where each instance has its own copy.
+
+A single qBittorrent or a single qui instance can't register a torrent twice, so
+none of this applies there.
 
 ---
 
@@ -184,7 +284,12 @@ quadratic on disc-heavy libraries and exhausts memory:
 - Excluded files are skipped entirely.
 - Groups of more than 200 same-size files are skipped — this is what disc rips
   produce.
-- Each file records at most 10 sibling paths.
+- Each file records at most 10 sibling paths. A larger group is still shown
+  whole, because the page joins what every file remembers.
+
+Anything your torrent client hasn't confirmed as **finished** is skipped too, on
+purpose: two half-downloaded files can look identical, and hardlinking them ruins
+both. See [What detection skips](workflows.md#what-detection-skips).
 
 Also note the definition: duplicates are identical files that **don't share an
 inode**. Two paths that are already hardlinks to one file are not duplicates —
@@ -203,6 +308,52 @@ respond; check it directly and use **Test Connection** in Config.
 
 The page never guesses: it will tell you it's showing stale data rather than
 silently present it as current.
+
+---
+
+## Triage says "Not in Library" for something Sonarr/Radarr definitely has
+
+Almost always a **title in another language**. Non-English content is released
+under its original-language name while your arr stores the English one, so
+`No.tengo.miedo.S01E01…` and *I'm Not Afraid* look like two unrelated titles.
+
+auditorr matches against the **alternate titles** Sonarr and Radarr already hold
+for every item, which is where translated and AKA names live, so this should
+resolve on its own and show as *Import pending* instead. If it still reads *Not
+in Library*, open the series or movie in your arr and check its alternate titles
+— if the release name isn't among them, the arr can't match it either, which is
+usually why it never imported.
+
+> Treat *Not in Library* as "nothing in your library holds this", not as "this is
+> junk". A torrent that was never imported has no hardlink anywhere else, so its
+> files are the only copy and deleting them loses the data.
+
+---
+
+## Triage shows a "Could Not Check" section
+
+One of your Sonarr/Radarr instances didn't answer when the page was built, so
+auditorr could not establish whether your library holds these. They are **not**
+*Not in Library* — that verdict means no arr has ever heard of the title, and no
+arr was able to say.
+
+A yellow banner at the top of the page names the instance and the error. Two
+shapes:
+
+- **Could not be read** — the instance was unreachable outright.
+- **Answered with only part of its library** — Sonarr needs one request per
+  series, and some of them timed out. The episodes of those series are exactly
+  the ones that would otherwise read as "no arr has heard of this".
+
+Fix the connection (Config → Sonarr/Radarr → Test) and reload. Don't act on rows
+in this section meanwhile: nothing there has been checked, and a not-imported
+torrent's files are the only copy you have.
+
+Other rows are unaffected — a title that *did* match still reports *Superseded*
+or *Import Pending* normally. One thing to know while a banner is showing:
+*Import Pending* can be over-reported, because a file that really did import
+looks unimported when the library list couldn't be read. Rescanning it is
+harmless either way.
 
 ---
 
@@ -239,6 +390,18 @@ or changed status between any two runs.
 Common innocent causes: an import completed (files move), a tracker went down
 (torrents become unregistered), or a large download finished and hasn't been
 imported yet.
+
+---
+
+## Backfill's Root Folders shows only "Other"
+
+The folder filter's options are the root folders configured in Sonarr and Radarr, and a
+file is grouped under **Other** when it isn't inside any of them. If *everything*
+is under Other, auditorr either couldn't read the root folder lists — they're
+fetched alongside your library, and a failure there is only logged, because all
+it costs you is the filter — or your files sit outside every root folder the arr
+reports. Nothing about the search depends on this filter: **All** still searches
+everything.
 
 ---
 
@@ -313,6 +476,23 @@ Must include the scheme: `https://sonarr.example.com`, not
 the field, since the only thing worth testing is whether *your* browser reaches
 it. Full detail in
 [External URLs](configuration.md#external-urls-reverse-proxy).
+
+---
+
+## A page says "This page stopped with an error"
+
+That's a bug in auditorr, not in your setup. The page couldn't be drawn, so it
+shows the error and where it happened instead of going blank. The sidebar still
+works, so you can move to another page.
+
+**Try again** redraws the page, and **Reload page** reloads the whole app. The
+page also tries again by itself after the next scan. If the sidebar or a dialog
+failed rather than a page, the message covers the whole window and reads
+*auditorr stopped with an error*.
+
+The error is also written to the server log, so it appears in `docker logs` and
+in the debug report. Please [report it](#reporting-a-problem) with the debug
+report attached.
 
 ---
 

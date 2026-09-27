@@ -146,6 +146,29 @@ Reduce time-to-first-scan for new users and surface qBittorrent metadata that wa
 
 ---
 
+## v1.8 — Workflow Safety Review ✅
+
+### Philosophy
+Every workflow that deletes, hardlinks or replaces a file was reviewed end to end, and most findings shared one root cause: "could not ask" and "the answer is no" arrived as the same empty collection. Absence of evidence is now reported as absence of evidence, from the torrent-client layer up to every page with a button on it.
+
+### Shipped in v1.8.0
+- **Absence is reportable** — `sources.fetch_file_map` returns a source report; a failed per-torrent listing falls back to the payload on disk instead of claiming nothing; `fetch_torrent_file_paths` answers `None` (could not ask) apart from `[]`; qui paging is checked against the total it advertises; the arr layer returns rows and errors as one snapshot and reports a partial Sonarr read
+- **Implausible scans refuse to persist** — `source_plausibility` / `filesystem_plausibility` (client blackout, count collapse, missing or unlistable roots) against a 7-day reference window; a manual scan accepts a change, never a failed read; missing roots are retried at 1, 2 and 5 minutes after startup
+- **One scan, one transaction** — `db_publish` writes the whole audit atomically; `db_read_snapshot` pins a reader of several rows to one generation
+- **Registrations, not hashes** — a torrent on two qui instances is two `(instance_id, hash)` registrations throughout; a request that can't name the instance is refused
+- **Completion is its own question** — `torrent_complete` (progress, else `completion_on`, never both); unfinished payloads leave Dedupe and Triage; `.!qB` and incomplete-directory spellings are claimed
+- **Cleanup** — piles by what survives a delete (library copy / linked elsewhere / only copy / could not check), one row per inode, the client re-asked immediately before a delete script is built; the script has `--dry-run`, is idempotent and prunes emptied release folders
+- **Triage** — files deleted only where ownership is established, and kept wherever it can't be; the confirmed plan binds (`plan_changed`); *Could Not Check* replaces *Not in Library* while an arr is unreachable; arr alternate titles; content type gates the library match
+- **Dedupe** — no canonical; union-find groups; every path of a file listed and replaced together; per-device buckets, owner/permission and partial-replacement checks; every link staged and verified before any rename; compact `dedupe` row; the badge counts groups
+- **Trumped** — the group is the transitive closure over shared paths; a per-member library-link check; the group re-resolved at execute; grab before removal; one operation per confirmation; *Grab only*
+- **Backfill** — a season is searched as a pack only when it is fully unseeded; a release must cover exactly the file's episodes; forced imports always `Copy`; the arrs' own root folders; *Closest to my file* ranking; generate jobs survive leaving the page
+- **The import watch observes success** — `done` requires the arr's file id to change; nothing still downloading is force-imported
+- **Exclusions** — `literal:` rules built from paths; a folder rule only where exclusivity is established; the Exclude buttons enforce the config caps; filesystem tombstones (`.fuse_hidden*`, `.nfs*`) always excluded
+- **One UI kit** — one `Button`, `Segmented` for every filter row, the type scale and `tint()` each held by a guard test; render errors caught by `ErrorBoundary` and logged server-side
+- **Tested images** — the Docker build `needs` `pytest backend_tests`, so a red suite publishes nothing
+
+---
+
 ## Future Ideas
 - **Dead-since tracking** — persist when each torrent was first seen tracker-dead across audits, so Dead Seeds can show tracker-credited seed time (seeded minus dead duration) for hit-and-run decisions
 - **Webhook / notification support** — alert when health score drops below threshold (Discord, ntfy.sh, Gotify)

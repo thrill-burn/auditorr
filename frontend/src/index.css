@@ -39,6 +39,15 @@
   --font-md:   13px;  /* card titles, prominent values */
   --font-lg:   15px;  /* modal headers, tracker card titles */
   --font-xl:   20px;  /* page headers */
+  /* Control heights. A filter bar picks one and every control in it — button,
+     segmented track, input, select, clear ✕ — takes that height. `Button`'s sm
+     and md sizes are these two, so there is one small and one standard button. */
+  --control-h:    28px;  /* dense toolbars: File Explorer */
+  --control-h-lg: 34px;  /* page filter bars and forms: Dashboard, Trackers, Audit History, Config */
+  /* A selected segment (.seg-opt): a step lighter than its --surface3 track,
+     the same step light mode's white takes above its own track. */
+  --seg-on:    #2a2e33;
+  --seg-edge:  #3a3f46;
 }
 
 [data-theme="light"] {
@@ -62,6 +71,8 @@
   --elev-1:    0 1px 2px rgba(28, 25, 23, 0.08);
   --elev-2:    0 8px 22px rgba(28, 25, 23, 0.12);
   --shadow-pop: 0 18px 42px rgba(28, 25, 23, 0.16);
+  --seg-on:    #ffffff;
+  --seg-edge:  #ceccc7;
 }
 
 html, body, #root {
@@ -152,56 +163,114 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   border-color: var(--border2);
 }
 
-.ui-button {
+/* The workflow Button (components/workflows/shared.jsx). Each variant hands its
+   colours in as custom properties, so one rule gives all of them a hover — an
+   inline background would outrank :hover. Tints are color-mix(), never a hex
+   alpha glued to a var(): that spelling is invalid after substitution and the
+   browser drops the whole declaration. */
+.wf-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 16px;
-  border-radius: var(--r);
-  border: 1px solid var(--border2);
-  background: var(--surface2);
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 600;
-  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1), border-color 0.12s cubic-bezier(.4,0,.2,1);
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: none;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: 1px solid var(--btn-border);
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1), filter 0.12s cubic-bezier(.4,0,.2,1);
 }
-
-.ui-button:hover {
-  background: var(--surface3);
-  border-color: var(--border2);
+.wf-btn:hover:not(:disabled) {
+  background: var(--btn-bg-hover);
+  color: var(--btn-fg-hover);
+  filter: var(--btn-filter-hover);
 }
+.wf-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wf-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .wf-btn { transition: none; } }
 
-.ui-button-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #0a0a0a;
-}
-
-.ui-button-ghost {
-  background: transparent;
-  color: var(--text-dim);
-}
-
-.ui-chip {
+/* Segmented (shared.jsx): every filter row in the app, one choice or several.
+   An inset track whose selected segments are raised: filled lighter than the
+   track (--seg-on) and edged with an inset hairline (--seg-edge). The dark
+   theme used to fill them with --surface, a shade *darker* than the track and
+   the colour of the card behind it, so they read as holes rather than keys —
+   and on its near-black page the shadow draws nothing. Inset, so selecting
+   never changes a size. Hovering an unselected segment washes it at 4% of the
+   text colour, as every Button already answers hover with a fill; any stronger
+   and on dark it lands on --seg-on, so a hovered option reads as selected. The
+   track is exactly the bar's control height: the segment's min-height is that
+   less the 3px padding. A segment that is a div rather than a button (Backfill's
+   Custom depth, which holds an input) is marked chosen with data-on="true". */
+.seg {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  border: 1px solid var(--border2);
-  border-radius: 99px;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  max-width: 100%;
+  flex-shrink: 0;
+  background: var(--surface3);
+  border-radius: var(--r);
+}
+.seg-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+  min-height: calc(var(--control-h) - 6px);
+  padding: 2px 12px;
+  border: none;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--text-dim);
   font-family: var(--sans);
-  font-size: 12px;
+  font-size: var(--font-base);
   font-weight: 500;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
 }
+.seg-lg .seg-opt { min-height: calc(var(--control-h-lg) - 6px); padding: 4px 12px; }
+.seg-mono .seg-opt { font-family: var(--mono); }
+.seg-opt:hover:not(:disabled):not([aria-pressed="true"]):not([data-on="true"]) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.seg-opt[aria-pressed="true"],
+.seg-opt[data-on="true"] {
+  background: var(--seg-on);
+  color: var(--seg-fg, var(--text));
+  font-weight: 700;
+  box-shadow: var(--elev-1), inset 0 0 0 1px var(--seg-edge);
+}
+.seg-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.seg-opt:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .seg-opt { transition: none; } }
 
-.ui-chip-active {
-  color: var(--accent);
-  background: var(--accent)18;
-  border-color: var(--accent);
+/* IconButton / CloseButton (shared.jsx): a quiet square for a line icon — the
+   close ×, a collapse chevron. An icon has no font size, which is what retired
+   the type guard's two close-× exemptions. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
 }
+.icon-btn-sm { width: 18px; height: 18px; }
+.icon-btn:hover { color: var(--text); background: var(--surface2); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .ui-input {
   background: var(--surface2);

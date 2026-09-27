@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import posixpath
 import random
 import socket
 import threading
@@ -21,10 +22,12 @@ import sources
 from db import (
     DATA_DIR,
     DEFAULT_CONFIG, SCORE_WEIGHT_KEYS, API_URL_KEYS, url_problem,
+    EXCLUSION_PATTERNS_MAX, EXCLUSION_PATTERN_MAX_CHARS,
     init_db,
     db_load_config, db_save_config, validate_config,
     db_load_results, db_save_results,
     db_load_file_results, db_stream_file_results, db_has_file_results,
+    db_read_snapshot,
     db_save_history,
     db_get_recent_runs,
     db_clear_audit_history,
@@ -40,10 +43,12 @@ from state import (
     get_state, set_state, try_start_scanning,
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _compute_cross_seed_stats
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index, arr_media_index_errors, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, title_match_keys, compare_release_quality, parse_trump_pm, match_trump_release, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer
-from scripts import generate_script, _build_dup_groups, dup_group_inputs
-from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
+from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
+                     dedupe_script_units, dedupe_group_count)
+from exclusions import reads_bracket_as_glob
+from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets, is_tombstone_path
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
 from debug import (
     install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events,
@@ -53,7 +58,7 @@ from debug import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
 
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.8.0"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()
@@ -186,6 +191,11 @@ def _is_source_error_status(status):
         'qui error',
         'qui connection error',
         'qui HTTP error',
+        # A refused scan (the source plausibility guard). Listed here for the
+        # startup retry above all: a client still loading its session answers
+        # with few or no torrents, which is precisely what the guard refuses,
+        # and 60 seconds later it answers properly.
+        'Source anomaly',
     ))
 
 # ---------------------------------------------------------------------------
@@ -321,19 +331,51 @@ def _handle_aborted_scan():
     return streak
 
 
+# A startup scan refused because a root was missing or could not be listed waits
+# this long before each retry (Phase 12, S03). The single 60 s retry below was
+# written for a client still loading its session, which answers within seconds;
+# an array or a network share still mounting takes minutes. And the watchdog
+# starts after the startup audit and watches only the roots that exist then, so
+# without these the next scan would be the scheduled one, hours later — while the
+# longer wait also gives the watchdog a mounted root to watch.
+_STARTUP_ROOT_RETRY_DELAYS = (60, 120, 300)
+_ROOT_ANOMALY_CODES = frozenset({'root_missing', 'root_unlistable'})
+
+
+def _startup_scan_failed():
+    state = get_state()
+    return (state.get('last_scan_status') == 'error'
+            and _is_source_error_status(state.get('status_message', ''))), state
+
+
 def _run_startup_audit():
-    """Run the startup audit, retrying once after 60s on connection errors (other containers may not be ready)."""
+    """Run the startup audit, retrying when a source is not ready yet.
+
+    A connection error or a client anomaly retries once after 60 s (other
+    containers may not be ready). A missing or unlistable root retries at 1, 2
+    and 5 minutes. Only the last attempt records a failed run.
+    """
     if not _torrent_source_configured(db_load_config()):
         log.info("Torrent source not configured, skipping startup audit.")
         return
     if try_start_scanning("startup"):
         run_audit_process("startup", persist_source_errors=False)
-    state = get_state()
-    if state.get('last_scan_status') == 'error' and _is_source_error_status(state.get('status_message', '')):
-        log.warning("Startup audit failed with connection error, retrying in 60s before recording a failure...")
-        time.sleep(60)
+    failed, state = _startup_scan_failed()
+    if not failed:
+        return
+    delays = (_STARTUP_ROOT_RETRY_DELAYS if state.get('anomaly_code') in _ROOT_ANOMALY_CODES
+              else (60,))
+    for attempt, delay in enumerate(delays, start=1):
+        last = attempt == len(delays)
+        log.warning("Startup audit failed (%s), retrying in %ds%s...",
+                    state.get('anomaly_code') or 'connection error', delay,
+                    ' before recording a failure' if last else '')
+        time.sleep(delay)
         if try_start_scanning("startup"):
-            run_audit_process("startup", persist_source_errors=True)
+            run_audit_process("startup", persist_source_errors=last)
+        failed, state = _startup_scan_failed()
+        if not failed:
+            return
 
 
 def _startup_sequence():
@@ -400,12 +442,47 @@ def debug_report():
     report['app_gauges'] = {
         'release_jobs':         len(_release_jobs),
         'import_watches':       len(_import_watches),
-        'generate_job_results': len((_gen_state.get('job') or {}).get('results') or []),
+        # Backfill runs retained (bounded by _GEN_JOBS_KEPT + one running) and
+        # the result rows they hold between them.
+        'generate_jobs':        len(_gen_jobs),
+        'generate_job_results': sum(len(j.get('results') or []) for j in list(_gen_jobs.values())),
         # True while background scans are deferring to an active workflow
         # session — evidence for "why didn't the watchdog scan run yet"
         'workflow_active':      workflow_active(),
     }
     return jsonify(report)
+
+
+# Field caps for a reported frontend error. A render error's message is one
+# short sentence and the component chain a handful of names; anything longer is
+# not worth a ring-buffer slot that a server-side line could have used.
+_CLIENT_ERROR_CAPS = {'page': 40, 'name': 60, 'message': 500, 'where': 300}
+
+
+@app.route('/api/debug/client_error', methods=['POST'])
+@require_auth
+def client_error():
+    """One log line for a render error the frontend's error boundary caught.
+
+    Without it a crash exists only in the browser that had it: a blank page on
+    the user's side and nothing in `docker logs` or `/api/debug/report`. The
+    report's sanitizer runs over this line like any other, so a path that ends
+    up in a message is hashed there. Newlines are flattened here, because a
+    newline in the message would start a forged line in `docker logs`.
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get('message'), str):
+        return jsonify({'status': 'error', 'code': 'bad_request',
+                        'message': 'message is required'}), 400
+    fields = {}
+    for key, cap in _CLIENT_ERROR_CAPS.items():
+        value = data.get(key)
+        value = ' '.join(value.split()) if isinstance(value, str) else ''
+        fields[key] = value[:cap - 1] + '…' if len(value) > cap else value
+    log.error("Frontend render error on page '%s': %s: %s%s",
+              fields['page'] or '?', fields['name'] or 'Error', fields['message'],
+              f" (in {fields['where']})" if fields['where'] else '')
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/api/results')
@@ -533,6 +610,16 @@ def handle_config():
                 problem = url_problem(label, data.get(key))
                 if problem:
                     warnings.append(problem)
+        # CLEANUP C8's optional half (decision 4 (b), Phase 14): a hand-typed path
+        # carrying `[` is a character class and matches nothing. Said, never
+        # refused, and never rewritten — existing rules are not migrated (R4).
+        for pattern in data.get('EXCLUSION_PATTERNS') or []:
+            if isinstance(pattern, str) and reads_bracket_as_glob(pattern):
+                shown = pattern if len(pattern) <= 90 else pattern[:87] + '…'
+                warnings.append(
+                    f"Exclusion pattern “{shown}” is read as a glob, where “[” starts a character "
+                    f"class, so it matches nothing with that name. To match the path exactly, "
+                    f"put literal: in front of it.")
         try:
             existing = db_load_config()
             new_conf = {
@@ -603,12 +690,25 @@ def handle_config():
                 log.info(f"Skipping immediate health recompute ({stored_count} files stored) — "
                          f"new thresholds apply on the next audit.")
             else:
-                curr         = db_load_results()
-                media_files  = db_load_file_results('media')
-                torrent_files = db_load_file_results('torrents')
+                # Pinned: this reads three rows and then **writes a dashboard
+                # back**, so a read that straddled a publish would persist a
+                # health score computed from half of one scan and half of
+                # another (S04). One read transaction; no copy.
+                with db_read_snapshot() as snap:
+                    curr         = db_load_results(conn=snap)
+                    media_files  = db_load_file_results('media', conn=snap)
+                    torrent_files = db_load_file_results('torrents', conn=snap)
                 if media_files and torrent_files:
+                    prev = (((curr.get('dashboard') or {}).get('current') or {})
+                            .get('details') or {})
+                    extras = {k: prev[k] for k in SCAN_ONLY_DETAILS if k in prev}
+                    # The badge's number, under the rules just saved — the page
+                    # applies the current rules too, and the lists are in hand.
+                    extras['dedupe_group_count'] = dedupe_group_count(
+                        torrent_files, media_files, new_conf)
                     new_dashboard = process_health_metrics(
-                        media_files, torrent_files, new_conf, update_history=False)
+                        media_files, torrent_files, new_conf, update_history=False,
+                        extra_details=extras)
                     # cross_seed_stats is added by the audit, not process_health_metrics —
                     # recompute it here so the config-save dashboard refresh doesn't drop
                     # the Cross-Seed Effectiveness / Tracker Leaderboard panels.
@@ -845,22 +945,461 @@ def test_arr_connections_route():
     })
 
 
+# ---------------------------------------------------------------------------
+# Cleanup — the orphan working set, its states, and the live re-verify (C3)
+# ---------------------------------------------------------------------------
+
+# Past this many torrents that *could* claim a selected path, the re-verify
+# refuses (409 `selection_too_broad`) rather than issue that many per-torrent
+# file listings inside one request. An orphan has no torrent by definition, so
+# on a healthy library the count is zero; it climbs only where a client exposes
+# no `content_path`, or a torrent is still downloading, under the save paths the
+# selection sits in. The same bound Trumped's pre-filter uses, for the same
+# reason: both backends list a torrent's files one call at a time.
+_CLEANUP_VERIFY_BOUND = 150
+
+
+class _CleanupRefusal(Exception):
+    """A script that must not be built, with the reason as a response — Cleanup's
+    delete script, and since Phase 10 the Dedupe script's selection refusals."""
+
+    def __init__(self, status, code, message, **extra):
+        super().__init__(message)
+        self.status, self.code, self.message, self.extra = status, code, message, extra
+
+    def response(self):
+        return jsonify({"status": "error", "code": self.code,
+                        "message": self.message, **self.extra}), self.status
+
+
+def _norm_abs(path):
+    """An absolute path spelled for comparison: posix separators, no `//` or `..`.
+
+    Every comparison in the re-verify goes through this on both sides, so a
+    Windows test path, a trailing slash on `LOCAL_PATH` and a client that joins
+    with a doubled separator all compare equal. Normalising can only make more
+    paths match, and a match *drops* a file from the script — so it errs in the
+    fail-safe direction.
+    """
+    p = str(path or '').replace('\\', '/')
+    return posixpath.normpath(p) if p else ''
+
+
+def _cleanup_paths(rec):
+    """Every torrent-tree path of one orphan record — its own, then `other_paths`.
+
+    A record is an **inode** (C5): `_assemble_records` emits one per inode and
+    stamps the inode's other torrent-tree paths on orphans only. Relative and
+    posix, the spelling `other_paths` is stored in.
+    """
+    return [str(rec.get('path') or '').replace('\\', '/')] + list(rec.get('other_paths') or [])
+
+
+def _cleanup_state(rec):
+    """What survives deleting every path of this orphan (CLEANUP §5.3, corrected).
+
+    In precedence order — **an unknown never renders as safe**, TR3's ordering
+    for TR3's reason:
+
+    * `unverified` — the scan could not ask about this file (a failed instance
+      on a scan the manual override persisted, or a failed listing whose disk
+      fallback found nothing under its save path). It may be a live torrent's.
+    * `library_copy` — a hardlink to the inode sits in `MEDIA_PATH`. Deleting
+      is lossless and frees nothing.
+    * `linked_elsewhere` — `nlink` exceeds the torrent-tree paths this row
+      lists: a link outside both trees (a manual hardlink, a snapshot, a second
+      library root auditorr is not configured for), or a sibling path that is
+      excluded and so never listed. Lossless, frees nothing.
+    * `last_copy` — nothing else is known to hold these bytes.
+
+    **`cross_seed` is not a state**, which is the correction to §5.3: an orphan
+    at two torrent-tree paths with no library copy is still the last copy of
+    those bytes, and deleting both destroys it. Being cross-seeded is a fact
+    about the row (`paths`), not about safety.
+
+    A record with no `nlink` stamp — a failed stat, or a database whose last
+    audit predates the field — has no evidence of another link, so it falls
+    through to `last_copy`. Absence never produces the least alarming state.
+    """
+    if rec.get('unverified'):
+        return 'unverified'
+    if rec.get('imported') or rec.get('linked_paths'):
+        return 'library_copy'
+    nlink = rec.get('nlink')
+    if isinstance(nlink, int) and not isinstance(nlink, bool) and nlink > len(_cleanup_paths(rec)):
+        return 'linked_elsewhere'
+    return 'last_copy'
+
+
+def _cleanup_details(conn=None):
+    try:
+        return ((db_load_results(conn=conn) or {}).get('dashboard') or {}) \
+            .get('current', {}).get('details') or {}
+    except Exception:
+        return {}
+
+
+def _cleanup_records():
+    """(orphan records, excluded_count) — the compact row, or the full list filtered.
+
+    The audit persists a compact `cleanup` row (`audit._is_cleanup_relevant`) so
+    neither this page nor the delete script deserializes the full torrent list
+    to read the ~1% it acts on (C10 — Triage's v1.7.0 fix, same shape). A
+    database whose last audit predates the row falls back to the full list until
+    the next scan.
+
+    **Excluded orphans do not ride the compact row; their count rides the
+    audit's details** (`orphaned_excluded_count`). The row is the working set
+    and nothing on the page acts on an excluded file, while an install that has
+    excluded a large folder of orphans would otherwise carry all of it in the
+    row just to produce one integer. `None` where the details predate the key.
+
+    Filesystem tombstones are dropped here as well as at the walk, for Dedupe's
+    reason: records from a scan that predates the always-on rule can still carry
+    one as `excluded: False`, and `rm` on a tombstone frees nothing.
+    """
+    # Pinned: the row and the count beside it come from two rows, and the
+    # fallback reads a third. One generation or none (S04).
+    with db_read_snapshot() as snap:
+        if db_has_file_results('cleanup', conn=snap):
+            records = db_load_file_results('cleanup', conn=snap)
+            excluded = _cleanup_details(conn=snap).get('orphaned_excluded_count')
+        else:
+            full = db_load_file_results('torrents', conn=snap)
+            records = [f for f in full if _is_cleanup_relevant(f)]
+            excluded = sum(1 for f in full if f.get('status') == 'Orphaned' and f.get('excluded'))
+            del full
+    return [r for r in records if not is_tombstone_path(r.get('path'))], excluded
+
+
+def _cleanup_claim_candidates(rows, wanted_abs, remote, local):
+    """The live torrents that could claim any selected path — and only those.
+
+    A torrent claims its listing joined on `save_path`, the incomplete spellings
+    of an unfinished payload, or whatever its disk fallback finds at
+    `save_path/name` and `content_path` (`sources.torrent_claimed_paths`). So a
+    torrent is a candidate when:
+
+    * its `save_path/name` or its `content_path` **is** a selected path, is one
+      without the `.!qB` suffix, or **contains** one; or
+    * it exposes no `content_path`, or is not known to be complete, and its
+      `save_path` contains one — without `content_path` a listing's names are
+      not bounded to the torrent's own folder, and an unfinished payload's
+      final paths need not sit under its name.
+
+    Selected paths are expanded into the set of their ancestors once, so this is
+    one pass over the listing with set lookups, not a product of the two.
+
+    Deliberately **not** `_trump_candidates`, which answers a different question
+    (which torrents can share a file with *each other*).
+    """
+    suffix = sources.INCOMPLETE_SUFFIX
+    exact = set(wanted_abs) | {a[:-len(suffix)] for a in wanted_abs if a.endswith(suffix)}
+    ancestors = set()
+    for a in wanted_abs:
+        d = posixpath.dirname(a)
+        while d and d not in ancestors:
+            ancestors.add(d)
+            parent = posixpath.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    out = []
+    for r in rows:
+        sp = _norm_abs(sources.remap_path(r.get('save_path') or '', remote, local))
+        name = r.get('name') or ''
+        cp_raw = r.get('content_path') or ''
+        cp = _norm_abs(sources.remap_path(cp_raw, remote, local)) if cp_raw else ''
+        root = _norm_abs(f'{sp}/{name}') if sp and name else ''
+        if any(x and (x in exact or x in ancestors) for x in (root, cp)):
+            out.append(r)
+            continue
+        complete = sources.torrent_complete(r.get('progress'), r.get('completion_on'))
+        if (not cp or complete is not True) and (not sp or sp in ancestors):
+            out.append(r)
+    return out
+
+
+def _cleanup_row_claims(row, client_paths, remote, local):
+    """Paths one live torrent claims, by the audit's own rule.
+
+    `fetch_torrent_file_paths` answers **client-side, unremapped** paths — both
+    backends join the client's raw `save_path` and neither applies
+    `REMOTE_PATH` → `LOCAL_PATH` (Phase 7 checked both). The claim rule wants the
+    listing's names relative to that save path, so the prefix comes off here and
+    the remap happens exactly once, on `save_path` and `content_path`, inside
+    the shared rule. A path outside the torrent's save path is remapped and
+    claimed as it stands.
+
+    **`[]` is treated like `None`** — a torrent that lists no files is not
+    evidence that nothing sits at its roots, and routing it through the disk
+    fallback can only claim more. It is also what the audit itself does on qui.
+    """
+    sp_client = row.get('save_path') or ''
+    save_path = sources.remap_path(sp_client, remote, local)
+    cp_client = row.get('content_path') or ''
+    content_path = sources.remap_path(cp_client, remote, local) if cp_client else ''
+    complete = sources.torrent_complete(row.get('progress'), row.get('completion_on'))
+    names, extra = None, []
+    if client_paths:
+        prefix = str(sp_client).replace('\\', '/').rstrip('/') + '/'
+        names = []
+        for cp in client_paths:
+            c = str(cp).replace('\\', '/')
+            if not sp_client:
+                names.append(c)
+            elif c.startswith(prefix):
+                names.append(c[len(prefix):])
+            else:
+                extra.append(sources.remap_path(c, remote, local))
+    return sources.torrent_claimed_paths(
+        save_path, row.get('name') or '', content_path, names, complete) + extra
+
+
+def _cleanup_live_claims(cfg, rel_paths):
+    """The selected paths a live torrent claims **right now** (CLEANUP C3 + C4c).
+
+    The fact a delete script rests on — *no torrent claims this file* — is the
+    one fact the script cannot check: it runs on the host, often on another
+    machine, with no client credentials, by construction. So the last honest
+    verification point is here, server-side, immediately before the script is
+    built. In the window since the audit a cross-seed script can inject a
+    torrent for exactly these files, a torrent can be re-added and rechecked, or
+    one added during the walk can land (C4c, the race no snapshot can close).
+
+    Raises `_CleanupRefusal` instead of answering partially:
+
+    * the client unreachable → 502 `client_unreachable`;
+    * any instance failed → 502 `instances_unavailable`. A torrent on the
+      instance that did not answer is invisible, not absent — the same reading
+      Trumped takes of `list_torrents`, which refuses a partial listing;
+    * more candidates than `_CLEANUP_VERIFY_BOUND` → 409 `selection_too_broad`.
+      Never a script emitted unverified, never a check silently narrowed.
+
+    Logs counts only: the log ring reaches `/api/debug/report`.
+    """
+    remote, local = cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', '')
+    base = _norm_abs(local)
+    abs_of = {p: _norm_abs(f'{base}/{p}') for p in rel_paths}
+    wanted = set(abs_of.values())
+    unreachable = ("Could not reach your torrent client to check the selection just before "
+                   "building the script, so no script was built. A torrent added since the last "
+                   "scan could be using these files — try again once the client answers.")
+    try:
+        rows, report = sources.list_torrents_detailed(cfg)
+    except Exception as e:
+        log.warning("Cleanup: no delete script — the torrent client could not be listed (%s)",
+                    type(e).__name__)
+        raise _CleanupRefusal(502, 'client_unreachable', unreachable)
+    failed = (report or {}).get('instances_failed') or []
+    if failed:
+        total = (report or {}).get('instances_total', '?')
+        names = ', '.join(str(f.get('name', '?')) for f in failed[:3])
+        log.warning("Cleanup: no delete script — %d of %s client instance(s) did not answer",
+                    len(failed), total)
+        raise _CleanupRefusal(
+            502, 'instances_unavailable',
+            f"{len(failed)} of {total} torrent-client instance(s) did not answer ({names}), so no "
+            f"script was built — a torrent on an instance that did not answer could be using "
+            f"these files.")
+    candidates = _cleanup_claim_candidates(rows, wanted, remote, local)
+    if len(candidates) > _CLEANUP_VERIFY_BOUND:
+        log.warning("Cleanup: no delete script — %d torrents could claim the selection (bound %d)",
+                    len(candidates), _CLEANUP_VERIFY_BOUND)
+        raise _CleanupRefusal(
+            409, 'selection_too_broad',
+            f"Checking this selection would mean reading the file lists of {len(candidates)} "
+            f"torrents, past the limit of {_CLEANUP_VERIFY_BOUND}. Select fewer folders at a time.",
+            candidates=len(candidates), bound=_CLEANUP_VERIFY_BOUND)
+    if not candidates:
+        return set()
+    try:
+        listings = sources.fetch_torrent_file_paths(cfg, candidates) or {}
+    except Exception as e:
+        log.warning("Cleanup: no delete script — torrent file listings failed (%s)",
+                    type(e).__name__)
+        raise _CleanupRefusal(502, 'client_unreachable', unreachable)
+    claimed = set()
+    for row in candidates:
+        for p in _cleanup_row_claims(row, listings.get(_reg(row)), remote, local):
+            n = _norm_abs(p)
+            if n in wanted:
+                claimed.add(n)
+    return {rel for rel, a in abs_of.items() if a in claimed}
+
+
+def _cleanup_script_response(cfg, selection):
+    """`orphaned_torrents_delete` — a delete script for an explicit, re-verified selection.
+
+    **A selection is required** (C14, decided 2026-09-13: remove `delete_selected`
+    end-to-end and require a non-empty selection here). An unselected script over
+    every orphan had no UI caller, and CLEANUP §6 rules out "clean everything":
+    C2's failure mode is one click from catastrophic, so nothing may be pre-armed.
+
+    A path is accepted only if the last audit listed it as a non-excluded orphan
+    — a record's own path or one of its `other_paths`. Then:
+
+    * any `unverified` path → 409 `unverified`, so the rule is not only a
+      disabled checkbox;
+    * the live re-verify (`_cleanup_live_claims`) — refusals as documented there;
+    * claimed paths are dropped and the header says how many;
+    * nothing left → 409 `nothing_left`, not a script that does nothing.
+
+    The body stays plain text so copy and download are unchanged; what the page
+    needs to correct its subtitle rides response headers — the verification
+    time, the dropped count, the files in the script and the bytes it can free
+    at most. Dedupe's script path is untouched by any of this.
+    """
+    raw = selection.get('paths') if isinstance(selection, dict) else None
+    wanted = list(dict.fromkeys(str(p).replace('\\', '/') for p in
+                                (raw if isinstance(raw, list) else []) if str(p).strip()))
+    if not wanted:
+        return _CleanupRefusal(
+            400, 'selection_required',
+            "Select the files to delete first — a delete script is only built for an explicit "
+            "selection.").response()
+    if not cfg.get('LOCAL_PATH'):
+        return _CleanupRefusal(
+            400, 'local_path_unset',
+            "Your torrent folder (LOCAL_PATH) is not configured, so the selection cannot be "
+            "checked against your torrent client. Set it in Config first.").response()
+
+    records, excluded_count = _cleanup_records()
+    by_path = {}
+    for rec in records:
+        for p in _cleanup_paths(rec):
+            by_path[p] = rec
+    known = [p for p in wanted if p in by_path]
+    not_in_report = len(wanted) - len(known)
+    unverified = sum(1 for p in known if by_path[p].get('unverified'))
+    if unverified:
+        return _CleanupRefusal(
+            409, 'unverified',
+            f"{unverified} of the selected files could not be checked on the last scan, so no "
+            f"delete script was built. They become checkable again after a scan that reads every "
+            f"torrent's file list.", unverified=unverified).response()
+    if not known:
+        return _CleanupRefusal(
+            409, 'nothing_left',
+            "None of the selected files are orphaned in the last scan, so there is nothing to "
+            "delete.", dropped=0, not_in_report=not_in_report).response()
+
+    try:
+        claimed = _cleanup_live_claims(cfg, known)
+    except _CleanupRefusal as refusal:
+        return refusal.response()
+    kept = [p for p in known if p not in claimed]
+    if claimed:
+        log.info("Cleanup: %d of %d selected file(s) are claimed by a torrent now — "
+                 "left out of the delete script", len(claimed), len(known))
+    if not kept:
+        return _CleanupRefusal(
+            409, 'nothing_left',
+            f"Every selected file is in use by a torrent in your client now "
+            f"({len(claimed)} file{'s' if len(claimed) != 1 else ''}), so there is nothing to delete.",
+            dropped=len(claimed), not_in_report=not_in_report).response()
+
+    units, by_record = [], {}
+    for p in kept:
+        rec = by_path[p]
+        unit = by_record.get(id(rec))
+        if unit is None:
+            unit = by_record[id(rec)] = {
+                'paths': [], 'size': rec.get('size') or 0, 'state': _cleanup_state(rec),
+                '_all': set(_cleanup_paths(rec)),
+            }
+            units.append(unit)
+        unit['paths'].append(p)
+    for unit in units:
+        # An inode's bytes go only when every one of its paths goes, and only a
+        # last copy frees anything when they do.
+        unit['frees'] = unit['state'] == 'last_copy' and set(unit['paths']) == unit.pop('_all')
+
+    verified_at = int(time.time())
+    safe_folders = {str(r['excl_folder']).replace('\\', '/') for r in records if r.get('excl_folder')}
+    script = build_cleanup_script(
+        units, verified_at=verified_at, dropped=len(claimed), not_in_report=not_in_report,
+        excluded_count=excluded_count, safe_folders=safe_folders)
+    resp = app.response_class(script, mimetype='text/plain; charset=utf-8')
+    resp.headers['X-Auditorr-Verified-At'] = str(verified_at)
+    resp.headers['X-Auditorr-Dropped'] = str(len(claimed))
+    resp.headers['X-Auditorr-Files'] = str(len(kept))
+    resp.headers['X-Auditorr-Freeable'] = str(sum(u['size'] for u in units if u['frees']))
+    return resp
+
+
+def _dedupe_script_response(cfg, selection):
+    """The Dedupe script, for an explicit selection of groups.
+
+    * **No selection, no script** — 400 `selection_required` for a GET, `{}`,
+      `{groups: []}` or a `groups` that is not a list. `if selection.get('groups')`
+      read `[]` as "no filter" and scripted every group: the 2026-09-10 review's
+      note under S10, and the shape Cleanup closed as C14.
+    * A group is selected by its id **or any member path**. An open tab from
+      before Phase 10 posts the old canonical path, and every one of those is a
+      member path — so a stale bundle still selects exactly its groups.
+    * Nothing to script → 409 `nothing_selected`: no group matched, every match
+      changed since the scan (`stale`), or none keeps two copies inside the
+      script root.
+
+    Built from `scripts.build_dedupe_report`, the page's own builder (F13). The
+    body stays plain text; what was actually scripted rides `X-Auditorr-*`
+    headers, for the dialog's subtitle.
+    """
+    raw = selection.get('groups') if isinstance(selection, dict) else None
+    wanted = ({str(g).replace('\\', '/') for g in raw if str(g).strip()}
+              if isinstance(raw, list) else set())
+    if not wanted:
+        return _CleanupRefusal(
+            400, 'selection_required',
+            "Select the duplicate groups to link first — a dedupe script is only built for an "
+            "explicit selection.").response()
+
+    # The compact row, or both lists from one generation (R6, S04).
+    report = build_dedupe_report(*_dedupe_records(), cfg)
+    chosen = [g for g in report['groups']
+              if g['id'] in wanted
+              or any(p['path'] in wanted for m in g['members'] for p in m['paths'])]
+    stale = sum(1 for g in chosen if not g['selectable'])
+    units, _ = dedupe_script_units([g for g in chosen if g['selectable']])
+    if not units:
+        if not chosen:
+            message = ("None of the selected groups are among the last scan's duplicates, so there "
+                       "is nothing to link.")
+        elif stale == len(chosen):
+            message = ("Every selected group has changed since the last scan — a copy is gone. Scan "
+                       "again to refresh the page.")
+        else:
+            message = ("None of the selected groups keeps two copies inside the folder the script "
+                       "runs from, so there is nothing to link.")
+        return _CleanupRefusal(409, 'nothing_selected', message, stale=stale).response()
+
+    log.info("Dedupe: script built for %d of %d selected group(s)", len(units), len(chosen))
+    script = build_dedupe_script(
+        [g for g, _ in units], script_root=report['script_root'], generated_at=int(time.time()),
+        excluded_count=report['excluded_count'], stale=stale)
+    resp = app.response_class(script, mimetype='text/plain; charset=utf-8')
+    resp.headers['X-Auditorr-Groups'] = str(len(units))
+    resp.headers['X-Auditorr-Files'] = str(sum(len(m) for _, m in units))
+    resp.headers['X-Auditorr-Frees-Up-To'] = str(sum(g['size'] * (len(m) - 1) for g, m in units))
+    return resp
+
+
 @app.route('/api/actions/script/<script_type>', methods=['GET', 'POST'])
 @require_auth
 def get_action_script(script_type):
     cfg = db_load_config()
-    results = db_load_results()
-    results['torrent_files'] = db_load_file_results('torrents')
-    if script_type == 'dedupe':
-        results['media_files'] = db_load_file_results('media')
-    # POST carries a selection from a workflow page: {'paths': [...]} for
-    # delete scripts, {'groups': [...]} (canonical paths) for dedupe.
+    # POST carries a selection from a workflow page: {'paths': [...]} for the
+    # Cleanup delete script, {'groups': [...]} for dedupe. Neither script is ever
+    # built without one.
     selection = (request.get_json(silent=True) or {}) if request.method == 'POST' else None
-    try:
-        script = generate_script(script_type, results, cfg, selection=selection)
-    except ValueError as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
-    return app.response_class(script, mimetype='text/plain; charset=utf-8')
+    if script_type == 'orphaned_torrents_delete':
+        # Built from the compact `cleanup` row and a live check of the client —
+        # never from the full torrent list, and never without a selection.
+        return _cleanup_script_response(cfg, selection or {})
+    if script_type == 'dedupe':
+        return _dedupe_script_response(cfg, selection or {})
+    return jsonify({"status": "error", "message": "Unknown script type"}), 400
 
 
 @app.route('/api/actions/sonarr_rescan', methods=['POST'])
@@ -1030,7 +1569,10 @@ def workflows_indexers():
 # Workflow report endpoints (Triage / Cleanup / Dedupe)
 # ---------------------------------------------------------------------------
 
-_VIDEO_EXTS = {'.mkv', '.mp4', '.avi', '.m2ts', '.ts', '.mov', '.wmv'}
+# One video extension set, shared with Backfill (`arr.VIDEO_EXTENSIONS`). This was
+# a narrower local copy, and `_classify_triage_junk` calls anything outside it a
+# sidecar — so a `.m4v` film was offered as "`.m4v` files", one click from hiding it.
+_VIDEO_EXTS = VIDEO_EXTENSIONS
 _TRIAGE_GROUP_CAP = 500
 # Hard cap per /triage/verify request. The client sends smaller batches
 # sequentially, so the per-torrent tracker fan-out (8-wide pools in sources/)
@@ -1042,6 +1584,52 @@ _TRIAGE_VERIFY_BATCH_MAX = 200
 # polls it every few seconds, so it is deliberately smaller than the tracker
 # verify batch — a rescan selection is a handful of rows, not a whole library.
 _IMPORT_CHECK_MAX = 60
+
+
+def _literal_pattern(path, subtree=False):
+    """One exclusion rule built from a real path — never a glob (C8).
+
+    `literal:` exists because release names contain `[`, `]`, `*` and `?`, and
+    every other path rule runs through fnmatch. See `exclusions._LITERAL_DOC`.
+    """
+    p = str(path).replace('\\', '/').strip('/')
+    return f"literal:{p}/" if subtree else f"literal:{p}"
+
+
+def _excl_folder(records):
+    """The audit's agreed `excl_folder` for a torrent's records, or ''.
+
+    Every record of a hash carries the same stamp, so disagreement means the
+    group spans hashes or a record predates the field — either way the honest
+    answer is "not established", which falls back to per-file rules.
+    """
+    folders = {str(f.get('excl_folder') or '') for f in records}
+    return folders.pop() if len(folders) == 1 else ''
+
+
+def _triage_exclusion_patterns(paths, folder):
+    """Exclusion rules for one Triage row (T6).
+
+    `folder` is the audit's `excl_folder` stamp — the directory it established is
+    safe to exclude wholesale, or empty. When there is one, the row is a single
+    literal subtree rule; otherwise every file gets its own exact rule.
+
+    **The endpoint deliberately makes no judgement of its own here.** It used to
+    re-derive the common folder from `paths` and accept it at two segments or
+    deeper, which was a proxy for "is this a category dir" and measurably wrong:
+    a torrent saved with no category directory has its release folder one
+    segment down, and the rule refused it in favour of nine per-file rules long
+    enough for the config cap to refuse those in turn. Only the audit can see
+    the whole torrent, every other torrent's paths, and the media tree, which is
+    what the real test needs — see `audit._mark_whole_torrents`.
+
+    A single-file torrent gets an exact rule regardless: the audit will not stamp
+    a folder it does not own, and a lone file's parent is usually shared.
+    """
+    norm = [str(p).replace('\\', '/') for p in paths if p]
+    if folder and len(norm) > 1:
+        return [_literal_pattern(folder, subtree=True)]
+    return [_literal_pattern(p) for p in norm]
 
 
 def _triage_verdict_under(alternatives, health):
@@ -1056,7 +1644,21 @@ def _triage_verdict_under(alternatives, health):
 @app.route('/api/workflows/exclude', methods=['POST'])
 @require_auth
 def workflows_exclude():
-    """Append patterns to the Excluded Files & Folders config list."""
+    """Append patterns to the Excluded Files & Folders config list.
+
+    This writes `EXCLUSION_PATTERNS` through `db_save_config`, which is a bare
+    INSERT OR REPLACE and validates nothing — `validate_config` runs only on the
+    config POST. So the caps it enforces on this exact key have to be enforced
+    *here* too, or a click-through session writes a list the Config page then
+    refuses to save, and the error ("EXCLUSION_PATTERNS[47] must not exceed 200
+    characters") blocks every unrelated setting on that page until the user
+    finds and hand-trims the list. Both limits are reachable in one sitting: a
+    200-character relative path on a nested season pack with a long scene name,
+    and 100 patterns in an afternoon of clicking Exclude on a messy library.
+
+    Refusal is reported rather than swallowed — "3 of 5 added; 2 were too long"
+    beats a green toast over a list that is now unsaveable.
+    """
     data = request.json or {}
     patterns = [str(p).strip() for p in (data.get('patterns') or []) if str(p).strip()]
     if not patterns:
@@ -1064,80 +1666,404 @@ def workflows_exclude():
     cfg = db_load_config()
     existing = [p for p in cfg.get('EXCLUSION_PATTERNS', []) if isinstance(p, str)]
     seen = {p.strip().lower() for p in existing}
-    added = 0
+    added = duplicates = too_long = no_room = 0
     for p in patterns:
-        if p.lower() not in seen:
-            existing.append(p)
-            seen.add(p.lower())
-            added += 1
-    cfg['EXCLUSION_PATTERNS'] = existing
-    db_save_config(cfg)
-    # No file changed, so the watcher will never notice this on its own — but
-    # every count auditorr reports just moved. Debounced, so clicking through a
-    # page of suggestion chips still costs one scan.
-    if added:
-        nudge_watchdog('exclusion patterns added')
-    return jsonify({"status": "success", "added": added, "total": len(existing)})
-
-
-def _partition_removal_by_file_sharing(cfg, items):
-    """Split a removal set by whether each torrent's files survive its removal.
-
-    A cross-seed can share its files with another torrent in one of two ways:
-      - shared path (one file, several registrations): deleting the file breaks
-        every other torrent pointing at it → those files must be KEPT.
-      - distinct hardlink (own path, shared inode): deleting drops only this
-        torrent's link; the library and sibling hardlinks survive → safe to
-        DELETE, and deleting avoids leaving an orphaned file behind.
-
-    The deciding question is per torrent: is any of its files also owned by a
-    torrent that is NOT being removed? If so, keep files; otherwise delete them.
-    Only same-size torrents can share a file, so the live path lookup is bounded
-    to that candidate set (mirrors the Trumped group resolver).
-
-    Returns (delete_items, keep_items).
-    """
-    remove_hashes = {i['hash'] for i in items if i.get('hash')}
-    rows      = sources.list_torrents(cfg)
-    by_hash   = {r['hash']: r for r in rows}
-    seeds     = [by_hash[i['hash']] for i in items if i.get('hash') in by_hash]
-    sizes     = {s['size'] for s in seeds}
-    # Removed torrents + any same-size torrent that could share a path with them.
-    candidates = [r for r in rows if r['size'] in sizes]
-    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
-
-    owners = {}  # path -> set(hashes referencing it)
-    for h, paths in paths_map.items():
-        for p in paths:
-            owners.setdefault(p, set()).add(h)
-
-    delete_items, keep_items = [], []
-    for it in items:
-        h = it.get('hash')
-        if not h:
+        if p.lower() in seen:
+            duplicates += 1
             continue
-        my_paths = paths_map.get(h, [])
-        shared = any(any(o not in remove_hashes for o in owners.get(p, ()))
-                     for p in my_paths)
-        (keep_items if shared else delete_items).append(it)
-    return delete_items, keep_items
+        if len(p) > EXCLUSION_PATTERN_MAX_CHARS:
+            too_long += 1
+            continue
+        if len(existing) >= EXCLUSION_PATTERNS_MAX:
+            no_room += 1
+            continue
+        existing.append(p)
+        seen.add(p.lower())
+        added += 1
+    cfg['EXCLUSION_PATTERNS'] = existing
+    if added:
+        db_save_config(cfg)
+        # No file changed, so the watcher will never notice this on its own — but
+        # every count auditorr reports just moved. Debounced, so clicking through a
+        # page of suggestion chips still costs one scan.
+        nudge_watchdog('exclusion patterns added')
+
+    # Each refusal names its own remedy: trimming the list fixes the count cap
+    # and does nothing for an over-long path, so one shared "trim the list"
+    # sent half of these users somewhere useless.
+    refusals, remedies = [], []
+    if too_long:
+        refusals.append(f"{too_long} too long (over {EXCLUSION_PATTERN_MAX_CHARS} characters)")
+        remedies.append("write a shorter rule for those by hand")
+    if no_room:
+        refusals.append(f"{no_room} would pass the {EXCLUSION_PATTERNS_MAX}-pattern limit")
+        remedies.append("remove rules you no longer need")
+    if refusals:
+        message = (f"Added {added} of {len(patterns)} — "
+                   + ", ".join(refusals)
+                   + f". In Config → Excluded Files & Folders, {' and '.join(remedies)}.")
+        log.warning("Exclude refused %d pattern(s): %s", too_long + no_room, "; ".join(refusals))
+    else:
+        message = f"Added {added} exclusion rule{'' if added == 1 else 's'}"
+    return jsonify({
+        "status":     "success",
+        "added":      added,
+        "duplicates": duplicates,
+        "refused":    too_long + no_room,
+        "too_long":   too_long,
+        "no_room":    no_room,
+        "total":      len(existing),
+        "message":    message,
+    })
+
+
+# Candidate searches a removal resolution runs before it stops and calls itself
+# bounded. Each round searches near every member found so far; the second round
+# almost always finds nothing new, so this only guards a pathological chain.
+_REMOVAL_ROUNDS = 5
+# A client can drop a torrent a moment after its API returns, so a removal still
+# listed on the first look is looked at once more before it is reported as such.
+_REMOVAL_RECHECK_SECS = 2
+
+
+def _reg(row):
+    """This live row's registration key (S05) — `(instance_id, hash)`, spelled.
+
+    Every live listing carries `reg`; the fallback derives it for a row built by
+    hand or by a stale caller. With qbit, or any qui row whose instance is
+    unknown, this is the bare hash — so a one-client install's keys are exactly
+    what they were before Phase 13.
+    """
+    return row.get('reg') or sources.registration_key(row.get('instance_id'), row.get('hash'))
+
+
+def _resolve_registrations(rows, keys):
+    """`(regs, ambiguous, missing)` — keys posted by a page, against the live listing.
+
+    A key is a registration key or a bare infohash: every existing page posts
+    hashes, and a hash is still the whole answer wherever a torrent is
+    registered once. Where it is registered on **more than one instance** there
+    is no honest way to pick, so the key is returned as `ambiguous` (naming the
+    instances, by name, because that is what the user has to act on) and nothing
+    acts on it — S05's rule, and R1's one layer up: "could not tell which" is
+    not "the first one".
+    """
+    by_reg, by_hash = {}, {}
+    for r in rows:
+        reg = _reg(r)
+        by_reg[reg] = r
+        by_hash.setdefault(r.get('hash'), []).append(reg)
+    regs, ambiguous, missing = [], [], []
+    for key in dict.fromkeys(str(k) for k in keys if k):
+        if key in by_reg:
+            regs.append(key)
+            continue
+        found = by_hash.get(key) or []
+        if len(found) == 1:
+            regs.append(found[0])
+        elif found:
+            ambiguous.append({
+                'hash': key,
+                'instances': [str(by_reg[f].get('instance_name')
+                                  or by_reg[f].get('instance_id') or '?') for f in found],
+            })
+        else:
+            missing.append(key)
+    return regs, ambiguous, missing
+
+
+def _ambiguous_registration_refusal(ambiguous):
+    """409 `registration_ambiguous`, in `ArrErrorsWarning`'s plain-sentence idiom."""
+    names = ', '.join(sorted({n for a in ambiguous for n in a['instances']})[:4])
+    log.warning("Refusing: %d selected torrent(s) are registered on more than one instance "
+                "and the request did not say which", len(ambiguous))
+    return jsonify({
+        "status": "error", "code": "registration_ambiguous",
+        "ambiguous": ambiguous,
+        "message": (f"{len(ambiguous)} of the selected torrent"
+                    f"{'s are' if len(ambiguous) != 1 else ' is'} registered on more than one "
+                    f"instance ({names}), and this request does not say which one to act on. "
+                    "Nothing was done. Open the row from the instance you mean, or remove the "
+                    "extra registration in your client first."),
+    }), 409
+
+
+def _removal_ownership(cfg, rows, seed_regs):
+    """Everything removing these torrents could touch, and who else holds each file (S01).
+
+    The question Trumped answers before a trump, asked with Trumped's primitives
+    rather than a third copy of them: `_trump_candidates` for the pre-filter
+    (overlapping content roots, or size within 1% — **never exact size**, TR2)
+    and `_cross_seed_group` for membership, the closure over shared file paths.
+
+    One thing is added. Candidates are searched near **every member found so
+    far**, round after round, not only near the seeds. A sidecar-only torrent
+    sharing a file with a seed's cross-seed need share nothing with the seed —
+    its root sits inside the cross-seed's, not the seed's, and its size is
+    nowhere near — so a single search from the seeds never meets it, and
+    removing that cross-seed with its files breaks it (the outside review's
+    design amendment 2). The rounds stop when a search finds nobody new, which
+    is the second round on any ordinary library.
+
+    Returns `{by_reg, paths, holders, groups, unknown, bounded}`: `paths` is
+    `{registration key: [paths] | None}` for every torrent asked, `holders` is
+    `{path: {registration keys}}`, `groups` is `{seed reg: [member rows]}`,
+    `unknown` counts asked torrents outside every group whose listing is `None`
+    (a torrent that may share a file and could not say), and `bounded` is true
+    when the search was cut short. `_removal_file_decision` reads all of it.
+
+    **Keyed by registration, not by hash** (S05): the same torrent on two qui
+    instances is two registrations that can hold two different sets of bytes,
+    and a hash-keyed map kept whichever came first. `_reg` gives the bare hash
+    back where there are no instances, so a one-client answer is unchanged.
+    """
+    by_reg = {_reg(r): r for r in rows}
+    seeds = [by_reg[k] for k in dict.fromkeys(seed_regs) if k in by_reg]
+    paths, bounded, members = {}, False, list(seeds)
+    for _ in range(_REMOVAL_ROUNDS):
+        candidates, prefilter = _trump_candidates(rows, members)
+        bounded = bounded or prefilter['bounded']
+        fresh = [c for c in candidates if _reg(c) not in paths]
+        room = _TRUMP_CANDIDATE_BOUND - len(paths)
+        if len(fresh) > room:
+            bounded, fresh = True, fresh[:max(room, 0)]
+        if not fresh:
+            break
+        got = sources.fetch_torrent_file_paths(cfg, fresh)
+        for c in fresh:
+            paths[_reg(c)] = got.get(_reg(c))
+        members, _, _ = _cross_seed_group([by_reg[k] for k in paths], paths, seeds)
+    else:
+        bounded = True
+
+    holders = {}
+    for key, listing in paths.items():
+        for p in listing or ():
+            holders.setdefault(p, set()).add(key)
+    asked = [by_reg[k] for k in paths]
+    groups = {}
+    for s in seeds:
+        group, _, _ = _cross_seed_group(asked, paths, s)
+        groups[_reg(s)] = group or [{**s, 'paths': []}]
+    in_groups = {_reg(g) for group in groups.values() for g in group}
+    unknown = sum(1 for key, listing in paths.items()
+                  if listing is None and key not in in_groups)
+    return {'by_reg': by_reg, 'paths': paths, 'holders': holders, 'groups': groups,
+            'unknown': unknown, 'bounded': bounded}
+
+
+def _removal_file_decision(own, key, removal):
+    """`('delete' | 'keep', reason)` for one **registration** of a removal set (S01).
+
+    Files are deleted only when ownership is **established**: the torrent's own
+    listing is usable, no torrent that survives the removal holds any of its
+    paths, and nothing about the answer is unknown. Anything else keeps them —
+    the user's decision (a), 2026-09-15: a registration-only removal harms
+    nothing, and its worst case is an orphan, which Cleanup re-verifies against
+    the client before it will delete anything.
+
+    The reasons, in the order they are checked:
+
+    * `not_in_client` — the torrent is not in the listing at all.
+    * `unusable_listing` — its own listing is `None` *or* `[]`. `[]` is an
+      honest answer for a candidate (it holds nothing to share) but not for the
+      torrent being removed: its files are exactly what the listing failed to
+      name. Trumped's seed rule.
+    * `shared` — a survivor holds one of its paths. A survivor holding a
+      *different path to the same inode* (a distinct hardlink) does not count:
+      deleting this torrent drops only its own link.
+    * `unknown` — a candidate's listing could not be read, or the search was
+      bounded. Either could be a survivor this answer cannot see.
+    * `requested` — none of the above; the files go, as asked.
+    """
+    if key not in own['by_reg']:
+        return 'keep', 'not_in_client'
+    listing = own['paths'].get(key)
+    if not listing:
+        return 'keep', 'unusable_listing'
+    if any(o not in removal for p in listing for o in own['holders'].get(p, ())):
+        return 'keep', 'shared'
+    if own['unknown'] or own['bounded']:
+        return 'keep', 'unknown'
+    return 'delete', 'requested'
+
+
+def _keeps_files(mode):
+    """True when a removal request asked to keep every file.
+
+    Only an explicit no keeps them. `auto`, `true` and an **omitted** value all
+    take the ownership-checked path. An omitted value used to default to `True`
+    and delete with no check at all, and the only caller in auditorr sends
+    `auto` — decided by the user, 2026-09-15, so no unchecked delete mode
+    survives as an API affordance.
+    """
+    if mode is None or mode is False:
+        return True
+    if isinstance(mode, str):
+        return mode.strip().lower() in ('false', 'keep', 'no', '0')
+    return mode == 0
+
+
+def _removal_plan_refusal(own, plan, decisions):
+    """None when the confirmed plan still holds, else a 409 `plan_changed`.
+
+    **The confirmed plan binds** — the user's TR5 decision for Trumped
+    ("grown ⇒ refuse", 2026-09-13), and the outside review's design amendment 2
+    for any destructive group. The modal posts what it showed: each group's
+    members and each removed torrent's file decision. The server has just
+    re-resolved, and refuses when:
+
+    * a group gained or lost a member — new information about what is touched;
+    * a torrent shown **keeping** its files would now have them deleted. A
+      decision the plan does not name was never shown going, so it counts as
+      shown kept.
+
+    A flip the other way — shown deleted, now kept — is the safe direction and
+    goes ahead; the route reports it.
+
+    Every key here is a **registration** key; the route normalises the posted
+    plan with `_plan_in_registrations` first, so a page that posts bare hashes
+    (every page before S05, and every page on a one-client install, where the
+    two spellings are the same string) is compared like for like.
+    """
+    posted_groups = plan.get('groups') if isinstance(plan.get('groups'), dict) else {}
+    posted_files = plan.get('files') if isinstance(plan.get('files'), dict) else {}
+    added = lost = 0
+    for seed, shown in posted_groups.items():
+        shown = {str(h) for h in (shown if isinstance(shown, list) else [])}
+        now = {_reg(g) for g in own['groups'].get(str(seed), [])}
+        added += len(now - shown)
+        lost += len(shown - now)
+    now_deleting = sum(1 for key, (files, _) in decisions.items()
+                       if files == 'delete' and posted_files.get(key) != 'delete')
+    if not (added or lost or now_deleting):
+        return None
+    log.warning("Client delete: refusing — the plan changed since it was shown "
+                "(%d added, %d gone, %d would now delete files)", added, lost, now_deleting)
+    parts = ([f"{added} more torrent{'s' if added != 1 else ''} share these files"] if added else []) + \
+            ([f"{lost} no longer {'do' if lost != 1 else 'does'}"] if lost else []) + \
+            ([f"{now_deleting} would now have files deleted that were shown as kept"] if now_deleting else [])
+    return jsonify({
+        "status": "error", "code": "plan_changed",
+        "added": added, "lost": lost, "now_deleting": now_deleting,
+        "message": f"What this removal would do has changed since the dialog opened — {'; '.join(parts)}. "
+                   "Nothing was removed. Review it and confirm again.",
+    }), 409
+
+
+def _plan_in_registrations(rows, plan):
+    """The confirmed plan with every posted key resolved to a registration key.
+
+    A bare hash resolves only when exactly one registration carries it; where
+    several do it is left alone, which reads as a membership change and refuses
+    — the fail-safe direction, and the same rule `_resolve_registrations` takes.
+    """
+    if not isinstance(plan, dict):
+        return None
+    single = {}
+    for r in rows:
+        h = r.get('hash')
+        single[h] = None if h in single else _reg(r)
+    resolve = lambda k: single.get(str(k)) or str(k)          # noqa: E731
+    groups = plan.get('groups') if isinstance(plan.get('groups'), dict) else {}
+    files  = plan.get('files') if isinstance(plan.get('files'), dict) else {}
+    return {
+        'seeds':  [resolve(s) for s in (plan.get('seeds') or [])],
+        'groups': {resolve(seed): [resolve(m) for m in (members if isinstance(members, list) else [])]
+                   for seed, members in groups.items()},
+        'files':  {resolve(k): v for k, v in files.items()},
+    }
+
+
+def _removal_outcomes(cfg, regs, before):
+    """`{registration key: outcome}` — what the client lists after a removal (S09).
+
+    `sources.remove_torrents` reports what it *submitted*: qui counts what it
+    posted (and a later instance's `raise_for_status` loses the earlier
+    instances' outcomes with the request), qbit counts hashes that existed.
+    Neither says what left. Rather than rewrite both backends' return contract,
+    this looks — one `list_torrents_detailed` — and answers per hash:
+
+    * `removed` — listed before, absent now, from an instance that answered;
+    * `already_gone` — not listed before either;
+    * `still_listed` — still there. Looked at once more after
+      `_REMOVAL_RECHECK_SECS`, since a client can drop a torrent a moment
+      after its API returns; **not verified against a live qui bulk action**,
+      which may apply asynchronously — the re-check is the allowance for it;
+    * `unknown` — its instance did not answer, so absence means nothing.
+
+    **Per registration, not per hash** (S05). Asking whether the *hash* is still
+    listed reads a correct removal as `still_listed` the moment the same torrent
+    is registered on a second instance — the page then marks it "removal
+    unconfirmed" for something that worked. The question is whether *this*
+    registration is still there.
+
+    The page dismisses only `removed` and `already_gone` rows and names the rest.
+    """
+    instance_of = {_reg(r): r.get('instance_name') for r in before}
+
+    def _look():
+        try:
+            rows, report = sources.list_torrents_detailed(cfg)
+        except Exception as e:
+            log.warning("Client delete: could not list the client afterwards (%s)", type(e).__name__)
+            return None
+        failed = {str(f.get('name')) for f in report.get('instances_failed') or []}
+        listed = {_reg(r) for r in rows}
+        out = {}
+        for key in regs:
+            inst = instance_of.get(key)
+            if failed and (inst is None or str(inst) in failed):
+                out[key] = 'unknown'
+            elif key in listed:
+                out[key] = 'still_listed'
+            else:
+                out[key] = 'removed' if key in instance_of else 'already_gone'
+        return out
+
+    out = _look() or {key: 'unknown' for key in regs}
+    lingering = [key for key in regs if out[key] == 'still_listed']
+    if lingering:
+        time.sleep(_REMOVAL_RECHECK_SECS)
+        again = _look()
+        if again:
+            for key in lingering:
+                out[key] = again[key]
+    return out
 
 
 @app.route('/api/workflows/remove_torrents', methods=['POST'])
 @require_auth
 def workflows_remove_torrents():
-    """Remove selected torrents from the client, optionally deleting their files.
+    """Remove selected torrents from the client, deleting files only where it is established safe.
 
-    `delete_files` accepts true / false / "auto":
-      true  — delete each torrent's files (caller asserts it is safe)
-      false — remove the registration only, keep every file
-      auto  — per torrent, delete files only when they are not shared with a
-              surviving torrent (cross-seed safe across every topology); files
-              shared with a still-seeding sibling are kept so it is never broken.
+    `delete_files` is `false` (keep every file) or anything else — `auto`,
+    `true`, or omitted — which takes the ownership-checked path: per torrent,
+    files go only when no surviving torrent holds them and nothing about that
+    answer is unknown (`_removal_file_decision`). `auto` used to delete whenever
+    it *found* no survivor, and a listing it could not read, a survivor it could
+    not list and a survivor one `.nfo` larger all found none (S01).
+
+    `plan` — `{seeds, groups: {seed: [keys]}, files: {key: keep|delete}}`,
+    what the confirm modal showed — binds: the group is re-resolved here, once,
+    and a change refuses with 409 `plan_changed` (`_removal_plan_refusal`).
+    Without a plan the checks still run; there is just nothing to hold them to.
+
+    **Every item is a registration** (S05) — `{hash, instance_id}`, which is
+    what the page has always sent. A posted hash that names more than one
+    registration and no instance refuses with 409 `registration_ambiguous`
+    rather than acting on whichever the client listed first, and `outcomes` is
+    keyed by registration so a correct removal is not reported as unconfirmed
+    because the same hash is still registered elsewhere.
+
+    The response says, per torrent, what happened to its files and why, and
+    whether it actually left the client (`_removal_outcomes`) — including on a
+    502, where a removal that failed part-way still reports what it removed.
 
     Destructive — gated behind the ALLOW_CLIENT_DELETE config flag (off by
     default) so conservative users can keep auditorr strictly read-only
-    against their client.
+    against their client. A failed instance refuses a checked removal: its
+    torrents are invisible to the ownership check, not merely uncounted.
     """
     cfg = db_load_config()
     if not cfg.get('ALLOW_CLIENT_DELETE'):
@@ -1146,37 +2072,101 @@ def workflows_remove_torrents():
             "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
         }), 403
     data  = request.json or {}
-    items = [
-        {'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
-        for i in (data.get('items') or []) if i.get('hash')
-    ]
+    items = list({sources.registration_key(i.get('instance_id'), str(i.get('hash'))):
+                  {'hash': str(i.get('hash')), 'instance_id': i.get('instance_id')}
+                  for i in (data.get('items') or []) if isinstance(i, dict) and i.get('hash')}.values())
     if not items:
         return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
 
-    mode = data.get('delete_files', True)
+    keep_files = _keeps_files(data.get('delete_files', True))
+    plan = data.get('plan') if isinstance(data.get('plan'), dict) else None
     try:
-        if mode == 'auto':
-            delete_items, keep_items = _partition_removal_by_file_sharing(cfg, items)
-            removed  = sources.remove_torrents(cfg, delete_items, delete_files=True) if delete_items else 0
-            removed += sources.remove_torrents(cfg, keep_items, delete_files=False) if keep_items else 0
-            files_deleted, files_kept = len(delete_items), len(keep_items)
-        else:
-            removed = sources.remove_torrents(cfg, items, delete_files=bool(mode))
-            files_deleted = removed if bool(mode) else 0
-            files_kept    = 0 if bool(mode) else removed
+        # Keeping files needs no ownership answer, so a listing short of an
+        # instance is still good enough to report outcomes against.
+        before = sources.list_torrents_detailed(cfg)[0] if keep_files else sources.list_torrents(cfg)
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
-    log.info("Client delete: removed %d/%d torrent(s) (mode=%s, files_deleted=%d, files_kept=%d)",
-             removed, len(items), mode, files_deleted, files_kept)
+
+    # An item that names its instance is already a registration; one that does
+    # not is resolved against the live listing, and refuses where several
+    # registrations answer to the same hash.
+    posted = [(_reg(i), i) for i in items]
+    resolved, ambiguous, absent = _resolve_registrations(before, [k for k, _ in posted])
+    if ambiguous:
+        return _ambiguous_registration_refusal(ambiguous)
+    live = {_reg(r): r for r in before}
+    # A key the client does not list is still answered for — `not_in_client` /
+    # `already_gone` — rather than dropped from the response.
+    regs = resolved + absent
+    by_key = {}
+    for key in regs:
+        row = live.get(key)
+        fallback = next((i for k, i in posted if k == key), {'hash': key, 'instance_id': None})
+        by_key[key] = ({'hash': row['hash'], 'instance_id': row.get('instance_id')}
+                       if row else fallback)
+    plan = _plan_in_registrations(before, plan)
+
+    flipped = 0
+    if keep_files:
+        decisions = {key: ('keep', 'requested') for key in regs}
+    else:
+        seeds = [*(str(s) for s in ((plan or {}).get('seeds') or [])),
+                 *(str(s) for s in ((plan or {}).get('groups') or {})),
+                 *regs]
+        own = _removal_ownership(cfg, before, seeds)
+        removal = set(regs)
+        decisions = {key: _removal_file_decision(own, key, removal) for key in regs}
+        if plan is not None:
+            refusal = _removal_plan_refusal(own, plan, decisions)
+            if refusal is not None:
+                return refusal
+            posted = plan.get('files') or {}
+            flipped = sum(1 for key, (files, _) in decisions.items()
+                          if files == 'keep' and posted.get(key) == 'delete')
+        kept = [r for f, r in decisions.values() if f == 'keep']
+        if kept:
+            log.info("Client delete: keeping files for %d of %d torrent(s) — %d shared, %d unknown, "
+                     "%d unusable listing, %d not in client",
+                     len(kept), len(regs), kept.count('shared'), kept.count('unknown'),
+                     kept.count('unusable_listing'), kept.count('not_in_client'))
+
+    delete_items = [by_key[k] for k in regs if k in by_key and decisions[k][0] == 'delete']
+    keep_items   = [by_key[k] for k in regs if k in by_key and decisions[k][0] != 'delete']
+    submitted, error = 0, None
+    try:
+        if delete_items:
+            submitted += sources.remove_torrents(cfg, delete_items, delete_files=True)
+        if keep_items:
+            submitted += sources.remove_torrents(cfg, keep_items, delete_files=False)
+    except sources.SourceConnectionError as e:
+        error = str(e)
+
+    outcomes = _removal_outcomes(cfg, regs, before)
+    torrents = [{'reg': key, 'hash': by_key.get(key, {}).get('hash', key),
+                 'instance_id': by_key.get(key, {}).get('instance_id'),
+                 'files': decisions[key][0], 'reason': decisions[key][1],
+                 'outcome': outcomes[key]}
+                for key in regs]
+    removed = sum(1 for t in torrents if t['outcome'] == 'removed')
+    files_deleted = sum(1 for t in torrents if t['outcome'] == 'removed' and t['files'] == 'delete')
+    log.info("Client delete: %d/%d torrent(s) left the client (%d with files deleted, %d submitted, "
+             "%d still listed, %d unknown, %d kept files where deletion was shown)",
+             removed, len(items), files_deleted, submitted,
+             sum(1 for t in torrents if t['outcome'] == 'still_listed'),
+             sum(1 for t in torrents if t['outcome'] == 'unknown'), flipped)
     # A keep-files removal touches the client and nothing else, so there is no
     # filesystem event for the watcher to see — yet the torrent is gone and
     # every count that mentions it is now wrong. Even a delete-files removal is
     # worth nudging: it makes the audit start from the last *action* rather than
     # from whichever inotify event happened to arrive last.
-    if removed:
+    if removed or submitted:
         nudge_watchdog('torrents removed via the client')
-    return jsonify({"status": "success", "removed": removed, "requested": len(items),
-                    "files_deleted": files_deleted, "files_kept": files_kept})
+    body = {"removed": removed, "requested": len(items), "submitted": submitted,
+            "files_deleted": files_deleted, "files_kept": removed - files_deleted,
+            "flipped_to_keep": flipped, "torrents": torrents, "outcomes": outcomes}
+    if error is not None:
+        return jsonify({"status": "error", "message": error, **body}), 502
+    return jsonify({"status": "success", **body})
 
 
 @app.route('/api/workflows/force_import', methods=['POST'])
@@ -1243,13 +2233,30 @@ def workflows_import_check():
     for the same reason — the arr's command status is not trustworthy, but its
     own file id is. Stateless: the caller holds the baseline, so nothing here
     has to be remembered between requests.
+
+    Two rules, each a Phase 9 fix:
+
+    * **S08 — only a read that happened is `checked`.** The file id comes from
+      `read_arr_file_id`, which raises on a failed read, rather than
+      `get_arr_file_id`, which answered `None` — so a timeout used to come back
+      `checked: true, file_id: null` and read as an import.
+    * **T11 — a Sonarr row watches its own episodes, not the series.** The
+      series' file ids move whenever Sonarr imports *any* episode of it, and a
+      busy series retired a row whose file never landed. An item carrying
+      `season` (and `episode`, or `episodes` for a multi-episode row; neither
+      for a season pack) is answered with the file ids of those episodes,
+      joined through `sonarr_episodes_by_file` once per series per request;
+      a `None` join is `checked: false`. An item with no `season` — a browser
+      bundle older than this — gets the series-wide reading it always did.
+
+    Each result carries `scope`: `movie`, `episode`, `season` or `series`.
     """
     cfg   = db_load_config()
     items = (request.json or {}).get('items') or []
     if not items:
         return jsonify({"status": "error", "message": "No items provided"}), 400
 
-    results = []
+    results, episode_lists = [], {}
     for item in items[:_IMPORT_CHECK_MAX]:
         key     = str(item.get('key') or '')
         service = str(item.get('service') or '')
@@ -1259,40 +2266,90 @@ def workflows_import_check():
             # showing it until an audit clears it.
             results.append({"key": key, "file_id": None, "checked": False})
             continue
+        season = item.get('season')
+        by_episode = service == 'sonarr' and isinstance(season, int) and not isinstance(season, bool)
         try:
-            fid = get_arr_file_id(cfg, service, item['connection_id'], item['arr_id'])
-            results.append({"key": key, "file_id": fid, "checked": True})
+            if by_episode:
+                fid, scope = _import_check_episode_files(cfg, item, episode_lists)
+            else:
+                fid = read_arr_file_id(cfg, service, item['connection_id'], item['arr_id'])
+                scope = 'movie' if service == 'radarr' else 'series'
+            results.append({"key": key, "file_id": fid, "checked": True, "scope": scope})
         except Exception as e:
             # `checked: false` is not `file_id: null` — one means "could not
             # ask", the other means "asked, and it holds no file". Collapsing
             # them would read an unreachable arr as a successful import.
-            log.warning("Import check failed for %s %s: %s", service, item.get('arr_id'), e)
+            log.warning("Import check failed for a %s item (%s)", service, type(e).__name__)
             results.append({"key": key, "file_id": None, "checked": False})
 
     return jsonify({"status": "success", "results": results})
 
 
+def _import_check_episode_files(cfg, item, episode_lists):
+    """`(sorted episode-file ids, scope)` for the episodes one Sonarr row is about (T11).
+
+    `episode_lists` caches `sonarr_episodes_by_file` per `(connection, series)`
+    for the request. Raises when the series' episode list could not be read, so
+    the caller reports `checked: false` rather than an empty answer.
+    """
+    series = (item['connection_id'], item['arr_id'])
+    if series not in episode_lists:
+        episode_lists[series] = sonarr_episodes_by_file(cfg, *series)
+    by_file = episode_lists[series]
+    if by_file is None:
+        raise LookupError('episode list unavailable')
+    season = item['season']
+    listed = item.get('episodes')
+    if isinstance(listed, list):
+        wanted = {e for e in listed if isinstance(e, int) and not isinstance(e, bool)} or None
+    elif isinstance(item.get('episode'), int) and not isinstance(item.get('episode'), bool):
+        wanted = {item['episode']}
+    else:
+        wanted = None
+    ids = sorted(fid for fid, eps in by_file.items()
+                 if any(s == season and (wanted is None or e in wanted) for _, s, e in eps))
+    return ids, ('season' if wanted is None else 'episode')
+
+
 @app.route('/api/workflows/triage/resolve_groups', methods=['POST'])
 @require_auth
 def workflows_triage_resolve_groups():
-    """Resolve each selected Triage torrent to its full live cross-seed group.
+    """Resolve each selected Triage torrent to everything its removal touches, live.
 
-    Triage records keep one hash per path (the healthiest claimant), so the
-    sibling cross-seeds are invisible in the report. This queries the client
-    directly so the delete modal can offer 'this torrent only' vs 'all N
-    cross-seeds'.
+    Triage records keep one hash per path (the healthiest claimant), so sibling
+    cross-seeds are invisible in the report and have to be asked of the client.
+    The answer is `_removal_ownership`'s — **the same resolution the removal
+    route re-runs at confirm** — so the modal shows exactly the decisions the
+    server will hold it to.
 
-    Cross-seed file topology is NOT uniform: siblings may each hold a distinct
-    hardlink to a shared inode (deleting one's files is safe), OR several may
-    register against one shared file at the same path (deleting that file breaks
-    the others). Each member therefore carries `shares_path` — true when it
-    shares a content path with another member — so the UI can warn, and the
-    server's delete_files='auto' mode keeps shared files while dropping
-    distinct-hardlink ones.
+    Per group member:
+
+    * `shares_path` / `shares_with` — which other members hold one of its paths.
+      Cross-seed topology is not uniform: a shared path (one file, several
+      registrations) is broken by deleting it, a distinct hardlink is not.
+    * `files` / `reason` — the server's file decision under "this torrent only"
+      (the seed alone; `None` for other members, which that scope does not
+      remove) and under "the whole group" (`_removal_file_decision`).
+
+    And for the request: `checked` (false when a candidate's listing could not be
+    read or the search was bounded — every decision then keeps files, and the
+    modal says so before confirm), `unknown_listings`, `bounded`, and `missing`
+    (selected hashes no longer in the client, which get an empty group).
+
+    This returned HTTP 500 on every call with a seed in the client from `a96bb15`
+    to Phase 9: Phase 7 changed `_cross_seed_group` to return a tuple and this
+    caller, which no test called, kept iterating it.
     """
     data   = request.json or {}
-    hashes = [str(h) for h in (data.get('hashes') or []) if h]
-    if not hashes:
+    # Accepts a bare hash (every page before S05) or `{hash, instance_id}`.
+    posted = []
+    for raw in (data.get('hashes') or []):
+        if isinstance(raw, dict) and raw.get('hash'):
+            posted.append(sources.registration_key(raw.get('instance_id'), str(raw['hash'])))
+        elif raw:
+            posted.append(str(raw))
+    posted = list(dict.fromkeys(posted))
+    if not posted:
         return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
     cfg = db_load_config()
     try:
@@ -1300,59 +2357,74 @@ def workflows_triage_resolve_groups():
     except sources.SourceConnectionError as e:
         return jsonify({"status": "error", "message": str(e)}), 502
 
-    by_hash    = {r['hash']: r for r in rows}
-    seeds      = [by_hash[h] for h in hashes if h in by_hash]
-    sizes      = {s['size'] for s in seeds}
-    candidates = [r for r in rows if r['size'] in sizes]
-    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
-
-    groups = {s['hash']: _cross_seed_group(candidates, paths_map, s) for s in seeds}
+    keys, ambiguous, absent = _resolve_registrations(rows, posted)
+    if ambiguous:
+        return _ambiguous_registration_refusal(ambiguous)
+    own = _removal_ownership(cfg, rows, keys)
+    checked = not (own['unknown'] or own['bounded'])
+    if not checked:
+        log.warning("Triage resolve_groups: ownership not established — %d candidate listing(s) "
+                    "unknown, search bounded: %s", own['unknown'], own['bounded'])
 
     # Enrich every unique group member with live details (seeding time, tracker
     # health) — one batched call across all resolved groups.
     seen, members_in = set(), []
-    for g in groups.values():
+    for g in own['groups'].values():
         for t in g:
-            if t['hash'] not in seen:
-                seen.add(t['hash'])
+            if _reg(t) not in seen:
+                seen.add(_reg(t))
                 members_in.append({'hash': t['hash'], 'instance_id': t.get('instance_id')})
     try:
-        details = sources.fetch_torrent_details(cfg, members_in)
+        details = sources.fetch_torrent_details(cfg, members_in) if members_in else {}
     except Exception as e:
-        log.warning("Triage resolve_groups: detail fetch failed: %s", e)
+        log.warning("Triage resolve_groups: detail fetch failed: %s", type(e).__name__)
         details = {}
 
     out = {}
-    for h, g in groups.items():
+    for key in keys:
+        group = own['groups'].get(key)
+        if not group:
+            out[key] = []
+            continue
+        everyone = {_reg(g) for g in group}
         members = []
-        for t in g:
-            det = details.get(t['hash'], {})
-            t_paths = set(t.get('paths') or [])
-            # Does this member share a content path with another group member?
-            # If so, deleting its files would break that sibling (shared file);
-            # if not, its files are its own distinct hardlink (safe to delete).
-            shares_path = any(o is not t and t_paths and t_paths & set(o.get('paths') or [])
-                              for o in g)
+        for t in group:
+            member = _reg(t)
+            det = details.get(member, {})
+            listing = own['paths'].get(member) or []
+            shares_with = sorted({o for p in listing for o in own['holders'].get(p, ())} - {member})
+            one = _removal_file_decision(own, member, {key}) if member == key else (None, None)
+            whole = _removal_file_decision(own, member, everyone)
             members.append({
+                'reg':            member,
                 'hash':           t['hash'],
                 'instance_id':    t.get('instance_id'),
-                'name':           t['name'],
+                'instance_name':  t.get('instance_name'),
+                'name':           t.get('name') or '',
                 'tracker':        t.get('tracker') or '',
-                'size':           t['size'],
+                'size':           t.get('size') or 0,
                 'seeding_time':   det.get('seeding_time'),
                 'uploaded':       det.get('uploaded'),
                 'tracker_health': det.get('tracker_health', 'unknown'),
                 'tracker_msg':    det.get('tracker_msg', ''),
-                'shares_path':    shares_path,
+                'shares_path':    bool(shares_with),
+                'shares_with':    shares_with,
+                'files':          {'one': one[0], 'all': whole[0]},
+                'reason':         {'one': one[1], 'all': whole[1]},
             })
         members.sort(key=lambda m: m['name'])
-        out[h] = members
+        out[key] = members
 
-    # Hashes not found in the client get an empty group → the modal falls back
-    # to a single-torrent delete for them.
-    for h in hashes:
-        out.setdefault(h, [])
-    return jsonify({"status": "success", "groups": out})
+    return jsonify({
+        "status":           "success",
+        # Keyed by registration (S05) — the bare hash wherever a torrent is
+        # registered once, which is every qbit install and every ordinary qui one.
+        "groups":           {**{k: [] for k in absent}, **out},
+        "missing":          absent,
+        "checked":          checked,
+        "unknown_listings": own['unknown'],
+        "bounded":          own['bounded'],
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1362,44 +2434,151 @@ def workflows_triage_resolve_groups():
 # Sonarr/Radarr.
 # ---------------------------------------------------------------------------
 
-def _trump_year_ok(parsed, t):
-    """Radarr year guard (±1) so same-title remakes can't cross-match."""
-    return not (parsed['year'] is not None and t.get('service') == 'radarr'
-                and t.get('year') and abs(int(t['year']) - parsed['year']) > 1)
+# A daily series names its episodes by air date rather than SxxExx, so the
+# season token that normally identifies TV is absent and the release looks like
+# a film. The service below is a *gate*, so guessing radarr for "Show.2024.01.05"
+# would send the lookup to the wrong service and 404 rather than merely
+# mis-rank — this recovers that one case at the cost of four lines.
+_DAILY_DATE_RE = re.compile(r'\b(19|20)\d{2}[.\-_ ]\d{2}[.\-_ ]\d{2}\b')
 
 
-def _trump_find_arr_item(cfg, parsed):
+def _trump_service_for(parsed, name=''):
+    """Which arr service a parsed trump release belongs to."""
+    if parsed.get('season') is not None:
+        return 'sonarr'
+    return 'sonarr' if _DAILY_DATE_RE.search(str(name or '')) else 'radarr'
+
+
+def _trump_find_arr_item(cfg, parsed, titles=None, name=''):
     """Match a parsed release against managed arr titles (title + year aware).
 
-    Exact first (diacritic/apostrophe-folded title keys, same as Triage), then a
-    **soft fallback** ranked by shared title core — a trump's new-release name
-    often carries a stray season token or extra scene tokens the exact key match
-    can't fold ('… Rides Again S01' vs the series 'The Magic School Bus Rides
-    Again'), so a graded title match beats a hard 404. Content-type service
-    preference (season/episode → sonarr, otherwise radarr) breaks ties.
-    """
-    titles    = fetch_arr_all_titles(cfg)
-    preferred = 'sonarr' if parsed['season'] is not None else 'radarr'
+    Exact first (diacritic/apostrophe-folded title keys, same as Triage), then
+    the arrs' own **alternate titles** — non-English content is released under
+    its original-language name while the arr stores the English one, and that
+    field is authoritative precisely because it is how the arr matched the grab
+    in the first place (TRIAGE T15, same primitives) — then a **soft fallback**
+    ranked by shared title core, because a trump's new-release name often
+    carries a stray season token or extra scene tokens the exact key match can't
+    fold ('… Rides Again S01' vs the series 'The Magic School Bus Rides Again')
+    and a graded title match beats a hard 404.
 
-    keys = title_match_keys(parsed['title'])
-    exact = [t for t in titles
-             if (title_match_keys(t.get('title') or '') & keys) and _trump_year_ok(parsed, t)]
+    **Content type is a gate, not a sort key**, at every tier — TRIAGE T1's fix
+    at its second call site. It used to be `sort(key=preferred first)` followed
+    by `[0]`, which silently falls back to the wrong type whenever the right one
+    has no rows: a same-titled film answering for a series, searched and grabbed
+    on the wrong instance. Within the surviving rows, `rank_arr_candidates`
+    replaces `[0]` so ties stop being broken by `normalize_arr_connections`
+    emission order.
+    """
+    if titles is None:
+        titles = fetch_arr_all_titles(cfg)
+    service = _trump_service_for(parsed, name)
+
+    keys  = title_match_keys(parsed['title'])
+    exact = rank_arr_candidates(
+        [t for t in titles if title_match_keys(t.get('title') or '') & keys],
+        parsed, service=service)
     if exact:
-        exact.sort(key=lambda t: 0 if t.get('service') == preferred else 1)
         return exact[0]
+
+    # Alias pass — kept strictly behind the canonical one, so an alias can only
+    # ever rescue a release that would otherwise have matched nothing.
+    alias_keys = set(with_title_aliases(keys, title_alias_keys(titles))) - keys
+    if alias_keys:
+        aliased = rank_arr_candidates(
+            [t for t in titles if title_match_keys(t.get('title') or '') & alias_keys],
+            parsed, service=service)
+        if aliased:
+            return aliased[0]
 
     # Soft fallback — best title-core overlap above a real floor.
     best, best_sim = None, 0.0
     for t in titles:
-        if not _trump_year_ok(parsed, t):
+        if t.get('service') != service or not arr_year_ok(parsed, t):
             continue
         sim = title_soft_match(parsed['title'], t.get('title') or '')
-        # Nudge the preferred service so a movie/series tie goes the right way.
-        if t.get('service') == preferred:
-            sim += 0.001
         if sim > best_sim:
             best, best_sim = t, sim
     return best if best_sim >= 0.5 else None
+
+
+# Client paths `search_release` will stat for one group. A season pack is a few
+# dozen; this only bounds what a request can make the container stat.
+_TRUMP_GROUP_PATHS_MAX = 2000
+
+
+def _trump_same_item(a, b):
+    """True when two arr rows or summaries name the same item on the same instance."""
+    return bool(a and b) and ((a.get('service'), a.get('connection_id'), a.get('arr_id'))
+                              == (b.get('service'), b.get('connection_id'), b.get('arr_id')))
+
+
+def _trump_item_summary(row):
+    return {k: row.get(k) for k in ('service', 'connection_id', 'connection_name', 'arr_id',
+                                    'title', 'year', 'title_slug')}
+
+
+def _trump_item_label(row):
+    year = row.get('year')
+    return f"{row.get('title') or '?'}{f' ({year})' if year else ''}"
+
+
+def _trump_items_from_paths(cfg, group_paths, parsed):
+    """The arr items holding a trump group's bytes, joined by inode (TR7).
+
+    Group paths are torrent-tree paths and media-index rows are library paths;
+    the arr renames on import, so the two share **inodes, not names**. The
+    join, chosen over the two alternatives ROADMAP Phase 7 lists:
+
+    * reading the audit's `linked_paths` would deserialize the full `torrents`
+      `file_results` row — the known RAM hotspot — on a wizard step;
+    * a compact persisted row would describe the last audit rather than the live
+      group, and add a write path for one endpoint;
+    * so: stat the group, then stat index rows — **only those whose recorded
+      `size` matches a group file**, because a hardlink shares its size. That
+      turns ~3,600 stats on `fuse.shfs` into a handful. A row whose size is
+      stale (a file edited in place) is missed and the title match answers
+      instead, which is the degraded direction, never a wrong hit.
+
+    Returns `{status, items, errors}`. `status` is `matched`, `no_match`,
+    `group_unreadable` (no group path could be stat'ed) or `index_unavailable`.
+    Each item is a summary plus the `file_ids` of its hit rows, ranked by
+    `_arr_candidate_score` against the parsed release — stable, and **not
+    gated**: the files are authoritative, and a year or service guess from a
+    release name must not overrule them.
+    """
+    inodes = {(st.st_dev, st.st_ino): st.st_size
+              for st in _trump_stat_paths(cfg, group_paths).values()
+              if st is not None and st.st_ino}
+    if not inodes:
+        return {'status': 'group_unreadable', 'items': [], 'errors': []}
+    try:
+        # Rows and errors from one snapshot (S11): the accessor reads whichever
+        # fetch landed last, which under concurrent requests need not be this one.
+        index, errors = fetch_arr_media_index_result(cfg)
+    except Exception as e:
+        log.warning("Trump: media index unavailable for the path lookup: %s", e)
+        return {'status': 'index_unavailable', 'items': [], 'errors': []}
+    sizes = set(inodes.values())
+    hits = {}
+    for row in index:
+        size = row.get('size')
+        if size is not None and size not in sizes:
+            continue
+        try:
+            st = os.stat(row.get('path') or '')
+        except (OSError, ValueError):
+            continue
+        if st.st_ino and (st.st_dev, st.st_ino) in inodes:
+            hits.setdefault((row.get('service'), row.get('connection_id'), row.get('arr_id')), []).append(row)
+    ranked = sorted(hits.values(),
+                    key=lambda rows: -max(_arr_candidate_score(r, parsed) for r in rows))
+    items = [{**_trump_item_summary(rows[0]),
+              'file_ids': sorted({r['file_id'] for r in rows
+                                  if isinstance(r.get('file_id'), int)}),
+              'files': len(rows)}
+             for rows in ranked]
+    return {'status': 'matched' if items else 'no_match', 'items': items, 'errors': errors}
 
 
 @app.route('/api/workflows/trump/parse', methods=['POST'])
@@ -1420,28 +2599,254 @@ def workflows_trump_parse():
     return jsonify({"status": "success", "old_titles": old_titles, "new_title": new_title})
 
 
-def _cross_seed_group(rows, paths_map, seed):
-    """The cross-seed group of `seed`, drawn from `rows`.
+# Phase 2's pre-filter bounds how many torrents get a per-torrent file listing —
+# a sequential round trip each, in both backends. It is a *cost* bound and never
+# a membership rule (TR2). Past the bound it falls back to size-exact and marks
+# the group partial rather than narrowing silently.
+_TRUMP_CANDIDATE_BOUND = 150
+# A shared-path sibling carrying one extra file (a tracker-required .nfo, a
+# different sample) differs in total size by a sliver of its payload.
+_TRUMP_SIZE_TOLERANCE  = 0.01
 
-    A sibling is any torrent with the same payload size that shares at least one
-    content file path with the seed (hardlinked cross-seeds point at the same
-    files). The seed itself is always included. `paths_map` is {hash: [paths]}.
-    Each returned row gains a sorted 'paths' list.
+
+def _trump_content_root(row):
+    """`save_path/name` in posix form, or None — where a torrent's files live."""
+    sp = str(row.get('save_path') or '').replace('\\', '/').rstrip('/')
+    name = str(row.get('name') or '')
+    return f'{sp}/{name}' if sp and name else None
+
+
+def _trump_candidates(rows, seeds):
+    """(candidates, prefilter) — the torrents whose file lists phase 2 fetches.
+
+    A torrent is a near neighbour of a seed when their **content roots overlap**
+    (equal, or one inside the other) or their sizes are within
+    `_TRUMP_SIZE_TOLERANCE`. The first rule is what "same save_path" stands in
+    for, and it is deliberately not that: in a category layout every film
+    shares `/data/torrents/movies`, so save_path equality admits the whole
+    category and trips the bound on every trump. Two torrents can only share a
+    file path if one's files sit under the other's root. The size rule catches
+    a sibling whose root was renamed or laid out without a subfolder.
+
+    Past `_TRUMP_CANDIDATE_BOUND` this falls back to size-exact — the old rule —
+    and reports `bounded`, which makes the group partial: a narrower search is
+    a smaller answer, and it has to say so.
     """
-    seed_paths = set(paths_map.get(seed['hash'], []))
-    group = []
+    bound = _TRUMP_CANDIDATE_BOUND
+    seed_regs = {_reg(s) for s in seeds}
+    roots = [r for r in (_trump_content_root(s) for s in seeds) if r]
+
+    def _near(r):
+        if _reg(r) in seed_regs:
+            return True
+        root = _trump_content_root(r)
+        if root and any(root == sr or root.startswith(sr + '/') or sr.startswith(root + '/')
+                        for sr in roots):
+            return True
+        size = r.get('size') or 0
+        return any(abs(size - (s.get('size') or 0)) <= _TRUMP_SIZE_TOLERANCE * (s.get('size') or 0)
+                   for s in seeds)
+
+    widened = [r for r in rows if _near(r)]
+    if len(widened) <= bound:
+        return widened, {'candidates': len(widened), 'bound': bound, 'bounded': False}
+    sizes = {s['size'] for s in seeds}
+    exact = [r for r in rows if _reg(r) in seed_regs or r['size'] in sizes]
+    return exact, {'candidates': len(exact), 'widened': len(widened), 'bound': bound, 'bounded': True}
+
+
+def _cross_seed_group(rows, paths_map, seeds):
+    """(group, components, unknown) — everything a delete of `seeds` touches.
+
+    **Membership is the transitive closure over shared file paths**, not "shares
+    a path with the seed", and payload size plays no part (TR2). Every member is
+    deleted *with its files*, so a torrent sharing a path with any member is
+    harmed whether or not it shares one with the seed; and a sibling carrying
+    one extra `.nfo` shares every file that matters while differing in size.
+
+    `paths_map` is {registration key: [paths] | None} (S05 — the same torrent on
+    two instances holds two sets of bytes and answers twice). **`None` is
+    "could not ask"** and a candidate in that state cannot be placed, so it is
+    counted in `unknown` — the group may be missing it, which is TR1c. **`[]` is
+    an answer**: the client says the torrent holds no files, so it has nothing on
+    disk to share or to lose, and it is not counted. The caller refuses outright
+    when a *seed's* own listing is unusable either way.
+
+    `components` lists member registration keys per connected payload, in seed
+    order, so a caller can count each payload once. Each group row gains a
+    sorted `paths`.
+    """
+    if isinstance(seeds, dict):
+        seeds = [seeds]
+    by_reg = {_reg(r): r for r in rows}
+    holders = {}
     for r in rows:
-        if r['size'] != seed['size']:
+        for p in paths_map.get(_reg(r)) or []:
+            holders.setdefault(p, []).append(_reg(r))
+    seen, components = set(), []
+    for s in seeds:
+        if _reg(s) in seen or _reg(s) not in by_reg:
             continue
-        ps = set(paths_map.get(r['hash'], []))
-        if r['hash'] == seed['hash'] or (seed_paths and ps & seed_paths):
-            group.append({**r, 'paths': sorted(ps)})
-    return group
+        seen.add(_reg(s))
+        comp, stack = [], [_reg(s)]
+        while stack:
+            key = stack.pop()
+            comp.append(key)
+            for p in paths_map.get(key) or []:
+                for other in holders.get(p, ()):
+                    if other not in seen:
+                        seen.add(other)
+                        stack.append(other)
+        components.append(comp)
+    group = [{**by_reg[key], 'paths': sorted(paths_map.get(key) or [])}
+             for comp in components for key in comp]
+    unknown = sum(1 for r in rows if _reg(r) not in seen and paths_map.get(_reg(r)) is None)
+    return group, components, unknown
+
+
+def _trump_resolve_group(cfg, rows, seed_keys):
+    """Phase 2's expansion — shared by `resolve_group` and `execute`'s re-verify.
+
+    `seed_keys` are **registration keys** (S05), already resolved by the route.
+
+    Returns a dict whose `status` is `ok`, `no_seeds` (none of the seeds is in
+    the client) or `seed_unknown` (a seed's own listing could not be used).
+
+    A seed whose listing is `None` *or* `[]` refuses the whole request: there is
+    no honest degraded answer for a seed, only a smaller one. Its group would
+    collapse to the seed alone, and deleting that torrent's files leaves every
+    cross-seed sibling registered and seeding on top of the hole — silently, in
+    the default configuration, reported as a successful one-torrent group.
+
+    Logs counts only, never names or hashes: the log ring reaches
+    `/api/debug/report`.
+    """
+    by_reg = {_reg(r): r for r in rows}
+    wanted = list(dict.fromkeys(seed_keys))
+    seeds = [by_reg[k] for k in wanted if k in by_reg]
+    if not seeds:
+        return {'status': 'no_seeds'}
+    candidates, prefilter = _trump_candidates(rows, seeds)
+    paths_map = sources.fetch_torrent_file_paths(cfg, candidates)
+    unusable = [s for s in seeds if not paths_map.get(_reg(s))]
+    if unusable:
+        log.warning("Trump: refusing to resolve — no file listing for %d of %d seed(s)",
+                    len(unusable), len(seeds))
+        return {'status': 'seed_unknown', 'unknown_seeds': len(unusable), 'seeds': len(seeds)}
+
+    group, components, unknown = _cross_seed_group(candidates, paths_map, seeds)
+    by_member = {_reg(g): g for g in group}
+    # One payload per connected component, however many registrations stand
+    # on it; the largest member is the payload plus any extra sidecar.
+    total_size = sum(max((by_member[k].get('size') or 0) for k in comp) for comp in components)
+    partial = bool(unknown) or prefilter['bounded']
+    if partial:
+        log.warning("Trump: group resolved partial — %d of %d candidate listing(s) unknown, "
+                    "pre-filter bounded: %s", unknown, len(candidates), prefilter['bounded'])
+    link_check = _trump_link_state(cfg, group)
+    return {
+        'status':           'ok',
+        'seeds':            seeds,
+        'missing_seeds':    len(wanted) - len(seeds),
+        'group':            group,
+        'total_size':       total_size,
+        'partial':          partial,
+        'unknown_listings': unknown,
+        'prefilter':        prefilter,
+        'link_check':       link_check,
+    }
+
+
+def _trump_stat_paths(cfg, client_paths):
+    """`{client path: os.stat_result | None}` for torrent-client file paths.
+
+    The client names files in its own filesystem, and **neither source backend
+    remaps a per-torrent file listing** — `_qbit` joins the client's raw
+    `save_path`, `_qui` joins `_norm_torrent`'s, and only `fetch_file_map`
+    applies `REMOTE_PATH` → `LOCAL_PATH`. So the swap happens here, exactly once:
+    twice and every `stat` misses, never and every `stat` misses too. A path
+    that cannot be stat'ed — not visible to the container, a mapping the user
+    has not configured — is `None`, which is an unknown and never a safe answer.
+    Read-only: `/data` is never written.
+    """
+    remote, local = cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', '')
+    out = {}
+    for p in client_paths:
+        if p in out:
+            continue
+        try:
+            out[p] = os.stat(sources.remap_path(p, remote, local))
+        except (OSError, ValueError):
+            out[p] = None
+    return out
+
+
+def _trump_link_state(cfg, group):
+    """Does anything outside this group still hold each member's bytes? (TR3)
+
+    The confirm screen's whole safety argument for `delete_files=True` was
+    "your library hardlinks survive", and nothing checked it; M1 measured 3.5%
+    of the reference box's torrent-tree files at `st_nlink == 1`. Every distinct
+    path in the **whole group** is stat'ed and grouped by `(st_dev, st_ino)`:
+    *own* is how many distinct group paths sit on an inode, *outside* is
+    `st_nlink − own`. A file is True when outside > 0, False when it is 0 — this
+    group holds the only links — and None when its `stat` failed or came back
+    odd (no inode number, fewer links than the group's own paths).
+
+    A member is False if any file is False; otherwise None if any is None or it
+    has no paths; otherwise True. **False outranks None outranks True**: a known
+    destruction beats an unknown, and an unknown never renders as safe.
+
+    True means *a link outside this group exists*, not "the library copy
+    exists" — a distinct-hardlink cross-seed counts, and correctly survives. It
+    is also only as good as the group: a shared-path sibling the resolution
+    missed adds no link, but a distinct-hardlink one it missed reads as outside.
+    The inode grouping is sound on `fuse.shfs` because shfs synthesizes inodes
+    consistently (M1, F8 dead); anywhere it is not, the odd `stat` degrades.
+
+    Sets `hardlinked` and `only_copy_bytes` on each member in place and returns
+    the group-wide summary, each inode counted once.
+    """
+    stats = _trump_stat_paths(cfg, [p for m in group for p in (m.get('paths') or [])])
+    own = {}
+    for st in stats.values():
+        if st is not None and st.st_ino:
+            key = (st.st_dev, st.st_ino)
+            own[key] = own.get(key, 0) + 1
+
+    def _file_state(st):
+        if st is None or not st.st_ino:
+            return None
+        outside = st.st_nlink - own[(st.st_dev, st.st_ino)]
+        return None if outside < 0 else outside > 0
+
+    verdict = {p: _file_state(st) for p, st in stats.items()}
+    only_copy = {}
+    for p, v in verdict.items():
+        if v is False:
+            only_copy[(stats[p].st_dev, stats[p].st_ino)] = stats[p].st_size
+    for m in group:
+        states = [verdict[p] for p in (m.get('paths') or [])]
+        if any(s is False for s in states):
+            m['hardlinked'] = False
+        elif not states or any(s is None for s in states):
+            m['hardlinked'] = None
+        else:
+            m['hardlinked'] = True
+        mine = {(stats[p].st_dev, stats[p].st_ino): stats[p].st_size
+                for p in (m.get('paths') or []) if verdict[p] is False}
+        m['only_copy_bytes'] = sum(mine.values())
+    return {
+        'only_copy_files': len(only_copy),
+        'only_copy_bytes': sum(only_copy.values()),
+        'unchecked_files': sum(1 for v in verdict.values() if v is None),
+    }
 
 
 def _trump_pick_row(row):
     """Trim a live torrent row to the fields the candidate picker needs."""
     return {
+        'reg':           _reg(row),
         'hash':          row.get('hash'),
         'name':          row.get('name') or '',
         'tracker':       row.get('tracker') or '',
@@ -1453,7 +2858,7 @@ def _trump_pick_row(row):
     }
 
 
-def _trump_prefer_pm_tracker(ranked, auto_hash, indexer):
+def _trump_prefer_pm_tracker(ranked, auto_key, indexer):
     """Break candidate ties with the tracker that sent the PM.
 
     A cross-seed group carries one release name on several trackers, so its rows
@@ -1464,23 +2869,25 @@ def _trump_prefer_pm_tracker(ranked, auto_hash, indexer):
     Strictly a tie-break: the sort is score-first and stable, so a stronger title
     match is never demoted, and nothing is dropped for being on another tracker
     (the PM's tracker may not be in the client under a recognizable name at all).
-    Reorders `ranked` in place and returns the possibly-upgraded auto hash.
+    Reorders `ranked` in place and returns the possibly-upgraded auto
+    **registration key** (S05 — two instances holding the trumped release are
+    two candidates, and the PM's tracker picks between them).
     """
     if not indexer or not ranked:
-        return auto_hash
-    on_tracker = {c['hash'] for c in ranked
+        return auto_key
+    on_tracker = {_reg(c) for c in ranked
                   if tracker_matches_indexer(c.get('tracker'), indexer)}
     if not on_tracker:
-        return auto_hash
-    pinned = next((c for c in ranked if c['hash'] == auto_hash), None)
-    ranked.sort(key=lambda c: ((c.get('match_score') or 0), c['hash'] in on_tracker),
+        return auto_key
+    pinned = next((c for c in ranked if _reg(c) == auto_key), None)
+    ranked.sort(key=lambda c: ((c.get('match_score') or 0), _reg(c) in on_tracker),
                 reverse=True)
     if pinned is None:
-        return ranked[0]['hash']
+        return _reg(ranked[0])
     # Only swap for a sibling that matched the PM equally well.
-    sib = next((c for c in ranked if c['hash'] in on_tracker
+    sib = next((c for c in ranked if _reg(c) in on_tracker
                 and c.get('match_score') == pinned.get('match_score')), None)
-    return sib['hash'] if sib else auto_hash
+    return _reg(sib) if sib else auto_key
 
 
 @app.route('/api/workflows/trump/resolve_group', methods=['POST'])
@@ -1519,47 +2926,51 @@ def workflows_trump_resolve_group():
     # Phase 1 — rank candidates per title; the user confirms the seed set.
     if not seed_hashes:
         picks = []
-        for title in old_titles:
-            ranked = rank_release_matches(rows, title, name_key='name', limit=8)
-            auto   = match_trumped_torrent(rows, title)
-            # The conservative exact/subset matcher is the trusted pre-selection;
-            # make sure it's present in (and at the head of) the ranked list.
-            if auto is not None and all(c['hash'] != auto['hash'] for c in ranked):
-                s, brk = score_release_match(title, auto['name'])
-                ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
-            auto_hash = auto['hash'] if auto is not None else (ranked[0]['hash'] if ranked else None)
-            auto_hash = _trump_prefer_pm_tracker(ranked, auto_hash, indexer)
-            picks.append({
-                'title':      title,
-                'auto':       auto_hash,
-                'candidates': [_trump_pick_row(c) for c in ranked],
-            })
+        try:
+            for title in old_titles:
+                ranked = rank_release_matches(rows, title, name_key='name', limit=8)
+                auto   = match_trumped_torrent(rows, title)
+                # The conservative exact/subset matcher is the trusted pre-selection;
+                # make sure it's present in (and at the head of) the ranked list.
+                if auto is not None and all(_reg(c) != _reg(auto) for c in ranked):
+                    s, brk = score_release_match(title, auto['name'])
+                    ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
+                auto_key = _reg(auto) if auto is not None else (_reg(ranked[0]) if ranked else None)
+                auto_key = _trump_prefer_pm_tracker(ranked, auto_key, indexer)
+                picks.append({
+                    'title':      title,
+                    # A registration key — the bare hash wherever a torrent is
+                    # registered once, which is every qbit install (S05).
+                    'auto':       auto_key,
+                    'candidates': [_trump_pick_row(c) for c in ranked],
+                })
+        finally:
+            # Every title after the first re-reads the same names from the cache
+            # (TR11); nothing needs them once the request is answered.
+            release_match_cache_clear()
         return jsonify({"status": "needs_pick", "picks": picks})
 
     # Phase 2 — expand the confirmed seeds into their full cross-seed groups.
-    by_hash = {r['hash']: r for r in rows}
-    seeds   = [by_hash[h] for h in dict.fromkeys(seed_hashes) if h in by_hash]
-    if not seeds:
+    # A failed instance has already refused above, deliberately *not* as
+    # `partial`: a sibling living on an instance that did not answer is
+    # invisible rather than narrowed, and no acknowledgement makes that safe.
+    seed_keys, ambiguous, _absent = _resolve_registrations(rows, seed_hashes)
+    if ambiguous:
+        return _ambiguous_registration_refusal(ambiguous)
+    res = _trump_resolve_group(cfg, rows, seed_keys)
+    if res['status'] == 'no_seeds':
         return jsonify({
             "status": "error",
             "message": "None of the selected torrents are still in the client — re-run the search.",
         }), 404
-
-    # Cross-seed siblings share a payload size; only those rows can join a group.
-    sizes      = {s['size'] for s in seeds}
-    candidates = [r for r in rows if r['size'] in sizes]
-    paths_map  = sources.fetch_torrent_file_paths(cfg, candidates)
-
-    group_by_hash, total_size = {}, 0
-    for seed in seeds:
-        # A seed already pulled into an earlier seed's group shares that payload —
-        # its torrents are present and its size is already counted.
-        if seed['hash'] in group_by_hash:
-            continue
-        total_size += seed['size']
-        for g in _cross_seed_group(candidates, paths_map, seed):
-            group_by_hash.setdefault(g['hash'], g)
-    group = list(group_by_hash.values())
+    if res['status'] == 'seed_unknown':
+        return jsonify({
+            "status": "error",
+            "message": f"Could not read the file list for {res['unknown_seeds']} of the {res['seeds']} "
+                       "selected torrent(s), so their cross-seed groups cannot be resolved. "
+                       "Check that the torrent client is reachable and try again.",
+        }), 502
+    group = res['group']
 
     try:
         details = sources.fetch_torrent_details(cfg, group)
@@ -1567,17 +2978,21 @@ def workflows_trump_resolve_group():
         log.warning("Trump: torrent detail fetch failed: %s", e)
         details = {}
     for g in group:
-        det = details.get(g['hash'], {})
+        g['reg'] = _reg(g)
+        det = details.get(g['reg'], {})
         g['uploaded']       = det.get('uploaded')
         g['seeding_time']   = det.get('seeding_time')
         g['tracker_health'] = det.get('tracker_health', 'unknown')
         g['tracker_msg']    = det.get('tracker_msg', '')
     group.sort(key=lambda g: g['name'])
     return jsonify({
-        "status":       "success",
-        "torrents":     group,
-        "total_size":   total_size,
-        "matched_name": seeds[0]['name'],
+        "status":           "success",
+        "torrents":         group,
+        "total_size":       res['total_size'],
+        "partial":          res['partial'],
+        "unknown_listings": res['unknown_listings'],
+        "prefilter":        res['prefilter'],
+        "link_check":       res['link_check'],
     })
 
 
@@ -1586,9 +3001,17 @@ def workflows_trump_resolve_group():
 def workflows_trump_search_release():
     """Find the replacement release in Sonarr/Radarr's release search.
 
-    Exact normalized title match (release names are effectively unique ids),
-    optionally restricted to the indexer the PM came from. Always returns the
-    arr deep link as a manual fallback.
+    **Which arr item** is decided from the confirmed group's own files first
+    (TR7, what `TRUMP.md` step 4 specified): `group_paths` are the client paths
+    phase 2 returned, joined to the arrs' media index by inode. The title match
+    is the fallback for a group that resolves to nothing. Where a path hit and a
+    title hit disagree the endpoint says so (409 `arr_item_conflict`) rather
+    than picking, and the wizard re-asks with the user's `arr_item`. A path hit
+    also yields the library file ids a trump's import watch is scoped to (TR9).
+
+    Then exact normalized title match (release names are effectively unique
+    ids), optionally prioritising the indexer the PM came from. Always returns
+    the arr deep link as a manual fallback.
     """
     data      = request.json or {}
     new_title = str(data.get('new_title') or '').strip()
@@ -1597,10 +3020,71 @@ def workflows_trump_search_release():
         return jsonify({"status": "error", "message": "new_title is required"}), 400
     cfg    = db_load_config()
     parsed = parse_release_info_for_path(new_title)
-    item   = _trump_find_arr_item(cfg, parsed)
+    # The titles and their errors from one snapshot (S11). "Fetch, then read the
+    # accessor, in this request" was a sequential contract; another request's
+    # refresh could land between the two and describe a list nobody received.
+    titles, arr_errors = fetch_arr_all_titles_result(cfg)
+    title_item = _trump_find_arr_item(cfg, parsed, titles=titles, name=new_title)
+
+    group_paths = [p for p in (data.get('group_paths') or []) if isinstance(p, str) and p]
+    lookup = (_trump_items_from_paths(cfg, group_paths[:_TRUMP_GROUP_PATHS_MAX], parsed)
+              if group_paths else {'status': 'no_group', 'items': [], 'errors': []})
+    for e in lookup['errors']:
+        if not any((e.get('connection_id'), e.get('partial')) == (a.get('connection_id'), a.get('partial'))
+                   for a in arr_errors):
+            arr_errors.append(e)
+    path_items = lookup['items']
+    title_path = next((p for p in path_items if _trump_same_item(p, title_item)), None)
+    choice     = data.get('arr_item') if isinstance(data.get('arr_item'), dict) else None
+
+    item, resolved_by, library_file_ids = None, None, []
+    if choice:
+        chosen = next((p for p in path_items if _trump_same_item(p, choice)), None)
+        if chosen is not None:
+            item, library_file_ids = chosen, chosen['file_ids']
+        elif _trump_same_item(title_item, choice):
+            item = title_item
+        else:
+            return jsonify({"status": "error",
+                            "message": "That Sonarr/Radarr item is not one of the matches for this group — "
+                                       "search again."}), 400
+        resolved_by = 'choice'
+    elif path_items and title_item is not None and title_path is None:
+        # Two independent answers to "which item is this", and they differ. The
+        # files say one thing and the new release's name another — a renamed
+        # title, a remake, a second instance. Picking either silently is how a
+        # trump ends in the wrong grab, so the user decides.
+        return jsonify({
+            "status": "error", "code": "arr_item_conflict",
+            "path_item":  path_items[0], "path_items": path_items,
+            "title_item": _trump_item_summary(title_item),
+            "arr_errors": arr_errors,
+            "message": f"Your library files for this group belong to “{_trump_item_label(path_items[0])}”, "
+                       f"but the new release's name matches “{_trump_item_label(title_item)}”. "
+                       "Choose which one to search.",
+        }), 409
+    elif path_items:
+        item = title_path or path_items[0]
+        library_file_ids, resolved_by = item['file_ids'], 'path'
+    elif title_item is not None:
+        item, resolved_by = title_item, 'title'
     if item is None:
+        # "No arr knows this title" and "an arr could not be asked" are the same
+        # empty list, and they are not the same answer — telling a user to add a
+        # title their arr is already managing is how a trump ends in the wrong
+        # grab (TR7). Say which one happened.
+        if arr_errors:
+            names = ', '.join(e.get('name') or e.get('connection_id') or '?' for e in arr_errors)
+            return jsonify({
+                "status": "error",
+                "arr_errors": arr_errors,
+                "message": f"Could not check whether “{parsed['title'] or new_title}” is managed — "
+                           f"{names} did not answer. Fix the connection and retry rather than "
+                           f"adding the title again.",
+            }), 502
         return jsonify({
             "status": "error",
+            "arr_errors": [],
             "message": f"No Sonarr/Radarr entry matches “{parsed['title'] or new_title}” — add the title to an arr first, then retry.",
         }), 404
 
@@ -1631,24 +3115,21 @@ def workflows_trump_search_release():
         return jsonify({"status": "error", "message": f"Release search failed: {e}",
                         "fallback_url": fallback_url}), 502
 
-    # The exact match is the trusted auto-pick; the ranked list is the fallback
-    # when the PM's rendering of the new title doesn't match any release name
-    # exactly, and an "other matches" affordance when it does.
-    #
-    # The PM's indexer is a *priority*, not a filter. Its copy is the one that
-    # was trumped (and the one carrying the PM's freeleech), so it wins every
-    # tie — but the release is often listed on several trackers, and hiding
-    # those turned "not up on this one yet" into a dead end. Ranked wide, then
-    # reordered, then cut, so a lower-scoring copy on the PM's tracker can't be
-    # truncated away before the tie-break runs.
-    release = (match_trump_release(releases, new_title, indexer)
-               or match_trump_release(releases, new_title))
-    candidates = rank_release_matches(releases, new_title, name_key='title', limit=40)
-    if indexer:
-        candidates.sort(key=lambda r: ((r.get('match_score') or 0),
-                                       tracker_matches_indexer(r.get('indexer'), indexer)),
-                        reverse=True)
-    candidates = candidates[:8]
+    # The exact release on the PM's tracker leads and is pre-selected; the same
+    # release elsewhere follows (grab there and cross-seed — an edge case, not
+    # the default); then everything else. The PM's indexer is still a priority
+    # and never a filter: a release not yet listed on that tracker is not a dead
+    # end. Exactness gates the top, because the fuzzy score cannot tell a
+    # REPACK from the release it trumped — see `rank_trump_replacements`.
+    release, candidates = rank_trump_replacements(releases, new_title, indexer, limit=8)
+    # 4b's flag, rendered (Phase 14): name the instance the grab goes to and
+    # every other one holding this payload, as Triage's T2 chip does. Named here
+    # rather than re-derived on the page from `path_items`, because which entry
+    # was chosen is this endpoint's decision.
+    others = [{'connection_id': p.get('connection_id'),
+               'connection_name': p.get('connection_name') or p.get('connection_id') or '',
+               'arr_id': p.get('arr_id'), 'title': p.get('title') or ''}
+              for p in path_items if not _trump_same_item(p, item)]
     return jsonify({
         "status":          "success",
         "release":         release,
@@ -1656,68 +3137,423 @@ def workflows_trump_search_release():
         "candidate_count": len(releases),
         "service":         item['service'],
         "connection_id":   item['connection_id'],
+        "connection_name": ((conn or {}).get('name') or item.get('connection_name')
+                            or item['connection_id']),
+        "arr_item_others": others,
         "arr_id":          item['arr_id'],
         "arr_title":       item.get('title') or '',
         "arr_year":        item.get('year'),
         "fallback_url":    fallback_url,
+        # A match found *despite* an unreachable instance is still worth
+        # flagging: the instance that did not answer may hold a better one.
+        "arr_errors":      arr_errors,
+        "resolved_by":     resolved_by,
+        # The library files the trumped release was imported as — the scope a
+        # trump's import watch may force-import over (TR9). Only ever from the
+        # path join: a title match knows the item, not which of its files.
+        "library_file_ids": library_file_ids,
+        "path_lookup":     lookup['status'],
+        "path_items":      path_items,
+        # 4b's UI half, as a payload flag: more than one instance holds this
+        # payload. Unreachable on the reference install (M4), so it is tested by
+        # fixture rather than rendered blind.
+        "arr_item_ambiguous": len(path_items) > 1,
     })
+
+
+def _trump_reverify(cfg, items, data):
+    """Re-resolve the posted group and compare. None to proceed, else `(payload, status)`.
+
+    `execute` runs it twice when it grabs (Phase 12): before the grab, so a
+    refused group grabs nothing, and again before the removal, because the
+    replacement is now in the client and one saved on the old torrents' paths
+    joins the group.
+
+    * **Identical** — proceed.
+    * **Shrunk, or a hash the client no longer holds** — 409 `group_changed`.
+    * **Grown** — also 409 `group_changed`. Decided by the user (2026-09-13):
+      deleting only the posted hashes leaves the newcomer registered on top of
+      deleted files (TR1's harm, recreated), and deleting it too removes a
+      torrent nobody was shown. A grown group is new information about what
+      will be touched, and TRUMPED §1 says that is seen before acting;
+      re-resolving costs one click.
+    * **Partial** — 409 `partial` unless `acknowledge_partial`.
+    * **Any member holds the only copy** — 409 `only_copy` unless
+      `acknowledge_only_copy`.
+
+    A failed instance or an unusable seed listing is a 502, never a partial:
+    those are not narrowed answers but missing ones. Seeds are the posted
+    `seed_hashes` (the torrents the user confirmed in step 3) when they are part
+    of the posted set, else every posted registration — with the confirmed
+    seeds, a member that stopped sharing the payload drops out and is caught as
+    shrunk. Membership is compared by **registration key** (S05): the same
+    release on two instances is two members, and comparing hashes would read the
+    pair as one and miss a group that really changed.
+    """
+    try:
+        rows = sources.list_torrents(cfg)
+    except sources.SourceConnectionError as e:
+        return {"status": "error", "message": str(e)}, 502
+    posted_keys, ambiguous, absent = _resolve_registrations(
+        rows, [_reg(i) for i in items])
+    if ambiguous:
+        body, status = _ambiguous_registration_refusal(ambiguous)
+        return body.get_json(), status
+    # A posted key the client no longer lists stays in the set, so the group
+    # comparison below sees it gone and refuses. Dropping it would make a
+    # vanished torrent look like agreement.
+    posted = set(posted_keys) | set(absent)
+    seed_keys, _amb, _miss = _resolve_registrations(
+        rows, [str(x) for x in (data.get('seed_hashes') or [])])
+    seeds = [k for k in seed_keys if k in posted]
+    res = _trump_resolve_group(cfg, rows, seeds or sorted(posted))
+    if res['status'] == 'seed_unknown':
+        return {
+            "status": "error",
+            "message": "Could not re-read the file list of the selected torrent(s) just before "
+                       "removing them, so nothing was removed. Check that the torrent client is "
+                       "reachable and try again.",
+        }, 502
+
+    group = {_reg(g) for g in res.get('group') or []}
+    added, missing = len(group - posted), len(posted - group)
+    if added or missing:
+        log.warning("Trump: refusing execute — the group changed since it was confirmed "
+                    "(%d added, %d gone)", added, missing)
+        parts = ([f"{added} torrent{'s' if added != 1 else ''} joined it"] if added else []) + \
+                ([f"{missing} {'are' if missing != 1 else 'is'} no longer part of it"] if missing else [])
+        return {
+            "status": "error", "code": "group_changed", "added": added, "missing": missing,
+            "message": f"The cross-seed group changed since you confirmed it — {' and '.join(parts)}. "
+                       "Nothing was removed. Go back to step 3 and confirm the group again.",
+        }, 409
+
+    if res['partial'] and not data.get('acknowledge_partial'):
+        return {
+            "status": "error", "code": "partial",
+            "unknown_listings": res['unknown_listings'], "prefilter": res['prefilter'],
+            "message": "The group could not be fully checked just now, so a cross-seed sharing "
+                       "these files may be missing from it. Nothing was removed.",
+        }, 409
+
+    only = [g for g in res['group'] if g.get('hardlinked') is False]
+    if only and not data.get('acknowledge_only_copy'):
+        return {
+            "status": "error", "code": "only_copy",
+            "only_copy_bytes": res['link_check']['only_copy_bytes'],
+            "only_copy_files": res['link_check']['only_copy_files'],
+            "torrents": [{'reg': _reg(g), 'hash': g['hash'], 'name': g.get('name') or '',
+                          'only_copy_bytes': g.get('only_copy_bytes') or 0} for g in only],
+            "message": "Nothing outside this group holds some of these files — removing it "
+                       "destroys the only copy. Nothing was removed.",
+        }, 409
+    return None
+
+
+# S09 (the 2026-09-10 outside review), Trumped's half — an execute is one
+# operation. Recorded here before anything acts, on `_gen_jobs`' pattern: in
+# memory, swept by age and count. It outlives nothing but the process, which is
+# enough for what it is for: a double submit, and a retry of a request whose
+# answer never arrived.
+_trump_operations = {}
+_trump_operations_lock = threading.Lock()
+_TRUMP_OP_TTL = 3600      # a finished operation replays for an hour
+_TRUMP_OPS_KEPT = 20      # and at most this many finished ones are kept, newest first
+
+
+def _sweep_trump_operations(now):
+    """Callers hold `_trump_operations_lock`. A running operation is never swept."""
+    finished = sorted((op for op in list(_trump_operations.values()) if op.get('finished_at')),
+                      key=lambda op: op['finished_at'], reverse=True)
+    for i, op in enumerate(finished):
+        if i >= _TRUMP_OPS_KEPT or now - op['finished_at'] > _TRUMP_OP_TTL:
+            _trump_operations.pop(op['id'], None)
+
+
+def _clean_token(value, limit=64):
+    """A client-sent id: letters, digits, `-` and `_`, at most `limit`; else None."""
+    s = str(value or '').strip()
+    return s if re.fullmatch(rf'[A-Za-z0-9_-]{{1,{limit}}}', s) else None
+
+
+class _TrumpStages:
+    """What an execute did, stage by stage, for the page to render (S09)."""
+    ORDER = ('reverify', 'queue_check', 'grab', 'remove', 'watch')
+
+    def __init__(self):
+        self._by_stage = {}
+        self.acted = False   # a grab or a removal was attempted
+
+    def set(self, stage, status, message, **extra):
+        self._by_stage[stage] = {'stage': stage, 'status': status, 'message': message, **extra}
+
+    def failed(self):
+        return any(s['status'] == 'failed' for s in self._by_stage.values())
+
+    def as_list(self):
+        return [self._by_stage[s] for s in self.ORDER if s in self._by_stage]
 
 
 @app.route('/api/workflows/trump/execute', methods=['POST'])
 @require_auth
 def workflows_trump_execute():
-    """Nuke the confirmed group via the client, grab the replacement, re-audit.
+    """Grab the replacement, then remove the confirmed group via the client.
 
-    Gated by ALLOW_CLIENT_DELETE like every destructive client action. The
-    grab half is optional — when no release matched, the user grabs manually
-    via the arr deep link and this only deletes.
+    Either half may be absent. With no release, this only removes and the user
+    grabs through the arr deep link. **With no `hashes`, this is a grab** (TR4),
+    and needs no ALLOW_CLIENT_DELETE: the flag gates the *removal*, not the
+    request. It used to gate everything, so in the default configuration a user
+    could run all four steps, watch the wizard find the exact release, and get
+    a 403 — while Backfill grabs freely, because grabbing is not destructive.
+
+    **Grab first, then remove** — the user's decision 3 (a), 2026-09-15. The
+    order was remove, then grab, and a grab that failed after the delete
+    answered 200 with `removed 3, grabbed false`: the old payload gone and
+    nothing on its way (S09). Both arrs' `ReleaseController` await
+    `DownloadReport` before answering, so a grab that returned has been handed to
+    the download client. A failed grab removes nothing; a removal that fails
+    after a good grab is reported with the old torrents still in the client —
+    the safe failure. The group is resolved again between the two, because a
+    replacement saved on the old torrents' paths joins the group, and removing
+    it with its files would delete the replacement.
+
+    **An execute is one operation** (S09). The page mints `operation_id` when the
+    user confirms and resends it on a retry, and it is recorded before anything
+    acts. The same id while it runs is 409 `in_progress`; once the operation has
+    acted, its stored answer comes back with `replayed: true` and nothing acts
+    again — B12's queue check sees only a download the arr has already queued,
+    so two submits inside that window grabbed twice. A refusal before anything
+    acted frees the id, since answering it (acknowledging a partial group)
+    carries the same confirmation forward. A request with no id — a page from
+    before it — proceeds as it always did.
+
+    Every answer that acted carries `stages` — reverify, queue_check, grab,
+    remove, watch — each `done`, `failed` or `skipped` with its message.
     """
-    cfg = db_load_config()
-    if not cfg.get('ALLOW_CLIENT_DELETE'):
+    cfg   = db_load_config()
+    data  = request.json or {}
+    items = [{'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
+             for i in (data.get('hashes') or []) if i.get('hash')]
+    release  = data.get('release') or {}
+    grabbing = bool(release.get('guid') and data.get('service'))
+    if not items and not grabbing:
+        return jsonify({"status": "error",
+                        "message": "Nothing to do — no torrents to remove and no release to grab."}), 400
+    if items and not cfg.get('ALLOW_CLIENT_DELETE'):
         return jsonify({
             "status": "error",
             "message": "Client deletion is disabled — enable it in Config → Torrent Source first.",
         }), 403
-    data  = request.json or {}
-    items = [{'hash': str(i.get('hash') or ''), 'instance_id': i.get('instance_id')}
-             for i in (data.get('hashes') or []) if i.get('hash')]
-    if not items:
-        return jsonify({"status": "error", "message": "No torrent hashes provided"}), 400
-    try:
-        removed = sources.remove_torrents(cfg, items, delete_files=True)
-    except sources.SourceConnectionError as e:
-        return jsonify({"status": "error", "message": str(e)}), 502
 
+    op_id = _clean_token(data.get('operation_id'))
+    if op_id is None:
+        log.info("Trump execute: no operation id (a page from before it existed) — not replay-protected")
+    else:
+        now = time.time()
+        with _trump_operations_lock:
+            _sweep_trump_operations(now)
+            op = _trump_operations.get(op_id)
+            if op and op['status'] == 'running':
+                return jsonify({"status": "error", "code": "in_progress", "operation_id": op_id,
+                                "message": "This swap is already running — its result will show "
+                                           "here when it finishes. Nothing was done twice."}), 409
+            if op:
+                log.info("Trump execute: operation replayed, nothing acted again")
+                payload, code = op['response']
+                return jsonify({**payload, "replayed": True}), code
+            _trump_operations[op_id] = {'id': op_id, 'status': 'running', 'started_at': now}
+
+    stages = _TrumpStages()
+    try:
+        payload, code = _trump_execute(cfg, data, items, release, grabbing, stages)
+    except Exception as e:
+        log.exception("Trump execute stopped part-way")
+        payload, code = ({"status": "error", "message": f"The swap stopped part-way: {e}",
+                          "stages": stages.as_list()}, 500)
+    payload = {**payload, "operation_id": op_id}
+    if op_id is not None:
+        with _trump_operations_lock:
+            if stages.acted:
+                _trump_operations[op_id] = {'id': op_id, 'status': 'finished',
+                                            'finished_at': time.time(), 'response': (payload, code)}
+            else:
+                _trump_operations.pop(op_id, None)
+    return jsonify({**payload, "replayed": False}), code
+
+
+def _trump_execute(cfg, data, items, release, grabbing, stages):
+    """The stages of one execute, in order. Returns `(payload, status)`."""
+    service = data.get('service')
+    arr_id = data.get('arr_id')
+    arr_id = arr_id if isinstance(arr_id, int) and not isinstance(arr_id, bool) else None
+    arr_name = 'Sonarr' if service == 'sonarr' else 'Radarr'
+
+    # TR5 — the last honest verification point is server-side, immediately before
+    # anything acts. The wizard's group can be minutes old: a tab left open, a
+    # cross-seed script adding a registration, a torrent rechecked into a
+    # different path. The expansion is re-run from the confirmed seeds and must
+    # land on exactly the posted set — before the grab, so a refused group grabs
+    # nothing.
+    if items:
+        refusal = _trump_reverify(cfg, items, data)
+        if refusal is not None:
+            return refusal
+        stages.set('reverify', 'done', f"The group of {len(items)} torrent(s) is as you confirmed it")
+    else:
+        stages.set('reverify', 'skipped', "Nothing to remove")
+
+    # B12's advisory queue check, before anything acts: the replacement already
+    # in the arr's queue — the arr having grabbed it from RSS on its own, or a
+    # submit from another tab — is refused unless `force`. A queue that cannot be
+    # read does not block, and the answer says it was not checked.
+    queue_checked = None
+    if grabbing and arr_id is not None and not data.get('force'):
+        season = data.get('season_number')
+        queued = queue_records_for_item(
+            cfg, service, data.get('connection_id'), arr_id,
+            season_number=season if isinstance(season, int) else None)
+        queue_checked = queued is not None
+        if queued:
+            titles = [q.get('title') for q in queued if q.get('title')]
+            return {"status": "error", "code": "already_queued", "titles": titles[:5],
+                    "message": f"Already in {arr_name}'s queue: {titles[0] if titles else 'this item'}. "
+                               "Nothing was removed or grabbed."}, 409
+        stages.set('queue_check', 'done' if queue_checked else 'skipped',
+                   f"Not already in {arr_name}'s queue" if queue_checked
+                   else f"Could not read {arr_name}'s queue, so it was not checked")
+    else:
+        stages.set('queue_check', 'skipped', "Grab anyway" if grabbing and data.get('force')
+                   else "Nothing to check")
+
+    # The grab. Its answer echoes the posted release and carries no download id
+    # (`ReleaseResource`, both arrs); the download's identity is the search
+    # result's `infoHash`, which the page sends and the import watch uses.
     grabbed, grab_error = None, ''
-    release = data.get('release') or {}
-    if release.get('guid') and data.get('service'):
+    if grabbing:
+        stages.acted = True
         try:
-            grab_release(cfg, data['service'], data.get('connection_id'),
+            grab_release(cfg, service, data.get('connection_id'),
                          release['guid'], release.get('indexer_id'))
             grabbed = True
+            stages.set('grab', 'done', "The replacement was handed to the download client")
         except Exception as e:
-            grabbed = False
-            grab_error = str(e)
+            grabbed, grab_error = False, str(e)
+            stages.set('grab', 'failed', f"The grab failed: {grab_error}")
+    else:
+        stages.set('grab', 'skipped', "No replacement was chosen")
 
-    # Credit the swap on the Next steps prize layer. Trumped is the one workflow
-    # counted at execute time: the swap trades one release for another, so the
-    # re-audit below sees a library in much the same shape and has nothing to
-    # infer the action from. Recorded before the rescan so that scan's own
-    # progress pass reads the updated counter.
+    removed, removal_error = 0, ''
+    if items and grabbed is False:
+        stages.set('remove', 'skipped', "Nothing was removed, because the grab failed — the old "
+                                        "torrents and their files are untouched.")
+    elif items:
+        # Resolved again after the grab: the replacement is in the client now.
+        refusal = _trump_reverify(cfg, items, data) if grabbed else None
+        if refusal is not None:
+            body, _status = refusal
+            if body.get('code') == 'group_changed':
+                removal_error = ("The group changed after the grab — a replacement saved on the old "
+                                 "torrents' files joins it, and removing them with their files would "
+                                 "delete it.")
+            else:
+                removal_error = body.get('message') or 'The group could not be checked again.'
+            stages.set('remove', 'failed',
+                       f"{removal_error} The old torrents are still in your client — remove them "
+                       "there, keeping their files if the replacement shares them.",
+                       code=body.get('code'))
+        else:
+            stages.acted = True
+            try:
+                removed = sources.remove_torrents(cfg, items, delete_files=True)
+                stages.set('remove', 'done', f"Removed {removed} torrent(s) and their files")
+            except sources.SourceConnectionError as e:
+                removal_error = str(e)
+                stages.set('remove', 'failed', f"Could not remove the old torrents ({e}). They are "
+                                               "still in your client — remove them there.")
+    else:
+        stages.set('remove', 'skipped', "Nothing to remove")
+
+    # Credit the swap on the Rounds prize layer. Trumped is counted at execute
+    # time: the swap trades one release for another, so the audit that follows
+    # the import sees a library in much the same shape and has nothing to infer
+    # the action from. A grab with nothing removed is not a swap and pays nothing,
+    # and a replayed operation never reaches here.
     if removed:
         try:
             db_update_meta('ns_progress',
                            lambda p: rounds.record_trump(p, torrents=removed))
         except Exception as e:
-            log.warning("Could not record trump on Next steps progress: %s", e)
+            log.warning("Could not record trump on Rounds progress: %s", e)
 
-    rescan = False
-    if try_start_scanning("trump"):
-        threading.Thread(target=run_audit_process, args=("trump",), daemon=True).start()
-        rescan = True
-    log.info("Trump execute: removed %d/%d torrent(s), grabbed=%s", removed, len(items), grabbed)
-    return jsonify({"status": "success", "removed": removed, "requested": len(items),
-                    "grabbed": grabbed, "grab_error": grab_error, "rescan_started": rescan})
+    # TR9 — the grab is followed by the same import watch Backfill uses, scoped
+    # to the library files the trumped release was imported as, which only the
+    # path lookup knows (`library_file_ids`), and correlated by the release's
+    # info hash (S07). The re-audit waits for an observed import (TR10).
+    watch_job_id = None
+    if grabbed and arr_id is not None and data.get('connection_id'):
+        watch_job_id = _start_import_watch(
+            cfg, service, data['connection_id'], arr_id,
+            title=str(data.get('arr_title') or ''),
+            file_ids=_int_list(data.get('library_file_ids')), source='trump',
+            info_hash=_clean_token(release.get('info_hash'), limit=128))
+        stages.set('watch', 'done', f"Following the download into {arr_name}")
+    else:
+        stages.set('watch', 'skipped', "Nothing to follow" if not grabbed
+                   else f"No {arr_name} item to follow the download into")
+        if removed:
+            # Nothing to follow: the watchdog's entry point, not a direct scan, so
+            # the deferral and debounce every other client action gets apply here.
+            nudge_watchdog('trumped torrents removed via the client')
+    log.info("Trump execute: grabbed=%s, removed %d/%d torrent(s), watching import=%s",
+             grabbed, removed, len(items), bool(watch_job_id))
+    status = 'success' if not stages.failed() else ('partial' if grabbed or removed else 'failed')
+    return {"status": status, "removed": removed, "requested": len(items),
+            "grabbed": grabbed, "grab_error": grab_error, "removal_error": removal_error,
+            "queue_checked": queue_checked, "watch_job_id": watch_job_id,
+            "stages": stages.as_list()}, 200
+
+
+# T5's ordering. When a torrent's files earn different verdicts the row takes the
+# one whose action deletes least: `library_unknown` says "do not act on this until
+# the arr answers", `import_pending` says "rescan", `superseded` offers a delete for
+# a copy the library already beats, and `not_in_library` is the bucket that invites
+# one. A season pack with one episode the arr is waiting to import is not junk
+# because its other nine are unmatched.
+_TRIAGE_LEAST_DESTRUCTIVE = ('library_unknown', 'import_pending', 'superseded', 'not_in_library')
+
+
+def _triage_pick_instance(rows, parsed):
+    """`(winner, rivals)` among ranked arr rows for one release (T2).
+
+    `rows` come ranked by `rank_arr_candidates`. The winner is the first, except
+    where another **instance** ties it on that ranking and holds a file of the
+    same quality as the release while the first does not: a 1080p and a 4K
+    Sonarr both hold the episode, and the honest comparison — and the right
+    place to send a rescan or a force import — is the instance whose file
+    matches. That is TRIAGE T2's third ranking criterion ("prefer the instance
+    whose file most closely matches"). Rows from the winner's own instance never
+    reorder, so a single-instance install gets the ranker's answer unchanged.
+
+    `rivals` is the first row from each *other* instance that also matched — the
+    ambiguity the row says out loud rather than resolving silently.
+    """
+    if not rows:
+        return None, []
+    winner = rows[0]
+    if 'file_quality_name' in winner and \
+            compare_release_quality(parsed, winner.get('file_quality_name') or '') != 'same':
+        top = _arr_candidate_score(winner, parsed)
+        winner = next((r for r in rows[1:]
+                       if r.get('connection_id') != winner.get('connection_id')
+                       and _arr_candidate_score(r, parsed) == top
+                       and compare_release_quality(parsed, r.get('file_quality_name') or '') == 'same'),
+                      winner)
+    rivals, seen = [], {winner.get('connection_id')}
+    for r in rows:
+        if r.get('connection_id') not in seen:
+            seen.add(r.get('connection_id'))
+            rivals.append(r)
+    return winner, rivals
 
 
 @app.route('/api/workflows/triage')
@@ -1736,6 +3572,12 @@ def workflows_triage():
       import_pending  — title is managed by Sonarr/Radarr but has no library file
       not_in_library  — title matches nothing in any Arr instance
 
+    Torrents the client says are still downloading are **not** candidates: an
+    unfinished payload is not-imported by definition and was being reported as
+    junk (T4). The filter lives in `_is_not_imported_torrent`, so this endpoint,
+    the compact `triage` row's predicate and the sidebar badge's count all move
+    together.
+
     Two-phase contract: this endpoint answers from audit-time data only — no
     torrent-client calls — so the page renders immediately. Each item carries
     `verdict_alternatives` (its verdict under live health working/unregistered/
@@ -1747,10 +3589,14 @@ def workflows_triage():
     # Compact working set persisted by the audit (the only records the filters
     # below can select). Databases whose last audit predates the subset row
     # fall back to the full torrent list until the next scan.
-    if db_has_file_results('triage'):
-        torrent_files = db_load_file_results('triage')
-    else:
-        torrent_files = db_load_file_results('torrents')
+    # Pinned: the presence check and the read it decides are two reads, and a
+    # publish landing between them serves a row from the generation the check
+    # did not see (S04).
+    with db_read_snapshot() as snap:
+        if db_has_file_results('triage', conn=snap):
+            torrent_files = db_load_file_results('triage', conn=snap)
+        else:
+            torrent_files = db_load_file_results('torrents', conn=snap)
     not_imported  = [f for f in torrent_files if _is_not_imported_torrent(f)]
     # Dead seeds: fully imported but the tracker no longer registers the
     # torrent (flag captured at audit time). Deleting these via the client is
@@ -1760,10 +3606,13 @@ def workflows_triage():
                   and f.get('status') != 'Orphaned'
                   and f.get('tracker_health') == 'unregistered']
 
-    # Group files by torrent hash — verdicts are per torrent, not per file
+    # Group files by torrent **registration** — verdicts are per torrent, not per
+    # file, and a torrent on two qui instances is two torrents here (S05). The key
+    # is the hash wherever there is one registration of it; `count_triage_items`
+    # groups the same way, or the badge disagrees with the page.
     groups = {}
     for f in not_imported:
-        key = f.get('hash') or f['path']
+        key = torrent_record_key(f) or f['path']
         g = groups.setdefault(key, {
             'hash':          f.get('hash') or '',
             'instance_id':   f.get('instance_id'),
@@ -1779,7 +3628,7 @@ def workflows_triage():
         g['total_size'] += f['size']
         g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
     for f in dead_seeds:
-        key = f.get('hash') or f['path']
+        key = torrent_record_key(f) or f['path']
         existing = groups.get(key)
         if existing is not None and not existing['imported']:
             continue  # partially-imported torrent — already triaged normally
@@ -1797,188 +3646,27 @@ def workflows_triage():
         g['total_size'] += f['size']
         g['trackers'].update(t for t in (f.get('trackers') or []) if t != 'None')
 
-    group_list = sorted(groups.values(), key=lambda g: -g['total_size'])
-    truncated  = len(group_list) > _TRIAGE_GROUP_CAP
-    group_list = group_list[:_TRIAGE_GROUP_CAP]
-
-    try:
-        media_index = fetch_arr_media_index(cfg)
-    except Exception as e:
-        log.warning("Triage: media index fetch failed: %s", e)
-        media_index = []
-    try:
-        all_titles = fetch_arr_all_titles(cfg)
-    except Exception as e:
-        log.warning("Triage: title list fetch failed: %s", e)
-        all_titles = []
-
-    # Index arr titles under every match variant (apostrophes spaced/dropped)
-    lib_by_title = {}
-    for m in media_index:
-        for key in title_match_keys(m.get('title') or ''):
-            lib_by_title.setdefault(key, []).append(m)
-    titles_by_norm = {}
-    for t in all_titles:
-        for key in title_match_keys(t.get('title') or ''):
-            titles_by_norm.setdefault(key, []).append(t)
-
-    conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
-
-    def _arr_url(entry):
-        conn = conn_by_id.get(entry.get('connection_id'))
-        if not conn:
-            return ''
-        prefix = '/movie/' if entry.get('service') == 'radarr' else '/series/'
-        slug = entry.get('title_slug') or ''
-        return link_base(conn) + prefix + (slug or str(entry.get('arr_id') or ''))
-
-    items = []
-    for g in group_list:
-        videos = [f for f in g['files']
-                  if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
-        rep = max(videos or g['files'], key=lambda f: f['size'])
-        parsed = parse_release_info_for_path(rep['path'])
-
-        tracker_health = g.get('stored_health') or 'unknown'
-        parsed_keys    = title_match_keys(parsed['title'])
-        is_episode     = parsed['season'] is not None
-
-        # Same-title remakes ("The Smashing Machine" 2002 vs 2025) must not
-        # match each other: when the release name carries a year, a radarr
-        # candidate with a different year is rejected. Only enforced for
-        # movies — TV release names often carry air dates, not series years.
-        def _year_ok(entry):
-            if parsed['year'] is None or entry.get('service') != 'radarr':
-                return True
-            if not entry.get('year'):
-                return True
-            return abs(int(entry['year']) - parsed['year']) <= 1
-
-        # Library rows with files, preferring the service that fits the content type
-        lib_rows = next((lib_by_title[k] for k in parsed_keys if k in lib_by_title), [])
-        lib_rows = [r for r in lib_rows if _year_ok(r)]
-        if lib_rows:
-            preferred = 'sonarr' if is_episode else 'radarr'
-            lib_rows = [r for r in lib_rows if r.get('service') == preferred] or lib_rows
-
-        library_match = None
-        if lib_rows:
-            if is_episode and lib_rows[0].get('service') == 'sonarr':
-                # Same episode, or any episode of the same season for season packs
-                if parsed['episode'] is not None:
-                    se_tag = f"s{parsed['season']:02d}e{parsed['episode']:02d}"
-                else:
-                    se_tag = f"s{parsed['season']:02d}e"
-                for r in lib_rows:
-                    base = os.path.basename(r.get('relative_path') or r.get('path') or '').lower()
-                    if se_tag in base:
-                        library_match = r
-                        break
-            else:
-                library_match = lib_rows[0]
-
-        arr_title_hit = next(
-            (t for k in parsed_keys for t in titles_by_norm.get(k, []) if _year_ok(t)),
-            None)
-        in_arr = arr_title_hit is not None
-
-        # What this torrent is when the tracker doesn't say 'unregistered' —
-        # health is the only live input to classification, so precomputing the
-        # verdict under every health outcome lets the client apply the live
-        # answer without re-running any of this.
-        if library_match:
-            fallback = 'superseded'
-        elif in_arr or lib_rows:
-            fallback = 'import_pending'
-        else:
-            fallback = 'not_in_library'
-
-        if g['imported']:
-            # 'working' → None: a torrent the tracker answers for again has
-            # recovered (re-registered) — the row disappears on live verify.
-            alternatives = {'working': None, 'unregistered': 'dead_seed', 'other': 'dead_seed'}
-        else:
-            alternatives = {'working': fallback, 'unregistered': 'unregistered', 'other': fallback}
-
-        verdict = _triage_verdict_under(alternatives, tracker_health)
-        if verdict is None:
-            continue
-
-        lib_payload = None
-        if library_match:
-            lib_quality = library_match.get('file_quality_name') or ''
-            lib_payload = {
-                'title':        library_match.get('title') or '',
-                'year':         library_match.get('year'),
-                'service':      library_match.get('service') or '',
-                'quality_name': lib_quality,
-                'hdr':          library_match.get('file_hdr') or '',
-                'filename':     os.path.basename(library_match.get('path') or ''),
-                'arr_url':      _arr_url(library_match),
-                'quality_cmp':  compare_release_quality(parsed, lib_quality),
-                # Addressing for force-import: the arr already holds a file for
-                # this title, so replacing it needs the item's own id, not a path.
-                'arr_id':        library_match.get('arr_id'),
-                'connection_id': library_match.get('connection_id'),
-            }
-        elif in_arr:
-            t = arr_title_hit
-            lib_payload = {
-                'title':        t.get('title') or '',
-                'year':         t.get('year'),
-                'service':      t.get('service') or '',
-                'quality_name': '',
-                'hdr':          '',
-                'filename':     '',
-                'arr_url':      _arr_url(t),
-                'quality_cmp':  'unknown',
-                'arr_id':        t.get('arr_id'),
-                'connection_id': t.get('connection_id'),
-            }
-
-        # A byte-identical copy of this torrent's data already exists on disk
-        # (audit duplicate detection) but isn't hardlinked — a lossless Dedupe
-        # target. Distinct from a "same quality" alternate, which is separate data.
-        is_duplicate = any(f.get('duplicate_paths') for f in g['files'])
-
-        items.append({
-            'hash':           g['hash'],
-            'instance_id':    g['instance_id'],
-            'rep_path':       rep['path'],
-            'paths':          [f['path'] for f in g['files']],
-            'file_count':     len(g['files']),
-            'total_size':     g['total_size'],
-            'trackers':       sorted(g['trackers']),
-            'verdict':        verdict,
-            'verdict_alternatives': alternatives,
-            'is_duplicate':   is_duplicate,
-            'parsed':         parsed,
-            'library':        lib_payload,
-            'tracker_health': tracker_health,
-            'tracker_msg':    g['stored_msg'],
-            # Live-only fields — filled in by /triage/verify
-            'uploaded':       None,
-            'ratio':          None,
-            'seeding_time':   None,
-            'added_on':       None,
-        })
-
     # Dead registrations: torrents the tracker dropped whose payload is still
     # alive — on a working cross-seed sibling and/or the hardlinked library copy.
     # The audit merge keeps the healthy claimant per inode and stashes the dead
     # ones in `dead_siblings`; they are invisible everywhere else. Surface each
-    # as its own removable registration (delete_files='auto' keeps shared files,
-    # drops a distinct hardlink's own file so nothing is orphaned).
-    seen_hashes  = {i['hash'] for i in items if i['hash']}
+    # as its own removable registration. Collected before the cap so one cap
+    # covers both kinds of row (T8), and against every listed hash rather than
+    # only those the cap keeps — a torrent the cap cut is still not also a dead
+    # registration, which is how `count_triage_items` counts.
+    listed = {k for k, g in groups.items() if g['hash']}
     dead_reg = {}
     for f in torrent_files:
         if f.get('excluded') or not f.get('dead_siblings'):
             continue
         for s in f['dead_siblings']:
             h = s.get('hash')
-            if not h or h in seen_hashes:
+            if not h:
                 continue
-            g = dead_reg.setdefault(h, {
+            key = sources.registration_key(s.get('instance_id'), h)
+            if key in listed:
+                continue
+            g = dead_reg.setdefault(key, {
                 'hash': h, 'instance_id': s.get('instance_id'),
                 'files': [], 'total_size': 0, 'trackers': set(),
                 'stored_msg': s.get('tracker_msg') or '',
@@ -1992,12 +3680,202 @@ def workflows_triage():
             if f.get('tracker_health') == 'working':
                 g['alive_sibling'] = True
 
-    dead_reg_list = sorted(dead_reg.values(), key=lambda g: -g['total_size'])[:_TRIAGE_GROUP_CAP]
-    for g in dead_reg_list:
+    # T8 — one cap, on the combined list, largest first. It used to be applied to
+    # the torrent rows and again to the dead registrations, so a page could hold
+    # twice the cap while `truncated` reflected only the first, and the banner
+    # said "500" whatever the cap was. The badge (`count_triage_items`) still
+    # counts everything.
+    listing = sorted([('torrent', g) for g in groups.values()] +
+                     [('dead_registration', g) for g in dead_reg.values()],
+                     key=lambda kind_group: -kind_group[1]['total_size'])
+    total = len(listing)
+    listing = listing[:_TRIAGE_GROUP_CAP]
+
+    # S11 — each fetch hands back its rows and its errors from **one** snapshot.
+    # This used to call the fetch and then its errors accessor, which reads
+    # whichever fetch landed last: under eight gthreads another request's refresh
+    # could land in between, leaving this request `[]` rows and no errors, and
+    # the gate below reading that silence as a healthy arr.
+    #
+    # An arr that did not answer contributes no rows, which is the same empty
+    # list as an arr that manages nothing — and Triage turns that silence into a
+    # verdict with a delete button under it. `arr_configured` is derived from
+    # the config rather than from the fetch, so it stays true and the existing
+    # banner never fires.
+    arr_errors = []
+    try:
+        media_index, index_errors = fetch_arr_media_index_result(cfg)
+        arr_errors.extend(index_errors)
+    except Exception as e:
+        log.warning("Triage: media index fetch failed: %s", e)
+        media_index = []
+        # The per-connection loop inside has its own try, so reaching here means
+        # the whole call failed and no snapshot was published. Synthesize.
+        arr_errors.append({'connection_id': '', 'name': 'Sonarr/Radarr library',
+                           'service': '', 'partial': False, 'message': str(e)})
+    try:
+        all_titles, title_errors = fetch_arr_all_titles_result(cfg)
+        arr_errors.extend(title_errors)
+    except Exception as e:
+        log.warning("Triage: title list fetch failed: %s", e)
+        all_titles = []
+        arr_errors.append({'connection_id': '', 'name': 'Sonarr/Radarr titles',
+                           'service': '', 'partial': False, 'message': str(e)})
+    arr_degraded = bool(arr_errors)
+
+    # Index arr titles under every match variant (apostrophes spaced/dropped)
+    lib_by_title = {}
+    for m in media_index:
+        for key in title_match_keys(m.get('title') or ''):
+            lib_by_title.setdefault(key, []).append(m)
+    titles_by_norm = {}
+    for t in all_titles:
+        for key in title_match_keys(t.get('title') or ''):
+            titles_by_norm.setdefault(key, []).append(t)
+
+    # Non-English content is released under its original-language name while the
+    # arr stores the English one, so matching on the release title alone answers
+    # "no arr has ever heard of this" for a series the arr is actively managing.
+    # The arrs' own `alternateTitles` carry the mapping — and they must, because
+    # it is how the arr matched the grab in the first place. Built once per
+    # request from `all_titles` (one row per series/movie, already cached), so
+    # the per-file media index pays no memory for it.
+    title_aliases = title_alias_keys(all_titles)
+
+    conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
+
+    def _arr_url(entry):
+        conn = conn_by_id.get(entry.get('connection_id'))
+        if not conn:
+            return ''
+        prefix = '/movie/' if entry.get('service') == 'radarr' else '/series/'
+        slug = entry.get('title_slug') or ''
+        return link_base(conn) + prefix + (slug or str(entry.get('arr_id') or ''))
+
+    def _conn_name(row):
+        return (row.get('connection_name')
+                or (conn_by_id.get(row.get('connection_id')) or {}).get('name') or '')
+
+    def _classify(path):
+        """One file's library match and its verdict when the tracker has not dropped it.
+
+        Library rows with files are gated to the service that fits the content
+        type. A *gate*, not a tiebreak: this used to end `... or lib_rows`, which
+        fell back to the wrong-type rows whenever the right type had none, so a
+        TV episode of a same-titled series absent from Sonarr matched the film in
+        Radarr (Fargo, Hannibal, Dune, Shōgun — the collisions are not exotic).
+        That produced quality_cmp 'same', which is exactly what renders the Force
+        import button, and force_import_files then posts replaceExistingFiles
+        against the movie's id: one episode deliberately written over a library
+        film, past every rejection spec (T1).
+
+        Within the gate the rows are **ranked** (T2, `rank_arr_candidates`) —
+        they are pooled across every connection under one title key, so `[0]`
+        was whichever instance answered first — and the title list gets the
+        same gate, which it never had. The year gate is the shared `arr_year_ok`
+        (Radarr ±1, Sonarr one-sided), replacing an endpoint-local copy that was
+        Radarr ±1 and blind to a title that is itself a year. Ranking happens
+        within the rows a title match produced, aliases included; it never opens
+        a second matching path.
+        """
+        parsed = parse_release_info_for_path(path)
+        # Canonical keys first, then the arrs' alternate titles — an exact match
+        # always wins, an alias only rescues what would otherwise match nothing.
+        keys = with_title_aliases(title_match_keys(parsed['title']), title_aliases)
+        is_episode = parsed['season'] is not None
+        preferred = 'sonarr' if is_episode else 'radarr'
+        lib_rows = rank_arr_candidates(
+            next((lib_by_title[k] for k in keys if k in lib_by_title), []), parsed, service=preferred)
+        if is_episode:
+            # Same episode, or any episode of the same season for season packs
+            se_tag = (f"s{parsed['season']:02d}e{parsed['episode']:02d}" if parsed['episode'] is not None
+                      else f"s{parsed['season']:02d}e")
+            matches = [r for r in lib_rows
+                       if se_tag in os.path.basename(r.get('relative_path') or r.get('path') or '').lower()]
+        else:
+            matches = lib_rows
+        library_match, library_rivals = _triage_pick_instance(matches, parsed)
+        title_rows = next((ranked for ranked in
+                           (rank_arr_candidates(titles_by_norm.get(k, []), parsed, service=preferred)
+                            for k in keys)
+                           if ranked), [])
+        title_hit, title_rivals = _triage_pick_instance(title_rows, parsed)
+
+        if library_match:
+            verdict = 'superseded'
+        elif title_hit or lib_rows:
+            verdict = 'import_pending'
+        elif arr_degraded:
+            # `not_in_library` means "no arr has ever heard of this", and its
+            # copy ends "junk can be deleted" — a not-imported torrent has no
+            # hardlink anywhere by definition, so those files are the only copy.
+            # That verdict must not be reachable when no arr answered: absence
+            # of evidence is not evidence of absence (the same rule Phase 2's
+            # source guard applies to the torrent client). `superseded` and
+            # `import_pending` are positive matches and stand on their own; only
+            # the verdict derived purely from silence is suppressed.
+            verdict = 'library_unknown'
+        else:
+            verdict = 'not_in_library'
+        return {'parsed': parsed, 'verdict': verdict,
+                'match': library_match, 'match_rivals': library_rivals,
+                'title': title_hit, 'title_rivals': title_rivals}
+
+    def _library_payload(c):
+        parsed = c['parsed']
+        if c['match']:
+            row, rivals = c['match'], c['match_rivals']
+            quality = row.get('file_quality_name') or ''
+            payload = {
+                'title':        row.get('title') or '',
+                'year':         row.get('year'),
+                'service':      row.get('service') or '',
+                'quality_name': quality,
+                'hdr':          row.get('file_hdr') or '',
+                'filename':     os.path.basename(row.get('path') or ''),
+                'arr_url':      _arr_url(row),
+                'quality_cmp':  compare_release_quality(parsed, quality),
+                # Addressing for force-import: the arr already holds a file for
+                # this title, so replacing it needs the item's own id, not a path.
+                'arr_id':        row.get('arr_id'),
+                'connection_id': row.get('connection_id'),
+            }
+        elif c['title']:
+            row, rivals = c['title'], c['title_rivals']
+            payload = {
+                'title':        row.get('title') or '',
+                'year':         row.get('year'),
+                'service':      row.get('service') or '',
+                'quality_name': '',
+                'hdr':          '',
+                'filename':     '',
+                'arr_url':      _arr_url(row),
+                'quality_cmp':  'unknown',
+                'arr_id':        row.get('arr_id'),
+                'connection_id': row.get('connection_id'),
+            }
+        else:
+            return None
+        # T2 — the instance a rescan and a force import go to, and every other
+        # instance that also holds the title. Two instances holding one title is
+        # a legitimate configuration (1080p + 4K), and "your library already has
+        # this" is true of both, so the row says so rather than picking silently.
+        payload['connection_name'] = _conn_name(row)
+        payload['others'] = [{
+            'connection_id': r.get('connection_id'),
+            'name':          _conn_name(r),
+            'quality_name':  r.get('file_quality_name') or '',
+            'quality_cmp':   (compare_release_quality(parsed, r['file_quality_name'])
+                              if r.get('file_quality_name') else 'unknown'),
+        } for r in rivals]
+        return payload
+
+    def _dead_registration_item(g):
         videos = [f for f in g['files']
                   if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS]
         rep = max(videos or g['files'], key=lambda f: f['size'])
-        items.append({
+        return {
+            'reg':            sources.registration_key(g['instance_id'], g['hash']),
             'hash':           g['hash'],
             'instance_id':    g['instance_id'],
             'rep_path':       rep['path'],
@@ -2011,34 +3889,154 @@ def workflows_triage():
             'verdict_alternatives': {'working': None,
                                      'unregistered': 'dead_registration',
                                      'other': 'dead_registration'},
+            'verdict_spread': None,
+            # Deliberately empty, and the UI renders no Exclude action for these
+            # rows (T6). These `paths` are the **healthy carrier's** — a file a
+            # working cross-seed is seeding right now. Excluding one hides a live
+            # file from the walk while the dead registration it was meant to
+            # address is still sitting in the client. Exclusion is not a
+            # meaningful answer to this row at all; removing the registration is.
+            'exclusion_patterns': [],
             'is_duplicate':   False,
             'parsed':         parse_release_info_for_path(rep['path']),
+            'episodes':       None,
             'library':        None,
             'tracker_health': 'unregistered',
             'tracker_msg':    g['stored_msg'],
+            'status':             rep.get('status') or '',
+            'completion_unknown': bool(rep.get('completion_unknown')),
+            # The files are the carrier's, so neither count describes this
+            # registration's own torrent.
+            'torrent_files':  None,
+            'torrent_size':   None,
             'uploaded':       None,
             'ratio':          None,
             'seeding_time':   None,
             'added_on':       None,
+            # The evidence the row's copy asserts — the page renders which (T9).
             'alive_library':  g['alive_library'],
             'alive_sibling':  g['alive_sibling'],
+        }
+
+    items = []
+    for kind, g in listing:
+        if kind == 'dead_registration':
+            items.append(_dead_registration_item(g))
+            continue
+        # Largest first, so the representative is the largest video, as it was.
+        videos = sorted((f for f in g['files'] if os.path.splitext(f['path'])[1].lower() in _VIDEO_EXTS),
+                        key=lambda f: -f['size'])
+        rep = videos[0] if videos else max(g['files'], key=lambda f: f['size'])
+
+        # T5 — one verdict per torrent, earned by every video in it rather than
+        # by the largest. A season pack is one decision, so rows stay per torrent,
+        # but a pack where one episode is superseded and nine are not in the
+        # library used to read as superseded-lower — the state that pre-selected
+        # a delete of the whole cross-seed group. Every video is judged, the row
+        # takes the verdict that deletes least, and a disagreement ships as
+        # `verdict_spread`. An imported dead seed's verdict does not depend on the
+        # library, so it is judged on its representative as before.
+        voters = videos if videos and not g['imported'] else [rep]
+        judged = [_classify(f['path']) for f in voters]
+        spread = {}
+        for c in judged:
+            spread[c['verdict']] = spread.get(c['verdict'], 0) + 1
+        fallback = min(spread, key=_TRIAGE_LEAST_DESTRUCTIVE.index)
+        chosen = next(c for c in judged if c['verdict'] == fallback)
+        parsed = chosen['parsed']
+        # The episodes this row covers, for the rescan watch (T11): every video's,
+        # when each names an episode of the row's season; otherwise the season.
+        episodes = None
+        if parsed['season'] is not None:
+            numbers = {c['parsed']['episode'] for c in judged}
+            if None not in numbers and all(c['parsed']['season'] == parsed['season'] for c in judged):
+                episodes = sorted(numbers)
+
+        tracker_health = g.get('stored_health') or 'unknown'
+        # What this torrent is when the tracker doesn't say 'unregistered' —
+        # health is the only live input to classification, so precomputing the
+        # verdict under every health outcome lets the client apply the live
+        # answer without re-running any of this.
+        if g['imported']:
+            # 'working' → None: a torrent the tracker answers for again has
+            # recovered (re-registered) — the row disappears on live verify.
+            alternatives = {'working': None, 'unregistered': 'dead_seed', 'other': 'dead_seed'}
+        else:
+            alternatives = {'working': fallback, 'unregistered': 'unregistered', 'other': fallback}
+
+        verdict = _triage_verdict_under(alternatives, tracker_health)
+        if verdict is None:
+            continue
+
+        # A byte-identical copy of this torrent's data already exists on disk
+        # (audit duplicate detection) but isn't hardlinked — a lossless Dedupe
+        # target. Distinct from a "same quality" alternate, which is separate data.
+        is_duplicate = any(f.get('duplicate_paths') for f in g['files'])
+
+        items.append({
+            # The row's registration (S05) — what /triage/verify keys its
+            # answers by, and what the removal acts on. The bare hash wherever a
+            # torrent is registered once.
+            'reg':            sources.registration_key(g['instance_id'], g['hash']),
+            'hash':           g['hash'],
+            'instance_id':    g['instance_id'],
+            'rep_path':       rep['path'],
+            'paths':          [f['path'] for f in g['files']],
+            'file_count':     len(g['files']),
+            'total_size':     g['total_size'],
+            'trackers':       sorted(g['trackers']),
+            'verdict':        verdict,
+            'verdict_alternatives': alternatives,
+            'verdict_spread': spread if len(spread) > 1 else None,
+            # Built here, not in the browser — and the safe folder comes off the
+            # audit's own stamp, because deciding it needs the whole torrent,
+            # every other torrent's paths and the media tree.
+            'exclusion_patterns': _triage_exclusion_patterns(
+                [f['path'] for f in g['files']], _excl_folder(g['files'])),
+            'is_duplicate':   is_duplicate,
+            'parsed':         parsed,
+            'episodes':       episodes,
+            'library':        _library_payload(chosen),
+            'tracker_health': tracker_health,
+            'tracker_msg':    g['stored_msg'],
+            # What the client is doing, and whether the payload is whole. The
+            # item carried neither, so the UI could not have told an in-flight
+            # download from junk even if it wanted to (T4). Known-incomplete
+            # torrents no longer reach this list at all; `completion_unknown`
+            # ones do, and say so rather than vanishing.
+            'status':             rep.get('status') or '',
+            'completion_unknown': bool(rep.get('completion_unknown')),
+            # T5 — what a delete touches is the whole torrent, and this row may
+            # list a subset (a partly imported torrent, an excluded file). The
+            # file count is the audit's (`_stamp_torrent_files`, sparse); the size
+            # arrives from /triage/verify, which has the torrent's own row.
+            'torrent_files':  max((f.get('torrent_files') or 0) for f in g['files']) or None,
+            'torrent_size':   None,
+            # Live-only fields — filled in by /triage/verify
+            'uploaded':       None,
+            'ratio':          None,
+            'seeding_time':   None,
+            'added_on':       None,
         })
 
     verdict_order = {'dead_seed': 0, 'dead_registration': 1, 'unregistered': 2,
-                     'superseded': 3, 'import_pending': 4, 'not_in_library': 5}
+                     'superseded': 3, 'import_pending': 4, 'library_unknown': 5,
+                     'not_in_library': 6}
     items.sort(key=lambda i: (verdict_order.get(i['verdict'], 9), -i['total_size']))
-    counts = {}
-    for i in items:
-        counts[i['verdict']] = counts.get(i['verdict'], 0) + 1
 
     suggestions = _triage_exclusion_suggestions(items)
 
+    # `counts` is gone (T9): nothing read it, and the badge and the Rounds card
+    # read `details.triage_counts` off the audit. `shown` / `total` replace a
+    # banner that hardcoded "500" (T8); `truncated` stays for an older bundle.
     return jsonify({
         "status":         "success",
         "items":          items,
-        "counts":         counts,
-        "truncated":      truncated,
+        "shown":          len(listing),
+        "total":          total,
+        "truncated":      total > len(listing),
         "arr_configured": bool(conn_by_id),
+        "arr_errors":     arr_errors,
         "suggestions":    suggestions,
     })
 
@@ -2069,6 +4067,9 @@ def workflows_triage_verify():
         return jsonify({"status": "success", "details": {}})
     cfg = db_load_config()
     try:
+        # Keyed by registration (S05): two instances seeding one torrent have
+        # two sets of upload figures and two tracker answers, and the page holds
+        # a row per registration.
         details = sources.fetch_torrent_details(cfg, items)
     except Exception as e:
         # qBittorrent raises SourceConnectionError when unreachable — surface
@@ -2134,58 +4135,115 @@ def _triage_exclusion_suggestions(items):
     return sorted(buckets.values(), key=lambda s: -s['count'])
 
 
+# Pile order on the page: the lossless pile first, where green belongs; the
+# irreversible pile second; the one nothing can be done about until a clean scan
+# last. CLEANUP Principle 5 — irreversibility outranks yield — decided by the
+# user as option (a), 2026-09-13.
+_CLEANUP_PILES = ('keeps_copy', 'only_copy', 'unverified')
+
+
 @app.route('/api/workflows/cleanup')
 @require_auth
 def workflows_cleanup():
-    """Orphaned-torrent report grouped by top-level folder, with hardlink and age info."""
-    cfg = db_load_config()
-    torrent_files = db_load_file_results('torrents')
-    local_path    = cfg.get('LOCAL_PATH', '')
+    """Orphaned files, one row per inode, grouped by release folder and split into piles.
 
-    orphaned       = [f for f in torrent_files if f.get('status') == 'Orphaned' and not f.get('excluded')]
-    excluded_count = sum(1 for f in torrent_files if f.get('status') == 'Orphaned' and f.get('excluded'))
+    Built entirely from what the audit stamped — **nothing is stat'ed here**
+    (C9). The page used to `os.path.getmtime` every orphan on every load, capped
+    at 5,000, and above the cap every age silently vanished.
 
-    # mtime via os.stat is best-effort and capped — a pathological orphan count
-    # shouldn't turn the report page into a second filesystem scan
-    fetch_mtime = bool(local_path) and len(orphaned) <= 5000
+    Each row is an inode (C5): `path` (the first walked), `paths` (every
+    torrent-tree path of it — the bytes go only when all of them go), `size`
+    once, `state` (`_cleanup_state`) and `mtime` or `None` ("age unavailable" is
+    a readout, never a missing chip).
+
+    Each group ships `excl_folder` — the folder a rule may name, stamped by
+    `audit._mark_cleanup_folders` — or `None` with `no_folder_rule` saying why:
+    `root`, `media_root` (a category dir shared with the library by name),
+    `live_torrent` (the folder also holds files a torrent claims — C16),
+    `unverified`, or `not_established` (no stamp: a database whose last audit
+    predates it). `loose` is kept as `excl_folder is None` for a stale browser
+    bundle, which reads only that flag and would otherwise offer a folder rule
+    for every group.
+
+    `pile` is the group's most alarming state: any `unverified` file puts it in
+    `unverified`, else any `last_copy` in `only_copy`, else `keeps_copy` — a
+    group holding both kinds sits in the only-copy pile with per-file states.
+    Groups sort by pile, then oldest first; rows oldest first.
+
+    `freeable_size` is an **upper bound**: each last-copy inode counted once.
+    What a run actually frees is the script's to report. `excluded_count` counts
+    excluded orphan **records** (inodes), not paths.
+    """
+    records, excluded_count = _cleanup_records()
 
     folders = {}
-    for f in orphaned:
-        rel = f['path'].replace('\\', '/')
-        # Group at release-folder depth: with a TRaSH layout the first segment
-        # is a category dir (movies/, tv/) and the second is the torrent's own
-        # folder — cap at two segments so groups map to abandoned payloads.
-        dir_segs = rel.split('/')[:-1]
+    for rec in records:
+        paths = _cleanup_paths(rec)
+        dir_segs = paths[0].split('/')[:-1]
         top = '/'.join(dir_segs[:2]) if dir_segs else '(root)'
-        g = folders.setdefault(top, {
-            'folder': top, 'files': [],
-            'total_size': 0, 'freeable_size': 0, 'hardlinked_size': 0,
+        g = folders.get(top)
+        if g is None:
+            g = folders[top] = {'folder': top, 'files': [], '_stamps': set(), '_refused': set()}
+        g['_stamps'].add(str(rec.get('excl_folder') or ''))
+        g['_refused'].add(str(rec.get('excl_refused') or ''))
+        mtime = rec.get('mtime')
+        g['files'].append({
+            'path':  paths[0],
+            'paths': paths,
+            'size':  rec.get('size') or 0,
+            'state': _cleanup_state(rec),
+            'mtime': mtime if isinstance(mtime, int) and not isinstance(mtime, bool) else None,
         })
-        # Hardlinked elsewhere — deleting frees nothing until the last link goes
-        hardlinked = bool(f.get('imported')) or bool(f.get('linked_paths'))
-        entry = {'path': f['path'], 'size': f['size'], 'hardlinked': hardlinked, 'mtime': None}
-        if fetch_mtime:
-            try:
-                entry['mtime'] = int(os.path.getmtime(os.path.join(local_path, f['path'])))
-            except OSError:
-                pass
-        g['files'].append(entry)
-        g['total_size'] += f['size']
-        if hardlinked:
-            g['hardlinked_size'] += f['size']
+
+    states = {s: {'count': 0, 'size': 0}
+              for s in ('library_copy', 'linked_elsewhere', 'last_copy', 'unverified')}
+    groups = []
+    for top, g in folders.items():
+        stamps, refused = g.pop('_stamps'), g.pop('_refused')
+        # Every record of a group carries the same stamp; disagreement means some
+        # predate it, which is "not established", never "safe".
+        if top == '(root)':
+            excl, why = None, 'root'
+        elif stamps == {top}:
+            excl, why = top, None
+        elif len(refused) == 1 and '' not in refused:
+            excl, why = None, next(iter(refused))
         else:
-            g['freeable_size'] += f['size']
+            excl, why = None, 'not_established'
+        present = {f['state'] for f in g['files']}
+        pile = ('unverified' if 'unverified' in present
+                else 'only_copy' if 'last_copy' in present else 'keeps_copy')
+        for f in g['files']:
+            states[f['state']]['count'] += 1
+            states[f['state']]['size'] += f['size']
+        g['files'].sort(key=lambda f: (f['mtime'] is None, f['mtime'] or 0, f['path']))
+        ages = [f['mtime'] for f in g['files'] if f['mtime'] is not None]
+        g.update({
+            'excl_folder':    excl,
+            'no_folder_rule': why,
+            'loose':          excl is None,
+            'pile':           pile,
+            'oldest_mtime':   min(ages) if ages else None,
+            'total_size':     sum(f['size'] for f in g['files']),
+            'freeable_size':  sum(f['size'] for f in g['files'] if f['state'] == 'last_copy'),
+        })
+        groups.append(g)
+    groups.sort(key=lambda g: (_CLEANUP_PILES.index(g['pile']), g['oldest_mtime'] is None,
+                               g['oldest_mtime'] or 0, g['folder']))
 
-    groups = sorted(folders.values(), key=lambda g: -g['total_size'])
-    for g in groups:
-        g['files'].sort(key=lambda x: -x['size'])
-
+    keeps = {'count': states['library_copy']['count'] + states['linked_elsewhere']['count'],
+             'size':  states['library_copy']['size'] + states['linked_elsewhere']['size']}
     return jsonify({
         "status":         "success",
         "groups":         groups,
-        "file_count":     len(orphaned),
+        "file_count":     len(records),
+        "path_count":     sum(len(f['paths']) for g in groups for f in g['files']),
         "total_size":     sum(g['total_size'] for g in groups),
         "freeable_size":  sum(g['freeable_size'] for g in groups),
+        "keeps_copy":     keeps,
+        "only_copy":      states['last_copy'],
+        "unverified":     states['unverified'],
+        "states":         states,
         "excluded_count": excluded_count,
     })
 
@@ -2193,131 +4251,82 @@ def workflows_cleanup():
 @app.route('/api/workflows/dedupe')
 @require_auth
 def workflows_dedupe():
-    """Duplicate-group report — the same groups the dedupe script is built from."""
+    """Duplicate groups, built by the same function the dedupe script is (F13).
+
+    Each group is a set of identical files — one member per inode, every known
+    path listed — with a `status` (`linkable` / `cross_device` /
+    `unverifiable` / `stale`), a `cause` and a `frees_up_to` maximum. No copy is
+    canonical: the script chooses the one to keep, per disk, when it runs. See
+    `scripts.build_dedupe_report`.
+    """
     cfg = db_load_config()
-    local_path = cfg.get('LOCAL_PATH', '')
-    media_path = cfg.get('MEDIA_PATH', '')
-    torrent_files = db_load_file_results('torrents')
-    media_files   = db_load_file_results('media')
-    dup_result = _build_dup_groups(
-        dup_group_inputs(torrent_files, media_files, local_path, media_path),
-        local_path, media_path)
+    report = build_dedupe_report(*_dedupe_records(), cfg)
+    return jsonify({"status": "success", **report})
 
-    groups_out = []
-    for g in dup_result['groups']:
-        canonical = next(f for f in g['files'] if f['canonical'])
-        groups_out.append({
-            'id':               canonical['path'],
-            'files':            g['files'],
-            'recoverable_size': g['recoverable_size'],
-            'cross_fs':         g['skipped'],
-        })
-    groups_out.sort(key=lambda g: (g['cross_fs'], -g['recoverable_size']))
 
-    return jsonify({
-        "status":            "success",
-        "groups":            groups_out,
-        "script_root":       dup_result['script_root'],
-        "excluded_count":    dup_result.get('excluded_count', 0),
-        "total_recoverable": sum(g['recoverable_size'] for g in groups_out),
-    })
+def _dedupe_records():
+    """`(torrent records, media records)` for the Dedupe builder — the compact row,
+    or both full lists where the last scan predates it.
+
+    The audit persists a compact `dedupe` row (`scripts.dedupe_row`: excluded
+    records and records with duplicate partners, keyed by tree), so neither the
+    page nor the script deserializes the whole library to keep a sliver of it —
+    R6, and C10's shape for Cleanup. The builder's first step is that same
+    filter, so the two sources build the same report. A database whose last
+    scan predates the row falls back to the full lists until the next scan.
+
+    Pinned (S04): a group is a join of the two trees, so the fallback's two
+    reads come from one generation, and the row is one read of one.
+    """
+    with db_read_snapshot() as snap:
+        if db_has_file_results('dedupe', conn=snap):
+            row = db_load_file_results('dedupe', conn=snap)
+            if isinstance(row, dict):
+                return row.get('torrents') or [], row.get('media') or []
+        return (db_load_file_results('torrents', conn=snap),
+                db_load_file_results('media', conn=snap))
 
 
 @app.route('/api/workflows/acquire_candidates')
 @require_auth
 def workflows_acquire_candidates():
+    """Backfill's candidates exactly as they will be searched, plus the file counts.
+
+    Grouped and scoped by `_resolve_backfill` — the same call `generate` searches
+    from — and by nothing else. This used to ship a row for every unseeded file,
+    resolved or not, so the browser could discard the unresolved ones and regroup
+    the rest with its own copy of the season key (B7). After B1 that copy could
+    not be kept correct at all: whether a season is one pack or N episodes turns
+    on how many files the arr holds in it, which the client never sees (B7b).
+
+    Two units, and the page keeps them as two sentences: `counts` is candidates
+    (groups — a season pack is one), `resolved_count` / `unresolved_count` are
+    files.
+    """
     cfg = db_load_config()
-    media_files = db_load_file_results('media')
-
-    candidates_raw = [
-        f for f in media_files
-        if not f.get('excluded') and not [t for t in (f.get('trackers') or []) if t != 'None']
-    ]
-
-    arr_media = fetch_arr_media_index(cfg)
-    media_root = cfg.get('MEDIA_PATH', '')
-
-    def _norm(p):
-        return os.path.normpath(str(p or '')).replace('\\', '/')
-
-    arr_index = {}
-    for item in arr_media:
-        key = _norm(item.get('path', ''))
-        if key:
-            arr_index[key] = item
-
-    svc_map = {
-        'sonarr': {'slug_prefix': '/series/'},
-        'radarr': {'slug_prefix': '/movie/'},
-    }
-
-    all_conns = normalize_arr_connections(cfg)
-    conn_by_id = {c['id']: c for c in all_conns}
-    fallback_base_url = link_base(all_conns[0]) if all_conns else ''
-
-    candidates = []
-    resolved_count = 0
-    unresolved_count = 0
-
-    for f in candidates_raw:
-        rel_path = f.get('path', '')
-        abs_path = _norm(os.path.join(media_root, rel_path) if not os.path.isabs(rel_path) else rel_path)
-        arr_item = arr_index.get(abs_path)
-
-        if arr_item:
-            service = arr_item.get('service', '')
-            conn_id = arr_item.get('connection_id', '')
-            arr_id = arr_item.get('arr_id')
-            title = arr_item.get('title', '')
-            episode_ids = arr_item.get('episode_ids') or []
-            episode_id = episode_ids[0] if episode_ids else None
-            slug_prefix = svc_map.get(service, {}).get('slug_prefix', '/')
-            title_slug = arr_item.get('titleSlug') or arr_item.get('title_slug')
-            conn = conn_by_id.get(conn_id)
-            base_url = link_base(conn) if conn else ''
-            if title_slug:
-                arr_url = base_url + slug_prefix + title_slug
-            else:
-                arr_url = base_url + slug_prefix + str(arr_id) if arr_id else base_url
-            candidates.append({
-                **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
-                'resolved': True,
-                'arr_service': service,
-                'arr_connection_id': conn_id,
-                'arr_id': arr_id,
-                'arr_title': title,
-                'episode_id': episode_id,
-                'arr_url': arr_url,
-            })
-            resolved_count += 1
-        else:
-            filename = os.path.basename(rel_path)
-            search_url = ''
-            if fallback_base_url:
-                term = os.path.splitext(filename)[0]
-                search_url = fallback_base_url + '/add/new?term=' + urllib.parse.quote(term)
-            candidates.append({
-                **{k: f.get(k) for k in ('path', 'size', 'trackers', 'inode')},
-                'resolved': False,
-                'arr_service': None,
-                'arr_connection_id': None,
-                'arr_id': None,
-                'arr_title': None,
-                'episode_id': None,
-                'arr_url': search_url,
-            })
-            unresolved_count += 1
-
+    backfill = _resolve_backfill(cfg)
+    # The errors of the very fetch the candidates were built from (S11). An
+    # instance whose index failed contributes no rows — indistinguishable from
+    # one managing nothing — so it is reported rather than left to be inferred
+    # from a gap.
+    arr_errors = backfill['arr_errors']
+    groups = backfill['groups']
+    by_scope = {'season': 0, 'episode': 0, 'movie': 0}
+    for g in groups:
+        by_scope[g['scope']] += 1
     return jsonify({
         "status": "success",
-        "candidates": candidates,
-        "resolved_count": resolved_count,
-        "unresolved_count": unresolved_count,
-        # An instance whose index failed contributes no rows, which is
-        # indistinguishable from one managing nothing: its files fall to
-        # unresolved and drop out of the page entirely, folder chips included.
-        # Report it rather than leaving the user to infer a gap.
-        "arr_errors": arr_media_index_errors(),
+        "candidates": groups,
+        "counts": {'candidates': len(groups), **by_scope},
+        "resolved_count": backfill['resolved_count'],
+        "unresolved_count": backfill['unresolved_count'],
+        # B9: how many of the unresolved files are video. The rest are sidecars
+        # no arr indexes; these are the ones worth acting on.
+        "unresolved_video_count": backfill['unresolved_video_count'],
+        # B9's optional half: one unmatched video beside the arr's own path for
+        # a file of the same name, or None. Local UI only — never logged.
+        "unmatched_example": backfill['unmatched_example'],
+        "arr_errors": arr_errors,
     })
 
 
@@ -2328,7 +4337,32 @@ def _release_job_key(service, connection_id, arr_id, episode_id, season_number, 
     parts = (service, connection_id, str(arr_id), str(episode_id), str(season_number), file_path or '')
     return ':'.join(parts)
 
-_RES_LABEL_MAP = {'2160p': 2160, '1080p': 1080, '720p': 720}
+_RES_LABEL_MAP = {'2160p': 2160, '1080p': 1080, '720p': 720, '480p': 480}
+
+
+def _release_res_label(r):
+    """The resolution chip a release belongs to, or `''`.
+
+    The arr's integer decides, as it always has for 2160p/1080p/720p. The SD chip
+    (`480p`, BACKFILL B2's note, Phase 14) also takes 576 — `Bluray-576p` is SD —
+    and reads the quality name where the integer is 0, because **Radarr's `DVD`
+    quality carries resolution 0** (`Quality.cs`: `new Quality(2, "DVD",
+    QualitySource.DVD, 0)`, where Sonarr's is 480). `_effective_res_rank`
+    already ranks a DVD source as 480p-class, which is how a DVD release was
+    rankable and yet unselectable.
+    """
+    res = r.get('resolution') or 0
+    for label, px in _RES_LABEL_MAP.items():
+        if res == px:
+            return label
+    if 0 < res <= 576:
+        return '480p'
+    if not res:
+        q_res, q_src = parse_quality_name(r.get('quality_name'))
+        if q_res == '480p' or (not q_res and q_src == 'dvd'):
+            return '480p'
+    return ''
+
 
 def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, source_filter=None, hdr_filter=None):
     groups = {}
@@ -2344,23 +4378,134 @@ def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, sou
                 continue
             filtered.append(r)
     if res_filter:
-        target_resolutions = {_RES_LABEL_MAP[r] for r in res_filter if r in _RES_LABEL_MAP}
-        if target_resolutions:
-            filtered = [r for r in filtered if r.get('resolution') in target_resolutions]
+        target_labels = {r for r in res_filter if r in _RES_LABEL_MAP}
+        if target_labels:
+            filtered = [r for r in filtered if _release_res_label(r) in target_labels]
     if source_filter:
+        # Match on the *quality name*, never the raw `source` field. That field
+        # is a serialized C# enum and the two services do not spell it the same
+        # way: Sonarr says 'web' where Radarr says 'webdl', 'webRip' where
+        # Radarr says 'webrip', and HDTV is 'television' on Sonarr against 'tv'
+        # on Radarr — so the HDTV chip matched nothing on either service and
+        # WEB-DL/WEBRip matched nothing on any Sonarr candidate. The failure was
+        # silent: the candidate came back `not_found`, indistinguishable from
+        # "no release exists". `parse_quality_name` maps the display string both
+        # services do agree on ('WEBDL-1080p', 'HDTV-720p', 'Bluray-1080p
+        # Remux') onto the chips' own vocabulary, and it is what the rest of
+        # auditorr already uses — this was the last consumer of the raw enum.
+        # It also subsumes the old Remux special case, since 'remux' is matched
+        # ahead of 'bluray' in _SOURCE_NAME_PATTERNS.
         def _source_match(r):
-            # Sonarr uses source="bluray" for both Remux and Bluray encodes.
-            # Distinguish them by quality name so the two chips are independent.
-            is_remux = 'remux' in (r.get('quality_name') or '').lower()
-            return ('remux' if is_remux else r.get('source', '')) in source_filter
+            _, src = parse_quality_name(r.get('quality_name'))
+            return src in source_filter
         filtered = [r for r in filtered if _source_match(r)]
     if hdr_filter:
         # 'SDR' maps to empty string (no HDR detected); other values match hdr field directly
         target_hdr = {'' if h == 'SDR' else h for h in hdr_filter}
         filtered = [r for r in filtered if r.get('hdr', '') in target_hdr]
-    # Sort: custom format score desc, quality weight desc, seeders desc (matches Sonarr/Radarr interactive search order)
-    filtered.sort(key=lambda r: (r.get('custom_format_score', 0), r.get('quality_weight', 0), r.get('seeders', 0)), reverse=True)
+    # Sort: custom format score desc, quality weight desc, seeders desc (matches
+    # Sonarr/Radarr interactive search order). `or 0`, not a .get default: both
+    # arrs declare Seeders as `int?`, so the key is present and null on usenet.
+    filtered.sort(key=lambda r: (r.get('custom_format_score') or 0, r.get('quality_weight') or 0,
+                                 r.get('seeders') or 0), reverse=True)
     return filtered
+
+
+# Within this fraction of the local size a release still counts as "the same
+# payload". A scene torrent carries an .nfo, an .srr and often a sample beside
+# the video, so byte equality with the one library file is the rarer case.
+_SIZE_MATCH_TOLERANCE = 0.01
+
+
+def _release_closeness(release, local):
+    """`(sort_key, size_delta, match)` — how close a release is to the file on disk.
+
+    `match` is the per-field breakdown the page renders beside each release, in
+    Trumped's vocabulary: `same` / `partial` / `diff`, or `''` where there is no
+    evidence either way (an unparseable quality, SDR on both sides).
+    """
+    want = local.get('total_size') or 0
+    size = release.get('size') or 0
+    delta = size - want if (want and size) else None
+    if delta is None:
+        size_match, size_tier = '', 2
+    elif delta == 0:
+        size_match, size_tier = 'same', 0
+    elif abs(delta) <= want * _SIZE_MATCH_TOLERANCE:
+        size_match, size_tier = 'partial', 1
+    else:
+        size_match, size_tier = 'diff', 2
+
+    l_res, l_src = parse_quality_name(local.get('file_quality'))
+    r_res, r_src = parse_quality_name(release.get('quality_name'))
+    if not (l_res or l_src) or not (r_res or r_src):
+        quality_match, quality_tier = '', 2
+    elif (l_res, l_src) == (r_res, r_src):
+        quality_match, quality_tier = 'same', 0
+    elif (l_res and l_res == r_res) or (l_src and l_src == r_src):
+        quality_match, quality_tier = 'partial', 1
+    else:
+        quality_match, quality_tier = 'diff', 2
+
+    l_hdr, r_hdr = local.get('file_hdr') or '', release.get('hdr') or ''
+    hdr_match = '' if not (l_hdr or r_hdr) else ('same' if l_hdr == r_hdr else 'diff')
+    hdr_tier = 0 if l_hdr == r_hdr else 1
+
+    key = (size_tier, quality_tier, hdr_tier, -(release.get('seeders') or 0),
+           abs(delta) if delta is not None else float('inf'))
+    return key, delta, {'size': size_match, 'quality': quality_match, 'hdr': hdr_match}
+
+
+def _rank_releases(rows, rank='upgrade', local=None):
+    """Order one candidate's filtered releases, and attach the evidence (B3).
+
+    `upgrade` (the default, amendment 2) keeps the arr's own interactive-search
+    order — custom format score, quality weight, seeders — which answers *"what
+    is the best copy of this?"*. `closest` answers the other question, *"which
+    of these is the file I already have?"*: exact size, then within
+    `_SIZE_MATCH_TOLERANCE`, then quality, then HDR, then seeders. That is the
+    release the file on disk came from, so grabbing it leaves the library where
+    it started with a seed behind it — the conservative choice, and the one to
+    pick when a backfill must not change what the library holds.
+
+    **Both orders attach the same evidence** (`size_delta`, `match`), because the
+    closeness of a release to the file you already have is worth showing whether
+    or not it decides the order.
+
+    Rows are expected in upgrade order already (`_apply_release_filters`) and the
+    sort is stable, so ties keep it.
+
+    Without a `local` file there is nothing to be close to and rows come back
+    as given.
+    """
+    if not local:
+        return rows
+    scored = []
+    for r in rows:
+        key, delta, match = _release_closeness(r, local)
+        scored.append((key, dict(r, size_delta=delta, match=match)))
+    if rank != 'upgrade':
+        scored.sort(key=lambda kr: kr[0])
+    return [r for _key, r in scored]
+
+
+def _sweep_backfill_jobs():
+    """Expire Backfill's in-memory jobs: release searches and finished generate runs.
+
+    Called from `watch_import/active` — which every open auditorr page polls every
+    five seconds — as well as from the endpoints that own the jobs. Release
+    searches used to be swept only from inside `acquire_releases`, so an entry
+    lived until the next release search, which may never come (B13).
+    """
+    now = time.time()
+    for k in [k for k, v in list(_release_jobs.items()) if now - v['ts'] > _RELEASE_JOB_TTL]:
+        _release_jobs.pop(k, None)
+    with _gen_jobs_lock:
+        _sweep_gen_jobs(now)
+
+
+def _csv_arg(name):
+    return [v for v in (request.args.get(name) or '').split(',') if v]
 
 
 @app.route('/api/workflows/acquire_releases')
@@ -2375,11 +4520,7 @@ def workflows_acquire_releases():
     if not service or not connection_id or arr_id is None:
         return jsonify({"status": "error", "message": "service, connection_id, and arr_id are required"}), 400
 
-    # Expire old jobs
-    now = time.time()
-    expired = [k for k, v in _release_jobs.items() if now - v['ts'] > _RELEASE_JOB_TTL]
-    for k in expired:
-        del _release_jobs[k]
+    _sweep_backfill_jobs()
 
     job_key = _release_job_key(service, connection_id, arr_id, episode_id, season_number, file_path)
 
@@ -2387,10 +4528,17 @@ def workflows_acquire_releases():
         job = _release_jobs[job_key]
         if job['status'] == 'done':
             cfg = db_load_config()
+            # The same filters `generate` applies, on this branch too (B13). It
+            # applied the indexer strategy and dropped resolution/source/HDR, so
+            # one endpoint answered the same inputs two ways depending on whether
+            # the search happened to be cached.
             releases = _apply_release_filters(
                 job['releases'],
                 cfg.get('ACQUIRE_DOWNLOAD_FROM') or [],
                 cfg.get('ACQUIRE_SEEDING_ON') or [],
+                res_filter=_csv_arg('res_filter'),
+                source_filter=_csv_arg('source_filter'),
+                hdr_filter=_csv_arg('hdr_filter'),
             )
             return jsonify({"status": "done", "releases": releases})
         return jsonify({"status": job['status'], "message": job.get('message', '')})
@@ -2425,47 +4573,214 @@ def workflows_grab_release():
     if not service or not connection_id or not guid or indexer_id is None:
         return jsonify({"status": "error", "message": "service, connection_id, guid, and indexer_id are required"}), 400
     cfg = db_load_config()
+
+    # B12 — a candidate whose download is already in the arr's queue is not
+    # grabbed again: not by a retry after a timeout the arr had in fact
+    # processed, not by a second run, not by a click on a row that reported
+    # failure. `force` is the page's "Grab anyway". Advisory: a queue that cannot
+    # be read does not block the grab — the cost there is a possible duplicate
+    # download, not a lost file — and the answer says it was not checked.
+    queue_checked = None
+    arr_id = data.get('arr_id')
+    if isinstance(arr_id, int) and not data.get('force'):
+        season = data.get('season_number')
+        queued = queue_records_for_item(
+            cfg, service, connection_id, arr_id,
+            episode_ids=_int_list(data.get('episode_ids')) or None,
+            season_number=season if isinstance(season, int) else None)
+        queue_checked = queued is not None
+        if queued:
+            titles = [q.get('title') for q in queued if q.get('title')]
+            name = 'Sonarr' if service == 'sonarr' else 'Radarr'
+            return jsonify({"status": "error", "code": "already_queued", "titles": titles[:5],
+                            "message": f"Already in {name}'s queue: {titles[0] if titles else 'this item'}"}), 409
     try:
         grab_release(cfg, service, connection_id, guid, indexer_id)
-        return jsonify({"status": "success"})
+        return jsonify({"status": "success", "queue_checked": queue_checked})
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors='replace')
         msg = f"HTTP {e.code}: {e.reason}"
+        parsed = False
         try:
             msg = json.loads(body).get('message') or msg
+            parsed = True
         except Exception:
             pass
         log.warning("Grab failed for %s/%s: %s", service, guid, msg)
-        return jsonify({"status": "error", "message": msg}), 400
+        out = {"status": "error", "message": msg}
+        # The one failure a fresh search fixes: the guid fell out of the arr's
+        # release cache, which both arrs answer with a 404 and this message.
+        # Anything else — an indexer error, an auth failure, a timeout on a grab
+        # the arr may already have processed — is surfaced as it is and never
+        # retried automatically, because the retry grabs a second copy (B12).
+        if 'requested release in cache' in msg.lower() or (e.code == 404 and not parsed):
+            out['code'] = 'stale_release'
+        return jsonify(out), 400
     except Exception as e:
         log.warning("Grab failed for %s/%s: %s", service, guid, e)
         return jsonify({"status": "error", "message": str(e)}), 400
 
 
-_gen_state = {'job': None}
+# Generate runs, keyed by id (B4). This was one process-wide slot: navigating
+# away lost the only handle to a run while its searches carried on against the
+# user's indexers, a second tab's Generate silently stopped the first tab's
+# half-finished run, and a finished run's full result set stayed resident until
+# the next run replaced it.
+_gen_jobs = {}
+_gen_jobs_lock = threading.Lock()
+_GEN_JOB_TTL = 3600       # a finished run stays readable, and reattachable, for an hour
+_GEN_JOBS_KEPT = 3        # and at most this many finished runs are kept, newest first
+_GEN_ABANDON_SECS = 600   # a running job nobody has polled for this long stops itself
 
 
-def _gen_root_folder(path):
-    if not path:
-        return 'Other'
-    normalized = path.replace('\\', '/').lstrip('/')
-    parts = normalized.split('/')
-    return parts[0] if parts else 'Other'
+def _sweep_gen_jobs(now=None):
+    """Drop finished runs past their TTL or beyond the newest `_GEN_JOBS_KEPT`.
+
+    Callers hold `_gen_jobs_lock`. A running job is never swept — it ends by
+    finishing, by a stop, or by nobody polling it for `_GEN_ABANDON_SECS`.
+    """
+    now = now or time.time()
+    finished = sorted((j for j in list(_gen_jobs.values()) if j.get('finished_at')),
+                      key=lambda j: j['finished_at'], reverse=True)
+    for i, job in enumerate(finished):
+        if i >= _GEN_JOBS_KEPT or now - job['finished_at'] > _GEN_JOB_TTL:
+            _gen_jobs.pop(job['id'], None)
+
+
+def _running_gen_job():
+    return next((j for j in list(_gen_jobs.values()) if j['status'] == 'running'), None)
+
+
+def _gen_job_running_response(job):
+    """Refused, not replaced: a new run never stops somebody else's (B4)."""
+    return jsonify({'status': 'error', 'code': 'job_running', 'job_id': job['id'],
+                    'message': 'A search is already running — showing it instead.'}), 409
 
 
 def _gen_parse_season(path):
+    """The filename's season, as a *label* for an episode Sonarr gave no season.
+
+    Never evidence of coverage: a pack is only ever searched for a season Sonarr
+    itself numbered (B1). It misses daily series, anime absolute numbering and
+    `S01.E02`, which is why the season is read off the arr's record first (B8).
+    """
     m = re.search(r'[Ss](\d{1,2})[Ee]', os.path.basename(str(path or '')))
     return int(m.group(1)) if m else None
 
 
-def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
-    """Resolved, season-grouped candidates for the generate workflow."""
+def _sonarr_season_coverage(arr_media):
+    """How many episode files each Sonarr holds per season — B1's denominator.
+
+    Returns `(held, unknown)`. `held[(connection_id, arr_id, season)]` counts the
+    episode-file records the arr reported in that season; `unknown` is the set of
+    `(connection_id, arr_id)` series with at least one record whose season the
+    arr did not report.
+
+    The unit is **files the arr holds**, not episodes the season has. A season
+    still airing is fully covered the moment every file the arr holds is
+    unseeded — the case a pack search was written for, and there it is strictly
+    right: nothing was seeded, so nothing is orphaned by replacing it.
+
+    A series in `unknown` has no season that can be proven covered: the record
+    with no season could sit in any of them, seeded, and a pack would replace it.
+    """
+    held, unknown = {}, set()
+    for item in arr_media:
+        if item.get('service') != 'sonarr':
+            continue
+        series = (item.get('connection_id'), item.get('arr_id'))
+        season = item.get('season_number')
+        if season is None:
+            unknown.add(series)
+        else:
+            key = series + (season,)
+            held[key] = held.get(key, 0) + 1
+    return held, unknown
+
+
+def _backfill_search(group, episode_id=None):
+    """The release search for one candidate — the only place a scope becomes a query.
+
+    The same dict is what `acquire_releases` is re-asked with when a grab has to
+    be retried, so a retry can never widen an episode row into a pack search by
+    rebuilding the query from a season number the row merely displays.
+    """
+    params = {'service': group['arr_service'], 'connection_id': group['arr_connection_id'],
+              'arr_id': group['arr_id']}
+    if group['scope'] == 'season':
+        params['season_number'] = group['season_number']
+    elif group['scope'] == 'episode':
+        eid = episode_id or group.get('episode_id')
+        if eid:
+            params['episode_id'] = eid
+        params['path'] = group['rep_path']
+    return params
+
+
+def _backfill_group(scope, files, season=None, held=None, unseeded=None):
+    """One searchable Backfill candidate, built from the resolved files it covers."""
+    first = files[0]
+    group = {k: first[k] for k in ('arr_service', 'arr_connection_id', 'arr_id',
+                                   'arr_title', 'arr_url', 'file_quality', 'file_hdr')}
+    conn, arr_id = first['arr_connection_id'], first['arr_id']
+    if scope == 'movie':
+        key = f'{conn}_{arr_id}'
+    elif scope == 'season':
+        key = f'{conn}_{arr_id}_S{season}'
+    else:
+        ident = first['file_id'] if first.get('file_id') is not None else first['path']
+        key = f'{conn}_{arr_id}_S{season}_F{ident}'
+    episode_numbers, episode_id = [], None
+    if scope == 'episode':
+        episode_numbers = first['episode_numbers'] or season_episodes_from_name(first['path'])[1]
+        episode_id = first['episode_ids'][0] if first['episode_ids'] else None
+    group.update({
+        'key':             key,
+        'scope':           scope,
+        'path':            first['path'],
+        'rep_path':        first['path'],
+        'season_number':   season,
+        'episode_numbers': episode_numbers,
+        'episode_id':      episode_id,
+        'file_count':      len(files),
+        'total_size':      sum(c['size'] for c in files),
+        # The arr's own ids for the files this candidate is about. The import
+        # watch scopes a force import to their episodes (B11), and that join
+        # has to happen before the grab replaces them.
+        'file_ids':        [c['file_id'] for c in files if c.get('file_id') is not None],
+        # The two numbers the pack-or-episode decision was made on, so a row can
+        # say why an episode was not searched as part of its season.
+        'season_files_held':     held,
+        'season_files_unseeded': unseeded,
+    })
+    return group
+
+
+def _resolve_backfill(cfg):
+    """Backfill's candidates — resolved, scoped and grouped — plus the file counts.
+
+    The one computation behind both `acquire_candidates` (what the page counts)
+    and `generate` (what gets searched), so the number on the button and the
+    searches that run cannot disagree (B7b).
+
+    Sonarr files are bucketed by `(connection, series, season)` — ids are
+    per-instance (#22) and the season is Sonarr's own (B8) — and a bucket becomes
+    **one season-pack candidate only if it covers the season**: every episode
+    file the arr holds in that season is unseeded. Otherwise each file is its own
+    episode candidate (B1). A pack search for a partly seeded season downloads
+    the whole season and then force-imports it over the files that were already
+    hardlinked, orphaning every one of their torrents. Where coverage cannot be
+    established — the arr reported no season on this file, or on any file of the
+    series — the answer is per-episode, never a pack: a missing count read as
+    "covers the season" is precisely the harm.
+
+    **Rows, errors and root folders come from one snapshot** (S11, Phase 14),
+    and the errors ride the result as `arr_errors`. They were read through the
+    accessors straight after this fetch, which under gunicorn's eight threads
+    describe whichever fetch landed last — another request's.
+    """
     media_files = db_load_file_results('media')
-    candidates_raw = [
-        f for f in media_files
-        if not f.get('excluded') and not [t for t in (f.get('trackers') or []) if t != 'None']
-    ]
-    arr_media = fetch_arr_media_index(cfg)
+    arr_media, arr_errors, arr_roots = fetch_arr_media_index_with_roots(cfg)
     media_root = cfg.get('MEDIA_PATH', '')
 
     def _norm(p):
@@ -2476,68 +4791,270 @@ def _build_generate_candidates(cfg, folders=None, limit=20, title_search=None):
         key = _norm(item.get('path', ''))
         if key:
             arr_index[key] = item
+    held, unknown_series = _sonarr_season_coverage(arr_media)
+    conns = normalize_arr_connections(cfg)
+    root_labels = _root_folder_labels(conns, arr_roots)
 
     svc_slug = {'sonarr': '/series/', 'radarr': '/movie/'}
-    conn_by_id = {c['id']: c for c in normalize_arr_connections(cfg)}
+    conn_by_id = {c['id']: c for c in conns}
 
-    flat = []
-    for f in candidates_raw:
+    # Encounter order is kept so ties under the chosen sort land as they did.
+    order, seasons, folder_of = [], {}, {}
+    resolved = unresolved = unresolved_video = 0
+    # B9's optional half: unmatched video names, first path per name, bounded.
+    unmatched_names = {}
+    for f in media_files:
+        if f.get('excluded') or [t for t in (f.get('trackers') or []) if t != 'None']:
+            continue
         rel_path = f.get('path', '')
         abs_path = _norm(os.path.join(media_root, rel_path) if not os.path.isabs(rel_path) else rel_path)
         arr_item = arr_index.get(abs_path)
         if not arr_item:
+            unresolved += 1
+            # B9: a subtitle or a poster failing to match is normal — no arr
+            # indexes them. A *video* failing to match is the number worth
+            # acting on, and is usually a path-mapping mismatch.
+            if os.path.splitext(rel_path)[1].lower() in VIDEO_EXTENSIONS:
+                unresolved_video += 1
+                if len(unmatched_names) < _UNMATCHED_NAMES_MAX:
+                    unmatched_names.setdefault(posixpath.basename(abs_path), rel_path)
             continue
+        resolved += 1
         service  = arr_item.get('service', '')
         conn_id  = arr_item.get('connection_id', '')
         arr_id   = arr_item.get('arr_id')
-        title    = arr_item.get('title', '')
-        ep_ids   = arr_item.get('episode_ids') or []
         t_slug   = arr_item.get('titleSlug') or arr_item.get('title_slug')
         conn     = conn_by_id.get(conn_id)
         base_url = link_base(conn) if conn else ''
         slug     = svc_slug.get(service, '/')
-        arr_url  = (base_url + slug + t_slug) if t_slug else (base_url + slug + str(arr_id) if arr_id else base_url)
-        flat.append({
-            'path': rel_path, 'size': f.get('size', 0),
+        # Matched on the arr-side path, which is what a root folder is written in.
+        folder_of[rel_path] = _root_folder_of(
+            root_labels, conn_id,
+            str(arr_item.get('arr_path') or arr_item.get('path') or '').replace('\\', '/'))
+        c = {
+            'path': rel_path, 'size': f.get('size') or 0,
             'arr_service': service, 'arr_connection_id': conn_id,
-            'arr_id': arr_id, 'arr_title': title,
-            'episode_id': ep_ids[0] if ep_ids else None,
-            'arr_url': arr_url,
+            'arr_id': arr_id, 'arr_title': arr_item.get('title', ''),
+            'arr_url': (base_url + slug + t_slug) if t_slug else (base_url + slug + str(arr_id) if arr_id else base_url),
+            'file_id': arr_item.get('file_id'),
+            'episode_ids': list(arr_item.get('episode_ids') or []),
+            'episode_numbers': list(arr_item.get('episode_numbers') or []),
             'file_quality': arr_item.get('file_quality_name', ''),
-            'file_hdr':     arr_item.get('file_hdr', ''),
-        })
+            'file_hdr': arr_item.get('file_hdr', ''),
+        }
+        if service != 'sonarr':
+            order.append(('movie', c))
+            continue
+        season = arr_item.get('season_number')
+        if season is None:
+            order.append(('loose', c))
+            continue
+        bucket = (conn_id, arr_id, season)
+        if bucket not in seasons:
+            seasons[bucket] = []
+            order.append(('season', bucket))
+        seasons[bucket].append(c)
 
-    # Group Sonarr episodes by (arr_id, season)
     groups = []
-    sonarr_map = {}
-    for c in flat:
-        if c['arr_service'] == 'sonarr':
-            season = _gen_parse_season(c['path'])
-            # Series ids are per-instance, so two Sonarrs both number from 1 and
-            # a bare id merges unrelated shows — the winner keeps its own
-            # connection and the loser's episodes are searched against it.
-            key = f"{c['arr_connection_id']}_{c['arr_id']}_S{season}"
-            if key in sonarr_map:
-                g = groups[sonarr_map[key]]
-                g['file_count'] += 1
-                g['total_size'] = g.get('total_size', 0) + (c.get('size') or 0)
-                if not g.get('episode_id') and c.get('episode_id'):
-                    g['episode_id'] = c['episode_id']
-            else:
-                sonarr_map[key] = len(groups)
-                groups.append({**c, 'season_number': season, 'file_count': 1,
-                                'total_size': c.get('size') or 0, 'rep_path': c['path']})
+    for kind, ref in order:
+        if kind == 'movie':
+            groups.append(_backfill_group('movie', [ref]))
+        elif kind == 'loose':
+            # No season from the arr: the filename is only a label here, never
+            # evidence of coverage.
+            groups.append(_backfill_group('episode', [ref], season=_gen_parse_season(ref['path'])))
         else:
-            groups.append({**c, 'season_number': None, 'file_count': 1,
-                           'total_size': c.get('size') or 0, 'rep_path': c['path']})
+            files = seasons[ref]
+            n_held = held.get(ref)
+            covered = (ref[:2] not in unknown_series and n_held is not None
+                       and len(files) == n_held)
+            if covered:
+                groups.append(_backfill_group('season', files, season=ref[2],
+                                              held=n_held, unseeded=len(files)))
+            else:
+                groups.extend(_backfill_group('episode', [c], season=ref[2],
+                                              held=n_held, unseeded=len(files))
+                              for c in files)
+    for g in groups:
+        g['search'] = _backfill_search(g)
+        g['folder'] = folder_of.get(g['rep_path'], 'Other')
+    return {'groups': groups, 'resolved_count': resolved, 'unresolved_count': unresolved,
+            'unresolved_video_count': unresolved_video, 'arr_errors': arr_errors,
+            'unmatched_example': _unmatched_example(unmatched_names, arr_media, conn_by_id)}
 
+
+# How many unmatched video names `_resolve_backfill` keeps looking for. One
+# example is all the page shows; the bound only stops a library with every video
+# unmatched (a broken mapping, the case this is for) holding every name.
+_UNMATCHED_NAMES_MAX = 200
+
+# The most grabbed-candidate keys a generate request may name (B6). A page holds
+# them only until the audit lands, so this is a sanity bound, not a working one.
+_EXCLUDE_KEYS_MAX = 2000
+
+
+def _unmatched_example(unmatched_names, arr_media, conn_by_id):
+    """One unmatched video beside the arr's own path for a file of the same name (B9).
+
+    BACKFILL B9's optional half: *"show one unmatched video path next to the
+    arr's own path for the same title — the mismatch is usually obvious the
+    moment the two are on screen together."* Matched by **file name**, not by a
+    title guess: a path mapping moves the folder and leaves the name, so the
+    arr's file of the same name is the one it would have matched, and where no
+    arr file shares the name there is nothing to show — a title parse would be a
+    claim the page cannot back. The media index is the one this request already
+    fetched; nothing is called for it.
+
+    `arr_path` is the arr's own spelling (before any remote-path mapping). Paths
+    here reach the page and nowhere else: never a log line, never
+    `/api/debug/report`.
+    """
+    if not unmatched_names:
+        return None
+    for item in arr_media:
+        path = str(item.get('path') or '').replace('\\', '/')
+        rel_path = unmatched_names.get(posixpath.basename(path)) if path else None
+        if rel_path is None:
+            continue
+        conn = conn_by_id.get(item.get('connection_id')) or {}
+        return {'path': rel_path,
+                'arr_path': str(item.get('arr_path') or item.get('path') or '').replace('\\', '/'),
+                'service': item.get('service', ''),
+                'connection_name': conn.get('name') or item.get('connection_name') or ''}
+    return None
+
+
+def _root_folder_labels(conns, roots):
+    """`{connection_id: [(root, label), ...]}`, longest root first (B10).
+
+    The folder chips used to be the first path segment below MEDIA_PATH, taken
+    over resolved candidates and headed "Root Folders" — auditorr had never
+    asked an arr for its root folders. They collapsed when the real roots sat
+    deeper than one level and were named after a directory rather than the thing
+    configured in Sonarr/Radarr. These are each arr's own `/api/v3/rootfolder`
+    paths, labelled verbatim; the instance name is added only where two
+    instances configure the same path string, which would otherwise be one chip
+    covering two libraries. A connection whose root folders could not be read
+    contributes nothing, so its files land in `Other` rather than silently
+    defining a root from their first segment.
+    """
+    name_of = {c['id']: c.get('name') or c['id'] for c in conns}
+    owners = {}
+    for conn_id, paths in (roots or {}).items():
+        for p in paths or []:
+            owners.setdefault(p, set()).add(conn_id)
+    labels = {}
+    for conn_id, paths in (roots or {}).items():
+        labels[conn_id] = [
+            (p, p if len(owners[p]) == 1 else f'{p} ({name_of.get(conn_id, conn_id)})')
+            for p in sorted(paths or [], key=lambda p: (-len(p), p))
+        ]
+    return labels
+
+
+def _root_folder_of(labels, conn_id, arr_path):
+    """The label of the longest root holding `arr_path`, on whole path segments."""
+    for root, label in labels.get(conn_id) or []:
+        if arr_path == root or arr_path.startswith(root + '/'):
+            return label
+    return 'Other'
+
+
+def _release_in_scope(release, scope, episode_numbers, season=None, episode_ids=None):
+    """May this release be offered for a candidate of this scope? (B1, at the release)
+
+    An episode candidate exists *because* part of its season is already seeded,
+    so a release covering more than the candidate's own file replaces library
+    files other torrents are hardlinked to — B1's harm, reached through the
+    results list instead of the search path. The episode search alone does not
+    prevent it: interactive search returns rejected releases alongside approved
+    ones (a pack in an episode search comes back flagged, not absent), and a grab
+    through `/api/v3/release` bypasses the rejection.
+
+    Only what a release *says* it covers is acted on — the pack flag, or episode
+    numbers outside the candidate's. One that reports no episode numbers (daily
+    and absolute-numbered series) is kept: refusing those would empty the
+    workflow for exactly the libraries B8 was written for, and the import watch
+    scopes by episode id as well (B11). Where the candidate's own episodes are
+    unknown, a release that names episodes cannot be shown to fit, so it goes.
+
+    **Episode sets, not counts** (the outside review's amendment 1, decision 5
+    (a), Phase 14). Two shapes got through all three of B1's layers:
+
+    * **Part of a file.** The rule was `covers <= mine`, so a two-episode file
+      (S01E01E02) was offered an S01E01 release — and Sonarr's upgrade recycles
+      every existing file of the episodes it imports, so grabbing it deletes the
+      whole two-episode file and leaves E02 with none. The release must cover
+      exactly the file's episodes.
+    * **Another season.** `mappedEpisodeNumbers` is numbers alone, so S02E05 and
+      the special S00E05 read as covering S01E05, and an S02 pack passed on an S01
+      pack row. The release's mapped season must be the candidate's — on both
+      scopes — wherever Sonarr mapped one.
+
+    Where Sonarr names the mapped episodes by id and the candidate's are known,
+    those ids decide outright. Nothing unmapped is refused that was offered
+    before: a release with no mapped season or numbers still stands.
+    """
+    mapped_season = release.get('mapped_season')
+    if scope == 'season':
+        return mapped_season is None or season is None or mapped_season == season
+    if scope != 'episode':
+        return True
+    if release.get('full_season'):
+        return False
+    if mapped_season is not None and season is not None and mapped_season != season:
+        return False
+    mapped_ids = set(release.get('mapped_episode_ids') or [])
+    if mapped_ids and episode_ids:
+        return mapped_ids == set(episode_ids)
+    covers = set(release.get('episode_numbers') or [])
+    if not covers:
+        return True
+    mine = set(episode_numbers or [])
+    return bool(mine) and covers == mine
+
+
+def _episode_scope(cfg, candidate, cache):
+    """`(episode_id, episode_numbers, episode_ids)` for an episode candidate, off Sonarr's own join.
+
+    The media index cannot answer this — `/api/v3/episodefile` carries no episode
+    ids — so it is joined in from the series' episode list by file id, once per
+    series per job (`cache`). Falls back to what the candidate already carries
+    (the filename parse) when the join is unavailable, which is where the search
+    has always come from. `episode_ids` is every episode the file holds (amendment
+    1: the release gate compares sets), `[]` where the join did not answer.
+    """
+    episode_id = candidate.get('episode_id')
+    numbers = candidate.get('episode_numbers') or []
+    file_id = next(iter(candidate.get('file_ids') or []), None)
+    if episode_id or file_id is None:
+        return episode_id, numbers, [episode_id] if episode_id else []
+    series = (candidate['arr_connection_id'], candidate['arr_id'])
+    if series not in cache:
+        cache[series] = sonarr_episodes_by_file(cfg, *series)
+    eps = (cache[series] or {}).get(file_id)
+    if not eps:
+        return episode_id, numbers, []
+    return eps[0][0], [e[2] for e in eps if e[2] is not None], [e[0] for e in eps]
+
+
+def _build_generate_candidates(cfg, folders=None, title_search=None):
+    """Resolved, scoped candidates for the generate workflow, narrowed by the page's
+    folder and title filters. Uncapped: `generate` sorts and cuts to its own count
+    (the old `limit=20` default had one caller, which passed None — B13)."""
+    return _narrow_backfill(_resolve_backfill(cfg)['groups'], folders, title_search)
+
+
+def _narrow_backfill(groups, folders=None, title_search=None, exclude_keys=None):
+    """The page's folder and title filters, and the candidates it already grabbed (B6)."""
+    if exclude_keys:
+        groups = [g for g in groups if g['key'] not in exclude_keys]
     if folders:
-        groups = [g for g in groups if _gen_root_folder(g.get('rep_path') or g.get('path', '')) in folders]
+        groups = [g for g in groups if g['folder'] in folders]
     if title_search:
         term = title_search.strip().lower()
         groups = [g for g in groups if term in (g.get('arr_title') or '').lower()]
-
-    return groups[:limit]
+    return groups
 
 
 def _sort_generate_candidates(groups, sort):
@@ -2565,31 +5082,70 @@ def workflows_generate():
     source_filter = data.get('source_filter') or []
     hdr_filter    = data.get('hdr_filter') or []
     title_search  = (data.get('title_search') or '').strip()
+    # B6 — the keys of candidates whose grab this page's server accepted, held by
+    # the page until the audit lands. The run builds its candidates here, so a
+    # grabbed candidate the page merely hid would be searched and offered again.
+    raw_keys      = data.get('exclude_keys')
+    exclude_keys  = ({k for k in raw_keys[:_EXCLUDE_KEYS_MAX] if isinstance(k, str)}
+                     if isinstance(raw_keys, list) else set())
 
-    existing = _gen_state.get('job')
-    if existing and existing.get('status') == 'running':
-        existing['stop_flag'] = True
+    # Checked before the build, which deserializes the media list, so a refused
+    # request costs nothing; and again at insert, because the build takes long
+    # enough for a second tab to get there first.
+    with _gen_jobs_lock:
+        _sweep_gen_jobs()
+        running = _running_gen_job()
+    if running:
+        return _gen_job_running_response(running)
 
     cfg = db_load_config()
     try:
+        backfill = _resolve_backfill(cfg)
         candidates = _sort_generate_candidates(
-            _build_generate_candidates(cfg, folders=folders or None, limit=None, title_search=title_search or None),
+            _narrow_backfill(backfill['groups'], folders=folders or None,
+                             title_search=title_search or None, exclude_keys=exclude_keys),
             sort,
         )[:count]
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
+    # The errors of the fetch this run's candidates came from (S11). The cache is
+    # 120s, so a user who spends longer than that setting filters starts the run
+    # against a *re-fetched* library — one that may have lost an instance since
+    # the page described it — and this is that fetch's answer, not the page's
+    # (B13).
+    arr_errors = backfill['arr_errors']
 
     job_id = secrets.token_hex(8)
+    now = time.time()
     job = {'id': job_id, 'status': 'running', 'total': len(candidates),
-           'completed': 0, 'stop_flag': False, 'results': []}
-    _gen_state['job'] = job
+           'completed': 0, 'stop_flag': False, 'stop_reason': None, 'results': [],
+           'started_at': now, 'last_polled': now, 'finished_at': None,
+           # Kept on the job so a page that reattaches can still say which
+           # instances this run could not read.
+           'arr_errors': arr_errors}
+    with _gen_jobs_lock:
+        running = _running_gen_job()
+        if running:
+            return _gen_job_running_response(running)
+        _gen_jobs[job_id] = job
 
     def do_generate():
+        episode_cache = {}   # (connection, series) -> Sonarr's file->episode join, per job
         for candidate in candidates:
+            if not job['stop_flag'] and time.time() - job['last_polled'] > _GEN_ABANDON_SECS:
+                # Nobody has asked about this run for ten minutes: the tab that
+                # started it is gone. Stop querying indexers for results no one
+                # will see (B4). A page that merely navigated away reattaches
+                # well inside that window.
+                job['stop_flag'] = True
+                job['stop_reason'] = 'abandoned'
             if job['stop_flag']:
                 job['status'] = 'stopped'
                 return
+            scope = candidate.get('scope')
             result = {
+                'key':               candidate.get('key'),
+                'scope':             scope,
                 'arr_title':         candidate.get('arr_title', ''),
                 'arr_service':       candidate.get('arr_service'),
                 'arr_connection_id': candidate.get('arr_connection_id'),
@@ -2597,10 +5153,15 @@ def workflows_generate():
                 'arr_url':           candidate.get('arr_url'),
                 'path':              candidate.get('rep_path') or candidate.get('path'),
                 'season_number':     candidate.get('season_number'),
+                'episode_numbers':   candidate.get('episode_numbers') or [],
                 'file_count':        candidate.get('file_count', 1),
                 'total_size':        candidate.get('total_size', 0),
                 'file_quality':      candidate.get('file_quality', ''),
                 'file_hdr':          candidate.get('file_hdr', ''),
+                'file_ids':          candidate.get('file_ids') or [],
+                'season_files_held':     candidate.get('season_files_held'),
+                'season_files_unseeded': candidate.get('season_files_unseeded'),
+                'search':            candidate.get('search'),
                 'status':            'searching',
                 'releases':          None,
                 'best_release':      None,
@@ -2608,13 +5169,35 @@ def workflows_generate():
             }
             job['results'].append(result)
             try:
+                search = candidate['search']
+                episode_numbers = candidate.get('episode_numbers') or []
+                episode_ids = []
+                if scope == 'episode':
+                    episode_id, episode_numbers, episode_ids = _episode_scope(cfg, candidate, episode_cache)
+                    search = _backfill_search(candidate, episode_id=episode_id)
+                    result['search'] = search
+                    result['episode_numbers'] = episode_numbers
                 rows = fetch_release_matrix(
-                    cfg, candidate['arr_service'], candidate['arr_connection_id'], candidate['arr_id'],
-                    episode_id=candidate.get('episode_id'),
-                    season_number=candidate.get('season_number'),
-                    file_path=candidate.get('rep_path') or candidate.get('path'),
+                    cfg, search['service'], search['connection_id'], search['arr_id'],
+                    episode_id=search.get('episode_id'),
+                    season_number=search.get('season_number'),
+                    file_path=search.get('path'),
                 )
+                rows = [r for r in rows if _release_in_scope(r, scope, episode_numbers,
+                                                             season=candidate.get('season_number'),
+                                                             episode_ids=episode_ids)]
                 filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter, hdr_filter=hdr_filter)
+                # The arr's own order unless the user asked for closeness to the
+                # file on disk (B3, amendment 2). Either way the closeness
+                # evidence is attached, so every row still shows what it is
+                # against the file you already have.
+                filtered = _rank_releases(
+                    filtered,
+                    'closest' if data.get('release_rank') == 'closest' else 'upgrade',
+                    {'total_size':   candidate.get('total_size') or 0,
+                     'file_quality': candidate.get('file_quality') or '',
+                     'file_hdr':     candidate.get('file_hdr') or ''},
+                )
                 best = filtered[0] if filtered else None
                 result['status']       = 'found' if best else 'not_found'
                 result['releases']     = filtered
@@ -2627,29 +5210,64 @@ def workflows_generate():
 
         job['status'] = 'done'
 
-    threading.Thread(target=do_generate, daemon=True).start()
-    return jsonify({'job_id': job_id, 'total': len(candidates)})
+    def run():
+        try:
+            do_generate()
+        except Exception as e:
+            # A run left 'running' would refuse every later run forever.
+            log.warning("Generate job %s failed: %s", job_id, e)
+            job['status'] = 'error'
+        finally:
+            job['finished_at'] = time.time()
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({'job_id': job_id, 'total': len(candidates), 'arr_errors': arr_errors})
 
 
 @app.route('/api/workflows/generate/status')
 @require_auth
 def workflows_generate_status():
-    job_id = request.args.get('job_id', '')
-    job = _gen_state.get('job')
-    if not job or job['id'] != job_id:
-        return jsonify({'status': 'error', 'message': 'Job not found'}), 404
-    return jsonify({'status': job['status'], 'total': job['total'],
-                    'completed': job['completed'], 'results': list(job['results'])})
+    """One run's progress, incrementally (B5).
+
+    `since=n` returns only `results[n:completed]` — the rows that finished since
+    the client last read — plus the in-flight row as `current`, without its
+    releases. It used to re-send the whole growing result set, every candidate's
+    full release list, every two seconds for a run that can last hours.
+    Completed rows never change, so there is nothing to reconcile: the client
+    appends them and asks again from `next`. Omitting `since` returns everything
+    completed so far, which is how a page that navigated away catches up (B4).
+
+    Polling is also what keeps a run alive: `last_polled` is what
+    `_GEN_ABANDON_SECS` measures.
+    """
+    job = _gen_jobs.get(request.args.get('job_id', ''))
+    if not job:
+        # Swept, or from before a restart. The page forgets the id on this code.
+        return jsonify({'status': 'error', 'code': 'job_not_found', 'message': 'Job not found'}), 404
+    job['last_polled'] = time.time()
+    # Rows below `completed` are final: the job thread bumps the count only after
+    # it has finished writing the row.
+    completed = job['completed']
+    since = max(0, min(request.args.get('since', 0, type=int) or 0, completed))
+    current = None
+    if job['status'] == 'running' and len(job['results']) > completed:
+        current = {k: v for k, v in job['results'][completed].items() if k != 'releases'}
+    return jsonify({'status': job['status'], 'total': job['total'], 'completed': completed,
+                    'since': since, 'next': completed,
+                    'results': job['results'][since:completed],
+                    'current': current,
+                    'stop_reason': job.get('stop_reason'),
+                    'arr_errors': job.get('arr_errors') or []})
 
 
 @app.route('/api/workflows/generate/stop', methods=['POST'])
 @require_auth
 def workflows_generate_stop():
-    data   = request.json or {}
-    job_id = data.get('job_id', '')
-    job    = _gen_state.get('job')
-    if job and job['id'] == job_id and job['status'] == 'running':
+    data = request.json or {}
+    job  = _gen_jobs.get(data.get('job_id', ''))
+    if job and job['status'] == 'running':
         job['stop_flag'] = True
+        job['stop_reason'] = 'stopped'
     return jsonify({'status': 'ok'})
 
 
@@ -2680,6 +5298,38 @@ def _record_backfill_credit(files):
         log.warning("Could not record backfill on Rounds progress: %s", e)
 
 
+def _int_list(value, cap=500):
+    """A client-sent id list, reduced to at most `cap` ints. Anything else is dropped."""
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, int) and not isinstance(v, bool)][:cap]
+
+
+def _watch_episode_sets(cfg, connection_id, series_id, file_ids):
+    """Per library file, the episode ids it holds — `[[id, ...], ...]` — or None if unknown.
+
+    Joined from the library files the candidate was built from, through Sonarr's
+    own episode list — `/api/v3/episodefile` carries no episode ids. None when
+    there is nothing to join or Sonarr could not be asked, and the watch then
+    force-imports nothing: a scope that cannot be established is not a licence
+    to import the whole download.
+
+    **Kept per file** since Phase 14 (amendment 1, decision 5 (a)). The watch's
+    scope is their union, and a download row naming *some* of one file's
+    episodes used to fit it — so a single-episode download was force-imported
+    over a two-episode library file, and Sonarr's upgrade recycles the whole
+    file (`UpgradeMediaFileService`), leaving the other episode with none.
+    """
+    if not file_ids:
+        return None
+    by_file = sonarr_episodes_by_file(cfg, connection_id, series_id)
+    if by_file is None:
+        return None
+    sets = [sorted({ep_id for ep_id, _s, _e in by_file.get(fid, [])}) for fid in file_ids]
+    sets = [s for s in sets if s]
+    return sets or None
+
+
 @app.route('/api/workflows/watch_import', methods=['POST'])
 @require_auth
 def workflows_watch_import():
@@ -2692,113 +5342,295 @@ def workflows_watch_import():
     # episodes, and Matchmaker counts files. Clamped in `record_backfill`;
     # missing (an older frontend bundle) simply credits one.
     files         = data.get('files', 1)
+    # The arr's ids for the library files this backfill is for. Only narrows:
+    # a force import is scoped to their episodes (B11), and a Sonarr watch sent
+    # none (an older bundle) force-imports nothing rather than everything.
+    file_ids      = _int_list(data.get('file_ids'))
+    # Which workflow the grab belongs to. Anything but an explicit 'trump' is a
+    # Backfill — that is what every bundle that predates the field sends.
+    source        = 'trump' if data.get('source') == 'trump' else 'backfill'
+    # The grabbed release's info hash, when its indexer supplied one — what the
+    # watch tells this download apart from another of the same title by (S07).
+    info_hash     = _clean_token(data.get('info_hash'), limit=128)
     if not service or not connection_id or arr_id is None:
         return jsonify({'status': 'error', 'message': 'Missing parameters'}), 400
 
+    # Scored here, at the grab, rather than when the watch confirms the import:
+    # the watch is a best-effort helper that nurses the download into the
+    # library, and tying the prize to its survival meant a container restart or
+    # a stalled import erased credit for work the user had already done. See
+    # `_record_backfill_credit`. **Backfill only**: a trump pays on Kingmaker,
+    # at execute, and sharing this watch must not pay it out on Matchmaker too —
+    # each workflow is paid in its own shape (TR9).
+    if source == 'backfill':
+        _record_backfill_credit(files)
+    return jsonify({'job_id': _start_import_watch(db_load_config(), service, connection_id,
+                                                  arr_id, title, file_ids, source,
+                                                  info_hash=info_hash)})
+
+
+def _trump_rescan():
+    """TR10 — the audit a trump used to start seconds after its delete.
+
+    That scan recorded the one moment nobody wants recorded: the media file
+    still there, its torrent-side link gone, so the hardlink ratio — 70 of the
+    100 health points — dipped, and the dip landed in `audit_runs`, the health
+    chart and the change log. It runs once the replacement has imported and
+    re-hardlinked, which is the state worth measuring.
+    """
+    if try_start_scanning("trump"):
+        threading.Thread(target=run_audit_process, args=("trump",), daemon=True).start()
+
+
+# A watch's reading of its target's file could not be taken.
+_UNREADABLE = object()
+
+# Terminal watch statuses. `done` is the only success, and it needs an
+# observation: the arr's file for this target changed (S07). The panel renders
+# `error`, `failed` and `unreadable` red, the rest dim.
+WATCH_TERMINAL = frozenset({'done', 'error', 'failed', 'unreadable', 'unobserved',
+                            'no_new_file', 'timed_out', 'unconfirmed'})
+
+
+def _read_target_files(cfg, service, connection_id, arr_id, episode_ids):
+    """The arr's file for a watch's target, or `_UNREADABLE`.
+
+    Radarr: the movie's file id. Sonarr: `[episode_id, file_id]` for each scoped
+    episode — never the series' ids, which move whenever Sonarr imports *any*
+    episode of it (T11's lesson, one workflow over). A Sonarr watch with no scope
+    has no target to read. Through the raising reader, so a failed read is never
+    a reading of "no file" (S08's lesson).
+    """
+    if service == 'sonarr' and not episode_ids:
+        return _UNREADABLE
+    try:
+        return read_arr_file_id(cfg, service, connection_id, arr_id,
+                                episode_ids=episode_ids if service == 'sonarr' else None)
+    except Exception as e:
+        log.info("Import watch: could not read the %s file of item %s (%s)",
+                 service, arr_id, type(e).__name__)
+        return _UNREADABLE
+
+
+def _target_landed(service, before, after):
+    """Did the target get a new file between two readings? Only if both were read,
+    and every part of it — the movie, or each scoped episode — now holds a real
+    file with a different id."""
+    if before is _UNREADABLE or after is _UNREADABLE:
+        return False
+    if service == 'radarr':
+        return bool(after) and after != before
+    old, new = dict(before or []), dict(after or [])
+    return bool(old) and all(new.get(ep) and new[ep] != old.get(ep) for ep in old)
+
+
+def _await_landing(cfg, service, connection_id, arr_id, episode_ids, baseline, reads=3, gap=10):
+    """True once the target's file is seen to change; False if it was read and had
+    not; None if it could not be told — no baseline, or no reading at all. A few
+    reads apart, because an arr drops a queue record as it imports."""
+    if baseline is _UNREADABLE:
+        return None
+    read_any = False
+    for i in range(reads):
+        current = _read_target_files(cfg, service, connection_id, arr_id, episode_ids)
+        if current is not _UNREADABLE:
+            read_any = True
+            if _target_landed(service, baseline, current):
+                return True
+        if i < reads - 1:
+            time.sleep(gap)
+    return False if read_any else None
+
+
+def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, source='backfill',
+                        info_hash=None):
+    """Follow a grab into the library, on a daemon thread. Returns the job id.
+
+    Shared by Backfill (through `/api/workflows/watch_import`) and Trumped
+    (from `execute`, TR9), so both land in `_import_watches` and in the same
+    bottom-right import panel every page polls. `file_ids` scopes a Sonarr force
+    import to those library files' episodes — the files a backfill is for, or
+    the ones a trumped release was imported as; with none, a Sonarr watch
+    force-imports nothing (B11).
+
+    **A success needs an observation** (S07, the 2026-09-10 outside review). The
+    watch used to turn every empty queue answer into "Imported successfully" —
+    an unreadable queue, a failed download, one never seen — and force-imported a
+    download still in progress once its two-hour wait ran out. It reaches `done`
+    only when the arr's file for this target changed from the reading taken
+    before the wait (`_target_landed`); everything else ends in a status of its
+    own that is not success (`WATCH_TERMINAL`). Only an `import_pending` outcome
+    — the download finished and the arr holding its import — is ever
+    force-imported. The download is told apart from another of the same title by
+    `info_hash` when the grabbed release carried one, else by Sonarr's episodes,
+    else by the movie or series — where two download ids mean a guess, and
+    nothing is force-imported.
+
+    A trump watch that observes its import starts the re-audit (`_trump_rescan`,
+    TR10); one that ends any other way nudges the watchdog instead. A Backfill
+    watch leaves the scan to the watchdog, as it always has.
+    """
+    arr_name = 'Sonarr' if service == 'sonarr' else 'Radarr'
+    what     = 'trump' if source == 'trump' else 'backfill'
+    item     = 'series' if service == 'sonarr' else 'movie'
     job_id = secrets.token_hex(8)
     watch  = {
         'status':       'queued',
         'message':      'Queued — waiting for download client',
         'title':        title,
         'service':      service,
+        'source':       source,
         'completed_at': None,
     }
     _import_watches[job_id] = watch
-    cfg = db_load_config()
-
-    # Scored here, at the grab, rather than from `mark_done` below: the watch is
-    # a best-effort helper that nurses the download into the library, and tying
-    # the prize to its survival meant a container restart or a stalled import
-    # erased credit for work the user had already done. See
-    # `_record_backfill_credit`.
-    _record_backfill_credit(files)
 
     def do_watch():
-        def mark_done():
-            watch['status']       = 'done'
-            watch['message']      = 'Imported successfully'
+        def finish(status, message):
+            watch['status']       = status
+            watch['message']      = message
             watch['completed_at'] = time.time()
+            if source != 'trump':
+                return
+            if status == 'done':
+                _trump_rescan()
+            else:
+                nudge_watchdog(f'a trump import watch that ended {status}')
+
+        def mark_done():
+            finish('done', 'Imported successfully')
 
         try:
+            # Joined first, long before the import can land: the join runs from
+            # file id to episode, and the import is what replaces those files and
+            # retires their ids.
+            episode_sets = (_watch_episode_sets(cfg, connection_id, arr_id, file_ids)
+                            if service == 'sonarr' else None)
+            scope = sorted({e for s in episode_sets for e in s}) if episode_sets else None
+            correlate = {'download_id': info_hash, 'episode_ids': None if info_hash else scope}
             # Brief delay so qBit + Sonarr/Radarr have time to register the grab before we poll
             time.sleep(8)
             def on_downloading():
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — verifying in qBittorrent'
 
-            # Snapshot the current file ID so we can confirm import even when the
-            # ManualImport command reports status='failed' internally (Radarr quirk)
-            original_file_id = get_arr_file_id(cfg, service, connection_id, arr_id)
+            # The target's file before the wait: what success is measured against.
+            # A baseline that could not be read means this watch can never say done.
+            baseline = _read_target_files(cfg, service, connection_id, arr_id, scope)
 
-            last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, on_downloading=on_downloading)
-
-            if not last_active:
-                # Queue cleared naturally (standard quality upgrade auto-imported)
-                mark_done()
-                return
-
-            # If the item is still downloading (not yet importPending), the 300 s poll
-            # timed out before the download finished — extend the wait instead of
-            # firing force import against an incomplete file (which causes a 500 error).
-            if not any(r.get('trackedDownloadState') == 'importPending' for r in last_active):
+            res = poll_queue_until_clear(cfg, service, connection_id, arr_id,
+                                         on_downloading=on_downloading, **correlate)
+            if res['outcome'] == 'downloading':
+                # The 300 s poll ran out mid-download: wait longer, never force.
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — waiting for completion'
-                last_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=7200)
-                if not last_active:
-                    mark_done()
-                    return
+                res = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=7200,
+                                             seen=True, **correlate)
 
-            # Queue didn't clear — extract context for manual import
-            rec             = last_active[0]
+            outcome = res['outcome']
+            if outcome == 'no_connection':
+                return finish('error', f"The {arr_name} connection this grab was made on is not configured")
+            if outcome == 'unreadable':
+                return finish('unreadable', f"Could not read {arr_name}'s queue, so auditorr cannot "
+                                            f"tell what happened to this grab — check Activity → Queue "
+                                            f"in {arr_name}")
+            if outcome == 'failed':
+                detail = '; '.join(res['messages'])
+                return finish('failed', f"The download failed in {arr_name}" + (f": {detail}" if detail else ''))
+            if outcome == 'downloading':
+                return finish('timed_out', f"Still downloading after two hours — {arr_name} will "
+                                           f"import it when it finishes")
+            if outcome in ('cleared', 'unobserved'):
+                landed = _await_landing(cfg, service, connection_id, arr_id, scope, baseline)
+                if landed:
+                    return mark_done()
+                if outcome == 'unobserved':
+                    return finish('unobserved', f"Never appeared in {arr_name}'s queue — check that "
+                                                f"the grab reached your download client")
+                if landed is None:
+                    return finish('unconfirmed', f"Left {arr_name}'s queue, but auditorr could not "
+                                                 f"read the {item}'s file to confirm an import — "
+                                                 f"check it in {arr_name}")
+                return finish('no_new_file', f"Left {arr_name}'s queue without a new file — it may "
+                                             f"have been removed or blocklisted in {arr_name}")
+
+            # import_pending: the download is finished and the arr is holding its
+            # import. The only outcome that is ever force-imported.
+            records = res['records']
+            download_ids = {str(r.get('downloadId') or '').upper() for r in records if r.get('downloadId')}
+            if not info_hash and len(download_ids) > 1:
+                return finish('error', f"More than one download for this {item} is waiting in "
+                                       f"{arr_name}'s queue, and auditorr cannot tell which is this "
+                                       f"{what}, so nothing was force-imported — finish it from "
+                                       f"Activity → Queue in {arr_name}")
+            rec             = records[0]
             download_id     = rec.get('downloadId') or ''
             output_path     = rec.get('outputPath') or ''
             download_folder = None
             if output_path:
-                import os as _os
-                download_folder = _os.path.dirname(output_path) if '.' in _os.path.basename(output_path) else output_path
+                download_folder = os.path.dirname(output_path) if '.' in os.path.basename(output_path) else output_path
             if download_id:
                 log.info("Manual import will use downloadId %s", download_id)
             elif download_folder:
-                log.info("Manual import will use download folder %s", download_folder)
+                log.info("Manual import will use the download's folder")
+            else:
+                # The arr's library folder used to stand in here, and its listing
+                # is the library file itself — a force import from it re-imports
+                # the file it is replacing (B11). Say so instead.
+                return finish('error', f"{arr_name} did not report where this download is, so "
+                                       f"nothing was force-imported — finish it from Activity → "
+                                       f"Queue in {arr_name}")
+            if service == 'sonarr' and not scope:
+                # Unknown episodes are not every episode. A pack forced in whole
+                # replaces files other torrents are hardlinked to (B1).
+                return finish('error', f"Could not tell which episodes this {what} was for, so "
+                                       "nothing was force-imported over your library — finish it "
+                                       "from Activity → Queue in Sonarr")
 
             watch['status']  = 'importing'
             watch['message'] = 'Importing — triggering manual import'
 
-            # Retry loop: fire the command up to 3 times, confirming via both queue state
-            # and a direct Arr API check (file ID change) after each attempt.
-            still_active = last_active
+            # Fire the command up to 3 times. The command's own status is not
+            # trustworthy (Radarr reports `failed` on replacements that succeeded);
+            # the arr's file id is, so that is what each attempt is judged by.
+            scope_error, after = None, res
             for attempt in range(3):
-                force_manual_import_by_id(cfg, service, connection_id, arr_id,
-                                          download_id=download_id, download_folder=download_folder)
-                still_active = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=60)
-                if not still_active:
-                    break
-                # Verify directly with Arr — command may have imported even if queue
-                # hasn't reflected it yet or command reported 'failed' internally
-                current_file_id = get_arr_file_id(cfg, service, connection_id, arr_id)
-                if current_file_id is not None and current_file_id != original_file_id:
-                    still_active = []
+                try:
+                    force_manual_import_by_id(cfg, service, connection_id, arr_id,
+                                              download_id=download_id, download_folder=download_folder,
+                                              only_episode_ids=scope, whole_episode_sets=episode_sets,
+                                              media_folder_fallback=False)
+                except ValueError as e:
+                    # Typically: nothing in scope is importable any more — the arr
+                    # took those episodes itself, and what is left is out of scope.
+                    scope_error = str(e)
+                after = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=60,
+                                               seen=True, **correlate)
+                if _await_landing(cfg, service, connection_id, arr_id, scope, baseline, reads=1):
+                    return mark_done()
+                if after['outcome'] != 'import_pending':
                     break
                 if attempt < 2:
                     watch['message'] = f'Importing — retrying ({attempt + 2}/3)'
                     time.sleep(20)
 
-            if still_active:
-                stuck_rec = still_active[0]
-                msgs = [m for msg in stuck_rec.get('statusMessages', []) for m in msg.get('messages', [])]
-                watch['status']  = 'error'
-                watch['message'] = 'Import stalled: ' + ('; '.join(msgs) or 'queue item remained')
-                watch['completed_at'] = time.time()
-            else:
-                mark_done()
+            if after['outcome'] == 'cleared':
+                landed = _await_landing(cfg, service, connection_id, arr_id, scope, baseline)
+                if landed:
+                    return mark_done()
+                if landed is None:
+                    return finish('unconfirmed', f"Left {arr_name}'s queue after the import, but "
+                                                 f"auditorr could not read the {item}'s file to "
+                                                 f"confirm it — check it in {arr_name}")
+                return finish('no_new_file', f"Left {arr_name}'s queue after the import without a "
+                                             f"new file — check it in {arr_name}")
+            msgs = after.get('messages') or res['messages']
+            return finish('error', 'Import stalled: ' + ('; '.join(msgs) or scope_error or 'queue item remained'))
         except Exception as e:
             log.warning("Auto-import failed for %s/%s: %s", service, arr_id, e)
-            watch['status']       = 'error'
-            watch['message']      = str(e)
-            watch['completed_at'] = time.time()
+            finish('error', str(e))
 
     threading.Thread(target=do_watch, daemon=True).start()
-    return jsonify({'job_id': job_id})
+    return job_id
 
 
 @app.route('/api/workflows/watch_import/status')
@@ -2814,16 +5646,21 @@ def workflows_watch_import_status():
 @app.route('/api/workflows/watch_import/active')
 @require_auth
 def workflows_watch_import_active():
+    # Every open auditorr page polls this every five seconds, which makes it the
+    # one place Backfill's in-memory jobs are reliably swept (B13).
+    _sweep_backfill_jobs()
     now = time.time()
     # Expire jobs completed more than 5 minutes ago
     expired = [k for k, v in _import_watches.items() if v.get('completed_at') and now - v['completed_at'] > 300]
     for k in expired:
         del _import_watches[k]
-    # Return active jobs + jobs completed within the last 60s (so Done/Error states are briefly visible)
+    # Return active jobs + jobs completed within the last 60s (so their end states
+    # are briefly visible). Keyed on `completed_at`, not on a list of statuses: a
+    # watch has more ways to end than done and error since Phase 12 (S07).
     jobs = []
-    for job_id, watch in _import_watches.items():
+    for job_id, watch in list(_import_watches.items()):
         ct = watch.get('completed_at')
-        if watch['status'] not in ('done', 'error') or (ct and now - ct < 60):
+        if not ct or now - ct < 60:
             jobs.append({'job_id': job_id, **{k: v for k, v in watch.items() if k != 'completed_at'}})
     return jsonify({'jobs': jobs})
 

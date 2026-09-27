@@ -1092,18 +1092,22 @@ def _fmt_bytes(n):
 
 
 def _summary(row):
-    """The one prose line under the card title — what this row is, right now.
+    """The prose line under the card title — only where the foot cannot say it.
 
-    Every card gets exactly one, chosen by state: what is blocking it, what the
-    workflow does, or what "clear" means for it. The *numbers* are not in here;
-    they are the stat line at the foot of the card. Keeping the two apart is
-    what stopped Backfill saying "85% hardlinked" twice on one card.
+    A blocked card says what is blocking it, and a clear or standby card says
+    what "clear" means for it: those cards have no stat line, so this is their
+    only sentence. A card that wants something gets none (2026-09-23, the
+    user's pick from `.internal/preview/density.html`). It used to carry
+    `teaching`, which restated the workflow page's own subtitle in different
+    words above a foot that already has the number and the streak. `teaching`
+    stays on the row: the page shows it as the workflow name's hover text. The
+    *numbers* are never in here; they are the stat line at the foot of the card.
     """
     if row['state'] == 'blocked':
         return row['blocked_reason'] or 'Not configured yet.'
     if row['state'] in ('maintain', 'standby'):
         return row['clear_line']
-    return row['teaching']
+    return ''
 
 
 def _stat(row):

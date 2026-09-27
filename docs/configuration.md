@@ -142,8 +142,8 @@ therefore produce a re-audit every few minutes, all day.
 **Recommendation:** on large libraries, raise the cooldown into the tens of
 minutes (1800 = 30 min is a reasonable starting point), or turn the watchdog off
 entirely. The scheduled audit already runs every 6 hours by default — four full
-audits a day is plenty for a health dashboard, and **Scan Now** is always there
-when you want fresh numbers immediately.
+audits a day is plenty for a health dashboard, and **▶ Run Audit** at the foot of
+the Config page is always there when you want fresh numbers immediately.
 
 If you keep it on, the cooldown is the dial that matters: it is the minimum
 quiet period before a scan fires, so a larger value both batches more changes
@@ -269,10 +269,44 @@ Maximum 100 patterns, 200 characters each. Lines starting with `#` are comments.
 | `ext:.nfo` | By file extension. The leading dot is optional. |
 | `name:@eaDir` | An exact file or folder name — stricter than a bare word only in that it never partially matches. |
 | `contains:sample` | The text appears anywhere in the normalized path. |
+| `literal:movies/Film [2020].mkv` | That exact file, with no glob interpretation at all. |
+| `literal:movies/Some Release/` | That exact folder and everything under it. Same rule, subtree form. |
 
 Bare words are the friendly default: `Extras` excludes every `Extras` folder
 without you needing glob syntax. Use `contains:` when you need to match
 mid-segment text like `Sample` inside a filename.
+
+**Saving warns about a rule that can't match.** A path you typed containing `[`
+is read as a pattern, where `[SubsPlease]` means "any one of those letters", so
+the rule excludes nothing with that name. Config saves it as written and shows a
+warning suggesting `literal:`. Rules the matcher takes as a folder prefix (ending
+in `/` or `/**`) and typed rules (`ext:`, `name:`, `contains:`, `literal:`) aren't
+affected, and `*` or `?` aren't warned about — in a rule you typed yourself they
+are usually meant.
+
+**`literal:` is for paths that contain glob characters**, which release names
+routinely do. Without it, `anime/[SubsPlease] Show - 01 [1080p].mkv` is read as a
+character class and matches nothing at all, and `movies/Film*.mkv` matches
+`Film2.mkv` and `FilmXYZ.mkv` as well as itself. This is what the **Exclude**
+buttons on Cleanup and Triage write, so you will mostly see it rather than type
+it. It is case-sensitive on the path, and — like every other path rule — it
+matches whether you write the path relative (`movies/…`) or absolute
+(`/data/torrents/movies/…`).
+
+### Always ignored
+
+Two patterns apply on every install and are not configurable: `.fuse_hidden*`
+and `.nfs*`. These are **filesystem tombstones** — when a file is deleted while
+a process still has it open, the filesystem can't free it, so it renames it out
+of the way and drops that name when the last handle closes. FUSE (Unraid user
+shares) and NFS both do this.
+
+The file has already been deleted; what's left is bookkeeping for a delete that
+hasn't finished, and it disappears on its own. Treating one as media meant
+offering to deduplicate a file against itself, or to delete something already
+deleted. They still appear in File Explorer marked as excluded, so you can see
+them if one is sticking around — which usually means a process is holding a
+handle open and needs restarting.
 
 ### Presets
 
@@ -283,6 +317,9 @@ Two preset groups save you from writing common rules by hand:
   detection.
 - **Media server files** — Plex, Jellyfin, Emby, Kodi and UMS metadata and
   artwork directories.
+
+Each group has an **All** option. When the whole group is on, **All** is the
+only option lit; click it again to switch the group off.
 
 ### Hide excluded files from the explorer
 
@@ -300,6 +337,26 @@ the page.
 Besides typing them here, exclusions are written by the **Exclude** buttons on
 the Cleanup and Triage pages, and by Triage's one-click suggestions. Everything
 those buttons add lands in this list, visible and editable.
+
+Both Exclude buttons show you the exact rules before writing them. What they
+build depends on what you selected:
+
+- A folder that holds **nothing but what you selected** becomes one `literal:`
+  subtree rule.
+- **Loose files** — anything sitting directly in a category directory such as
+  `movies/`, which is where qBittorrent saves single-file torrents by default —
+  get one rule each. A category directory is never excluded as a folder: it is
+  shared with your media library and with every other torrent under it, so one
+  such rule would take the whole category out of scoring.
+- A **partly-imported torrent** in Triage also gets one rule per file, because
+  its release folder holds the files that imported successfully too.
+
+Depth is not what decides this. A release folder sitting directly under your
+torrent directory — no category directory in between — still gets the folder
+form, provided nothing else lives in it.
+
+They enforce the 100-pattern / 200-character limits above and tell you what they
+refused, rather than writing a list this page would then refuse to save.
 
 ---
 
@@ -325,6 +382,7 @@ Set these on the container; they can't be changed from the UI.
 | `AUDITORR_SECRET` | *(unset)* | Access key. Once set, required from every client. See [Remote access](remote-access.md). |
 | `AUDITORR_TRUSTED_NETWORKS` | *(unset)* | Extra CIDRs treated as local, e.g. `100.64.0.0/10` for Tailscale. |
 | `AUDITORR_REQUIRE_AUTH` | `false` | Require the access key even from local clients. |
+| `AUDITORR_DB_TIMEOUT` | `60` | Seconds a database write waits while a scan is saving its results before giving up. A scan saves everything in one step and holds the write for well under a second, so this only needs raising on very slow storage. |
 
 `MALLOC_ARENA_MAX=2` is set in the image itself to limit how much memory the
 allocator holds after a large scan. Don't override it unless you're

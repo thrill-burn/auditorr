@@ -1,11 +1,33 @@
 import React from 'react'
+import { tint, CloseButton } from './workflows/shared'
+
+// An import watch has more ways to end than done and error (Phase 12, S07).
+// `done` is the only success, and the server reaches it only when the arr's file
+// for the target changed, so it is the only green. A failure is red. A result
+// that is not a success and not a failure either — never queued, left the queue
+// with no new file, still downloading when the watch stopped, not confirmable —
+// is dim text with its message.
+export const WATCH_ACTIVE = ['queued', 'downloading', 'importing']
+export const WATCH_FAILED = ['error', 'failed', 'unreadable']
+
+export function watchColor(status) {
+  if (status === 'done') return 'var(--green)'
+  if (WATCH_FAILED.includes(status)) return 'var(--red)'
+  return WATCH_ACTIVE.includes(status) ? 'var(--accent)' : 'var(--text-dim)'
+}
 
 const STAGE_CONFIG = {
-  queued:      { label: 'Queued',      color: 'var(--text-dim)',  icon: 'pulse'   },
-  downloading: { label: 'Downloading', color: 'var(--accent)',    icon: 'spinner' },
-  importing:   { label: 'Importing',   color: 'var(--accent)',    icon: 'spinner' },
-  done:        { label: 'Done',        color: 'var(--green)',     icon: 'check'   },
-  error:       { label: 'Failed',      color: 'var(--red)',       icon: 'x'       },
+  queued:      { label: 'Queued',            color: 'var(--text-dim)', icon: 'pulse'   },
+  downloading: { label: 'Downloading',       color: 'var(--accent)',   icon: 'spinner' },
+  importing:   { label: 'Importing',         color: 'var(--accent)',   icon: 'spinner' },
+  done:        { label: 'Done',              color: 'var(--green)',    icon: 'check'   },
+  error:       { label: 'Failed',            color: 'var(--red)',      icon: 'x'       },
+  failed:      { label: 'Download failed',   color: 'var(--red)',      icon: 'x'       },
+  unreadable:  { label: 'Could not check',   color: 'var(--red)',      icon: 'x'       },
+  unobserved:  { label: 'Never queued',      color: 'var(--text-dim)', icon: 'dash'    },
+  no_new_file: { label: 'No new file',       color: 'var(--text-dim)', icon: 'dash'    },
+  timed_out:   { label: 'Still downloading', color: 'var(--text-dim)', icon: 'dash'    },
+  unconfirmed: { label: 'Unconfirmed',       color: 'var(--text-dim)', icon: 'dash'    },
 }
 
 function StageIcon({ type, color }) {
@@ -22,19 +44,20 @@ function StageIcon({ type, color }) {
       background: color, animation: 'importPulse 1.4s ease-in-out infinite',
     }} />
   )
-  if (type === 'check') return <span style={{ color, fontSize: 10, lineHeight: 1, flexShrink: 0 }}>✓</span>
-  return <span style={{ color, fontSize: 10, lineHeight: 1, flexShrink: 0 }}>✗</span>
+  if (type === 'check') return <span style={{ color, fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>✓</span>
+  if (type === 'dash') return <span style={{ color, fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>–</span>
+  return <span style={{ color, fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>✗</span>
 }
 
 export default function ImportProgress({ open, jobs, onClose }) {
   if (!open) return null
 
-  const activeCount = jobs.filter(j => !['done', 'error'].includes(j.status)).length
+  const activeCount = jobs.filter(j => WATCH_ACTIVE.includes(j.status)).length
 
-  // Sort: active first, then done/error
+  // Sort: active first, then the ones that have ended
   const sorted = [...jobs].sort((a, b) => {
-    const aActive = !['done', 'error'].includes(a.status)
-    const bActive = !['done', 'error'].includes(b.status)
+    const aActive = WATCH_ACTIVE.includes(a.status)
+    const bActive = WATCH_ACTIVE.includes(b.status)
     if (aActive && !bActive) return -1
     if (!aActive && bActive) return 1
     return 0
@@ -54,31 +77,31 @@ export default function ImportProgress({ open, jobs, onClose }) {
         padding: '10px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>Backfill Jobs</span>
+          {/* Backfill and Trumped grabs share one watch and one panel. */}
+          <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Import Jobs</span>
           {activeCount > 0 && (
             <span style={{
-              fontSize: 10, fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
-              background: 'var(--accent)18', color: 'var(--accent)', border: '1px solid var(--accent)30',
+              fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
+              background: tint('var(--accent)', 9), color: 'var(--accent)', border: `1px solid ${tint('var(--accent)', 19)}`,
             }}>
               {activeCount} active
             </span>
           )}
         </div>
-        <button onClick={onClose} style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: 'var(--text-dim)', fontSize: 16, lineHeight: 1, padding: '0 2px',
-        }}>×</button>
+        <CloseButton onClick={onClose} />
       </div>
 
       {/* Job list */}
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {jobs.length === 0 && (
-          <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 12, fontFamily: 'var(--mono)' }}>
+          <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-base)', fontFamily: 'var(--mono)' }}>
             No active import jobs
           </div>
         )}
         {sorted.map(job => {
           const cfg = STAGE_CONFIG[job.status] || STAGE_CONFIG.queued
+          // Every ending but an observed import says what happened, in the arr's words or ours.
+          const ended = !WATCH_ACTIVE.includes(job.status) && job.status !== 'done' && job.message
           return (
             <div key={job.job_id} style={{
               display: 'flex', alignItems: 'flex-start', gap: 10,
@@ -86,11 +109,11 @@ export default function ImportProgress({ open, jobs, onClose }) {
             }}>
               {/* Service badge */}
               <span style={{
-                fontSize: 9, fontFamily: 'var(--mono)', padding: '2px 5px', borderRadius: 3,
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 5px', borderRadius: 3,
                 flexShrink: 0, marginTop: 1,
-                background: job.service === 'radarr' ? 'var(--yellow)18' : 'var(--blue)18',
+                background: tint(job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)', 9),
                 color:      job.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-                border:     `1px solid ${job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)'}35`,
+                border:     `1px solid ${tint(job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)', 21)}`,
               }}>
                 {job.service || '—'}
               </span>
@@ -98,7 +121,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
               {/* Title + stage */}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
-                  fontSize: 12, fontWeight: 500, color: 'var(--text)',
+                  fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }} title={job.title}>
                   {job.title || 'Unknown'}
@@ -106,10 +129,10 @@ export default function ImportProgress({ open, jobs, onClose }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3 }}>
                   <StageIcon type={cfg.icon} color={cfg.color} />
                   <span style={{
-                    fontSize: 10, fontFamily: 'var(--mono)', color: cfg.color,
-                  }} title={job.status === 'error' ? job.message : undefined}>
+                    fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cfg.color,
+                  }} title={ended ? job.message : undefined}>
                     {cfg.label}
-                    {job.status === 'error' && ' — ' + job.message.slice(0, 40)}
+                    {ended && ' — ' + job.message.slice(0, 40)}
                   </span>
                 </div>
               </div>

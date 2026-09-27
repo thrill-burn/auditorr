@@ -25,11 +25,16 @@ async function req(path, opts = {}, retried = false) {
   if (!res.ok) {
     const err = new Error(data.message || data.error || 'Request failed')
     err.code = data.code
+    err.data = data
     throw err
   }
   return data
 }
 
+// A plain-text body (a generated script) plus its response headers. The body
+// stays plain so copy and download hand over exactly the script; what a page
+// needs to know about it — when Cleanup's selection was checked against the
+// torrent client, how many files that dropped — rides the headers instead.
 async function reqText(path, opts = {}, retried = false) {
   const secret = getSecret()
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) }
@@ -51,9 +56,26 @@ async function reqText(path, opts = {}, retried = false) {
     const data = await res.json().catch(() => ({}))
     const err = new Error(data.message || data.error || 'Request failed')
     err.code = data.code
+    err.data = data
     throw err
   }
-  return res.text()
+  return { text: await res.text(), headers: res.headers }
+}
+
+// A render error the error boundary caught, sent to the server log. Not `req`:
+// a 401 there opens a key prompt, which is the wrong thing to show over a crash
+// screen. Resolves true when the server logged it and false otherwise, and
+// never throws.
+export async function reportClientError(body) {
+  try {
+    const secret = getSecret()
+    const headers = { 'Content-Type': 'application/json' }
+    if (secret) headers['X-Auditorr-Secret'] = secret
+    const res = await fetch('/api/debug/client_error', { method: 'POST', headers, body: JSON.stringify(body) })
+    return res.ok
+  } catch (_) {
+    return false
+  }
 }
 
 export const api = {
@@ -102,7 +124,7 @@ export const api = {
   watchImportActive:  ()       => req('/workflows/watch_import/active'),
   importCheck:        (items)  => req('/workflows/import_check',        { method: 'POST', body: JSON.stringify({ items }) }),
   startGenerate:  (params) => req('/workflows/generate',        { method: 'POST', body: JSON.stringify(params) }),
-  generateStatus: (jobId)  => req('/workflows/generate/status?job_id=' + jobId),
+  generateStatus: (jobId, since) => req('/workflows/generate/status?job_id=' + jobId + (since != null ? '&since=' + since : '')),
   stopGenerate:   (jobId)  => req('/workflows/generate/stop',   { method: 'POST', body: JSON.stringify({ job_id: jobId }) }),
   workflowIndexers: ()   => req('/workflows/indexers'),
   triageReport:   ()         => req('/workflows/triage'),
@@ -110,7 +132,7 @@ export const api = {
   cleanupReport:  ()         => req('/workflows/cleanup'),
   dedupeReport:   ()         => req('/workflows/dedupe'),
   excludePatterns: (patterns) => req('/workflows/exclude', { method: 'POST', body: JSON.stringify({ patterns }) }),
-  removeTorrents: (items, deleteFiles = true) => req('/workflows/remove_torrents', { method: 'POST', body: JSON.stringify({ items, delete_files: deleteFiles }) }),
+  removeTorrents: (items, deleteFiles = 'auto', plan) => req('/workflows/remove_torrents', { method: 'POST', body: JSON.stringify({ items, delete_files: deleteFiles, ...(plan ? { plan } : {}) }) }),
   triageResolveGroups: (hashes) => req('/workflows/triage/resolve_groups', { method: 'POST', body: JSON.stringify({ hashes }) }),
   trumpParse:        (pmText)  => req('/workflows/trump/parse',          { method: 'POST', body: JSON.stringify({ pm_text: pmText }) }),
   trumpResolveGroup: (oldTitles, seedHashes, indexer) => req('/workflows/trump/resolve_group', { method: 'POST', body: JSON.stringify({ old_titles: oldTitles, seed_hashes: seedHashes, indexer }) }),

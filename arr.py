@@ -3,14 +3,18 @@ import re
 import json
 import logging
 import time
+import functools
 import unicodedata
+from types import MappingProxyType
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
 
-_arr_media_index_cache = {'data': None, 'ts': 0, 'errors': []}
+# One immutable snapshot, `(ts, rows, errors, roots)`, published in a single
+# assignment — never four (S11). See `fetch_arr_media_index_result`.
+_arr_media_index_cache = {'snapshot': None}
 _ARR_MEDIA_INDEX_TTL = 120
 # Bulk list endpoints (/api/v3/movie, /api/v3/series) return the entire library
 # in one response — seconds of JSON on a large instance, where the 10s default
@@ -135,44 +139,151 @@ def normalize_arr_connections(cfg, service=None):
     return legacy + explicit
 
 
-def fetch_arr_media_index(cfg, force=False):
-    """Fetch managed media-file paths from every configured Arr instance.
+def _fetch_root_folders(conn):
+    """One arr's configured root folders — arr-side paths, longest first — or None.
 
-    Results are cached for _ARR_MEDIA_INDEX_TTL seconds. Pass force=True to bypass.
+    None is "could not read them", kept apart from `[]` ("none configured"). A
+    failure here never fails the media index: the chips it feeds are a filter,
+    and a missing filter must not cost the library it filters.
+    """
+    try:
+        rows = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/rootfolder')
+    except Exception as e:
+        log.warning("Could not fetch root folders from %s: %s", conn['id'], e)
+        return None
+    if not isinstance(rows, list):
+        return None
+    paths = {_path_norm(r.get('path')).rstrip('/') for r in rows
+             if isinstance(r, dict) and r.get('path')}
+    return sorted((p for p in paths if p), key=lambda p: (-len(p), p))
+
+
+def _arr_media_index_snapshot(cfg, force=False):
+    """`(ts, rows, errors, roots)` — the media index as one immutable snapshot (S11).
+
+    Built from every configured arr and published with **one** assignment.
+    Results are cached for _ARR_MEDIA_INDEX_TTL seconds; force=True bypasses.
+    Each instance's root folders are read alongside (`arr_root_folders`).
     """
     now = time.monotonic()
-    if not force and _arr_media_index_cache['data'] is not None and (now - _arr_media_index_cache['ts']) < _ARR_MEDIA_INDEX_TTL:
-        return _arr_media_index_cache['data']
+    snap = _arr_media_index_cache.get('snapshot')
+    if not force and snap is not None and (now - snap[0]) < _ARR_MEDIA_INDEX_TTL:
+        return snap
     media = []
     errors = []
+    roots = {}
     for conn in normalize_arr_connections(cfg):
         try:
             if conn['service'] == 'radarr':
-                rows = _fetch_radarr_media(conn)
+                rows, partial = _fetch_radarr_media(conn)
             else:
-                rows = _fetch_sonarr_media(conn)
+                rows, partial = _fetch_sonarr_media(conn)
             media.extend(_apply_arr_media_path_mapping(rows, conn, cfg))
+            # Only for an instance that answered — a dead one would only add a
+            # second timeout. Per connection, never per row: one small list.
+            roots[conn['id']] = _fetch_root_folders(conn)
+            if partial:
+                # Some of the library came back. Reported on the same channel as
+                # a total failure because the consequence is the same shape — an
+                # unexplained gap the caller would otherwise read as "manages
+                # nothing" — and `partial` lets the UI say which it was.
+                errors.append({'connection_id': conn['id'], 'name': conn['name'],
+                               'service': conn['service'], 'partial': True,
+                               'failed': partial['failed'], 'total': partial['total'],
+                               'message': f"{partial['failed']} of {partial['total']} "
+                                          f"series could not be read"})
         except Exception as e:
             log.warning("Could not fetch %s media from %s: %s", conn['service'], conn['id'], e)
             errors.append({'connection_id': conn['id'], 'name': conn['name'],
-                           'service': conn['service'], 'message': str(e)})
-    _arr_media_index_cache['data'] = media
-    _arr_media_index_cache['errors'] = errors
-    _arr_media_index_cache['ts'] = now
-    return media
+                           'service': conn['service'], 'partial': False,
+                           'message': str(e)})
+    snap = (now, media, tuple(errors), roots)
+    _arr_media_index_cache['snapshot'] = snap
+    return snap
+
+
+def fetch_arr_media_index(cfg, force=False):
+    """Managed media-file rows from every configured Arr instance (cached 120s).
+
+    Rows only. **A caller that reports this fetch's failures uses
+    `fetch_arr_media_index_result`**, which returns the rows and their errors
+    from one snapshot.
+    """
+    return _arr_media_index_snapshot(cfg, force)[1]
+
+
+def fetch_arr_media_index_result(cfg, force=False):
+    """`(rows, errors)` for the media index, **from one snapshot** (S11).
+
+    The accessors below read the *most recent* snapshot, which is not
+    necessarily the one a caller received. auditorr runs one gunicorn worker
+    with eight threads, so another request's successful refresh can land
+    between a failed fetch and its `arr_media_index_errors()` read. That request
+    then holds `[]` rows and **no errors** — the state Triage's `library_unknown`
+    gate exists to catch, read as healthy, and `not_in_library` reachable from
+    silence again. The old contract ("call the fetch, then the accessor, in the
+    same request") was sequential, and said nothing about another request. The
+    snapshot is a tuple published in one assignment, so rows and errors taken
+    from it cannot come from two fetches.
+
+    Errors carry `partial`: False is "this instance answered with nothing",
+    True is "this instance answered with some of its library" (`failed`/`total`
+    series). Both leave the same hole; only the second is recoverable by
+    retrying a moment later.
+    """
+    snap = _arr_media_index_snapshot(cfg, force)
+    return snap[1], list(snap[2])
+
+
+def fetch_arr_media_index_with_roots(cfg, force=False):
+    """`(rows, errors, roots)` for the media index, **from one snapshot** (S11, B10).
+
+    Backfill's form of `fetch_arr_media_index_result`: it labels each candidate
+    with its instance's root folder, so the roots have to describe the rows too.
+    It read the errors and the roots through the accessors below, straight after
+    the fetch, until Phase 14 — the sequential contract S11 retired for Triage
+    and Trumped in Phase 9, where another request's refresh can land between the
+    two and a request then reports an instance as healthy that its own fetch
+    could not read, and labels its files with roots it never received.
+
+    `roots` is `{connection_id: [root, ...] | None}` — see `arr_root_folders`.
+    """
+    snap = _arr_media_index_snapshot(cfg, force)
+    return snap[1], list(snap[2]), dict(snap[3])
+
+
+def arr_root_folders():
+    """`{connection_id: [root, ...] | None}` from the most recent index snapshot (B10).
+
+    Arr-side paths as configured in Sonarr/Radarr, longest first. `None` for an
+    instance whose root folders could not be read; an instance whose media index
+    failed has no entry at all. **The most recent snapshot**, which under
+    concurrent requests need not be the one the caller's own fetch returned.
+    **No request path reads this since Phase 14**: Backfill takes its roots
+    from `fetch_arr_media_index_with_roots`. Kept for the in-container probe,
+    which runs one fetch at a time.
+    """
+    snap = _arr_media_index_cache.get('snapshot')
+    return dict(snap[3]) if snap else {}
 
 
 def arr_media_index_errors():
-    """Connections whose media index failed on the most recent fetch.
+    """Connections whose media index failed or came back partial, **most recent snapshot**.
 
     The index is a flat list of rows, so an instance that errored is
     indistinguishable from one that manages nothing — its files just stop
-    resolving. Anything that presents resolution results to the user reads this
-    so a failure is reported rather than left to be inferred from an
-    unexplained gap. Cached alongside the data, so it describes the list the
-    caller just received.
+    resolving. Anything that presents resolution results reads the failures so
+    they are reported rather than inferred from an unexplained gap.
+
+    **This reads whichever fetch landed last**, and under concurrent requests
+    that need not be the caller's (S11). Anything that turns these errors into
+    a verdict takes them from `fetch_arr_media_index_result` instead — Triage
+    and Trumped do, and since Phase 14 so does Backfill
+    (`fetch_arr_media_index_with_roots`). **No request path reads this.** Kept
+    for the in-container probe, which runs one fetch at a time.
     """
-    return list(_arr_media_index_cache.get('errors') or [])
+    snap = _arr_media_index_cache.get('snapshot')
+    return list(snap[2]) if snap else []
 
 
 def fetch_arr_indexers(cfg):
@@ -190,20 +301,91 @@ def fetch_arr_indexers(cfg):
     return names
 
 
+def season_episodes_from_name(name):
+    """(season, [episode numbers]) parsed from a release basename, or (None, []).
+
+    Two things the old two-digit pattern got wrong, both silently:
+
+    * **Three-digit episodes.** `[Ee](\\d{1,2})` against `S01E120` matched `E12`
+      and returned episode **12** — a confident wrong answer rather than no
+      answer, which then resolved to a real but unrelated episode id.
+      `(?!\\d)` makes the match refuse a truncation instead.
+    * **Multi-episode files.** `S01E01E02` / `S01E01-E02` is one file holding
+      two episodes; only the first was ever seen, so a lookup that failed on it
+      failed outright.
+
+    The bare `S01E01-02` form is deliberately **not** parsed: without a literal
+    `E` the trailing number is indistinguishable from a quality token
+    (`S01E01-720p`), and inventing episode 720 is worse than missing one.
+    """
+    base = os.path.basename(str(name or '').replace('\\', '/').rstrip('/'))
+    m = re.search(r'[Ss](\d{1,2})[Ee](\d{1,3})(?!\d)', base)
+    if not m:
+        return None, []
+    nums = [int(m.group(2))]
+    tail = base[m.end():]
+    while True:
+        more = re.match(r'[-._ ]*[Ee](\d{1,3})(?!\d)', tail)
+        if not more:
+            break
+        nums.append(int(more.group(1)))
+        tail = tail[more.end():]
+    return int(m.group(1)), nums
+
+
 def _episode_id_from_path(conn, arr_id, file_path):
     """Derive a Sonarr episode ID by parsing SxxExx from file_path and matching against the series."""
-    m = re.search(r'[Ss](\d{1,2})[Ee](\d{1,2})', os.path.basename(file_path))
-    if not m:
+    season, ep_nums = season_episodes_from_name(file_path)
+    if season is None:
         return None
-    season, ep_num = int(m.group(1)), int(m.group(2))
     try:
         episodes = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/episode?seriesId={arr_id}')
-        for ep in episodes:
-            if ep.get('seasonNumber') == season and ep.get('episodeNumber') == ep_num:
-                return ep.get('id')
     except Exception as e:
         log.warning("Could not look up episode from path %s: %s", file_path, e)
-    return None
+        return None
+    # First episode of the file that the series actually knows about — a
+    # multi-episode file searches on whichever of its episodes resolves.
+    by_num = {ep.get('episodeNumber'): ep.get('id') for ep in episodes
+              if ep.get('seasonNumber') == season}
+    return next((by_num[n] for n in ep_nums if by_num.get(n) is not None), None)
+
+
+def sonarr_episodes_by_file(cfg, connection_id, series_id):
+    """`{episode_file_id: [(episode_id, season, episode), ...]}` for one series, or None.
+
+    The only authoritative route from a library file to the episodes it holds.
+    `/api/v3/episodefile` does not carry them — Sonarr's `EpisodeFileResource`
+    has a `seasonNumber` and **no** episode ids or numbers — so the
+    `episode_ids` / `episode_numbers` `_fetch_sonarr_media` reads off that record
+    are always empty against a real Sonarr, and every fixture that populated
+    them was testing a field that does not exist. `/api/v3/episode?seriesId=`
+    does carry `episodeFileId`, and that join also works for daily and
+    absolute-numbered series, where parsing the filename does not.
+
+    `None` is "could not ask", kept distinct from `{}` ("this series holds no
+    files") for the reason R1 records: both Backfill consumers narrow a search or
+    an import by this answer, and an unknown read as "no episodes" would narrow
+    it to nothing silently.
+    """
+    conns = normalize_arr_connections(cfg, service='sonarr')
+    conn = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        return None
+    try:
+        episodes = _arr_get(conn['base_url'], conn['api_key'],
+                            f'/api/v3/episode?seriesId={series_id}')
+    except Exception as e:
+        log.warning("Could not list episodes for series %s on %s: %s", series_id, connection_id, e)
+        return None
+    out = {}
+    for ep in episodes or []:
+        file_id = ep.get('episodeFileId')
+        if file_id and ep.get('id') is not None:
+            out.setdefault(file_id, []).append(
+                (ep['id'], ep.get('seasonNumber'), ep.get('episodeNumber')))
+    for eps in out.values():
+        eps.sort(key=lambda e: (e[1] if e[1] is not None else -1, e[2] if e[2] is not None else -1))
+    return out
 
 
 def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None, file_path=None):
@@ -246,6 +428,11 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'leechers':            r.get('leechers', 0),
             'size':                r.get('size', 0),
             'guid':                guid,
+            # The download's identity, when the indexer supplies one: both arrs'
+            # `ReleaseResource.InfoHash` (from `TorrentInfo.InfoHash`). The grab's
+            # own response echoes the posted release and carries no download id,
+            # so this is what the import watch correlates the queue by (S07).
+            'info_hash':           r.get('infoHash') or '',
             'info_url':            r.get('infoUrl') or (guid if str(guid).startswith('http') else ''),
             'quality_name':        q_inner.get('name', ''),
             'resolution':          q_inner.get('resolution', 0),
@@ -253,26 +440,72 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'hdr':                 _detect_hdr(r.get('title', '')),
             'custom_format_score': r.get('customFormatScore', 0),
             'quality_weight':      r.get('qualityWeight', 0),
+            # Sonarr only: what the release covers. An episode search can still
+            # return a season pack or a multi-episode file — interactive search
+            # lists rejected releases alongside approved ones, and a grab
+            # through /api/v3/release bypasses the rejection — so Backfill's
+            # scope gate has to see this to keep a pack off an episode row (B1).
+            'full_season':         bool(r.get('fullSeason')),
+            # Mapped first: `episodeNumbers` is parsed off the title in scene
+            # numbering, `mappedEpisodeNumbers` is the series' own numbering —
+            # the one an episode-file join yields.
+            'episode_numbers':     list(r.get('mappedEpisodeNumbers') or r.get('episodeNumbers') or []),
+            # The season those numbers belong to, and the episodes themselves
+            # (amendment 1, Phase 14). Sonarr's `ReleaseResource`:
+            # `MappedSeasonNumber = remoteEpisode.Episodes.FirstOrDefault()?.SeasonNumber`
+            # (null where nothing mapped) and `MappedEpisodeInfo` carrying each
+            # mapped episode's `Id`. The numbers alone could not tell S02E05 from
+            # S01E05. Never the parsed `seasonNumber`: a daily release parses 0.
+            'mapped_season':       r.get('mappedSeasonNumber'),
+            'mapped_episode_ids':  [e.get('id') for e in (r.get('mappedEpisodeInfo') or [])
+                                    if isinstance(e, dict) and e.get('id') is not None],
         })
     return result
+
+
+# The phrase separating the trumped release(s) from the replacement. "(and) will
+# be replaced by" is the one layout on record from the field — three real PMs,
+# one tracker's automated template (QA-5, 2026-09-13). The others are in
+# circulation on other trackers and returned ([], '') here, dropping the user
+# into manual entry for want of an alternation; none of them is backed by a real
+# PM yet. Leftmost match wins, so "will be replaced by" is never cut short to
+# its trailing "replaced by".
+_TRUMP_DELIMITER_RE = re.compile(
+    r'(?i)\b(?:(?:and\s+)?will\s+be\s+replaced\s+by'
+    r'|has\s+been\s+trumped\s+by'
+    r'|(?:has\s+been\s+)?superseded\s+by'
+    r'|(?:has\s+been\s+)?replaced\s+(?:with|by))\b')
 
 
 def parse_trump_pm(pm_text):
     """Extract (old_titles, new_title) from a tracker trump PM.
 
     A PM lists one or more trumped releases between the "...trumped" /
-    "following torrent" header and the "(and) will be replaced by" phrase, then
-    the single replacement (typically a season pack when several episodes are
-    trumped together), optionally terminated by a "Reason:" line. Returns
-    ([], '') when the delimiter phrase is absent — the UI falls back to manual
-    fields. The old side is a list to cover season-pack trumps (N episodes → 1
-    pack); a single-release trump just yields a one-element list.
+    "following torrent" header and the delimiter phrase, then the single
+    replacement (typically a season pack when several episodes are trumped
+    together). Returns ([], '') when no delimiter phrase is present — the UI
+    falls back to manual fields. The old side is a list to cover season-pack
+    trumps (N episodes → 1 pack); a single-release trump just yields a
+    one-element list.
+
+    **A release name is one line** (TR6). The new title is the first non-empty
+    line after the delimiter, and nothing after it: the only terminator used to
+    be a literal `Reason:` line, so a PM without one — or with a sign-off on the
+    next line — had its boilerplate joined into the title, across blank lines.
+    That title then fails the exact release match by construction, and its junk
+    tokens drag every real candidate's title similarity below the gate, so a
+    PM that parsed "perfectly" produced an empty candidate list.
     """
     text = re.sub(r'\r\n?', '\n', str(pm_text or ''))
-    halves = re.split(r'(?i)\b(?:and\s+)?will\s+be\s+replaced\s+by\b', text, maxsplit=1)
+    halves = _TRUMP_DELIMITER_RE.split(text, maxsplit=1)
     if len(halves) != 2:
         return [], ''
     before, after = halves
+
+    def _clean(line):
+        # Trailing sentence periods (PMs end the phrase with "."); scene names
+        # never end in a bare dot, so stripping one is safe.
+        return line.strip().rstrip('.').strip()
 
     # Old titles are every release line after the header. Anchor on the last
     # header line so any greeting above it is ignored; "trumped" / "following
@@ -282,15 +515,20 @@ def parse_trump_pm(pm_text):
     for i, line in enumerate(lines):
         if re.search(r'(?i)trumped|following\s+torrent', line):
             header_idx = i
-    # Trailing sentence periods (PMs end the phrase with "."); scene names never
-    # end in a bare dot, so stripping one is safe.
-    old_titles = [l.strip().rstrip('.').strip()
-                  for l in lines[header_idx + 1:] if l.strip()]
+    if header_idx >= 0:
+        old_titles = [_clean(l) for l in lines[header_idx + 1:] if l.strip()]
+    else:
+        # No header: only the line immediately above the delimiter. Taking every
+        # line made "Hi there," a trumped release that phase 1 then ranked every
+        # torrent in the client against.
+        tail = [l for l in lines if l.strip()]
+        old_titles = [_clean(tail[-1])] if tail else []
 
-    after = re.split(r'(?i)\n\s*reason\s*:', after, maxsplit=1)[0]
-    new = ' '.join(l.strip() for l in after.strip().split('\n') if l.strip())
-
-    return old_titles, new.rstrip('.').strip()
+    new = next((l.strip().lstrip(':').strip() for l in after.split('\n')
+                if l.strip().lstrip(':').strip()), '')
+    if re.match(r'(?i)reason\s*:', new):
+        new = ''
+    return old_titles, _clean(new)
 
 
 _SEASON_EP_RE = re.compile(r'\bs\d{1,2}(?:e\d{1,4})?\b')
@@ -305,18 +543,60 @@ def _season_ep_anchor(norm_name):
     return m.group(0) if m else ''
 
 
+# A real file extension, for stripping one off a release name.
+#
+# Deliberately an explicit list rather than `os.path.splitext`, which takes
+# everything after the final dot: `splitext('Some.Movie.2020')` returns
+# ('Some.Movie', '.2020'), so a dot-separated release name loses its **year** to
+# an extension that does not exist. Release names are dot-separated by
+# convention, so this is the normal case, not an edge one.
+_FILE_EXT_RE = re.compile(
+    r'\.(mkv|mp4|m4v|avi|mov|wmv|webm|ts|m2ts|mpg|mpeg|iso'
+    r'|srt|sub|idx|ass|ssa|vtt|nfo)$', re.I)
+
+
+def _strip_file_ext(name):
+    """Drop a trailing real file extension from a release file or folder name."""
+    return _FILE_EXT_RE.sub('', str(name or '').strip())
+
+
+# Container extensions an arr imports as video — dotted, lowercase. What tells
+# an unmatched *video* (usually a path-mapping mismatch, and worth acting on)
+# from an unmatched sidecar (subtitles, artwork, .nfo — which no arr indexes)
+# in Backfill's resolution readout (B9). Triage's narrower `_VIDEO_EXTS` in
+# app.py predates this and is Phase 9's to reconcile.
+VIDEO_EXTENSIONS = frozenset({
+    '.mkv', '.mk3d', '.mp4', '.m4v', '.avi', '.mov', '.qt', '.wmv', '.asf',
+    '.mpg', '.mpeg', '.m2v', '.ts', '.m2ts', '.mts', '.wtv', '.vob', '.iso',
+    '.webm', '.flv', '.ogm', '.ogv', '.divx', '.xvid', '.rm', '.rmvb', '.3gp',
+    '.dvr-ms',
+})
+
+
 def _release_group_tag(name):
     """Release-group tag (lowercased, the token after the final hyphen), or '' —
     'A.Movie.2020-GRP' → 'grp'. The encode identity that distinguishes two
     same-episode releases; rejects sentence fragments so a hyphen inside a title
-    can't be mistaken for a group."""
-    s = re.sub(r'\.(mkv|mp4|avi|ts|m2ts|iso)$', '', str(name or '').strip(), flags=re.I)
+    can't be mistaken for a group.
+
+    A trailing hyphen is not proof of a group: the two commonest source tokens
+    carry one. 'Show.S01E01.1080p.AMZN.WEB-DL' yielded 'dl' and
+    'Movie 2020 2160p Blu-Ray' yielded 'ray', which is why quality tokens are
+    rejected here. In `match_trumped_torrent`'s overlap tier a mismatched group
+    is a hard `continue`, so a PM that named its group disqualified the client's
+    copy of the same payload outright whenever that copy was named without one.
+    The inverse was quieter and worse: two groupless names both reduced to 'dl',
+    which `score_release_match` then scored as a group *agreement* they never
+    had.
+    """
+    s = _strip_file_ext(name)
     if '-' not in s:
         return ''
     tag = s.rsplit('-', 1)[-1].strip()
     if not tag or ' ' in tag or len(tag) > 20:
         return ''
-    return re.sub(r'[^a-z0-9]', '', tag.lower())
+    tag = re.sub(r'[^a-z0-9]', '', tag.lower())
+    return '' if tag in _QUALITY_NOISE else tag
 
 
 def match_trumped_torrent(rows, title):
@@ -399,12 +679,18 @@ def match_trump_release(releases, new_title, indexer=''):
     id — fuzzy matching would only invite grabbing the wrong release. When
     several indexers carry the same release, the optional indexer filter (or
     the highest seeder count) decides.
+
+    The *indexer* comparison is the one place fuzziness is right, and it is the
+    same `tracker_matches_indexer` the rest of the flow uses: indexer names are
+    pooled across every arr by `fetch_arr_indexers`, so one tracker can arrive
+    as "Aither (API) (Prowlarr)" on one instance and "Aither" on another, and
+    exact equality fell through to the any-indexer retry.
     """
     target = _norm_release_name(new_title)
     if not target:
         return None
     pool = [r for r in releases
-            if not indexer or (r.get('indexer') or '').lower() == indexer.lower()]
+            if not indexer or tracker_matches_indexer(r.get('indexer'), indexer)]
     exact = [r for r in pool if _norm_release_name(r.get('title')) == target]
     if not exact:
         return None
@@ -503,12 +789,23 @@ def _title_core_tokens(norm, group=''):
     return out
 
 
+@functools.lru_cache(maxsize=32768)
 def _release_match_features(name):
+    """Match features of one release name, cached by name (TR11).
+
+    Phase 1 ranks every torrent in the client against every trumped title, and
+    a season-pack PM lists one title per episode, so the same few thousand names
+    were re-parsed once per title — ~27s of single-threaded CPU in one request
+    for 20 titles over 15k torrents, ~2s cached. **What is cached is read-only**:
+    a cached dict or set that one caller edited would corrupt every later match
+    in the process, so the mapping is a proxy and the title core a frozenset.
+    `release_match_cache_clear` releases the entries when a phase-1 request ends.
+    """
     norm  = _norm_release_name(name)
     info  = parse_release_info(name)
     group = _release_group_tag(name)
-    return {
-        'core':   _title_core_tokens(norm, group),
+    return MappingProxyType({
+        'core':   frozenset(_title_core_tokens(norm, group)),
         'res':    info['resolution'],
         'source': info['source'],
         'hdr':    info['hdr'],
@@ -516,7 +813,14 @@ def _release_match_features(name):
         'group':  group,
         'year':   info['year'],
         'anchor': _season_ep_anchor(norm),
-    }
+    })
+
+
+def release_match_cache_clear():
+    """Drop cached release-match features — the cache pays for itself inside one
+    request, and a client of 15k torrents should not leave 15k entries resident
+    on a process whose memory is already the thing to watch."""
+    _release_match_features.cache_clear()
 
 
 _MIN_TITLE_SIM = 0.3
@@ -538,8 +842,17 @@ def score_release_match(query, cand_name):
     group/audio/hdr/anchor to 'same' | 'diff' | 'partial' | '' (missing on a
     side).
     """
-    q = _release_match_features(query)
-    c = _release_match_features(cand_name)
+    return _score_match_features(_release_match_features(query),
+                                 _release_match_features(cand_name))
+
+
+def _score_match_features(q, c):
+    """`score_release_match` over features already extracted — see there.
+
+    Split out so a ranking loop extracts the query's features once rather than
+    once per candidate (TR11): the query is invariant across the loop, and
+    re-parsing it was half the cost of a phase-1 pass.
+    """
     b = {'title': '', 'year': '', 'res': '', 'source': '', 'group': '', 'audio': '', 'hdr': '', 'anchor': ''}
 
     # Title gate — both sides must have parseable title words that overlap.
@@ -557,7 +870,10 @@ def score_release_match(query, cand_name):
     # wide-release year renders one movie under either ("Snow White and the
     # Seven Dwarfs" is 1937 or 1938 depending on who typed it), so PMs, torrent
     # names, and indexer records routinely disagree by one. Same ±1 tolerance
-    # as _trump_year_ok; flagged 'partial' so the user sees the drift.
+    # `arr_year_ok` applies to Radarr; flagged 'partial' so the user sees the
+    # drift. (Both sides here are *release names*, so this is symmetric — unlike
+    # `arr_year_ok`, whose Sonarr half compares a release against a series' first
+    # air year and can only be one-sided.)
     if q['year'] and c['year']:
         if abs(q['year'] - c['year']) > 1:
             return 0.0, b
@@ -609,13 +925,61 @@ def rank_release_matches(items, query, name_key='name', limit=8, min_score=0.0):
     or the arr deep link).
     """
     scored = []
+    q = _release_match_features(query)
     for it in items:
-        s, brk = score_release_match(query, it.get(name_key) or '')
+        s, brk = _score_match_features(q, _release_match_features(it.get(name_key) or ''))
         if s <= 0 or s < min_score:
             continue
         scored.append({**it, 'match_score': round(s, 3), 'match': brk})
     scored.sort(key=lambda x: (x['match_score'], x.get('seeders') or 0), reverse=True)
     return scored[:limit]
+
+
+def rank_trump_replacements(releases, new_title, indexer='', limit=8):
+    """(release, candidates) — Trumped step 4's replacement, best first.
+
+    Three tiers, in this order:
+
+    1. **The exact release on the tracker that sent the PM.** That is the copy
+       the user means to grab — it is the one carrying the PM's freeleech, and
+       seeding the replacement where the trump happened is the point of
+       complying. It leads and is pre-selected.
+    2. **The exact release on another tracker.** Grabbing there and
+       cross-seeding is a legitimate edge case (the PM's tracker has not listed
+       it yet, or the user prefers it), never the default.
+    3. Everything else that clears the title gate, by score; ties broken by
+       fewer disagreeing fields, then the PM's tracker, then seeders.
+
+    **Exactness is required for the top two tiers, and it is load-bearing.**
+    `repack` and `proper` are quality noise to the fuzzy score, so a trump that
+    replaces a release with its own REPACK scores the trumped original — still
+    cached on an indexer — exactly as high as the replacement, and the score
+    saturates at 1.0 for most same-title releases anyway. Ranking by tracker
+    over that score would pre-select the release that was just trumped. Within
+    tiers 1 and 2 every copy is the same release, so seeders decide.
+
+    `release` is the head of tier 1 or 2, else None — no confident match. Each
+    candidate carries `pm_tracker` and `exact`.
+    """
+    target = _norm_release_name(new_title)
+    q = _release_match_features(new_title)
+    rows = []
+    for r in releases:
+        exact = bool(target) and _norm_release_name(r.get('title')) == target
+        s, brk = _score_match_features(q, _release_match_features(r.get('title') or ''))
+        if s <= 0 and not exact:
+            continue
+        rows.append({**r, 'match_score': 1.0 if exact else round(s, 3), 'match': brk, 'exact': exact,
+                     'pm_tracker': bool(indexer) and tracker_matches_indexer(r.get('indexer'), indexer)})
+
+    def _key(r):
+        tier = 0 if (r['exact'] and r['pm_tracker']) else (1 if r['exact'] else 2)
+        diffs = sum(1 for v in r['match'].values() if v == 'diff')
+        return (tier, -r['match_score'], diffs, not r['pm_tracker'], -(r.get('seeders') or 0))
+
+    rows.sort(key=_key)
+    release = rows[0] if rows and rows[0]['exact'] else None
+    return release, rows[:limit]
 
 
 def title_soft_match(query_title, candidate_title):
@@ -692,74 +1056,212 @@ def grab_release(cfg, service, connection_id, guid, indexer_id):
         return json.loads(raw) if raw.strip() else {}
 
 
-def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None):
-    """Poll Sonarr/Radarr queue for arr_id until the item clears or timeout (seconds).
+_QUEUE_PAGE_SIZE = 200
+_QUEUE_MAX_PAGES = 50
 
-    Returns the last seen list of active queue records so the caller can extract
-    outputPath for a manual import when the timeout expires with items still present.
-    Returns [] when the item cleared cleanly or was never seen.
+# Finished downloads the arr is holding the import of. `importPending` on older
+# arrs; Sonarr v4 and Radarr v5 park a *rejected* import — not an upgrade, a
+# backfill's usual case — as `importBlocked` (both arrs' `TrackedDownloadState`
+# and `CompletedDownloadService`, checked 2026-09-15). Compared lower-cased: the
+# API serialises enums camelCase.
+_IMPORT_WAITING_STATES = frozenset({'importpending', 'importblocked'})
+_FAILED_DOWNLOAD_STATES = frozenset({'failed', 'failedpending'})
 
-    Returns early (before timeout) when all active items are in importPending state —
-    the download is complete and Radarr is blocking the import; force import is needed
-    immediately rather than after a full 300 s wait.
+
+def _read_queue(conn, service, arr_id=None):
+    """Every record of the arr's queue — or only `arr_id`'s. Raises on a failed read.
+
+    `?pageSize=500` on one page is not the queue (S07). `/api/v3/queue` pages —
+    `page`, `pageSize` and `totalRecords` on `PagingResource` — and both arrs
+    filter it by `movieIds` / `seriesIds` (`QueueController` on Sonarr's and
+    Radarr's `develop`, checked 2026-09-15). The filter is passed and applied
+    again here, because an arr that predates it returns the whole queue. An
+    answer with no `totalRecords` — a bare list, or a shape from before paging —
+    is taken as everything there is.
+    """
+    id_field = 'movieId' if service == 'radarr' else 'seriesId'
+    filt = ''
+    if arr_id is not None:
+        filt = f"&{'movieIds' if service == 'radarr' else 'seriesIds'}={arr_id}"
+    records, seen_ids = [], set()
+    for page in range(1, _QUEUE_MAX_PAGES + 1):
+        result = _arr_get(conn['base_url'], conn['api_key'],
+                          f'/api/v3/queue?page={page}&pageSize={_QUEUE_PAGE_SIZE}{filt}',
+                          timeout=10)
+        if not isinstance(result, dict):
+            records.extend(r for r in (result or []) if isinstance(r, dict))
+            break
+        batch = [r for r in (result.get('records') or []) if isinstance(r, dict)]
+        fresh = [r for r in batch if r.get('id') is None or r['id'] not in seen_ids]
+        seen_ids.update(r['id'] for r in batch if r.get('id') is not None)
+        records.extend(fresh)
+        total = result.get('totalRecords')
+        if not isinstance(total, int) or isinstance(total, bool) or not fresh or len(records) >= total:
+            break
+    else:
+        raise LookupError(f"the {service} queue did not end within {_QUEUE_MAX_PAGES} pages")
+    if arr_id is not None:
+        records = [r for r in records if r.get(id_field) == arr_id]
+    return records
+
+
+def _queue_record_failed(record):
+    return (str(record.get('status') or '').lower() in ('failed', 'error')
+            or str(record.get('trackedDownloadState') or '').lower() in _FAILED_DOWNLOAD_STATES)
+
+
+def _queue_messages(records):
+    """The arr's own words about these records, de-duplicated, at most five."""
+    msgs = []
+    for r in records:
+        for sm in r.get('statusMessages') or []:
+            msgs.extend(m for m in (sm.get('messages') or []) if m)
+        if r.get('errorMessage'):
+            msgs.append(r['errorMessage'])
+    return list(dict.fromkeys(msgs))[:5]
+
+
+def correlate_queue_records(records, download_id=None, episode_ids=None):
+    """The queue records that are *this* grab (S07).
+
+    By the download's identity when there is one: a search result's `infoHash`,
+    which the queue spells `downloadId` — upper-cased for qBittorrent, whose
+    Sonarr/Radarr client sets `DownloadId = torrent.Hash.ToUpper()` — so it is
+    compared case-insensitively, and a record with another id is another
+    download. Failing that, by Sonarr's episodes: a record naming an episode
+    outside `episode_ids` is another download of the series. Failing both,
+    every record already matched on the movie or series — which is a guess when
+    they carry more than one download id, and the watch says so.
+    """
+    if download_id:
+        want = str(download_id).upper()
+        return [r for r in records if str(r.get('downloadId') or '').upper() == want]
+    if episode_ids:
+        scope = set(episode_ids)
+        return [r for r in records if r.get('episodeId') is None or r.get('episodeId') in scope]
+    return list(records)
+
+
+def queue_records_for_item(cfg, service, connection_id, arr_id, episode_ids=None, season_number=None):
+    """The arr's live queue entries for one Backfill candidate, or None if unreadable.
+
+    Sonarr: entries on this series carrying one of `episode_ids`; failing those,
+    entries in `season_number`; failing both, any entry on the series. Radarr:
+    entries on this movie. An entry in a terminal failed state is not a download
+    in progress and is not returned — the same reading `poll_queue_until_clear`
+    takes.
+
+    Keeps a candidate from being grabbed a second time (B12): by a retry after a
+    timeout the arr had in fact processed, by a second run, or by a click on a
+    row that reported failure. `None` is "could not ask", distinct from `[]`.
+    """
+    conns = normalize_arr_connections(cfg, service=service)
+    conn = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        return None
+    try:
+        records = _read_queue(conn, service, arr_id)
+    except Exception as e:
+        log.warning("Could not read the %s queue on %s: %s", service, connection_id, e)
+        return None
+    live = [r for r in records if isinstance(r, dict) and r.get('status') not in ('failed', 'error')]
+    if service == 'radarr':
+        return [r for r in live if r.get('movieId') == arr_id]
+    mine = [r for r in live if r.get('seriesId') == arr_id]
+    if episode_ids:
+        wanted = set(episode_ids)
+        return [r for r in mine if r.get('episodeId') in wanted]
+    if season_number is not None:
+        return [r for r in mine if r.get('seasonNumber') == season_number]
+    return mine
+
+
+def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None,
+                           download_id=None, episode_ids=None, seen=False):
+    """Follow one grab through the arr's queue. Returns `{'outcome', 'records', 'messages'}`.
+
+    S07 (the 2026-09-10 outside review): this returned a list, and `[]` meant
+    five different things — no connection, a failed download, a download that
+    cleared, one never seen, and a window in which every read failed (the
+    exceptions were swallowed) — each of which the watch turned into "Imported
+    successfully". The outcomes:
+
+      no_connection   the connection id is not configured
+      import_pending  every record of this grab is finished and waiting on an
+                      import (`_IMPORT_WAITING_STATES`), for three reads (~15 s)
+      failed          only failed records remain; `messages` carries the arr's
+      cleared         seen, then gone — **not** an import: the caller asks the
+                      arr's file ids whether anything landed
+      unobserved      never seen, through ~2 minutes of reads that succeeded
+                      (the arr's download-client check runs about once a minute)
+      downloading     the wait ran out with the download still in the queue
+      unreadable      the wait ran out and the last read had failed — which
+                      includes a window in which every read failed
+
+    The queue is read in full (`_read_queue`) and narrowed to this grab by
+    `correlate_queue_records`. `seen` carries "already observed" into a later
+    wait, so a download finishing during it is `cleared` rather than
+    `unobserved`. A read that failed is never absence.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
-        return []
-    # Fetch the full queue and filter client-side — the ?movieId= URL param is unreliable
-    # across Radarr versions and may silently return empty rather than the full list
-    id_field             = 'movieId' if service == 'radarr' else 'seriesId'
-    deadline             = time.monotonic() + timeout
-    notified             = False
-    ever_seen            = False   # did we ever find this item in the queue?
-    not_found_ticks      = 0       # consecutive polls with item absent
-    import_pending_ticks = 0       # consecutive polls with all items importPending
-    last_active          = []      # last snapshot of active records (for outputPath extraction)
+        return {'outcome': 'no_connection', 'records': [], 'messages': []}
+    deadline        = time.monotonic() + timeout
+    notified        = False
+    ever_seen       = bool(seen)
+    not_found_ticks = 0        # consecutive successful reads with this grab absent
+    waiting_ticks   = 0        # consecutive reads with every record waiting on an import
+    last_active     = []
+    last_read_ok    = None     # None: nothing read yet in this window
     while time.monotonic() < deadline:
         try:
-            result   = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/queue?pageSize=500', timeout=10)
-            records  = result.get('records', result) if isinstance(result, dict) else result
-            relevant = [r for r in records if r.get(id_field) == arr_id]
-            # 'completed' means download done but import not yet processed — keep polling
-            # until the item fully disappears or hits a hard terminal state.
-            # 'warning' is transient (download client temporarily unreachable, etc.)
-            # and must NOT be treated as terminal.
-            active   = [r for r in relevant if r.get('status') not in ('error', 'failed')]
-            if active:
-                ever_seen            = True
-                last_active          = active
-                not_found_ticks      = 0
-                if not notified and on_downloading:
-                    on_downloading()
-                    notified = True
-                # If all items are importPending the download is done but Radarr is
-                # blocking the import — return early so force import fires immediately
-                # instead of waiting the full timeout.
-                if all(r.get('trackedDownloadState') == 'importPending' for r in active):
-                    import_pending_ticks += 1
-                    if import_pending_ticks >= 3:  # ~15 s of confirmed importPending
-                        return last_active
-                else:
-                    import_pending_ticks = 0
-            elif relevant:
-                return []  # item is only in hard terminal states (error/failed)
+            mine = correlate_queue_records(_read_queue(conn, service, arr_id),
+                                           download_id=download_id, episode_ids=episode_ids)
+            last_read_ok = True
+        except Exception as e:
+            last_read_ok = False
+            log.debug("Could not read the %s queue on %s: %s", service, connection_id, e)
+            time.sleep(5)
+            continue
+        # 'completed' means the download is done but not yet imported, and
+        # 'warning' is transient (the download client briefly unreachable):
+        # neither is terminal.
+        active = [r for r in mine if not _queue_record_failed(r)]
+        if active:
+            ever_seen, last_active, not_found_ticks = True, active, 0
+            if not notified and on_downloading:
+                on_downloading()
+                notified = True
+            if all(str(r.get('trackedDownloadState') or '').lower() in _IMPORT_WAITING_STATES
+                   for r in active):
+                waiting_ticks += 1
+                if waiting_ticks >= 3:
+                    return {'outcome': 'import_pending', 'records': active,
+                            'messages': _queue_messages(active)}
             else:
-                not_found_ticks += 1
-                # Radarr's download-client check interval defaults to ~60 s, so the
-                # queue entry may not appear until a full minute after the grab.
-                # Wait up to 24 consecutive empty polls (~120 s) before concluding the
-                # item was never registered.  Once seen, its absence means processed.
-                if ever_seen or not_found_ticks >= 24:
-                    return []
-        except Exception:
-            pass
+                waiting_ticks = 0
+        elif mine:
+            return {'outcome': 'failed', 'records': mine, 'messages': _queue_messages(mine)}
+        else:
+            not_found_ticks += 1
+            if ever_seen:
+                return {'outcome': 'cleared', 'records': last_active, 'messages': []}
+            if not_found_ticks >= 24:
+                return {'outcome': 'unobserved', 'records': [], 'messages': []}
         time.sleep(5)
-    return last_active  # timeout — caller can use outputPath to locate the download
+    if last_read_ok is not True:
+        return {'outcome': 'unreadable', 'records': last_active, 'messages': []}
+    if not ever_seen:
+        return {'outcome': 'unobserved', 'records': [], 'messages': []}
+    return {'outcome': 'downloading', 'records': last_active,
+            'messages': _queue_messages(last_active)}
 
 
 def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=None,
-                              download_folder=None, only_paths=None, import_mode='Auto'):
+                              download_folder=None, only_paths=None, import_mode='Auto',
+                              only_episode_ids=None, media_folder_fallback=True,
+                              whole_episode_sets=None):
     """Force manual import of a movie or series, bypassing quality cutoff.
 
     download_id:     the downloadId from the Radarr/Sonarr queue record (qBittorrent hash).
@@ -768,17 +1270,38 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
                      quality grabs that sit in importPending state.
     download_folder: fallback — parent directory of outputPath from the queue record.
                      Used when download_id is unavailable.  Falls back further to the
-                     media folder for hardlink/backfill cases where the file is already
-                     at its final location.
+                     media folder unless `media_folder_fallback` is False.
     only_paths:      restrict the import to these exact arr-side file paths. A folder
                      lookup returns every file in the folder, and a single-file torrent's
                      folder is the shared category dir — without this, importing one
                      torrent would sweep in every unrelated file sitting beside it.
-    import_mode:     'Auto' is safe only when a download_id resolves to a tracked
-                     download: the arr then sees CanMoveFiles=false on a seeding
-                     torrent and hardlinks. With no tracked download Auto means
-                     move, which would pull the payload out from under the seed —
-                     callers working from a bare path must pass 'Copy'.
+    only_episode_ids: Sonarr only — keep a row only if every episode it names is in
+                     this set, and drop a row that names none. The path form above
+                     cannot scope a *grab*: the files to import do not exist until the
+                     download does, while the library paths a caller knows are the
+                     files being replaced, not imported. Episodes are the unit both
+                     sides share. Without it a season pack grabbed for one episode
+                     replaces every episode it carries (BACKFILL B1/B11).
+    whole_episode_sets: Sonarr only — the episode ids of each library file the
+                     import may replace, one list per file. A row naming any
+                     episode of a file must name all of them. Sonarr's upgrade
+                     recycles every existing file of the episodes it imports
+                     (`UpgradeMediaFileService`), so a single-episode download
+                     forced over a two-episode file deletes the other episode's
+                     file too — a subset of `only_episode_ids` fitted, and that
+                     was amendment 1's first shape (Phase 14).
+    media_folder_fallback: the arr's own library folder as a last resort. Its listing
+                     is the library file itself, so without a path scope a force
+                     import from it re-imports the very file it is replacing. A caller
+                     that has nothing to scope it with must pass False and report the
+                     missing download location rather than reach for this.
+    import_mode:     'Auto' is honoured **only when the rows came from the downloadId
+                     lookup**: the arr then sees CanMoveFiles=false on a seeding torrent
+                     and hardlinks. Every folder branch imports with 'Copy' whatever was
+                     asked for — with no tracked download Auto means move, which pulls
+                     the payload out from under the seed, and the branch is decided in
+                     here, so a caller cannot know which one it will get. 'Copy' is
+                     HardLinkOrCopy when the arr has hardlinks enabled.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
@@ -795,10 +1318,20 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         id_param     = f'seriesId={arr_id}'
 
     def _keep(rows):
-        if only_paths is None:
-            return rows or []
-        wanted = set(only_paths)
-        return [r for r in (rows or []) if (r.get('path') or '') in wanted]
+        rows = rows or []
+        if only_paths is not None:
+            wanted = set(only_paths)
+            rows = [r for r in rows if (r.get('path') or '') in wanted]
+        if only_episode_ids is not None:
+            allowed = set(only_episode_ids)
+            files = [set(s) for s in (whole_episode_sets or []) if s]
+
+            def _in_scope(row):
+                ids = {ep.get('id') for ep in (row.get('episodes') or []) if ep.get('id') is not None}
+                return (bool(ids) and ids <= allowed
+                        and all(held <= ids for held in files if held & ids))
+            rows = [r for r in rows if _in_scope(r)]
+        return rows
 
     def _query_by_download_id(dl_id):
         try:
@@ -826,39 +1359,50 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
             return []
 
     # Try downloadId first (finds download-client-tracked files), then folder fallbacks.
+    folders_to_try = [f for f in [download_folder, media_folder if media_folder_fallback else None] if f]
     files = []
+    via_download = False
     if download_id:
         files = _query_by_download_id(download_id)
+        via_download = bool(files)
         if files:
             log.info("Found %d importable file(s) for %s %s via downloadId", len(files), service, arr_id)
 
     if not files:
-        folders_to_try = [f for f in [download_folder, media_folder] if f]
         for folder in folders_to_try:
             files = _query_by_folder(folder)
             if files:
                 log.info("Found %d importable file(s) for %s %s in %s", len(files), service, arr_id, folder)
                 break
 
-    if not files:
+    if not files and (download_id or folders_to_try):
         # Retry once after a delay — handles timing race where qBit finishes but files
         # aren't importable yet from Sonarr/Radarr's perspective
         log.info("No importable files for %s %s on first attempt, retrying in 15s…", service, arr_id)
         time.sleep(15)
         if download_id:
             files = _query_by_download_id(download_id)
+            via_download = bool(files)
         if not files:
-            for folder in [f for f in [download_folder, media_folder] if f]:
+            for folder in folders_to_try:
                 files = _query_by_folder(folder)
                 if files:
                     break
 
     if not files:
-        if only_paths:
+        if not download_id and not folders_to_try:
+            raise ValueError("Nothing to import from — no download id or folder was given")
+        if only_paths or only_episode_ids is not None:
             raise ValueError(
                 f"{_SERVICE_MAP[service]['name']} does not list the selected file(s) as importable — "
                 "they may have already been imported, or moved")
         raise ValueError(f"No importable files found — check {service} queue manually")
+
+    # Auto survives only where a tracked download stands behind the rows; every
+    # folder branch copies (see the docstring). Decided here because only here
+    # is the branch known.
+    if not via_download:
+        import_mode = 'Copy'
 
     # Use the ManualImport command endpoint with replaceExistingFiles=True.
     # This mirrors what Radarr/Sonarr's "Import Anyway" UI button does and bypasses
@@ -904,26 +1448,62 @@ def force_manual_import_by_id(cfg, service, connection_id, arr_id, download_id=N
         raise
 
 
-def get_arr_file_id(cfg, service, connection_id, arr_id):
-    """Return the current file ID for a Radarr movie or Sonarr series episode files.
+def read_arr_file_id(cfg, service, connection_id, arr_id, episode_ids=None):
+    """The current file id for a Radarr movie, or a Sonarr series' episode file ids.
 
-    Used to detect whether a ManualImport command actually replaced the file,
-    since the command endpoint may report status='failed' even on success.
-    Returns None if unavailable.
+    With `episode_ids` (Sonarr), the reading is scoped to those episodes: a sorted
+    list of `[episode_id, episode_file_id]` pairs, `0` for an episode holding no
+    file, joined from `/api/v3/episode` because `/api/v3/episodefile` carries no
+    episode ids. The import watch confirms a grab by it (S07) — a series' file
+    ids move whenever Sonarr imports *any* episode of it.
+
+    **Raises when the read fails** — an unknown connection, a timeout, an error
+    status. That is the whole difference from `get_arr_file_id` below, and it is
+    load-bearing for `/api/workflows/import_check` (S08): that helper swallowed
+    every exception and answered `None`, so a timed-out read reached the page as
+    `checked: true, file_id: null`, which differs from any baseline holding a
+    file and was taken for a landed import. "Asked, and it holds no file" is a
+    return value here; "could not ask" is an exception.
+
+    Sonarr's answer is a *sorted list*, not a set: every consumer only ever
+    compares two readings with `!=`, and sorting makes that comparison as exact
+    as a set's while staying JSON-serializable. It used to be a `frozenset`,
+    which `/api/workflows/import_check` put straight into `jsonify` — so that
+    endpoint 500'd on every Sonarr item, silently taking any Radarr items in the
+    same request down with it and leaving the rescan follow-through watching
+    nothing.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
     if conn is None:
-        return None
+        raise LookupError(f"Arr connection '{connection_id}' not found for service '{service}'")
+    if service == 'radarr':
+        info = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}', timeout=10)
+        return info.get('movieFileId')
+    if episode_ids is not None:
+        wanted = set(episode_ids)
+        eps = _arr_get(conn['base_url'], conn['api_key'],
+                       f'/api/v3/episode?seriesId={arr_id}', timeout=10)
+        return sorted([ep['id'], ep.get('episodeFileId') or 0]
+                      for ep in eps or [] if ep.get('id') in wanted)
+    # For Sonarr track the episode file IDs as a sorted snapshot
+    eps = _arr_get(conn['base_url'], conn['api_key'],
+                   f'/api/v3/episodefile?seriesId={arr_id}', timeout=10)
+    return sorted({e['id'] for e in eps if e.get('id')})
+
+
+def get_arr_file_id(cfg, service, connection_id, arr_id):
+    """`read_arr_file_id`, or None when it could not be read.
+
+    Used to detect whether a ManualImport command actually replaced the file,
+    since the command endpoint may report status='failed' even on success.
+    `force_import_files` treats a `None` baseline as "could not verify", which
+    is right for it — it compares a reading taken before its own command with
+    one taken after, and says so when either is missing. A caller that has to
+    tell a failed read from an empty one uses `read_arr_file_id`.
+    """
     try:
-        if service == 'radarr':
-            info = _arr_get(conn['base_url'], conn['api_key'], f'/api/v3/movie/{arr_id}', timeout=10)
-            return info.get('movieFileId')
-        else:
-            # For Sonarr track the set of episode file IDs as a frozen snapshot
-            eps = _arr_get(conn['base_url'], conn['api_key'],
-                           f'/api/v3/episodefile?seriesId={arr_id}', timeout=10)
-            return frozenset(e['id'] for e in eps if e.get('id'))
+        return read_arr_file_id(cfg, service, connection_id, arr_id)
     except Exception:
         return None
 
@@ -1032,11 +1612,19 @@ def test_arr_connections(cfg):
             continue
 
         try:
-            media = _fetch_radarr_media(conn) if conn['service'] == 'radarr' else _fetch_sonarr_media(conn)
+            fetch = _fetch_radarr_media if conn['service'] == 'radarr' else _fetch_sonarr_media
+            media, partial = fetch(conn)
             media = _apply_arr_media_path_mapping(media, conn, cfg)
             item['ok'] = True
             item['managed_file_count'] = len(media)
             item['sample_paths'] = [m['path'] for m in media if m.get('path')][:5]
+            if partial:
+                # Still `ok` — the connection works — but a file count that
+                # silently omits a tenth of the library is the same misreport
+                # the index errors channel exists to stop.
+                item['partial'] = True
+                item['message'] = (f"Connected, but {partial['failed']} of {partial['total']} "
+                                   f"series could not be read — the file count below is incomplete")
         except Exception as e:
             item['message'] = f'Connected, but media file metadata could not be read: {e}'
         results.append(item)
@@ -1109,6 +1697,12 @@ def _path_norm(path):
 
 
 def _fetch_radarr_media(conn):
+    """(rows, partial) — Radarr needs one call, so `partial` is always None.
+
+    The tuple exists for symmetry with `_fetch_sonarr_media`, which needs one
+    call per series and therefore has a third outcome between "worked" and
+    "raised": some of the library came back.
+    """
     rows = []
     for movie in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie', timeout=_ARR_LIST_TIMEOUT):
         movie_file = movie.get('movieFile') or {}
@@ -1125,20 +1719,38 @@ def _fetch_radarr_media(conn):
             'year': movie.get('year'),
             'path': path,
             'relative_path': movie_file.get('relativePath'),
+            # MovieFileResource.Size (long). Lets Trumped narrow its inode join
+            # to rows that could be the same file before stat'ing any (TR7):
+            # a hardlink shares its size.
+            'size': movie_file.get('size'),
             'arr_id': movie.get('id'),
             'file_id': movie_file.get('id'),
             'title_slug': movie.get('titleSlug') or '',
             'file_quality_name': q_inner.get('name', ''),
-            'file_hdr': _detect_hdr(path),
+            # Basename, not the full path: a library root or category directory
+            # containing DV, HDR or HLG as a segment ("/data/media/HDR/…")
+            # otherwise labels every file beneath it.
+            'file_hdr': _detect_hdr(os.path.basename(path)),
         })
-    return rows
+    return rows, None
 
 
 def _fetch_sonarr_media(conn):
+    """(rows, partial) — episode-file records for one Sonarr instance.
+
+    `partial` is None when every series was read, else
+    `{'failed': n, 'total': m}`. One unreachable series must not discard the
+    instance (one timeout in a library of hundreds used to read to every caller
+    as "this Sonarr manages nothing"), but the survivors are a flat list, so
+    without this count a 40-of-400 gap is indistinguishable from a library that
+    simply has no files there — and every missing episode then reads as
+    `import_pending` or `not_in_library` in Triage. Partial failure is both
+    likelier than total failure and, until this was returned, completely silent.
+    """
     series_list = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT)
     valid_series = [(s, s['id']) for s in series_list if s.get('id') is not None]
     if not valid_series:
-        return []
+        return [], None
 
     base_url = conn['base_url']
     api_key = conn['api_key']
@@ -1160,12 +1772,24 @@ def _fetch_sonarr_media(conn):
                 'year': series.get('year'),
                 'path': path,
                 'relative_path': episode_file.get('relativePath'),
+                # EpisodeFileResource.Size (long) — see _fetch_radarr_media.
+                'size': episode_file.get('size'),
                 'arr_id': series_id,
                 'file_id': episode_file.get('id'),
                 'episode_ids': episode_file.get('episodeIds') or [],
+                # Sonarr's own season/episode numbers, off the same response.
+                # Regex-parsing them back out of the filename misses daily
+                # series ("Show - 2024-01-05"), anime absolute numbering
+                # ("Show - 087"), "S01.E02" and any non-standard renamer — and
+                # an unparseable episode does not merely lose its season, it
+                # merges with every other unparseable episode of the series
+                # into one candidate keyed `..._SNone`. Zero extra API cost.
+                'season_number': episode_file.get('seasonNumber'),
+                'episode_numbers': episode_file.get('episodeNumbers') or [],
                 'title_slug': series.get('titleSlug') or '',
                 'file_quality_name': q_inner.get('name', ''),
-                'file_hdr': _detect_hdr(path),
+                # Basename, not the full path — see _fetch_radarr_media.
+                'file_hdr': _detect_hdr(os.path.basename(path)),
             })
         return rows
 
@@ -1189,7 +1813,8 @@ def _fetch_sonarr_media(conn):
     if failed:
         log.error("%s: %d of %d series could not be read — their episodes will not "
                   "resolve to library items", conn['id'], len(failed), len(valid_series))
-    return all_rows
+        return all_rows, {'failed': len(failed), 'total': len(valid_series)}
+    return all_rows, None
 
 
 # Release-name quality detection — order matters (remux outranks bluray; the
@@ -1282,7 +1907,12 @@ def parse_release_info(path):
     'hdr', 'quality_label'} — empty strings / None for anything not detected.
     """
     base = os.path.basename(str(path or '').replace('\\', '/').rstrip('/'))
-    stem = os.path.splitext(base)[0]
+    # Not splitext: it takes everything after the final dot, so the dot-separated
+    # release name 'Some.Movie.2020' parsed its own year off as an extension and
+    # `_parse_year_from_name` below then found none. Release names are
+    # dot-separated by convention, and this function is also handed *folder*
+    # names, which have no extension at all to take.
+    stem = _strip_file_ext(base)
     name = re.sub(r'[._]', ' ', stem)
 
     se = re.search(r'[Ss](\d{1,2})[Ee](\d{1,3})', base)
@@ -1335,22 +1965,30 @@ def parse_release_info_for_path(rel_path):
     return parsed
 
 
-_arr_titles_cache = {'data': None, 'ts': 0}
+# One immutable snapshot, `(ts, rows, errors)`, published in one assignment (S11).
+_arr_titles_cache = {'snapshot': None}
 _ARR_TITLES_TTL = 120
 
 
-def fetch_arr_all_titles(cfg, force=False):
-    """Every managed title across all Arr instances, including items without files.
+def _arr_titles_snapshot(cfg, force=False):
+    """`(ts, rows, errors)` — every managed title, as one immutable snapshot (S11).
 
     The media index only contains items that HAVE files — this list is what lets
     Triage distinguish "in the library but never imported" from "not in the
-    library at all". Returns [{service, connection_id, arr_id, title,
-    title_slug, year, has_file}].
+    library at all". Rows are [{service, connection_id, arr_id, title,
+    title_slug, year, has_file, alt_titles}].
+
+    `alt_titles` is the arr's own `alternateTitles` — see `title_alias_keys`.
+    It rides the listing both services already return, so it costs no extra
+    call; it is capped per item because Radarr can carry a translation for
+    every region it knows about.
     """
     now = time.monotonic()
-    if not force and _arr_titles_cache['data'] is not None and (now - _arr_titles_cache['ts']) < _ARR_TITLES_TTL:
-        return _arr_titles_cache['data']
+    snap = _arr_titles_cache.get('snapshot')
+    if not force and snap is not None and (now - snap[0]) < _ARR_TITLES_TTL:
+        return snap
     rows = []
+    errors = []
     for conn in normalize_arr_connections(cfg):
         try:
             if conn['service'] == 'radarr':
@@ -1363,6 +2001,7 @@ def fetch_arr_all_titles(cfg, force=False):
                         'title_slug':    m.get('titleSlug') or '',
                         'year':          m.get('year'),
                         'has_file':      bool(m.get('hasFile')),
+                        'alt_titles':    _alt_titles(m),
                     })
             else:
                 for s in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT):
@@ -1375,12 +2014,46 @@ def fetch_arr_all_titles(cfg, force=False):
                         'title_slug':    s.get('titleSlug') or '',
                         'year':          s.get('year'),
                         'has_file':      (stats.get('episodeFileCount') or 0) > 0,
+                        'alt_titles':    _alt_titles(s),
                     })
         except Exception as e:
             log.warning("Could not fetch %s titles from %s: %s", conn['service'], conn['id'], e)
-    _arr_titles_cache['data'] = rows
-    _arr_titles_cache['ts'] = now
-    return rows
+            errors.append({'connection_id': conn['id'], 'name': conn['name'],
+                           'service': conn['service'], 'partial': False,
+                           'message': str(e)})
+    snap = (now, rows, tuple(errors))
+    _arr_titles_cache['snapshot'] = snap
+    return snap
+
+
+def fetch_arr_all_titles(cfg, force=False):
+    """Every managed title across all Arr instances (cached 120s) — rows only.
+
+    See `_arr_titles_snapshot` for the row shape. A caller that reports this
+    fetch's failures uses `fetch_arr_all_titles_result`.
+    """
+    return _arr_titles_snapshot(cfg, force)[1]
+
+
+def fetch_arr_all_titles_result(cfg, force=False):
+    """`(rows, errors)` for the title list, from one snapshot — see `fetch_arr_media_index_result` (S11)."""
+    snap = _arr_titles_snapshot(cfg, force)
+    return snap[1], list(snap[2])
+
+
+def arr_titles_errors():
+    """Connections whose title list failed, **most recent snapshot**.
+
+    The mirror of `arr_media_index_errors`, and it matters for the same reason:
+    this list is what answers "does any arr know this title at all", so an
+    instance that is merely unreachable would otherwise be indistinguishable
+    from one that has never heard of the release. It reads whichever fetch
+    landed last, so a caller that turns it into a verdict takes the errors from
+    `fetch_arr_all_titles_result` instead. **No request path reads this** —
+    every caller does, since Phase 9. Kept for the in-container probe.
+    """
+    snap = _arr_titles_cache.get('snapshot')
+    return list(snap[2]) if snap else []
 
 
 def _detect_hdr(title):
@@ -1494,6 +2167,172 @@ def title_match_keys(title):
     keys = {_normalize_title(v) for v in variants}
     keys.discard('')
     return keys
+
+
+# Radarr carries a translation for nearly every region it knows about, and this
+# list is held in memory for the whole cache TTL, so it is bounded per item.
+_MAX_ALT_TITLES = 25
+
+
+def _alt_titles(item):
+    """The `alternateTitles` strings on a Sonarr series or Radarr movie."""
+    out, seen = [], set()
+    for a in (item.get('alternateTitles') or ()):
+        t = (a.get('title') or '').strip() if isinstance(a, dict) else str(a or '').strip()
+        low = t.lower()
+        if t and low not in seen:
+            seen.add(low)
+            out.append(t)
+            if len(out) >= _MAX_ALT_TITLES:
+                break
+    return out
+
+
+def title_alias_keys(all_titles):
+    """Map each alternate-title key an arr knows onto that item's canonical keys.
+
+    Sonarr and Radarr both carry `alternateTitles` — the AKA and translated
+    names TheTVDB/TMDB hold for an item — and for non-English content the scene
+    release is named in the **original language** while the arr stores the
+    English title. `No.tengo.miedo.S01E01…` against a series Sonarr calls
+    "I'm Not Afraid" matches on nothing, so Triage returned `not_in_library`
+    ("no arr has ever heard of this — junk can be deleted") for a series Sonarr
+    was actively managing and had already grabbed. That copy invited a delete
+    on the only copy of the data.
+
+    This is authoritative metadata auditorr simply never asked for, not a fuzzy
+    guess: the arr could only have matched the grab in the first place *because*
+    it consults this same field. It rides a listing both services already
+    return, so reading it costs no extra API call.
+
+    Returns {alias_key: {canonical_key, ...}}. Callers append the results
+    **after** their canonical keys (`with_title_aliases`), so an exact title
+    match always wins and an alias can only ever add a candidate that would
+    otherwise have been "nothing". A key that is already canonical for the same
+    item is skipped, so nothing aliases to itself.
+    """
+    alias = {}
+    for t in all_titles or ():
+        canon = title_match_keys(t.get('title') or '')
+        if not canon:
+            continue
+        for a in (t.get('alt_titles') or ()):
+            for k in title_match_keys(a):
+                if k not in canon:
+                    alias.setdefault(k, set()).update(canon)
+    return alias
+
+
+def with_title_aliases(keys, aliases):
+    """Canonical keys first, then any the arrs' alternate titles point to.
+
+    Order is the whole point: every consumer resolves with `next(...)` over
+    these keys, so putting aliases last keeps an exact title match strictly
+    ahead of a translated one.
+    """
+    keys = set(keys)
+    if not aliases:
+        return list(keys)
+    extra = set()
+    for k in keys:
+        extra |= aliases.get(k) or set()
+    return list(keys) + sorted(extra - keys)
+
+
+def arr_year_ok(parsed, row):
+    """Year gate for matching a parsed release name against an arr item.
+
+    Three rules, and each of the three is load-bearing:
+
+    * **A title that *is* a year is not a release year.** "1923", "1883",
+      "1899", "2012" parse their own name as the year, while the arr stores the
+      year the show or film actually came out (1923 → 2022). Skipping the check
+      when the token sits inside the parsed title is what stops the gate
+      disqualifying the one title it was handed.
+    * **Radarr: ±1.** A premiere-vs-wide-release year renders one film either
+      way (Snow White 1937/1938) — the same tolerance `rank_release_matches`
+      already applies.
+    * **Sonarr: one-sided, and deliberately not ±1.** The arr stores a series'
+      *first air* year while a TV release name usually carries the episode's
+      **air date**, so a legitimate match differs by the length of the show's
+      run — ±1 would disqualify every daily series and everything past season
+      two. What is still sound is the one direction: nothing can air more than a
+      year before the series began, which is exactly the same-title-remake case
+      this gate exists for (a release labelled 1990 against a 2019 reboot).
+
+    Unknown on either side passes. A missing year is not evidence of a mismatch.
+    """
+    p_year = parsed.get('year')
+    r_year = row.get('year')
+    if not p_year or not r_year:
+        return True
+    if str(p_year) in str(parsed.get('title') or ''):
+        return True
+    if row.get('service') == 'radarr':
+        return abs(int(r_year) - p_year) <= 1
+    return p_year >= int(r_year) - 1
+
+
+def _arr_candidate_score(row, parsed):
+    """How well one arr row answers a parsed release. Higher is better."""
+    score = 0
+    season = parsed.get('season')
+    if season is not None:
+        row_season = row.get('season_number')
+        row_eps    = row.get('episode_numbers') or []
+        rel = os.path.basename(row.get('relative_path') or row.get('path') or '')
+        if row_season is None:
+            # Title-list rows have no per-file season, and media-index rows
+            # written before Sonarr's own numbers were carried have none either
+            # — fall back to the filename the way the rest of the app does.
+            row_season, row_eps = season_episodes_from_name(rel)
+        elif not row_eps:
+            # A media-index row carries Sonarr's own season but never its
+            # episode numbers — `/api/v3/episodefile` has none (Phase 6) — so
+            # the episode anchor below was inert on every such row. The filename
+            # supplies the episode half only, and only when it agrees with
+            # Sonarr about the season.
+            name_season, name_eps = season_episodes_from_name(rel)
+            if name_season == row_season:
+                row_eps = name_eps
+        if row_season is not None:
+            score += 4 if row_season == season else -4
+            episode = parsed.get('episode')
+            if episode is not None and row_eps:
+                score += 4 if episode in row_eps else -2
+    p_year, r_year = parsed.get('year'), row.get('year')
+    if p_year and r_year:
+        delta = abs(int(r_year) - p_year)
+        score += 3 if delta == 0 else (1 if delta <= 1 else 0)
+    if row.get('has_file'):
+        score += 1
+    return score
+
+
+def rank_arr_candidates(rows, parsed, service=None):
+    """Gate and rank arr rows for a parsed release — best first, `[]` for none.
+
+    The replacement for `rows[0]`, which is what auditorr took everywhere a
+    title lookup returned more than one row. Rows from every connection are
+    pooled under one title key, so `[0]` meant "whichever instance
+    `normalize_arr_connections` emitted first" — an answer with no relationship
+    to the release being matched. Two Sonarrs holding the same series at 1080p
+    and 4K is a legitimate configuration, and the wrong one produces the wrong
+    quality comparison, the wrong pre-selected delete scope, and commands
+    dispatched to an instance that cannot confirm them.
+
+    Gates first: `service` when given (a *gate*, never a sort key — see
+    TRIAGE T1) and `arr_year_ok`. Then ranks on the season/episode anchor, year
+    agreement, and whether the item holds a file. **The sort is stable**, so
+    rows that nothing distinguishes keep their input order and the answer is
+    byte-identical to the old `[0]` on a single-instance install.
+
+    Pure: rows in, rows out, no I/O — which is what makes it testable on an
+    install that has only one instance of each service to offer it.
+    """
+    gated = [r for r in rows
+             if (service is None or r.get('service') == service) and arr_year_ok(parsed, r)]
+    return sorted(gated, key=lambda r: -_arr_candidate_score(r, parsed))
 
 
 def _test_arr_connection(url, api_key):
