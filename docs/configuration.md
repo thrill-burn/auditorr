@@ -142,8 +142,8 @@ therefore produce a re-audit every few minutes, all day.
 **Recommendation:** on large libraries, raise the cooldown into the tens of
 minutes (1800 = 30 min is a reasonable starting point), or turn the watchdog off
 entirely. The scheduled audit already runs every 6 hours by default — four full
-audits a day is plenty for a health dashboard, and **Scan Now** is always there
-when you want fresh numbers immediately.
+audits a day is plenty for a health dashboard, and **▶ Run Audit** at the foot of
+the Config page is always there when you want fresh numbers immediately.
 
 If you keep it on, the cooldown is the dial that matters: it is the minimum
 quiet period before a scan fires, so a larger value both batches more changes

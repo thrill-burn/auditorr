@@ -87,7 +87,8 @@ at boot means the previous scan died.
 
 After **two consecutive** killed scans auditorr stops scanning automatically —
 both the startup audit and the watchdog — so it doesn't sit in a restart loop
-forever. It stays paused until a **manual scan completes successfully**.
+forever. It stays paused until a **manual scan completes successfully** — that's
+**▶ Run Audit**, at the foot of the Config page.
 
 **Fix:**
 
@@ -283,7 +284,12 @@ quadratic on disc-heavy libraries and exhausts memory:
 - Excluded files are skipped entirely.
 - Groups of more than 200 same-size files are skipped — this is what disc rips
   produce.
-- Each file records at most 10 sibling paths.
+- Each file records at most 10 sibling paths. A larger group is still shown
+  whole, because the page joins what every file remembers.
+
+Anything your torrent client hasn't confirmed as **finished** is skipped too, on
+purpose: two half-downloaded files can look identical, and hardlinking them ruins
+both. See [What detection skips](workflows.md#what-detection-skips).
 
 Also note the definition: duplicates are identical files that **don't share an
 inode**. Two paths that are already hardlinks to one file are not duplicates —
@@ -470,6 +476,23 @@ Must include the scheme: `https://sonarr.example.com`, not
 the field, since the only thing worth testing is whether *your* browser reaches
 it. Full detail in
 [External URLs](configuration.md#external-urls-reverse-proxy).
+
+---
+
+## A page says "This page stopped with an error"
+
+That's a bug in auditorr, not in your setup. The page couldn't be drawn, so it
+shows the error and where it happened instead of going blank. The sidebar still
+works, so you can move to another page.
+
+**Try again** redraws the page, and **Reload page** reloads the whole app. The
+page also tries again by itself after the next scan. If the sidebar or a dialog
+failed rather than a page, the message covers the whole window and reads
+*auditorr stopped with an error*.
+
+The error is also written to the server log, so it appears in `docker logs` and
+in the debug report. Please [report it](#reporting-a-problem) with the debug
+report attached.
 
 ---
 
