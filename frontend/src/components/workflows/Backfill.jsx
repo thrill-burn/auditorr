@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from '../../api'
 import { formatBytes } from '../../utils'
-import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
+import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker, SearchInput,
   SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, ArrErrorsWarning,
@@ -191,6 +191,7 @@ function ResultItem({ item }) {
   const [grabErrors,    setGrabErrors]    = useState({})
   const [importStatus,  setImportStatus]  = useState(null)   // null | watching | importing | done | error
   const [importMessage, setImportMessage] = useState(null)
+  const [importProgress, setImportProgress] = useState(null) // 0–1 while downloading, when the arr says
   const importPollRef    = useRef(null)
   const importStartedRef = useRef(false)
   const mountedRef       = useRef(true)
@@ -238,6 +239,7 @@ function ResultItem({ item }) {
           if (!mountedRef.current) return
           setImportStatus(data.status)
           setImportMessage(data.message)
+          setImportProgress(data.progress ?? null)
           if (WATCH_ACTIVE.includes(data.status)) {
             importPollRef.current = setTimeout(poll, 3000)
           }
@@ -465,14 +467,17 @@ function ResultItem({ item }) {
         ))}
 
         {/* Import status (auto-starts after any grab) */}
-        {importStatus && (
-          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {WATCH_ACTIVE.includes(importStatus) && <Spinner size={8} weight={1.5} />}
-            <span style={{ color: watchColor(importStatus) }} title={importMessage}>
-              {IMPORT_LABEL[importStatus] || importStatus}
+        {importStatus && (() => {
+          const pct = watchPercent(importStatus, importProgress)
+          return (
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+              {WATCH_ACTIVE.includes(importStatus) && pct == null && <Spinner size={8} weight={1.5} />}
+              <span style={{ color: watchColor(importStatus) }} title={importMessage}>
+                {pct != null ? `Downloading ${pct}%` : (IMPORT_LABEL[importStatus] || importStatus)}
+              </span>
             </span>
-          </span>
-        )}
+          )
+        })()}
 
         {/* Single-release grab button */}
         {found && !multi && item.best_release && (

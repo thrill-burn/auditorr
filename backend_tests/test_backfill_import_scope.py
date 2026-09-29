@@ -32,7 +32,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import app
-from arr import force_manual_import_by_id
+from arr import force_manual_import_by_id, queue_progress
 
 
 def _cfg():
@@ -500,3 +500,92 @@ def test_a_trump_watch_that_sees_its_import_starts_the_re_audit():
     assert out.watch['status'] == 'done'
     out.scan.assert_called_once_with('trump')
     out.nudge.assert_not_called()
+
+
+# ── how far the download has got ─────────────────────────────────────────────
+#
+# The panel showed a spinner for the whole download. The arr's queue carries
+# each download's `size` and `sizeleft`, so the watch reports a fraction — and
+# nothing, rather than a guess, when the arr did not say.
+
+def test_progress_is_the_share_of_the_download_that_has_arrived():
+    assert queue_progress([_movie(size=1000, sizeleft=250)]) == 0.75
+
+
+def test_a_pack_listed_once_per_episode_is_counted_once():
+    """Sonarr v4 gives a season pack one queue record per episode, each carrying
+    the whole download's numbers. Counted per record, a finished pack beside an
+    episode that has not started reads 90%."""
+    pack = [_episode(episodeId=100 + n, download='PACK', size=3000, sizeleft=0) for n in range(3)]
+    single = _episode(episodeId=200, download='SINGLE', size=1000, sizeleft=1000)
+
+    assert queue_progress(pack + [single]) == 0.75
+
+
+def test_progress_reads_the_spelling_the_arrs_are_moving_to():
+    assert queue_progress([_movie(size=1000, sizeLeft=0)]) == 1.0
+
+
+@pytest.mark.parametrize('numbers', [
+    {},                                       # neither
+    {'size': 1000},                           # no size left
+    {'size': 0, 'sizeleft': 0},               # nothing to divide by
+    {'size': 1000, 'sizeleft': None},
+    {'size': True, 'sizeleft': 0},
+    {'size': '1000', 'sizeleft': '0'},
+])
+def test_progress_the_arr_did_not_give_is_unknown_not_zero(numbers):
+    assert queue_progress([_movie(**numbers)]) is None
+
+
+def test_one_record_without_numbers_makes_the_whole_answer_unknown():
+    """A fraction over part of the grab would read as all of it."""
+    assert queue_progress([_movie(size=1000, sizeleft=0), _movie(download='BBBB')]) is None
+
+
+class _ProgressArr(_Arr):
+    """Notes the watch's progress as each queue read begins — what the panel
+    would have shown just before it."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.seen = []
+
+    def get(self, _base, _key, path, timeout=10):
+        if path.startswith('/api/v3/queue'):
+            self.seen.append(list(app._import_watches.values())[-1]['progress'])
+        return super().get(_base, _key, path, timeout)
+
+
+def _watch_progress(queue, imports_at):
+    the_arr = _ProgressArr(queue, imports_at=imports_at)
+    clock = _Clock()
+    with patch.object(app, 'AUDITORR_SECRET', ''), \
+         patch.object(app, 'AUDITORR_REQUIRE_AUTH', False), \
+         patch.object(app, 'db_load_config', return_value=_cfg()), \
+         patch.object(app, 'db_update_meta'), \
+         patch.object(app.threading, 'Thread', _Sync), \
+         patch('arr._arr_get', side_effect=the_arr.get), \
+         patch('time.monotonic', clock.monotonic), \
+         patch('time.sleep', clock.sleep), \
+         patch.object(app, 'nudge_watchdog'), \
+         patch.object(app, 'try_start_scanning', return_value=True):
+        res = app.app.test_client().post('/api/workflows/watch_import', json=_RADARR,
+                                         environ_base={'REMOTE_ADDR': '127.0.0.1'})
+    return the_arr.seen, app._import_watches[res.get_json()['job_id']]
+
+
+def test_the_watch_reports_progress_while_downloading_and_drops_it_when_done():
+    seen, watch = _watch_progress([[_movie(size=1000, sizeleft=1000)],
+                                   [_movie(size=1000, sizeleft=400)]], imports_at=2)
+
+    assert seen[:3] == [None, 0.0, 0.6]
+    assert watch['status'] == 'done'
+    assert watch['progress'] is None
+
+
+def test_a_download_the_arr_gives_no_size_for_keeps_no_progress():
+    seen, watch = _watch_progress([[_movie()], [_movie()]], imports_at=2)
+
+    assert set(seen) == {None}
+    assert watch['status'] == 'done'

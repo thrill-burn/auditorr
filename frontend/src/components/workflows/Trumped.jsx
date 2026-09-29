@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { api } from '../../api'
 import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
-import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
+import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   WorkflowPage, WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
   Checkbox, Spinner, SpinKeyframes, Button, Disclosure, QualityChip, MatchChips, MONO_TITLE, tint,
@@ -593,7 +593,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
       try {
         const data = await api.watchImportStatus(jobId)
         if (!mountedRef.current) return
-        setWatch({ status: data.status, message: data.message })
+        setWatch({ status: data.status, message: data.message, progress: data.progress ?? null })
         if (WATCH_ACTIVE.includes(data.status)) watchPollRef.current = setTimeout(poll, 3000)
       } catch (_) {}
     }
@@ -942,12 +942,15 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               {result.grabbed === true && !result.removed && !result.removal_error && (
                 <div style={{ color: 'var(--text-dim)' }}>The trumped torrents are still in {clientName} — remove them there.</div>
               )}
-              {watch && (
-                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, color: watchColor(watch.status) }}>
-                  {WATCH_ACTIVE.includes(watch.status) && <Spinner size={10} />}
-                  <span>Import: {watch.message}</span>
-                </div>
-              )}
+              {watch && (() => {
+                const pct = watchPercent(watch.status, watch.progress)
+                return (
+                  <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, color: watchColor(watch.status) }}>
+                    {WATCH_ACTIVE.includes(watch.status) && pct == null && <Spinner size={10} />}
+                    <span>Import: {watch.message}{pct != null && ` · ${pct}%`}</span>
+                  </div>
+                )
+              })()}
               <div style={{ color: 'var(--text-dim)', marginTop: 4 }}>
                 {result.watch_job_id
                   ? 'auditorr follows the download into Sonarr/Radarr — it is in the import panel, bottom right — and re-audits once the import lands.'

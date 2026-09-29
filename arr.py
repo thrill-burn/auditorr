@@ -1304,6 +1304,36 @@ def _queue_messages(records):
     return list(dict.fromkeys(msgs))[:5]
 
 
+def _queue_bytes(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def queue_progress(records):
+    """How much of this grab has downloaded, 0.0–1.0, or None when the arr did not say.
+
+    Each queue record carries its download's `size` and `sizeleft` in bytes —
+    checked against both arrs' `QueueResource`, which spell it `Sizeleft` and mark
+    it to become `SizeLeft`, so both spellings are read. Sonarr v4 lists a season
+    pack as one record per episode, each carrying the whole download's numbers, so
+    a download is counted once, by its `downloadId`. A record missing either
+    number makes the whole answer None: a percentage over part of the grab would
+    read as all of it.
+    """
+    downloads = {}
+    for i, r in enumerate(records):
+        size = _queue_bytes(r.get('size'))
+        left = _queue_bytes(r['sizeleft'] if 'sizeleft' in r else r.get('sizeLeft'))
+        if size is None or left is None or size <= 0 or left < 0:
+            return None
+        downloads[str(r.get('downloadId') or '').upper() or i] = (size, min(left, size))
+    if not downloads:
+        return None
+    total = sum(size for size, _ in downloads.values())
+    return 1 - sum(left for _, left in downloads.values()) / total
+
+
 def correlate_queue_records(records, download_id=None, episode_ids=None):
     """The queue records that are *this* grab (S07).
 
@@ -1360,7 +1390,7 @@ def queue_records_for_item(cfg, service, connection_id, arr_id, episode_ids=None
 
 
 def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_downloading=None,
-                           download_id=None, episode_ids=None, seen=False):
+                           download_id=None, episode_ids=None, seen=False, on_progress=None):
     """Follow one grab through the arr's queue. Returns `{'outcome', 'records', 'messages'}`.
 
     S07 (the 2026-09-10 outside review): this returned a list, and `[]` meant
@@ -1384,7 +1414,8 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
     The queue is read in full (`_read_queue`) and narrowed to this grab by
     `correlate_queue_records`. `seen` carries "already observed" into a later
     wait, so a download finishing during it is `cleared` rather than
-    `unobserved`. A read that failed is never absence.
+    `unobserved`. A read that failed is never absence. `on_progress` is handed
+    `queue_progress` of the live records on every read that found any.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn  = next((c for c in conns if c['id'] == connection_id), None)
@@ -1416,6 +1447,8 @@ def poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=300, on_
             if not notified and on_downloading:
                 on_downloading()
                 notified = True
+            if on_progress:
+                on_progress(queue_progress(active))
             if all(str(r.get('trackedDownloadState') or '').lower() in _IMPORT_WAITING_STATES
                    for r in active):
                 waiting_ticks += 1

@@ -178,7 +178,8 @@ the download is, or auditorr can't tell which episodes the row covered, it stops
 and asks you to finish the import in Sonarr/Radarr rather than guessing.
 
 auditorr follows the download in the **Import Jobs** panel at the bottom right,
-and says **Imported** only when the arr's file for that movie — or for those
+with how far it has got (from the arr's queue — a spinner when the arr doesn't
+report a size), and says **Imported** only when the arr's file for that movie — or for those
 episodes — actually changed. Everything else gets its own answer rather than a
 green tick: *Download failed* (the arr says so, with its reason), *Never queued*,
 *No new file* (it left the queue without one — removed or blocklisted in the

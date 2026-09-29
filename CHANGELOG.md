@@ -12,6 +12,11 @@
 - **Trumped's torrent picker starts with the tracker that sent the PM, and lists every match** — it showed the eight closest names, with the PM's tracker only breaking ties. Now every torrent that shares the title is listed, the PM's tracker's first, with the same filter box as the release list.
 - **Trumped reads anime-style release names more cleanly** — a checksum tag like `[079DB0B4]` and a track count like `FLACx2` no longer count as words of the title, so Radarr's `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv` is a full title match for the PM's name.
 
+### Improvements
+
+- **Import Jobs shows how far a download has got** — a percentage and a bar, read from Sonarr/Radarr's queue, where it used to show a spinner until the download finished. Backfill's row and Trumped's last step show the same number. When the arr doesn't report a size, the spinner stays rather than a made-up 0%.
+- **The Import Jobs panel's active count and service tags are plain coloured text**, like the rest of the app's status labels, instead of outlined badges.
+
 ## v1.8.0 — 2026-09-27
 
 **The largest release auditorr has had, and almost all of it is one idea.**

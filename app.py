@@ -5244,7 +5244,7 @@ def workflows_generate_stop():
     return jsonify({'status': 'ok'})
 
 
-_import_watches = {}  # job_id -> {status, message, title, service, completed_at}
+_import_watches = {}  # job_id -> {status, message, title, service, source, progress, completed_at}
 
 
 def _record_backfill_credit(files):
@@ -5453,6 +5453,10 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
         'title':        title,
         'service':      service,
         'source':       source,
+        # 0.0–1.0 while downloading, from the arr's queue (`queue_progress`);
+        # None whenever it is not known. Present from the start so the dict never
+        # changes size under a request thread reading it.
+        'progress':     None,
         'completed_at': None,
     }
     _import_watches[job_id] = watch
@@ -5461,6 +5465,7 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
         def finish(status, message):
             watch['status']       = status
             watch['message']      = message
+            watch['progress']     = None
             watch['completed_at'] = time.time()
             if source != 'trump':
                 return
@@ -5486,18 +5491,22 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — verifying in qBittorrent'
 
+            def on_progress(fraction):
+                watch['progress'] = fraction
+
             # The target's file before the wait: what success is measured against.
             # A baseline that could not be read means this watch can never say done.
             baseline = _read_target_files(cfg, service, connection_id, arr_id, scope)
 
             res = poll_queue_until_clear(cfg, service, connection_id, arr_id,
-                                         on_downloading=on_downloading, **correlate)
+                                         on_downloading=on_downloading, on_progress=on_progress,
+                                         **correlate)
             if res['outcome'] == 'downloading':
                 # The 300 s poll ran out mid-download: wait longer, never force.
                 watch['status']  = 'downloading'
                 watch['message'] = 'Downloading — waiting for completion'
                 res = poll_queue_until_clear(cfg, service, connection_id, arr_id, timeout=7200,
-                                             seen=True, **correlate)
+                                             seen=True, on_progress=on_progress, **correlate)
 
             outcome = res['outcome']
             if outcome == 'no_connection':
@@ -5559,8 +5568,9 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
                                        "nothing was force-imported over your library — finish it "
                                        "from Activity → Queue in Sonarr")
 
-            watch['status']  = 'importing'
-            watch['message'] = 'Importing — triggering manual import'
+            watch['status']   = 'importing'
+            watch['message']  = 'Importing — triggering manual import'
+            watch['progress'] = None
 
             # Fire the command up to 3 times. The command's own status is not
             # trustworthy (Radarr reports `failed` on replacements that succeeded);

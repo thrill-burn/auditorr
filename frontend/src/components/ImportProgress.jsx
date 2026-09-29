@@ -1,5 +1,5 @@
 import React from 'react'
-import { tint, CloseButton } from './workflows/shared'
+import { CloseButton } from './workflows/shared'
 
 // An import watch has more ways to end than done and error (Phase 12, S07).
 // `done` is the only success, and the server reaches it only when the arr's file
@@ -15,6 +15,16 @@ export function watchColor(status) {
   if (WATCH_FAILED.includes(status)) return 'var(--red)'
   return WATCH_ACTIVE.includes(status) ? 'var(--accent)' : 'var(--text-dim)'
 }
+
+// How far a download has got, as a whole percent, from the arr's queue (the
+// watch's `progress`). Null when it is not downloading or the arr did not say,
+// which keeps the spinner: an unknown is never drawn as 0%.
+export function watchPercent(status, progress) {
+  if (status !== 'downloading' || typeof progress !== 'number' || !Number.isFinite(progress)) return null
+  return Math.max(0, Math.min(100, Math.floor(progress * 100)))
+}
+
+const SERVICE_COLOR = { radarr: 'var(--yellow)', sonarr: 'var(--blue)' }
 
 const STAGE_CONFIG = {
   queued:      { label: 'Queued',            color: 'var(--text-dim)', icon: 'pulse'   },
@@ -79,11 +89,9 @@ export default function ImportProgress({ open, jobs, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* Backfill and Trumped grabs share one watch and one panel. */}
           <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Import Jobs</span>
+          {/* A count is coloured text, not an outlined pill: nothing here can be clicked. */}
           {activeCount > 0 && (
-            <span style={{
-              fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '1px 6px', borderRadius: 99,
-              background: tint('var(--accent)', 9), color: 'var(--accent)', border: `1px solid ${tint('var(--accent)', 19)}`,
-            }}>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--accent)' }}>
               {activeCount} active
             </span>
           )}
@@ -102,18 +110,16 @@ export default function ImportProgress({ open, jobs, onClose }) {
           const cfg = STAGE_CONFIG[job.status] || STAGE_CONFIG.queued
           // Every ending but an observed import says what happened, in the arr's words or ours.
           const ended = !WATCH_ACTIVE.includes(job.status) && job.status !== 'done' && job.message
+          const pct = watchPercent(job.status, job.progress)
           return (
             <div key={job.job_id} style={{
               display: 'flex', alignItems: 'flex-start', gap: 10,
               padding: '9px 14px', borderBottom: '1px solid var(--border)',
             }}>
-              {/* Service badge */}
+              {/* The service, as coloured text (a row's status is never a box) */}
               <span style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 5px', borderRadius: 3,
-                flexShrink: 0, marginTop: 1,
-                background: tint(job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)', 9),
-                color:      job.service === 'radarr' ? 'var(--yellow)'   : 'var(--blue)',
-                border:     `1px solid ${tint(job.service === 'radarr' ? 'var(--yellow)' : 'var(--blue)', 21)}`,
+                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, marginTop: 2,
+                color: SERVICE_COLOR[job.service] || 'var(--text-dim)',
               }}>
                 {job.service || '—'}
               </span>
@@ -127,14 +133,21 @@ export default function ImportProgress({ open, jobs, onClose }) {
                   {job.title || 'Unknown'}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3 }}>
-                  <StageIcon type={cfg.icon} color={cfg.color} />
+                  {/* A known percentage replaces the spinner; an unknown keeps it. */}
+                  {pct == null && <StageIcon type={cfg.icon} color={cfg.color} />}
                   <span style={{
                     fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cfg.color,
                   }} title={ended ? job.message : undefined}>
                     {cfg.label}
+                    {pct != null && ` ${pct}%`}
                     {ended && ' — ' + job.message.slice(0, 40)}
                   </span>
                 </div>
+                {pct != null && (
+                  <div style={{ height: 3, marginTop: 5, background: 'var(--border2)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
+                    <div style={{ width: pct + '%', height: '100%', background: 'var(--accent)', borderRadius: 'var(--r-pill)', transition: 'width 0.4s ease' }} />
+                  </div>
+                )}
               </div>
             </div>
           )
