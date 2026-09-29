@@ -16,6 +16,7 @@
 
 - **Import Jobs shows how far a download has got** — a percentage and a bar, read from Sonarr/Radarr's queue, where it used to show a spinner until the download finished. Backfill's row and Trumped's last step show the same number. When the arr doesn't report a size, the spinner stays rather than a made-up 0%.
 - **The Import Jobs panel's active count and service tags are plain coloured text**, like the rest of the app's status labels, instead of outlined badges.
+- **Cleanup fits more on screen** — each pile is one list, as in File Explorer, where every release folder used to be a card of its own. A folder holding one file is one line instead of a card with a header and a row. A file's state is a coloured dot, and is spelled out only where it differs from its pile's heading, so "only copy" is no longer printed on every row under "This is the only copy". On the test box the same list went from 8 files above the fold to 12.
 
 ## v1.8.0 — 2026-09-27
 

@@ -252,9 +252,12 @@ still hold this data?**
   last scan. Those files might belong to a live torrent, so they're shown but
   can't be selected until a scan reads every torrent's file list.
 
-Every file carries its state — **library copy**, **linked elsewhere** (a
-hardlink outside your torrent and media folders, such as a snapshot), **only
-copy** or **could not check** — and its age. Within each pile the oldest comes
+Every file carries its state as a coloured dot — **library copy**, **linked
+elsewhere** (a hardlink outside your torrent and media folders, such as a
+snapshot), **only copy** or **could not check** — and its age. The state is
+spelled out only where a file differs from its pile's heading: a release lands
+in the pile of its most alarming file, so a folder under *This is the only copy*
+can still hold a library copy, and that file says so. Within each pile the oldest comes
 first: a file that has sat there for years is likelier junk than one from this
 week. A file hardlinked at two places in your torrent folder — a cross-seed
 whose torrents are both gone — is one row listing both paths, because its space
@@ -262,7 +265,8 @@ is freed only when both are deleted. **Frees up to** is a maximum; the
 script reports what it actually frees.
 
 Files are grouped by release folder so you review whole releases rather than
-individual files, and nothing is ever selected for you.
+individual files, and nothing is ever selected for you. A release folder
+holding a single file is one line naming the folder and the file.
 
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
 

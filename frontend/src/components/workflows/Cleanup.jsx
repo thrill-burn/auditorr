@@ -50,17 +50,24 @@ const STATE = {
 // user's pick from `.internal/preview/density.html`). They were two or three,
 // restating the tiles and heading above them; the unverified pile's repeated
 // the warning box word for word, which already says why — this says when.
+//
+// `state` is the one its heading names. A row in that state shows only its dot;
+// a row in any other state prints its label too — a library copy in a folder
+// the only-copy pile holds for its most alarming file, or a file linked
+// elsewhere under "Your library keeps a copy". It printed "only copy" on every
+// row of the only-copy pile (the user's pick, 2026-09-28, from
+// `.internal/preview/cleanupdensity.html`).
 const PILES = [
   {
-    id: 'keeps_copy', title: 'Your library keeps a copy', color: 'var(--green)',
+    id: 'keeps_copy', state: 'library_copy', title: 'Your library keeps a copy', color: 'var(--green)',
     blurb: 'Another link holds the same data, so deleting these frees nothing and loses nothing.',
   },
   {
-    id: 'only_copy', title: 'This is the only copy', color: 'var(--red)',
+    id: 'only_copy', state: 'last_copy', title: 'This is the only copy', color: 'var(--red)',
     blurb: 'Deleting these is permanent. Oldest first.',
   },
   {
-    id: 'unverified', title: 'Could not check', color: 'var(--yellow)',
+    id: 'unverified', state: 'unverified', title: 'Could not check', color: 'var(--yellow)',
     blurb: 'Selectable after a scan that reads every torrent’s file list.',
   },
 ]
@@ -103,38 +110,54 @@ function ageLabel(mtime) {
 
 const selectable = row => row.state !== 'unverified'
 const plural = (n, word) => `${n} ${word}${n !== 1 ? 's' : ''}`
+const shownIn = (folder, p) => (folder !== '(root)' && p.startsWith(folder + '/') ? p.slice(folder.length + 1) : p)
 
-function StateMark({ state }) {
+const READOUT = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, whiteSpace: 'nowrap' }
+
+// A state's dot alone, for a row in the state its pile's heading names. The
+// hover text names the state, which the row no longer prints.
+function StateDot({ state }) {
   const s = STATE[state] || STATE.last_copy
   return (
-    <span title={s.title} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: s.color, flexShrink: 0, minWidth: 124, lineHeight: '16px' }}>
-      <Dot color={s.color} />{s.label}
+    <span title={`${s.label[0].toUpperCase()}${s.label.slice(1)}. ${s.title}`}
+      style={{ display: 'inline-flex', alignItems: 'center', height: 16, flexShrink: 0 }}>
+      <Dot color={s.color} />
     </span>
   )
 }
 
+function StateLabel({ state, dot = false }) {
+  const s = STATE[state] || STATE.last_copy
+  return (
+    <span title={s.title} style={{ ...READOUT, display: 'inline-flex', alignItems: 'center', gap: 6, color: s.color, lineHeight: '16px' }}>
+      {dot && <Dot color={s.color} />}{s.label}
+    </span>
+  )
+}
+
+function Unselectable() {
+  return <span title={STATE.unverified.title} style={{ width: 15, height: 15, borderRadius: 'var(--r-sm)', border: '1.5px dashed var(--border2)', flexShrink: 0, cursor: 'not-allowed' }} />
+}
+
 // A row is an inode (C5). A cross-seeded orphan lists every torrent-folder path
 // it has, together — its bytes go only when all of them go.
-function FileRow({ row, folder, checked, onToggle }) {
+function FileRow({ row, folder, pileState, checked, onToggle }) {
   const canSelect = selectable(row)
-  const shown = p => (folder !== '(root)' && p.startsWith(folder + '/') ? p.slice(folder.length + 1) : p)
   return (
     <div
       onClick={canSelect ? () => onToggle(row.path) : undefined}
       style={{
-        display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 14px 7px 36px',
+        display: 'flex', alignItems: 'flex-start', gap: 10, padding: '6px 14px 6px 36px',
         borderTop: '1px solid var(--border)', cursor: canSelect ? 'pointer' : 'default',
         background: checked ? tint('var(--accent)', 2) : 'transparent',
       }}
     >
-      {canSelect
-        ? <Checkbox checked={checked} onChange={() => onToggle(row.path)} />
-        : <span title={STATE.unverified.title} style={{ width: 15, height: 15, borderRadius: 'var(--r-sm)', border: '1.5px dashed var(--border2)', flexShrink: 0, cursor: 'not-allowed' }} />}
-      <StateMark state={row.state} />
+      {canSelect ? <Checkbox checked={checked} onChange={() => onToggle(row.path)} /> : <Unselectable />}
+      <StateDot state={row.state} />
       <div style={{ flex: 1, minWidth: 0 }}>
         {row.paths.map(p => (
           <div key={p} title={p} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '16px' }}>
-            {shown(p)}
+            {shownIn(folder, p)}
           </div>
         ))}
         {row.paths.length > 1 && (
@@ -143,15 +166,24 @@ function FileRow({ row, folder, checked, onToggle }) {
           </div>
         )}
       </div>
-      <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, lineHeight: '16px' }}>{ageLabel(row.mtime)}</span>
-      <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 60, textAlign: 'right', lineHeight: '16px' }}>
+      {/* Beside the readouts rather than before the path, so paths stay in
+          one column whichever rows print a label. */}
+      {row.state !== pileState && <StateLabel state={row.state} />}
+      <span style={{ ...READOUT, lineHeight: '16px' }}>{ageLabel(row.mtime)}</span>
+      <span style={{ ...READOUT, minWidth: 60, textAlign: 'right', lineHeight: '16px' }}>
         {formatBytes(row.size)}
       </span>
     </div>
   )
 }
 
-function FolderGroup({ group, selected, onToggleFile, onToggleKeys }) {
+// A folder is a row of its pile's card, 36px like File Explorer's folder rows
+// (2026-09-28, the user's pick from `.internal/preview/cleanupdensity.html`).
+// Each folder was a card of its own, 10px from the next: a one-file folder took
+// 82px and said its age and size twice, and Cleanup showed 8 file lines above
+// the fold where Dedupe showed 19. A folder holding one file at one path is one
+// line — the folder and the file, with the file's own readouts.
+function FolderGroup({ group, first, pileState, selected, onToggleFile, onToggleKeys }) {
   const [open, setOpen] = useState(group.files.length <= 6)
   const keys = group.files.filter(selectable).map(f => f.path)
   const allChecked  = keys.length > 0 && keys.every(k => selected.has(k))
@@ -162,12 +194,49 @@ function FolderGroup({ group, selected, onToggleFile, onToggleKeys }) {
   const tallies = Object.keys(STATE)
     .map(s => [s, group.files.filter(f => f.state === s).length])
     .filter(([, n]) => n > 0)
+  const rule = first ? 'none' : '1px solid var(--border)'
+  // Why no folder rule is offered here. Saying so is what stops the header
+  // checkbox reading as "this whole folder".
+  const reasonChip = reason && <span title={reason.title} style={READOUT}>{reason.chip}</span>
+
+  const single = group.files.length === 1 && group.files[0].paths.length === 1
+  if (single) {
+    const row = group.files[0]
+    const canSelect = selectable(row)
+    const checked = selected.has(row.path)
+    return (
+      <div
+        onClick={canSelect ? () => onToggleFile(row.path) : undefined}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', flexWrap: 'wrap',
+          borderTop: rule, cursor: canSelect ? 'pointer' : 'default',
+          background: checked ? tint('var(--accent)', 2) : 'var(--surface)',
+        }}
+      >
+        {canSelect ? <Checkbox checked={checked} onChange={() => onToggleFile(row.path)} /> : <Unselectable />}
+        {/* The chevron's slot, so every folder name in the card starts in one column. */}
+        <span style={{ width: 11, flexShrink: 0 }} />
+        <span title={row.paths[0]} style={{ ...MONO_TITLE, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {group.folder !== '(root)' && group.folder}
+          <span style={{ fontSize: 'var(--font-sm)', fontWeight: 400 }}>
+            {group.folder !== '(root)' && <span style={{ color: 'var(--text-dim)' }}>/</span>}
+            {shownIn(group.folder, row.paths[0])}
+          </span>
+        </span>
+        {reasonChip}
+        <span style={{ flex: 1 }} />
+        {row.state === pileState ? <StateDot state={row.state} /> : <StateLabel state={row.state} dot />}
+        <span style={READOUT}>{ageLabel(row.mtime)}</span>
+        <span style={{ ...READOUT, minWidth: 64, textAlign: 'right' }}>{formatBytes(row.size)}</span>
+      </div>
+    )
+  }
 
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+    <>
       <div
         onClick={() => setOpen(o => !o)}
-        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer', background: 'var(--surface2)', flexWrap: 'wrap' }}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'pointer', background: 'var(--surface2)', flexWrap: 'wrap', borderTop: rule }}
       >
         {keys.length > 0
           ? <Checkbox checked={allChecked} indeterminate={someChecked} onChange={() => onToggleKeys(keys)} />
@@ -180,35 +249,25 @@ function FolderGroup({ group, selected, onToggleFile, onToggleKeys }) {
         <span title={group.folder} style={{ ...MONO_TITLE, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {group.folder}
         </span>
-        {/* Why no folder rule is offered here. Saying so is what stops the
-            header checkbox reading as "this whole folder". */}
-        {reason && (
-          <span title={reason.title} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-            {reason.chip}
-          </span>
-        )}
+        {reasonChip}
         <span style={{ flex: 1 }} />
         {tallies.length > 1 && tallies.map(([s, n]) => (
-          <span key={s} title={STATE[s].title} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: STATE[s].color, flexShrink: 0 }}>
+          <span key={s} title={STATE[s].title} style={{ ...READOUT, display: 'inline-flex', alignItems: 'center', gap: 5, color: STATE[s].color }}>
             <Dot color={STATE[s].color} />{n} {STATE[s].label}
           </span>
         ))}
-        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
+        <span style={READOUT}>
           {group.oldest_mtime != null ? `oldest ${ageLabel(group.oldest_mtime)}` : 'age unavailable'}
         </span>
-        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>
-          {plural(group.files.length, 'file')}
-        </span>
-        <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 64, textAlign: 'right' }}>
-          {formatBytes(group.total_size)}
-        </span>
+        <span style={READOUT}>{plural(group.files.length, 'file')}</span>
+        <span style={{ ...READOUT, minWidth: 64, textAlign: 'right' }}>{formatBytes(group.total_size)}</span>
       </div>
 
       {open && group.files.map(row => (
-        <FileRow key={row.path} row={row} folder={group.folder}
+        <FileRow key={row.path} row={row} folder={group.folder} pileState={pileState}
           checked={selected.has(row.path)} onToggle={onToggleFile} />
       ))}
-    </div>
+    </>
   )
 }
 
@@ -228,10 +287,12 @@ function Pile({ pile, groups, selected, onToggleFile, onToggleKeys }) {
         meta={`${plural(rows.length, 'file')} · ${formatBytes(size)}`}
         desc={pile.blurb}
       />
-      {groups.map(g => (
-        <FolderGroup key={g.folder} group={g} selected={selected}
-          onToggleFile={onToggleFile} onToggleKeys={onToggleKeys} />
-      ))}
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+        {groups.map((g, i) => (
+          <FolderGroup key={g.folder} group={g} first={i === 0} pileState={pile.state} selected={selected}
+            onToggleFile={onToggleFile} onToggleKeys={onToggleKeys} />
+        ))}
+      </div>
     </section>
   )
 }
