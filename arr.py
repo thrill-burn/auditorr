@@ -588,8 +588,19 @@ def _release_group_tag(name):
     The inverse was quieter and worse: two groupless names both reduced to 'dl',
     which `score_release_match` then scored as a group *agreement* they never
     had.
+
+    **A leading `[Group]` is read first** — the anime convention, and how an
+    indexer often lists a release the PM names scene-style: the PM's
+    `…x264-Kametsu` arrives in Radarr as `[Kametsu] Only Yesterday (BD 1080p…)`.
+    Read only from the tail, `kametsu` stayed in the title core as a title word,
+    and a trailing `[Dual-Audio]` parsed as group `audio`.
     """
     s = _strip_file_ext(name)
+    lead = re.match(r'\s*\[([^\]]{1,20})\]', s)
+    if lead:
+        tag = re.sub(r'[^a-z0-9]', '', lead.group(1).lower())
+        if tag and not tag.isdigit() and tag not in _QUALITY_NOISE:
+            return tag
     if '-' not in s:
         return ''
     tag = s.rsplit('-', 1)[-1].strip()
@@ -667,9 +678,16 @@ def match_trumped_torrent(rows, title):
 
 
 def _norm_release_name(name):
-    """Normalize a release name for exact comparison: dots/underscores to
-    spaces, collapse whitespace, lowercase."""
-    return re.sub(r'\s+', ' ', re.sub(r'[._]', ' ', str(name or '').lower())).strip()
+    """Normalize a release name for exact comparison: a real file extension
+    dropped, dots/underscores to spaces, collapse whitespace, lowercase.
+
+    The extension, because an indexer lists a single-file release under its
+    file name: Radarr offered `Mulan.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv`
+    for a PM naming `… x265-NCmt`, every field agreed, and it was still "no
+    exact match" — so the one release the PM named was never pre-selected.
+    """
+    s = _strip_file_ext(str(name or '').strip().rstrip('.'))
+    return re.sub(r'\s+', ' ', re.sub(r'[._]', ' ', s.lower())).strip()
 
 
 def match_trump_release(releases, new_title, indexer=''):
@@ -746,6 +764,7 @@ _QUALITY_NOISE = {
     'repack', 'proper', 'internal', 'extended', 'remastered', 'remaster',
     'imax', 'real', 'uncut', 'directors', 'cut',
     'mkv', 'mp4', 'avi', 'ts', 'm2ts', 'iso',
+    'audio', 'dualaudio', 'bdremux',
 }
 
 # Articles carry no discriminating power and cause spurious title overlap ("The
@@ -760,9 +779,17 @@ _CORE_DROP_RE = re.compile(
     r'|s\d{1,2}(?:e\d{1,4})?'                              # season/episode anchor
     r'|\d{1,2}'                                            # stray channel/disc digits
     r'|(?:x|h)?26[45]'                                     # codec
-    r'|(?:dd\+?|ddp|dts|e?ac3|aac|flac|opus|truehd|atmos)\d*'  # audio
+    r'|hi10p?|hi444p{0,2}|\d{1,2}bit|av1|vp9|xvid|divx'    # codec, bit depth
+    r'|(?:dd\+?|ddp|dts|e?ac3|aac|flac|opus|truehd|atmos)\d*(?:x\d)?'  # audio, FLACx2
     r')$'
 )
+
+# "Dual-Audio" / "Multi Audio" as a phrase — not 'dual' on its own, which is a
+# title ("Dual", 2022).
+_AUDIO_PHRASE_RE = re.compile(r'\b(?:dual|multi)[\s\-]*audio\b')
+_AKA_RE = re.compile(r'\baka\b')
+# A bracketed CRC32 — `[079DB0B4]`, the anime convention's file checksum.
+_CRC_TAG_RE = re.compile(r'\[[0-9a-f]{8}\]')
 
 
 def _title_core_tokens(norm, group=''):
@@ -777,16 +804,44 @@ def _title_core_tokens(norm, group=''):
     gate — that was the "Weapons 2025 offered for The Drama 2026" bug, where
     both names contributed 'hdr10+' and nothing else overlapped. \\W (not
     [^a-z0-9]) so accented title words survive intact.
+
+    The noise has to be complete for the *query's* sake as much as the
+    candidate's: every junk word left in the PM's core is a word no candidate
+    can share, and the gate is a ratio. `Only Yesterday AKA Omoide Poro Poro
+    1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu` kept `aka`,
+    `dual`, `audio` and `hi10p`, so Radarr's `Only Yesterday 1991 …-Kametsu`
+    shared 2 of 8 words and failed the gate outright. `aka` is dropped only
+    beside other title words, so a film called "AKA" still has a core. The
+    candidate's side has its own junk: Radarr's listing of that release,
+    `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv`,
+    carried a checksum and `flacx2` as title words.
     """
     out = set()
-    for raw in re.split(r'[\s\-]+', norm):
+    for raw in re.split(r'[\s\-]+', _CRC_TAG_RE.sub(' ', _AUDIO_PHRASE_RE.sub(' ', norm))):
         tok = re.sub(r'\W+', '', raw)   # director's → directors, hdr10+ → hdr10
         if not tok or tok == group or tok in _QUALITY_NOISE or tok in _TITLE_STOPWORDS:
             continue
         if _CORE_DROP_RE.match(tok):
             continue
         out.add(tok)
+    if len(out) > 1:
+        out.discard('aka')
     return out
+
+
+def _aka_cores(norm, group=''):
+    """The title core of each side of an `AKA`, or () when there is none.
+
+    `Spirited Away AKA Sen to Chihiro no Kamikakushi` is two titles, and an
+    indexer lists the release under either one. Pooled into one core, the
+    English half shares 2 of 7 words with `Spirited Away 2001 …` and fails a
+    gate the same film should pass on its own.
+    """
+    parts = _AKA_RE.split(norm)
+    if len(parts) < 2:
+        return ()
+    cores = (frozenset(_title_core_tokens(p, group)) for p in parts)
+    return tuple(c for c in cores if c)
 
 
 @functools.lru_cache(maxsize=32768)
@@ -806,6 +861,7 @@ def _release_match_features(name):
     group = _release_group_tag(name)
     return MappingProxyType({
         'core':   frozenset(_title_core_tokens(norm, group)),
+        'alts':   _aka_cores(norm, group),
         'res':    info['resolution'],
         'source': info['source'],
         'hdr':    info['hdr'],
@@ -816,11 +872,24 @@ def _release_match_features(name):
     })
 
 
+@functools.lru_cache(maxsize=32768)
+def _name_tokens(name):
+    """Every word of a release name, punctuation dropped — for asking which of
+    two names a third is closer to. Cached with the features, and read-only for
+    the same reason (TR11)."""
+    return frozenset(re.findall(r'[^\W_]+', _norm_release_name(name)))
+
+
+def _jaccard(a, b):
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
 def release_match_cache_clear():
     """Drop cached release-match features — the cache pays for itself inside one
     request, and a client of 15k torrents should not leave 15k entries resident
     on a process whose memory is already the thing to watch."""
     _release_match_features.cache_clear()
+    _name_tokens.cache_clear()
 
 
 _MIN_TITLE_SIM = 0.3
@@ -855,13 +924,20 @@ def _score_match_features(q, c):
     """
     b = {'title': '', 'year': '', 'res': '', 'source': '', 'group': '', 'audio': '', 'hdr': '', 'anchor': ''}
 
-    # Title gate — both sides must have parseable title words that overlap.
+    # Title gate — both sides must have parseable title words that overlap. A
+    # name with an `AKA` is several titles, and matching any one of them is
+    # matching the title (`_aka_cores`).
     if not q['core'] or not c['core']:
         return 0.0, b
-    inter = len(q['core'] & c['core'])
-    union = len(q['core'] | c['core'])
-    title_sim = inter / union if union else 0.0
-    b['title'] = 'same' if q['core'] == c['core'] else ('partial' if inter else 'diff')
+    title_sim, inter, same = 0.0, 0, False
+    for qc in (q['core'],) + q['alts']:
+        for cc in (c['core'],) + c['alts']:
+            i = len(qc & cc)
+            sim = i / len(qc | cc)
+            same = same or qc == cc
+            if sim > title_sim:
+                title_sim, inter = sim, i
+    b['title'] = 'same' if same else ('partial' if inter else 'diff')
     if inter == 0 or title_sim < _MIN_TITLE_SIM:
         return 0.0, b
 
@@ -935,51 +1011,158 @@ def rank_release_matches(items, query, name_key='name', limit=8, min_score=0.0):
     return scored[:limit]
 
 
-def rank_trump_replacements(releases, new_title, indexer='', limit=8):
-    """(release, candidates) — Trumped step 4's replacement, best first.
+def rank_trumped_candidates(rows, title, indexer='', new_title=''):
+    """(auto, candidates) — Trumped step 3's picker for one trumped title:
+    every client torrent that clears the title gate, **the PM's tracker first**
+    (TR20).
 
-    Three tiers, in this order:
+    The trumped registration is the one on the tracker that sent the PM, so its
+    torrents lead whatever another tracker's scored — the rule step 4 follows
+    (TR19). Within it, then within the rest: the pre-selected torrent, the
+    exact name, then by score, then fewer disagreeing fields, then the client's
+    order. Nothing that clears the gate is cut. This was the eight
+    best scores, with the PM's tracker a tie-break among equal ones only.
 
-    1. **The exact release on the tracker that sent the PM.** That is the copy
-       the user means to grab — it is the one carrying the PM's freeleech, and
-       seeding the replacement where the trump happened is the point of
-       complying. It leads and is pre-selected.
-    2. **The exact release on another tracker.** Grabbing there and
-       cross-seeding is a legitimate edge case (the PM's tracker has not listed
-       it yet, or the user prefers it), never the default.
-    3. Everything else that clears the title gate, by score; ties broken by
-       fewer disagreeing fields, then the PM's tracker, then seeders.
+    **A torrent named like the replacement goes last, flagged `replacement`,
+    and is never pre-selected.** `repack` and `proper` are noise to the fuzzy
+    score and it saturates at 1.0, so a REPACK already in the client scores
+    what the original does — and it sits on the PM's tracker, where it was
+    grabbed. The old tie-break swapped the seed to the PM's tracker's first
+    equal score, which could be the replacement: offered up for deletion,
+    pre-selected. Where the two names' groups differ, "like the replacement"
+    is the new name's group — a third group's release shares words with both
+    names and is neither. Where they do not (a REPACK), it is closer in raw
+    words, which `repack` is one of.
 
-    **Exactness is required for the top two tiers, and it is load-bearing.**
+    `auto`: the conservative `match_trumped_torrent` over the PM's tracker's
+    torrents; else the PM's tracker's best candidate, unless a confident match
+    elsewhere is strictly better — by score, then by fewer disagreeing fields,
+    because the score saturates and a different group's release reaches 1.0
+    too. The user confirms the expanded group before anything is deleted, and
+    phase 2 reaches the PM's registration from a cross-seed through shared
+    paths anyway. Each candidate carries `pm_tracker`, `exact` and
+    `replacement`.
+    """
+    target = _norm_release_name(title)
+    new = _norm_release_name(new_title)
+    old_toks = _name_tokens(title)
+    new_toks = _name_tokens(new_title) if new and new != target else frozenset()
+    old_group, new_group = _release_group_tag(title), _release_group_tag(new_title)
+    pm_memo = {}
+
+    def on_pm(r):
+        t = r.get('tracker') or ''
+        if t not in pm_memo:
+            pm_memo[t] = bool(indexer) and tracker_matches_indexer(t, indexer)
+        return pm_memo[t]
+
+    def like_new(r):
+        if not new_toks:
+            return False
+        group = _release_match_features(r.get('name') or '')['group']
+        if new_group and new_group != old_group:
+            return group == new_group
+        if new_group and group != new_group:
+            return False
+        t = _name_tokens(r.get('name') or '')
+        return _jaccard(t, new_toks) > _jaccard(t, old_toks)
+
+    def confident(pool):
+        # Asked of the matcher's answer rather than of every torrent up front,
+        # which cost a quarter of a phase-1 pass over 15k torrents.
+        while True:
+            m = match_trumped_torrent(pool, title)
+            if m is None or not like_new(m):
+                return m
+            pool = [r for r in pool if r is not m]
+
+    auto = confident([r for r in rows if on_pm(r)]) if indexer else None
+    elsewhere = confident(rows) if auto is None else None
+
+    q = _release_match_features(title)
+    scored = []
+    for i, r in enumerate(rows):
+        s, brk = _score_match_features(q, _release_match_features(r.get('name') or ''))
+        if s <= 0 and r is not auto and r is not elsewhere:
+            continue
+        scored.append((i, {
+            **r, 'match_score': round(s, 3) if s > 0 else None, 'match': brk,
+            'exact': bool(target) and _norm_release_name(r.get('name')) == target,
+            'pm_tracker': on_pm(r), 'replacement': like_new(r)}))
+
+    def strength(c):
+        return (c['match_score'] or 0, -sum(1 for v in c['match'].values() if v == 'diff'))
+
+    scored.sort(key=lambda it: (it[1]['replacement'], not it[1]['pm_tracker'], not it[1]['exact'],
+                                it[1]['match_score'] is None, [-x for x in strength(it[1])], it[0]))
+    if auto is None:
+        top = next(((i, c) for i, c in scored if not c['replacement']), None)
+        best_else = next(((i, c) for i, c in scored if rows[i] is elsewhere), None)
+        if best_else and (top is None or not top[1]['pm_tracker']
+                          or strength(best_else[1]) > strength(top[1])):
+            top = best_else
+        auto = rows[top[0]] if top else None
+    # The pre-selected torrent heads its section.
+    scored.sort(key=lambda it: (it[1]['replacement'], not it[1]['pm_tracker'], rows[it[0]] is not auto))
+    return auto, [c for _, c in scored]
+
+
+def rank_trump_replacements(releases, new_title, indexer='', old_titles=()):
+    """(release, candidates) — Trumped step 4: **every** release the arr
+    returned, in the order the page shows them.
+
+    **The tracker that sent the PM comes first, whole.** Its copy of the
+    replacement is the one carrying the PM's freeleech, and seeding it where the
+    trump happened is the point of complying — so its releases are the first
+    thing to look at, whatever another tracker's scored. Within it, and then
+    within everything else: the exact name, then releases that clear the title
+    gate by score (ties to fewer disagreeing fields, then seeders), then the
+    ones that do not. A release named like one being removed (`old_titles`)
+    goes last of all and says so.
+
+    Nothing is dropped and nothing is cut to a top N. The list used to be the
+    eight best scores that cleared the title gate, and a tracker renders names
+    its own way — `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2)
+    [079DB0B4].mkv` for a PM's `Only Yesterday … x264-Kametsu` — so the one
+    release the user had come for
+    could be ranked out of sight or gated out entirely, with Radarr listing it.
+    A gated-out release has `match_score: None`.
+
+    **Only an exact name is ever pre-selected, and that is load-bearing.**
     `repack` and `proper` are quality noise to the fuzzy score, so a trump that
     replaces a release with its own REPACK scores the trumped original — still
     cached on an indexer — exactly as high as the replacement, and the score
-    saturates at 1.0 for most same-title releases anyway. Ranking by tracker
-    over that score would pre-select the release that was just trumped. Within
-    tiers 1 and 2 every copy is the same release, so seeders decide.
+    saturates at 1.0 for most same-title releases anyway. `release` is the exact
+    name on the PM's tracker; else the exact name anywhere **only when the PM's
+    tracker returned nothing else** — if it lists anything, a near match there
+    may be the replacement under its own spelling, and pre-selecting another
+    tracker's copy would give up the freeleech for a cross-seed. With no
+    indexer named, the exact name anywhere. Else None.
 
-    `release` is the head of tier 1 or 2, else None — no confident match. Each
-    candidate carries `pm_tracker` and `exact`.
+    Each candidate carries `pm_tracker`, `exact` and `trumped`.
     """
     target = _norm_release_name(new_title)
+    olds = {_norm_release_name(t) for t in old_titles or ()} - {'', target}
     q = _release_match_features(new_title)
     rows = []
     for r in releases:
-        exact = bool(target) and _norm_release_name(r.get('title')) == target
+        name = _norm_release_name(r.get('title'))
+        exact = bool(target) and name == target
         s, brk = _score_match_features(q, _release_match_features(r.get('title') or ''))
-        if s <= 0 and not exact:
-            continue
-        rows.append({**r, 'match_score': 1.0 if exact else round(s, 3), 'match': brk, 'exact': exact,
+        rows.append({**r, 'match_score': 1.0 if exact else (round(s, 3) if s > 0 else None),
+                     'match': brk, 'exact': exact, 'trumped': name in olds,
                      'pm_tracker': bool(indexer) and tracker_matches_indexer(r.get('indexer'), indexer)})
 
     def _key(r):
-        tier = 0 if (r['exact'] and r['pm_tracker']) else (1 if r['exact'] else 2)
         diffs = sum(1 for v in r['match'].values() if v == 'diff')
-        return (tier, -r['match_score'], diffs, not r['pm_tracker'], -(r.get('seeders') or 0))
+        return (r['trumped'], not r['pm_tracker'], not r['exact'], r['match_score'] is None,
+                -(r['match_score'] or 0), diffs, -(r.get('seeders') or 0))
 
     rows.sort(key=_key)
-    release = rows[0] if rows and rows[0]['exact'] else None
-    return release, rows[:limit]
+    release = next((r for r in rows if r['exact'] and r['pm_tracker']), None)
+    if release is None and not any(r['pm_tracker'] and not r['trumped'] for r in rows):
+        release = next((r for r in rows if r['exact']), None)
+    return release, rows
 
 
 def title_soft_match(query_title, candidate_title):

@@ -1,7 +1,7 @@
 """Trumped: the code that decides what gets deleted (TRUMPED TR18).
 
 `test_trump.py` covers the string matching, and covers it well. Nothing covered
-`_cross_seed_group`, `_trump_prefer_pm_tracker`, `_trump_find_arr_item` at its
+`_cross_seed_group`, `_trump_prefer_pm_tracker` (gone since TR20), `_trump_find_arr_item` at its
 endpoint, either `resolve_group` phase, or `execute` — every line between a
 pasted PM and a `remove_torrents(delete_files=True)` with no script, no `cmp` and
 no undo.
@@ -119,12 +119,6 @@ class TestAlreadyRight:
         assert plain['picks'][0]['auto'] == app.sources.registration_key(1, 'aaa')
         assert pm['picks'][0]['auto'] == app.sources.registration_key(1, 'bbb')
         assert len(pm['picks'][0]['candidates']) == 2, 'a tie-break drops nothing'
-
-    def test_the_pm_tracker_never_outranks_a_better_title_match(self):
-        ranked = [dict(_row('aaa', tracker='blutopia.cc'), match_score=1.0),
-                  dict(_row('bbb', tracker='aither.cc'), match_score=0.94)]
-        assert app._trump_prefer_pm_tracker(
-            ranked, app._reg(ranked[0]), 'Aither (API) (Prowlarr)') == app._reg(ranked[0])
 
     def test_the_service_gate_holds_at_the_endpoint(self):
         """A same-titled film never answers for an episode — searched on Sonarr."""
@@ -748,6 +742,25 @@ class TestArrItemFromPaths:
         assert body['arr_item_ambiguous'] is False
         assert body.get('arr_item_others', []) == []
 
+    def test_every_release_ships_and_the_old_names_mark_the_trumped_one(self, tree):
+        """TR19: the page browses everything the arr returned, so nothing is cut
+        to the eight best scores, and the old names travel with the request."""
+        releases = [{'guid': f'g{i}', 'title': f'Rel.2020.1080p.WEB.x264-G{i}', 'indexer': 'Other',
+                     'seeders': i} for i in range(20)]
+        releases.append({'guid': 'old', 'title': 'Rel.2020.2160p.UHD.BluRay-OLD', 'indexer': 'Aither', 'seeders': 9})
+        matrix = MagicMock(return_value=releases)
+        with patch.object(app, 'db_load_config', return_value=dict(tree.cfg)), \
+             patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
+             patch.object(app, 'fetch_arr_media_index_result', return_value=([_index_row(tree.library)], [])), \
+             patch.object(app, 'normalize_arr_connections', return_value=[]), \
+             patch.object(app, 'fetch_release_matrix', matrix):
+            body = app.app.test_client().post('/api/workflows/trump/search_release', json={
+                'new_title': 'Rel.2020.2160p.UHD.BluRay-NEW', 'group_paths': [tree.linked],
+                'indexer': 'Aither', 'old_titles': ['Rel 2020 2160p UHD BluRay-OLD', 7, '']}).get_json()
+        assert body['candidate_count'] == len(body['candidates']) == 21
+        assert body['release'] is None
+        assert body['candidates'][-1]['guid'] == 'old' and body['candidates'][-1]['trumped'] is True
+
 
 def test_the_episode_anchor_reads_media_index_rows():
     """Phase 6's note: index rows carry `season_number`, which skipped the
@@ -763,3 +776,64 @@ def test_the_episode_anchor_reads_media_index_rows():
     ]
     parsed = parse_release_info_for_path('Show.S01E02.1080p.WEB-DL-GRP')
     assert rank_arr_candidates(rows, parsed, service='sonarr')[0]['arr_id'] == 6
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TR20 — phase 1 leads with the PM's tracker, and never offers the replacement
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestPhaseOnePmTrackerFirst:
+    """All three fail on the code before TR20: the list was cut to eight, and
+    the equal-score swap to the PM's tracker pre-selected for deletion a REPACK
+    and another group's release. The score saturates, so "equal" was loose."""
+
+    def test_phase_one_leads_with_the_pm_tracker_whatever_another_scored(self):
+        """TR20, the user's rule (2026-09-28): "PMs tracker should always lead".
+        This replaced `test_the_pm_tracker_never_outranks_a_better_title_match`,
+        which held the opposite — the PM's tracker a tie-break among equal
+        scores — and a list cut to eight."""
+        rows = [_row(f'x{i}', name=f'Rel.2020.1080p.WEB-DL-G{i}', tracker='blutopia.cc') for i in range(10)]
+        rows.append(_row('pm', name='Rel 2020 720p HDTV x264-OTHER', tracker='aither.cc'))
+        with patch.object(app, 'db_load_config', return_value={}), \
+             patch.object(app.sources, 'list_torrents', return_value=rows):
+            body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
+                'old_titles': [NAME], 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+        cands = body['picks'][0]['candidates']
+        assert len(cands) == 11, 'nothing that clears the title gate is cut'
+        assert cands[0]['hash'] == 'pm' and cands[0]['pm_tracker'] is True
+        assert cands[0]['match_score'] < cands[1]['match_score']
+
+    def test_phase_one_never_preselects_the_replacement_for_deletion(self):
+        """TR20. The replacement already in the client — a REPACK, grabbed on the
+        PM's tracker and listed first — scores exactly what the original does,
+        and the old equal-score swap to the PM's tracker picked it."""
+        old = 'Rel.2020.1080p.WEB-DL.DDP5.1.H.264-GRP'
+        new = 'Rel.2020.REPACK.1080p.WEB-DL.DDP5.1.H.264-GRP'
+        rows = [_row('rep', name=new, tracker='aither.cc'),
+                _row('orig', name=old, tracker='blutopia.cc'),
+                _row('pmorig', name=old, tracker='aither.cc')]
+        with patch.object(app, 'db_load_config', return_value={}), \
+             patch.object(app.sources, 'list_torrents', return_value=rows):
+            body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
+                'old_titles': [old], 'new_title': new, 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+        pick = body['picks'][0]
+        assert pick['auto'] == app.sources.registration_key(1, 'pmorig'), \
+            'the replacement was pre-selected for deletion'
+        assert [c['hash'] for c in pick['candidates']] == ['pmorig', 'orig', 'rep']
+        assert pick['candidates'][-1]['replacement'] is True
+
+    def test_phase_one_never_preselects_another_groups_release_on_the_pm_tracker(self):
+        """TR20. A different group's release of the same film scores 1.0 as well
+        — title, year, resolution and source outweigh the group — so the old
+        equal-score swap moved the seed off the exact name onto it."""
+        old = 'Rel.2020.1080p.BluRay.DTS.x264-TiZU'
+        rows = [_row('exact', name=old, tracker='seedpool.org'),
+                _row('other', name='Rel.2020.1080p.BluRay.x264-HANDJOB', tracker='aither.cc')]
+        with patch.object(app, 'db_load_config', return_value={}), \
+             patch.object(app.sources, 'list_torrents', return_value=rows):
+            body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
+                'old_titles': [old], 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+        pick = body['picks'][0]
+        assert {c['hash']: c['match_score'] for c in pick['candidates']} == {'exact': 1.0, 'other': 1.0}
+        assert pick['auto'] == app.sources.registration_key(1, 'exact'), \
+            "another group's release was pre-selected for deletion"

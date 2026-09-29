@@ -618,8 +618,11 @@ through it:
 1. **Pick the tracker that sent the PM** (optional). Its torrents and its copy
    of the replacement come first.
 2. **Confirm the group.** auditorr queries your client live for torrents
-   matching the old release, and shows you a ranked list of candidates. You
-   confirm which are really yours before anything is touched.
+   matching the old release and lists every one that shares its title, the PM's
+   tracker's first. The closest match is pre-selected, on the PM's tracker
+   unless another tracker holds a clearly closer name. A torrent named like the
+   replacement — a REPACK you've already grabbed, say — is listed last and never
+   pre-selected. You confirm which are really yours before anything is touched.
 3. **Expand to cross-seeds.** Each confirmed torrent is expanded into every
    torrent sharing its files, followed all the way through — a torrent sharing
    files with a cross-seed is in the group too. That is the whole set that has
@@ -627,7 +630,11 @@ through it:
 4. **Pick the replacement.** auditorr finds the Sonarr/Radarr entry from the
    files the group is hardlinked to, falling back to the new release's name,
    and searches it. The exact replacement on the PM's tracker is shown as
-   **Grab this one**; the rest are folded under *Other releases*. If a second
+   **Grab this one**, and every other release it found is folded under it.
+   Without an exact match nothing is picked for you. Every release is listed,
+   the PM's tracker's first, because trackers often spell a name their own way
+   (`[Group] Title (BD 1080p…)`). Long lists get a filter box, and a release
+   named like the one you're removing is listed last. If a second
    Sonarr/Radarr instance also holds the group's files (a 4K Radarr beside your
    main one, say), step 4 says so — `on Radarr · also Radarr 4K` — naming the
    instance the search and the grab go to.

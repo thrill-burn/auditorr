@@ -55,7 +55,7 @@ import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot, C
 // icon and a not-started tile's "—", which are decoration. Do NOT reach for the
 // `var(--x)55` alpha-suffix idiom here — it does not survive substitution inside
 // a property value, which is what made these fills invisible the first time.
-// See prompts/NEXT_STEPS.md.
+// See prompts/record/NEXT_STEPS.md.
 //
 // Everything here is contained to this page. Nothing about Rounds appears
 // on the dashboard, in toasts, or as a sidebar badge.

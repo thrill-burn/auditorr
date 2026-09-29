@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Trumped lists every release Sonarr/Radarr finds, starting with the tracker that sent the PM** — step 4 used to show the eight closest names, and a tracker often spells a name its own way. Aither listing *Only Yesterday … x264-Kametsu* as `[Kametsu] Only Yesterday (BD 1080p…)` meant the release the PM named could fall out of the list, or never make it in, while Radarr had it. Now every release is listed: the PM's tracker's first, then the rest, closest first, with a filter box for long lists. A release named like the one you're removing is listed last and labelled.
+- **Trumped missed an exact match when the indexer listed the file name** — Radarr showing `Mulan.1998.REPACK…x265-NCmt.mkv` for a PM naming `…x265-NCmt` came back as "no exact match", with every field agreeing. The extension is ignored now, so it's the one pre-selected.
+- **Trumped matches release names more reliably** — `AKA` titles match on either name, a leading `[Group]` is read as the release group, and tags like `Dual-Audio`, `Hi10P` and `AV1` no longer count as words of the title.
+- **Trumped no longer pre-selects another tracker's copy over the PM's tracker's own** — when the exact name is only on another tracker but the PM's tracker has releases of its own, nothing is selected for you: one of those may be the replacement in that tracker's spelling, and grabbing elsewhere gives up the PM's freeleech. The page says where the exact name is.
+- **Trumped could pre-select the wrong torrent to remove** — when picking the torrent the PM means, a tie-break moved the selection to the PM's tracker on an equal score, and the score tops out at 100% for close names. So a REPACK of the release you'd already grabbed on that tracker, or another group's encode of the same film, could end up selected for removal. The confirm step still showed every torrent before anything was deleted. A torrent named like the replacement is now listed last and never selected, and another group's release no longer wins a tie.
+- **Trumped's torrent picker starts with the tracker that sent the PM, and lists every match** — it showed the eight closest names, with the PM's tracker only breaking ties. Now every torrent that shares the title is listed, the PM's tracker's first, with the same filter box as the release list.
+- **Trumped reads anime-style release names more cleanly** — a checksum tag like `[079DB0B4]` and a track count like `FLACx2` no longer count as words of the title, so Radarr's `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv` is a full title match for the PM's name.
+
 ## v1.8.0 — 2026-09-27
 
 **The largest release auditorr has had, and almost all of it is one idea.**

@@ -7,7 +7,7 @@ import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
 import {
   WorkflowPage, WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
   Checkbox, Spinner, SpinKeyframes, Button, Disclosure, QualityChip, MatchChips, MONO_TITLE, tint,
-  regKey, RegistrationWarning,
+  regKey, RegistrationWarning, SearchInput,
 } from './shared'
 
 const ACCENT = 'var(--green)'
@@ -88,33 +88,44 @@ function Field({ label, value, onChange, mono }) {
 // (`MatchChips` is shared with Backfill, which asks size/quality/HDR.)
 const MATCH_FIELDS = [['year', 'YR'], ['res', 'RES'], ['source', 'SRC'], ['audio', 'AUD'], ['hdr', 'HDR'], ['group', 'GRP']]
 
+// `null` is a release the title gate turned away — still listed (TR19), with
+// no score to rank it by.
 function ScoreBadge({ score }) {
-  if (score == null) return null
+  const style = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, flexShrink: 0, width: 34, textAlign: 'right' }
+  if (score == null) return <span title="Shares too few title words with the new release to score" style={{ ...style, color: 'var(--text-dim)' }}>—</span>
   const pct = Math.round(score * 100)
   const color = score >= 0.8 ? 'var(--green)' : score >= 0.5 ? 'var(--text-dim)' : 'var(--red)'
-  return <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700, color, flexShrink: 0, width: 34, textAlign: 'right' }}>{pct}%</span>
+  return <span style={{ ...style, color }}>{pct}%</span>
 }
 
+const meta = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }
+
 // A selectable candidate row — works for both client torrents (name/tracker) and
-// arr releases (title/indexer/seeders/quality).
+// arr releases (title/indexer/seeders/quality). The name has the row's width to
+// itself and the readouts sit under it: on one line, the chips squeezed a
+// release name into a column a dozen characters wide.
 function CandidateRow({ cand, selected, onSelect }) {
   const name = cand.name || cand.title || ''
   const sub  = cand.tracker || cand.indexer || ''
   return (
     <div onClick={onSelect} style={{
-      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer',
+      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', cursor: 'pointer',
       borderBottom: '1px solid var(--border)',
       background: selected ? tint(ACCENT, 5) : 'transparent',
       borderLeft: `2px solid ${selected ? ACCENT : 'transparent'}`,
     }}>
-      <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
-      {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
-      <span style={{ ...MONO_TITLE, flex: 1, minWidth: 0, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</span>
-      {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
-      <MatchChips match={cand.match} fields={MATCH_FIELDS} />
-      {sub && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.pm_tracker ? ACCENT : 'var(--text-dim)', flexShrink: 0 }}>{sub}</span>}
-      {cand.seeders != null && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)', flexShrink: 0 }}>{cand.seeders}S</span>}
-      <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(cand.size)}</span>
+      <span style={{ width: 13, height: 13, marginTop: 2, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
+        <div style={{ ...MONO_TITLE, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+          {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
+          <MatchChips match={cand.match} fields={MATCH_FIELDS} />
+          {sub && <span style={{ ...meta, color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{sub}</span>}
+          {cand.seeders != null && <span style={{ ...meta, color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders}S</span>}
+          <span style={meta}>{formatBytes(cand.size)}</span>
+        </div>
+      </div>
       <ScoreBadge score={cand.match_score} />
     </div>
   )
@@ -166,6 +177,101 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
         {cand.seeders != null && <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders} seeders</span>}
         <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{formatBytes(cand.size)}</span>
       </div>
+    </div>
+  )
+}
+
+// Every candidate the server returned, in its order — the PM's tracker first,
+// then the rest, then the tail the server flags: in step 4 a release named like
+// one being removed (TR19), in step 3 a torrent named like the replacement
+// (TR20). A tracker spells names its own way, so the one the user came for can
+// score as a near match or not at all — it has to be reachable anyway.
+const LIST_HEADER = {
+  ...meta, position: 'sticky', top: 0, zIndex: 1, padding: '6px 12px',
+  background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
+}
+
+function CandidateList({ rows, keyOf, chosenKey, onChoose, indexer, othersLabel, isTail, tailLabel, noneLabel, filterLabel }) {
+  const [filter, setFilter] = useState('')
+  const q = filter.trim().toLowerCase()
+  const text = r => `${r.name || r.title || ''} ${r.tracker || r.indexer || ''}`.toLowerCase()
+  const shown = q ? rows.filter(r => text(r).includes(q)) : rows
+  const live = shown.filter(r => !isTail(r))
+  const sections = [
+    ...(indexer
+      ? [[`on ${indexer}`, live.filter(r => r.pm_tracker)], [othersLabel, live.filter(r => !r.pm_tracker)]]
+      : [[null, live]]),
+    [tailLabel, shown.filter(isTail)],
+  ].filter(([, rs]) => rs.length)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rows.length > 8 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <SearchInput value={filter} onChange={setFilter} placeholder={filterLabel} width={280} mono />
+          {q && <span style={meta}>{shown.length} of {rows.length}</span>}
+        </div>
+      )}
+      <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+          {sections.map(([label, rs]) => (
+            <React.Fragment key={label || 'all'}>
+              {label && <div style={LIST_HEADER}>{label} · {rs.length}</div>}
+              {rs.map(r => (
+                <CandidateRow key={keyOf(r)} cand={r}
+                  selected={chosenKey != null && chosenKey === keyOf(r)}
+                  onSelect={() => onChoose(r)} />
+              ))}
+            </React.Fragment>
+          ))}
+          {q && !shown.length && (
+            <div style={{ padding: '8px 12px', fontSize: 'var(--font-base)', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
+              Nothing matches “{filter.trim()}”.
+            </div>
+          )}
+        </div>
+        {noneLabel && (
+          <NoneRow label={noneLabel}
+            selected={chosenKey == null}
+            onSelect={() => onChoose(null)} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Step 3 says why the selected torrent is not the first one listed: a confident
+// match elsewhere beat everything on the PM's tracker, and it is the safer seed
+// to expand (TR20).
+function PickNote({ pick, chosenKey, indexer }) {
+  const auto = pick.candidates.find(c => regKey(c) === pick.auto)
+  const onPm = pick.candidates.filter(c => c.pm_tracker && !c.replacement).length
+  if (!indexer || !auto || auto.pm_tracker || !onPm || chosenKey !== pick.auto) return null
+  return (
+    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
+      Nothing on {indexer} matches this name as closely as the torrent on {auto.tracker || 'another tracker'}, so that one is
+      selected. {indexer}’s {onPm} torrent{onPm !== 1 ? 's are' : ' is'} listed first — a tracker often names a torrent its own way, so check {onPm !== 1 ? 'them' : 'it'}.
+    </div>
+  )
+}
+
+// What step 4 says when nothing is pre-selected. Only an exact name ever is, so
+// this has to say where to look instead — the PM's tracker, whose own spelling
+// of the name is the likeliest reason there was no exact match.
+function NoExactMatch({ search, candidates, indexer, service }) {
+  const n = candidates.length
+  const onPm = candidates.filter(c => c.pm_tracker && !c.trumped).length
+  const elsewhere = candidates.find(c => c.exact)
+  const s = k => (k !== 1 ? 's' : '')
+  let text
+  if (!n) text = `${service} returned no releases for this title.`
+  else if (indexer && onPm) text = `No exact match for the new release name on ${indexer}. Its ${onPm} release${s(onPm)} ${onPm !== 1 ? 'are' : 'is'} listed first — a tracker often spells a name its own way, so check ${onPm !== 1 ? 'them' : 'it'}. Nothing is selected for you.`
+  else if (indexer) text = `${indexer} returned none of the ${n} release${s(n)}, and none has the exact new name — every one is below, closest first. Nothing is selected for you.`
+  else text = `No exact match for the new release name in ${n} release${s(n)} — every one is below, closest first. Nothing is selected for you.`
+  return (
+    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
+      {text}
+      {elsewhere && indexer && <> The exact name is on {elsewhere.indexer || 'another indexer'}; grabbing it there means cross-seeding it to {indexer}.</>}
+      {search.fallback_url && <> Or grab it manually in <a href={search.fallback_url} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT }}>{service} ↗</a>.</>}
     </div>
   )
 }
@@ -382,9 +488,10 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
 
   // TR14 — downstream state is only valid for the inputs it was computed from.
   // Editing a title or the indexer after phase 1 used to leave the old picks
-  // and tie-break on screen; editing the new title left the old search.
+  // and tie-break on screen; editing the new title left the old search. The
+  // picks read the new title too, to tell the replacement from the original.
   const titlesKey = oldTitles.map(t => t.trim()).filter(Boolean).join('\n')
-  useEffect(() => { setPicks(null); setSelected({}); setGroup(null) }, [titlesKey, indexer])
+  useEffect(() => { setPicks(null); setSelected({}); setGroup(null) }, [titlesKey, indexer, newTitle])
   useEffect(() => { setSearch(null); setConflict(null); setChosenRelease(null) }, [newTitle, group])
   useEffect(() => { setAckPartial(false) }, [group])
 
@@ -413,7 +520,9 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   const handleFindTorrents = async () => {
     setBusy('group'); setError(null)
     try {
-      const r = await api.trumpResolveGroup(oldTitles.filter(t => t.trim()), null, indexer)
+      // The new title keeps a replacement already in the client from being
+      // pre-selected for deletion (TR20).
+      const r = await api.trumpResolveGroup(oldTitles.filter(t => t.trim()), null, indexer, newTitle.trim())
       setPicks(r.picks || [])
       // Keyed by position, not title: a PM listing one release twice — or two
       // lines that trim alike — used to highlight and deselect together (TR15).
@@ -447,8 +556,13 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   const handleSearch = async (arrItem) => {
     setBusy('search'); setError(null); setConflict(null)
     try {
+      // The PM's names and the group's own: how step 4 tells the trumped
+      // release, often still cached on an indexer, from its replacement.
+      const removing = [...new Set([...oldTitles, ...group.torrents.map(t => t.name)]
+        .map(t => String(t || '').trim()).filter(Boolean))]
       const r = await api.trumpSearchRelease({
         new_title: newTitle, indexer, group_paths: groupPaths, arr_item: arrItem || undefined,
+        old_titles: removing,
       })
       setSearch(r)
       // Only an exact release is pre-selected. A near match is offered, never
@@ -561,6 +675,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   const candidates  = search?.candidates || []
   const recommended = search?.release ? (candidates.find(c => c.guid === search.release.guid) || search.release) : null
   const others      = candidates.filter(c => c.guid !== recommended?.guid)
+  const serviceName = { radarr: 'Radarr', sonarr: 'Sonarr' }[search?.service] || 'Sonarr/Radarr'
   const skippedTitles = picks ? picks.filter((_, i) => !selected[i]).map(p => p.title) : []
   const removeBlocked = !clientDeleteAllowed || (group?.partial && !ackPartial)
 
@@ -661,7 +776,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           {picks && !group && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
-                Pick the torrent that matches each trumped release — the best match is pre-selected. Once you confirm, every cross-seed of the chosen torrents is added automatically.
+                Pick the torrent that matches each trumped release{indexer ? ` — ${indexer}’s torrents come first` : ''}. The best match is pre-selected. Once you confirm, every cross-seed of the chosen torrents is added automatically.
               </div>
               {picks.map((p, i) => (
                 <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -669,16 +784,16 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   {p.candidates.length === 0 ? (
                     <div style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)' }}>No match found in {clientName} — this release will be skipped.</div>
                   ) : (
-                    <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                      {p.candidates.map(c => (
-                        <CandidateRow key={regKey(c)} cand={c}
-                          selected={selected[i] === regKey(c)}
-                          onSelect={() => setSelected(s => ({ ...s, [i]: regKey(c) }))} />
-                      ))}
-                      <NoneRow label="None of these — skip this release"
-                        selected={selected[i] == null}
-                        onSelect={() => setSelected(s => ({ ...s, [i]: null }))} />
-                    </div>
+                    <>
+                      <PickNote pick={p} chosenKey={selected[i]} indexer={indexer} />
+                      <CandidateList rows={p.candidates} keyOf={regKey} indexer={indexer}
+                        chosenKey={selected[i]}
+                        onChoose={c => setSelected(s => ({ ...s, [i]: c ? regKey(c) : null }))}
+                        othersLabel="other trackers"
+                        isTail={c => c.replacement} tailLabel="named more like the replacement"
+                        noneLabel="None of these — skip this release"
+                        filterLabel="Filter by name or tracker" />
+                    </>
                   )}
                 </div>
               ))}
@@ -778,33 +893,28 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                       onSelect={() => setChosenRelease(null)} />
                   </div>
                 </>
-              ) : (
-                <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
-                  No exact match for the new release name in {search.candidate_count ?? 0} release{search.candidate_count !== 1 ? 's' : ''}
-                  {others.length > 0 ? ' — the closest are below; nothing is selected for you.' : '.'}
-                  {search.fallback_url && <> Or grab it manually in <a href={search.fallback_url} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT }}>Sonarr/Radarr ↗</a>.</>}
+              ) : !search.error && (
+                <NoExactMatch search={search} candidates={candidates} indexer={indexer} service={serviceName} />
+              )}
+              {search.error && search.fallback_url && (
+                <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
+                  Grab it manually in <a href={search.fallback_url} target="_blank" rel="noopener noreferrer" style={{ color: ACCENT }}>{serviceName} ↗</a>.
                 </div>
               )}
               {others.length > 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {recommended && (
                     <Disclosure open={showOthers} onClick={() => setShowOthers(s => !s)}>
-                      Other releases ({others.length}) — for edge cases
+                      Every other release {serviceName} returned ({others.length})
                     </Disclosure>
                   )}
                   {showOthers && (
-                    <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                      {others.map(r => (
-                        <CandidateRow key={r.guid} cand={r}
-                          selected={chosenRelease?.guid === r.guid}
-                          onSelect={() => setChosenRelease(r)} />
-                      ))}
-                      {!recommended && (
-                        <NoneRow label="Don't grab — I'll handle the replacement myself"
-                          selected={chosenRelease == null}
-                          onSelect={() => setChosenRelease(null)} />
-                      )}
-                    </div>
+                    <CandidateList rows={others} keyOf={r => r.guid} indexer={indexer}
+                      chosenKey={chosenRelease?.guid} onChoose={setChosenRelease}
+                      othersLabel="other indexers"
+                      isTail={r => r.trumped} tailLabel="named like a release being removed"
+                      noneLabel={recommended ? null : "Don't grab — I'll handle the replacement myself"}
+                      filterLabel="Filter by name or indexer" />
                   )}
                 </div>
               )}

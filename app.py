@@ -44,7 +44,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, match_trumped_torrent, rank_release_matches, score_release_match, title_soft_match, tracker_matches_indexer, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
 from exclusions import reads_bracket_as_glob
@@ -2505,6 +2505,9 @@ def _trump_find_arr_item(cfg, parsed, titles=None, name=''):
 # Client paths `search_release` will stat for one group. A season pack is a few
 # dozen; this only bounds what a request can make the container stat.
 _TRUMP_GROUP_PATHS_MAX = 2000
+# Names of the releases being removed, which step 4 marks among the arr's
+# results — the PM's titles plus the group's torrent names.
+_TRUMP_OLD_TITLES_MAX = 200
 
 
 def _trump_same_item(a, b):
@@ -2855,39 +2858,10 @@ def _trump_pick_row(row):
         'instance_name': row.get('instance_name'),
         'match_score':   row.get('match_score'),
         'match':         row.get('match'),
+        'pm_tracker':    row.get('pm_tracker', False),
+        'exact':         row.get('exact', False),
+        'replacement':   row.get('replacement', False),
     }
-
-
-def _trump_prefer_pm_tracker(ranked, auto_key, indexer):
-    """Break candidate ties with the tracker that sent the PM.
-
-    A cross-seed group carries one release name on several trackers, so its rows
-    score identically and the pre-selected seed was whichever the client listed
-    first. The trumped registration is the one on the tracker that sent the PM,
-    so that's the better seed to offer.
-
-    Strictly a tie-break: the sort is score-first and stable, so a stronger title
-    match is never demoted, and nothing is dropped for being on another tracker
-    (the PM's tracker may not be in the client under a recognizable name at all).
-    Reorders `ranked` in place and returns the possibly-upgraded auto
-    **registration key** (S05 — two instances holding the trumped release are
-    two candidates, and the PM's tracker picks between them).
-    """
-    if not indexer or not ranked:
-        return auto_key
-    on_tracker = {_reg(c) for c in ranked
-                  if tracker_matches_indexer(c.get('tracker'), indexer)}
-    if not on_tracker:
-        return auto_key
-    pinned = next((c for c in ranked if _reg(c) == auto_key), None)
-    ranked.sort(key=lambda c: ((c.get('match_score') or 0), _reg(c) in on_tracker),
-                reverse=True)
-    if pinned is None:
-        return _reg(ranked[0])
-    # Only swap for a sibling that matched the PM equally well.
-    sib = next((c for c in ranked if _reg(c) in on_tracker
-                and c.get('match_score') == pinned.get('match_score')), None)
-    return _reg(sib) if sib else auto_key
 
 
 @app.route('/api/workflows/trump/resolve_group', methods=['POST'])
@@ -2896,11 +2870,13 @@ def workflows_trump_resolve_group():
     """Resolve the trumped release(s) to their full cross-seed group(s), live.
 
     Two phases on one endpoint. **Phase 1** (no `seed_hashes`): for each old
-    title, return a ranked list of candidate torrents the user picks from
-    (`status: needs_pick`) — the confident exact/subset match is pre-selected,
-    but the user always confirms before anything is expanded or deleted. Soft
-    matching can mis-rank a PM whose rendering differs from the torrent name, so
-    a list the user vets beats a single guess. **Phase 2** (with `seed_hashes`):
+    title, every torrent that clears the title gate, the PM's tracker's first
+    (`status: needs_pick`, `rank_trumped_candidates`, TR20) — a confident match
+    is pre-selected, but the user always confirms before anything is expanded or
+    deleted. Soft matching can mis-rank a PM whose rendering differs from the
+    torrent name, so a list the user vets beats a single guess. `new_title` is
+    optional and keeps a replacement already in the client from being
+    pre-selected for deletion. **Phase 2** (with `seed_hashes`):
     take the confirmed seeds and expand each into its cross-seed group — every
     torrent with the same payload size that shares ≥1 content file path. Audit
     records keep one hash per path, so siblings are enumerated live from the
@@ -2922,26 +2898,19 @@ def workflows_trump_resolve_group():
 
     seed_hashes = [str(h).strip() for h in (data.get('seed_hashes') or []) if str(h).strip()]
     indexer     = str(data.get('indexer') or '').strip()
+    new_title   = str(data.get('new_title') or '').strip()[:500]
 
     # Phase 1 — rank candidates per title; the user confirms the seed set.
     if not seed_hashes:
         picks = []
         try:
             for title in old_titles:
-                ranked = rank_release_matches(rows, title, name_key='name', limit=8)
-                auto   = match_trumped_torrent(rows, title)
-                # The conservative exact/subset matcher is the trusted pre-selection;
-                # make sure it's present in (and at the head of) the ranked list.
-                if auto is not None and all(_reg(c) != _reg(auto) for c in ranked):
-                    s, brk = score_release_match(title, auto['name'])
-                    ranked.insert(0, {**auto, 'match_score': round(s, 3), 'match': brk})
-                auto_key = _reg(auto) if auto is not None else (_reg(ranked[0]) if ranked else None)
-                auto_key = _trump_prefer_pm_tracker(ranked, auto_key, indexer)
+                auto, ranked = rank_trumped_candidates(rows, title, indexer, new_title)
                 picks.append({
                     'title':      title,
                     # A registration key — the bare hash wherever a torrent is
                     # registered once, which is every qbit install (S05).
-                    'auto':       auto_key,
+                    'auto':       _reg(auto) if auto is not None else None,
                     'candidates': [_trump_pick_row(c) for c in ranked],
                 })
         finally:
@@ -3009,9 +2978,10 @@ def workflows_trump_search_release():
     than picking, and the wizard re-asks with the user's `arr_item`. A path hit
     also yields the library file ids a trump's import watch is scoped to (TR9).
 
-    Then exact normalized title match (release names are effectively unique
-    ids), optionally prioritising the indexer the PM came from. Always returns
-    the arr deep link as a manual fallback.
+    Then every release the arr returned, ranked by `rank_trump_replacements`:
+    the indexer the PM came from first, the exact normalized name pre-selected
+    (release names are effectively unique ids). Always returns the arr deep
+    link as a manual fallback.
     """
     data      = request.json or {}
     new_title = str(data.get('new_title') or '').strip()
@@ -3115,13 +3085,16 @@ def workflows_trump_search_release():
         return jsonify({"status": "error", "message": f"Release search failed: {e}",
                         "fallback_url": fallback_url}), 502
 
-    # The exact release on the PM's tracker leads and is pre-selected; the same
-    # release elsewhere follows (grab there and cross-seed — an edge case, not
-    # the default); then everything else. The PM's indexer is still a priority
-    # and never a filter: a release not yet listed on that tracker is not a dead
-    # end. Exactness gates the top, because the fuzzy score cannot tell a
-    # REPACK from the release it trumped — see `rank_trump_replacements`.
-    release, candidates = rank_trump_replacements(releases, new_title, indexer, limit=8)
+    # Every release the arr returned, the PM's tracker first, so the user can
+    # always browse to the one they came for; only an exact name is
+    # pre-selected, because the fuzzy score cannot tell a REPACK from the
+    # release it trumped — see `rank_trump_replacements`. The PM's indexer is a
+    # priority and never a filter: a release not yet listed on that tracker is
+    # not a dead end. `old_titles` — the PM's and the group's own names — is
+    # how the trumped release, often still cached on an indexer, is told apart.
+    old_titles = [str(t)[:500] for t in (data.get('old_titles') or [])[:_TRUMP_OLD_TITLES_MAX]
+                  if isinstance(t, str) and t.strip()]
+    release, candidates = rank_trump_replacements(releases, new_title, indexer, old_titles)
     # 4b's flag, rendered (Phase 14): name the instance the grab goes to and
     # every other one holding this payload, as Triage's T2 chip does. Named here
     # rather than re-derived on the page from `path_items`, because which entry

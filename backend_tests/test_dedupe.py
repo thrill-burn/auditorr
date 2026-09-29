@@ -78,7 +78,7 @@ def _ordered_walk(top, **kw):
     Sorting makes every test in this file see one order. It does not paper over
     the underlying behaviour — that an inode with one excluded path is a
     duplicate candidate or not depending on which path was seen first is real,
-    predates F18, and is recorded in `prompts/DEDUPE.md` §0 as the open half of
+    predates F18, and is recorded in `prompts/record/DEDUPE.md` §0 as the open half of
     PR #24. A test must not be the thing that decides it.
     """
     for root, dirs, files in _REAL_WALK(top, **kw):
