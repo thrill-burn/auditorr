@@ -122,7 +122,9 @@ seeding torrent — a trumped release, a dead tracker, a rip you made yourself.
 They cost you disk space and return nothing.
 
 Backfill matches those files against your Sonarr/Radarr library, then searches
-your indexers for a version that is actually seeding.
+your indexers for a version that is actually seeding. Only torrent releases are
+offered, because a Usenet download can't seed. Usenet indexers aren't listed in
+the indexer pickers either.
 
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
@@ -636,9 +638,11 @@ through it:
    files the group is hardlinked to, falling back to the new release's name,
    and searches it. The exact replacement on the PM's tracker is shown as
    **Grab this one**, and every other release it found is folded under it.
-   Without an exact match nothing is picked for you. Every release is listed,
-   the PM's tracker's first, because trackers often spell a name their own way
-   (`[Group] Title (BD 1080p…)`). Long lists get a filter box, and a release
+   Without an exact match nothing is picked for you. Every torrent release is
+   listed, the PM's tracker's first, because trackers often spell a name their
+   own way (`[Group] Title (BD 1080p…)`). Usenet releases are left out: a scene
+   release often has the exact same name there, and grabbing it would remove
+   your torrent without putting a seed back. Long lists get a filter box, and a release
    named like the one you're removing is listed last. If a second
    Sonarr/Radarr instance also holds the group's files (a 4K Radarr beside your
    main one, say), step 4 says so — `on Radarr · also Radarr 4K` — naming the

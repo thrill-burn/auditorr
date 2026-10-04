@@ -761,6 +761,28 @@ class TestArrItemFromPaths:
         assert body['release'] is None
         assert body['candidates'][-1]['guid'] == 'old' and body['candidates'][-1]['trumped'] is True
 
+    def test_the_exact_name_on_usenet_is_never_offered(self, tree):
+        """B14 (issue #25). A scene release carries the same name on Usenet. With
+        no indexer named, the exact name anywhere is pre-selected, and execute
+        grabs it and then removes the trumped torrent, leaving nothing seeding on
+        the tracker. Driven through the real `fetch_release_matrix`, which is
+        where Usenet rows are dropped."""
+        new = 'Rel.2020.2160p.UHD.BluRay-NEW'
+        raw = [{'guid': 'nzb', 'title': new, 'indexer': 'NZBgeek', 'indexerId': 1,
+                'protocol': 'usenet', 'seeders': None, 'size': 1000},
+               {'guid': 'tor', 'title': 'Rel 2020 2160p UHD BluRay NEW', 'indexer': 'Aither',
+                'indexerId': 2, 'protocol': 'torrent', 'seeders': 9, 'size': 1000}]
+        cfg = {**tree.cfg, 'ARR_CONNECTIONS': [
+            {'id': 'r1', 'service': 'radarr', 'name': 'r1', 'base_url': 'http://r1', 'api_key': 'k'}]}
+        with patch.object(app, 'db_load_config', return_value=cfg), \
+             patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
+             patch.object(app, 'fetch_arr_media_index_result', return_value=([_index_row(tree.library)], [])), \
+             patch('arr._arr_get', return_value=raw):
+            body = app.app.test_client().post('/api/workflows/trump/search_release', json={
+                'new_title': new, 'group_paths': [tree.linked]}).get_json()
+        assert [c['guid'] for c in body['candidates']] == ['tor']
+        assert (body['release'] or {}).get('guid') != 'nzb'
+
 
 def test_the_episode_anchor_reads_media_index_rows():
     """Phase 6's note: index rows carry `season_number`, which skipped the

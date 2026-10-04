@@ -286,19 +286,43 @@ def arr_media_index_errors():
     return list(snap[2]) if snap else []
 
 
+def _is_usenet(protocol):
+    """True only where an arr says a release or an indexer is Usenet.
+
+    Both arrs' `ReleaseResource` and `IndexerResource` carry `Protocol`, a
+    `DownloadProtocol` (Unknown / Usenet / Torrent) serialized camelCase, so it
+    arrives as "usenet" or "torrent". Positive evidence only: a row without the
+    field is kept, because reading a missing field as Usenet would turn every
+    search on such an arr into "no release found" (R1).
+    """
+    return str(protocol or '').strip().lower() == 'usenet'
+
+
 def fetch_arr_indexers(cfg):
-    """Return a deduped list of indexer names seen across all configured Arr instances."""
-    names = []
+    """`(names, usenet)`: the torrent indexers' names, de-duplicated across every
+    arr, and the names of the Usenet indexers left out of them.
+
+    Nothing auditorr searches for can come from Usenet (B14, issue #25).
+    Backfill exists to turn a library file into a seed and Trumped replaces a
+    torrent on the tracker that sent the PM, so a Usenet indexer in either
+    picker is an option that can only ever be wrong. `usenet` is what the
+    Backfill page clears from a stored indexer choice. A name that is merely
+    missing from `names` is not cleared, because an arr that did not answer
+    leaves its names out too.
+    """
+    names, usenet = [], []
     for conn in normalize_arr_connections(cfg):
         try:
             indexers = _arr_get(conn['base_url'], conn['api_key'], '/api/v3/indexer')
             for idx in indexers:
                 name = idx.get('name')
-                if name and name not in names:
-                    names.append(name)
+                bucket = usenet if _is_usenet(idx.get('protocol')) else names
+                if name and name not in bucket:
+                    bucket.append(name)
         except Exception as e:
             log.warning("Could not fetch indexers from %s: %s", conn['id'], e)
-    return names
+    # A name some arr has as a torrent indexer stays a torrent indexer.
+    return names, [n for n in usenet if n not in names]
 
 
 def season_episodes_from_name(name):
@@ -398,6 +422,12 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
 
     For Sonarr grouped (season) rows, pass season_number — this triggers Sonarr's
     native season pack search. For single-episode rows, episode_id or file_path is used.
+
+    **Usenet releases are dropped here (B14)**, once for both callers. A Backfill
+    grab from Usenet produces no seed and still earned a Rounds point. In
+    Trumped, a scene release carries the same name on Usenet, so the exact name
+    could be pre-selected there, grabbed, and the trumped torrent removed with
+    nothing left seeding on the tracker.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn = next((c for c in conns if c['id'] == connection_id), None)
@@ -417,6 +447,8 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
     rows = _arr_get(conn['base_url'], conn['api_key'], api_path, timeout=90)
     result = []
     for r in rows:
+        if _is_usenet(r.get('protocol')):
+            continue
         q_outer = r.get('quality') or {}
         q_inner = q_outer.get('quality') or {}
         guid = r.get('guid', '')

@@ -4,7 +4,7 @@ import { formatBytes } from '../../utils'
 import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker, SearchInput,
-  SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, ArrErrorsWarning,
+  SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, WorkflowWarning, ArrErrorsWarning,
   Button, MatchChips, MATCH_COLOR, ITEM_TITLE, MONO_TITLE, tint,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
@@ -625,7 +625,8 @@ export default function Backfill({ onNavigate }) {
 
   // Data loaded on mount
   const [indexers,      setIndexers]      = useState([])
-  const [allGroups,     setAllGroups]     = useState([])   // candidates as the server grouped them
+  const [usenetCount,   setUsenetCount]   = useState(0)    // B14: Usenet indexers left out of `indexers`
+  const [allGroups,    setAllGroups]     = useState([])   // candidates as the server grouped them
   // Both file counts, not candidate counts. The candidate figure below is
   // groups (a season pack is one candidate, however many episodes), so the
   // two can only be reported as separate claims — see the Search Depth copy.
@@ -692,8 +693,22 @@ export default function Backfill({ onNavigate }) {
         setUnmatchedExample(cdata.unmatched_example || null)
         setArrErrors(cdata.arr_errors || [])
         setIndexers(idata.indexers || [])
-        setDownloadFrom(cfg.ACQUIRE_DOWNLOAD_FROM || [])
-        setSeedingOn(cfg.ACQUIRE_SEEDING_ON || [])
+        // B14: Usenet indexers are no longer offered and their releases are
+        // never searched, so one stored from before would filter every search
+        // down to nothing, with no option on the page to show why. Only names
+        // the server knows to be Usenet are cleared: a name that is merely
+        // missing may belong to an arr that did not answer this time.
+        const usenet = new Set(idata.usenet || [])
+        setUsenetCount(usenet.size)
+        const storedFrom = cfg.ACQUIRE_DOWNLOAD_FROM || []
+        const storedOn   = cfg.ACQUIRE_SEEDING_ON || []
+        const df = storedFrom.filter(n => !usenet.has(n))
+        const so = storedOn.filter(n => !usenet.has(n))
+        setDownloadFrom(df)
+        setSeedingOn(so)
+        if (df.length !== storedFrom.length || so.length !== storedOn.length) {
+          api.saveAcquirePrefs({ ACQUIRE_DOWNLOAD_FROM: df, ACQUIRE_SEEDING_ON: so }).catch(() => {})
+        }
       })
       .catch(e => setLoadError(e.message))
       .finally(() => setLoading(false))
@@ -900,6 +915,12 @@ export default function Backfill({ onNavigate }) {
           <LoadingRow label="Loading candidates…" />
         ) : (
           <>
+            {indexers.length === 0 && usenetCount > 0 && (
+              <WorkflowWarning>
+                Every indexer in Sonarr/Radarr is a Usenet indexer. Backfill only grabs torrents, because only a torrent can seed, so every search will come back empty until you add a torrent indexer.
+              </WorkflowWarning>
+            )}
+
             {indexers.length > 0 && (
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
@@ -909,7 +930,7 @@ export default function Backfill({ onNavigate }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   <div>
                     <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Download from</div>
-                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = no restriction.</div>
+                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = every torrent indexer.</div>
                     <IndexerFilter options={indexers} value={downloadFrom} onChange={handleDownloadFromChange} />
                   </div>
                   <div>

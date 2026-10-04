@@ -1558,11 +1558,12 @@ def workflows_acquire_prefs():
 def workflows_indexers():
     cfg = db_load_config()
     try:
-        indexers = fetch_arr_indexers(cfg)
+        indexers, usenet = fetch_arr_indexers(cfg)
     except Exception as e:
         log.exception("Error fetching Arr indexers")
         return jsonify({"status": "error", "message": str(e)}), 400
-    return jsonify({"status": "success", "indexers": indexers})
+    # `usenet` is listed so the Backfill page can clear a stored choice of one (B14).
+    return jsonify({"status": "success", "indexers": indexers, "usenet": usenet})
 
 
 # ---------------------------------------------------------------------------
@@ -4378,7 +4379,9 @@ def _apply_release_filters(rows, download_from, seeding_on, res_filter=None, sou
         filtered = [r for r in filtered if r.get('hdr', '') in target_hdr]
     # Sort: custom format score desc, quality weight desc, seeders desc (matches
     # Sonarr/Radarr interactive search order). `or 0`, not a .get default: both
-    # arrs declare Seeders as `int?`, so the key is present and null on usenet.
+    # arrs declare Seeders as `int?`, so the key is present and null where an
+    # indexer reports none. (It was null on every Usenet row too, before
+    # `fetch_release_matrix` stopped letting them through — B14.)
     filtered.sort(key=lambda r: (r.get('custom_format_score') or 0, r.get('quality_weight') or 0,
                                  r.get('seeders') or 0), reverse=True)
     return filtered
