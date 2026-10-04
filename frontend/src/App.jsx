@@ -207,6 +207,15 @@ function triageRowCount(details) {
   return (details.not_imported_count || 0) + (details.dead_seed_count || 0)
 }
 
+// How many rows the Cleanup page will list: orphans, plus leftover links to a
+// live torrent's files (CLEANUP C17). The sidebar badge and Triage's cross-link
+// both show it. `leftover_count` is absent from details written before it, which
+// is zero leftovers, as those scans found none.
+function cleanupRowCount(details) {
+  if (!details) return 0
+  return (details.orphaned_torrent_count || 0) + (details.leftover_count || 0)
+}
+
 // Triage's dead seeds, per torrent — the rows a missed trump PM ends up as.
 function deadSeedCount(details) {
   if (!details) return 0
@@ -497,7 +506,7 @@ function AppInner() {
           if (!det) return null
           return {
             triage:  triageRowCount(det),
-            cleanup: det.orphaned_torrent_count || 0,
+            cleanup: cleanupRowCount(det),
             // Groups, as the page lists them (Phase 14). `duplicate_count` counts
             // files and is only the fallback, for details a scan wrote before
             // the group count existed.
@@ -584,7 +593,7 @@ function AppInner() {
             )}
             {tab === 'triage' && (
               <Triage onNavigate={handleNavigate}
-                cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0}
+                cleanupCount={cleanupRowCount(results?.dashboard?.current?.details)}
                 trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
             )}
             {tab === 'cleanup' && (

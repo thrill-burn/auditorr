@@ -1050,5 +1050,99 @@ class TriageCompletionTests(unittest.TestCase):
         self.assertEqual(len([f for f in records if _is_triage_relevant(f)]), 1)
 
 
+# ---------------------------------------------------------------------------
+# CLEANUP C18 — libtorrent's part file is the torrent's, not an orphan
+# ---------------------------------------------------------------------------
+
+class _PriorityQbtClient(_FakeQbtClient):
+    """File listings as `(name, priority)` pairs, the way qBittorrent reports them."""
+
+    def torrents_files(self, torrent_hash=None):
+        if torrent_hash in self._fail_files:
+            raise RuntimeError('file listing timed out')
+        return [_Obj(name=n, priority=p) for n, p in self._files.get(torrent_hash, [])]
+
+
+class PartFileClaimTests(unittest.TestCase):
+    """A piece can straddle a wanted file and a skipped one, and libtorrent keeps
+    the skipped file's share in `.<infohash>.parts`, in the save path beside the
+    payload. No listing names it, so it read as an orphan and Cleanup offered it
+    for `rm` as "the only copy"."""
+
+    H    = 'ab' * 20
+    SAVE = '/data/torrents/movies'
+    PART = os.path.join('/data/torrents/movies', f".{'ab' * 20}.parts")
+
+    def _run(self, files, *, isfile=(), fail_files=(), isdir=(), walk=None):
+        client = _PriorityQbtClient(torrents=[_torrent(self.H, 'Alpha')],
+                                    files={self.H: files}, fail_files=fail_files)
+        stats = []
+
+        def _isfile(p):
+            stats.append(p)
+            return p in isfile
+        with patch.object(_qbit.qbittorrentapi, 'Client', return_value=client), \
+             patch.object(sources.os.path, 'isfile', _isfile), \
+             patch.object(sources.os.path, 'isdir', lambda p: p in isdir), \
+             patch.object(sources.os, 'walk', lambda root: (walk or {}).get(root, [])):
+            return _qbit.fetch_file_map(_qbit_cfg()), stats
+
+    def test_the_name_is_libtorrents(self):
+        self.assertEqual(sources.part_file_path(self.SAVE, self.H.upper()), self.PART)
+        self.assertTrue(sources.is_part_file_name(os.path.basename(self.PART)))
+        for name in ('.abc.parts', f'{self.H}.parts', f'.{self.H}.part', f'.{self.H}.parts.bak'):
+            self.assertFalse(sources.is_part_file_name(name), name)
+        self.assertEqual(sources.part_file_path('', self.H), '')
+        self.assertEqual(sources.part_file_path(self.SAVE, ''), '')
+
+    def test_a_torrent_that_skips_a_file_claims_its_part_file(self):
+        (file_map, _, _, report), _ = self._run(
+            [('Alpha/a.mkv', 1), ('Alpha/extras.mkv', 0)], isfile={self.PART})
+        self.assertIn(self.PART, file_map)
+        self.assertEqual(file_map[self.PART]['hash'], self.H)
+        self.assertEqual(report['file_map_size'], 3)
+
+    def test_a_part_file_that_is_not_there_is_not_claimed(self):
+        """The map never counts a path that does not exist: `file_map_size` is
+        the plausibility guard's baseline."""
+        (file_map, _, _, report), _ = self._run([('Alpha/a.mkv', 1), ('Alpha/x.mkv', 0)])
+        self.assertNotIn(self.PART, file_map)
+        self.assertEqual(report['file_map_size'], 2)
+
+    def test_a_torrent_that_skips_nothing_pays_no_stat(self):
+        (file_map, _, _, _), stats = self._run([('Alpha/a.mkv', 1), ('Alpha/b.mkv', 7)],
+                                               isfile={self.PART})
+        self.assertEqual(stats, [])
+        self.assertNotIn(self.PART, file_map)
+
+    def test_a_listing_with_no_priorities_looks_on_disk(self):
+        (file_map, _, _, _), stats = self._run([('Alpha/a.mkv', None)], isfile={self.PART})
+        self.assertIn(self.PART, file_map)
+        self.assertEqual(stats, [self.PART])
+
+    def test_a_failed_listing_claims_the_part_file_beside_the_payload_it_found(self):
+        """The disk fallback walks `save_path/name`, which never reaches a file
+        that sits beside it."""
+        root = os.path.join(self.SAVE, 'Alpha')
+        (file_map, _, _, report), _ = self._run(
+            [], fail_files={self.H}, isdir={root}, isfile={self.PART},
+            walk={root: [(root, [], ['a.mkv'])]})
+        self.assertIn(self.PART, file_map)
+        self.assertEqual(report['listing_recovered'], 1)
+
+    def test_a_failed_listing_that_found_nothing_stays_unresolved(self):
+        """A part file alone is not a recovered payload. The save path is an
+        unresolved root, which already makes the part file `unverified`."""
+        (file_map, _, _, report), _ = self._run([], fail_files={self.H}, isfile={self.PART})
+        self.assertNotIn(self.PART, file_map)
+        self.assertEqual(report['listing_unresolved'], 1)
+
+    def test_qui_keeps_a_priority_of_zero(self):
+        """`or 0`, or a dropped field, would read every listing as skipping a file
+        or as unknown — a stat per torrent per scan."""
+        self.assertEqual(_qui._norm_file({'name': 'a.mkv', 'priority': 0})['priority'], 0)
+        self.assertIsNone(_qui._norm_file({'name': 'a.mkv'})['priority'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -577,6 +577,21 @@ def test_first_scan_credits_nothing():
     assert count_pile_resolved({}, [_tf('radarr/A.mkv')]) == 0
 
 
+def test_a_record_renamed_off_its_leftover_link_is_not_digging():
+    """CLEANUP C17. A record is named after its inode's first *claimed* path; a
+    scan from before that could name it after a leftover link the walk reached
+    first. The first scan after the upgrade moves the name and nothing else —
+    the same not-imported file, still on the pile — and the old spelling now
+    sits on the record as a leftover. Without the guard that move paid a point."""
+    before = [_tf('cross-seed/Rel--cccc/Rel.mkv')]
+    after = [_tf('cross-seed/Rel--aaaa/Rel.mkv',
+                 leftover={'path': 'cross-seed/Rel--cccc/Rel.mkv', 'leftover': True})]
+    assert count_pile_resolved(file_signatures(before), after) == 0
+    # The same file, really imported since, is still a dig.
+    after[0]['imported'] = True
+    assert count_pile_resolved(file_signatures(before), after) == 1
+
+
 # ── …and the rest of the pile: dead seeds and dead registrations ─────────────
 # The pile is everything Triage lists, not just the not-imported files. Both of
 # these are invisible to a "not imported" test: a dead seed IS imported, and a

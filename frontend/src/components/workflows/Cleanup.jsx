@@ -36,6 +36,12 @@ const STATE = {
     label: 'linked elsewhere', color: 'var(--blue)',
     title: 'Another hardlink to this file exists beyond the paths listed here — a manual hardlink, a snapshot, another library root, or a copy you excluded. Deleting these paths loses nothing and frees nothing.',
   },
+  // A leftover link (C17): no torrent claims this path, but one claims the same
+  // bytes at another path, which is never listed here and never selectable.
+  torrent_copy: {
+    label: 'torrent copy', color: 'var(--cyan)',
+    title: 'A torrent in your client uses this file at another path, so this one is a leftover hardlink — often from a cross-seed removed with its files kept. Deleting it loses nothing and frees nothing.',
+  },
   last_copy: {
     label: 'only copy', color: 'var(--red)',
     title: 'Nothing else auditorr can see holds these bytes. Deleting is permanent.',
@@ -61,6 +67,14 @@ const PILES = [
   {
     id: 'keeps_copy', state: 'library_copy', title: 'Your library keeps a copy', color: 'var(--green)',
     blurb: 'Another link holds the same data, so deleting these frees nothing and loses nothing.',
+  },
+  // Its own pile rather than a row state under the library's heading: the
+  // reason to clear these is that tools counting hardlinks read them as a
+  // library copy, so "your library keeps a copy" is the one thing that must
+  // not be printed above them (issue #26).
+  {
+    id: 'leftover', state: 'torrent_copy', title: 'A torrent keeps a copy', color: 'var(--cyan)',
+    blurb: 'Leftover hardlinks, often from a cross-seed removed with its files kept. Tools that count hardlinks read these as a library copy.',
   },
   {
     id: 'only_copy', state: 'last_copy', title: 'This is the only copy', color: 'var(--red)',
@@ -109,6 +123,8 @@ function ageLabel(mtime) {
 }
 
 const selectable = row => row.state !== 'unverified'
+// The states whose delete loses nothing: the server's `keeps_copy` count.
+const LOSSLESS = new Set(['library_copy', 'linked_elsewhere', 'torrent_copy'])
 const plural = (n, word) => `${n} ${word}${n !== 1 ? 's' : ''}`
 const shownIn = (folder, p) => (folder !== '(root)' && p.startsWith(folder + '/') ? p.slice(folder.length + 1) : p)
 
@@ -162,7 +178,9 @@ function FileRow({ row, folder, pileState, checked, onToggle }) {
         ))}
         {row.paths.length > 1 && (
           <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 2 }}>
-            One file at {row.paths.length} paths — its space is freed only when every one is deleted.
+            {row.state === 'torrent_copy'
+              ? <>One file at {row.paths.length} leftover paths — a torrent keeps it either way.</>
+              : <>One file at {row.paths.length} paths — its space is freed only when every one is deleted.</>}
           </div>
         )}
       </div>
@@ -343,7 +361,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
 
   const selectedRows  = useMemo(() => [...selected].map(k => rowByKey[k]).filter(Boolean), [selected, rowByKey])
   const selectedPaths = useMemo(() => selectedRows.flatMap(r => r.paths), [selectedRows])
-  const selKeeps = selectedRows.filter(r => r.state === 'library_copy' || r.state === 'linked_elsewhere').length
+  const selKeeps = selectedRows.filter(r => LOSSLESS.has(r.state)).length
   const selOnly  = selectedRows.filter(r => r.state === 'last_copy')
   // A row selects every path of its inode, so an only-copy row's bytes are freed
   // at most once. The script reports what it actually frees.

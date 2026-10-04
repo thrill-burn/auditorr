@@ -134,6 +134,15 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 excluded = (compiled_exclusions.match(full_path, rel_path, filename)
                             if compiled_exclusions is not None
                             else is_excluded(full_path, rel_path, filename, exclusion_patterns))
+                qbit_info = qbit_file_map.get(full_path) if source_label == 'Torrent' else None
+                # A live torrent's libtorrent part file (CLEANUP C18) is the
+                # client's bookkeeping, not payload: claimed so Cleanup never
+                # offers it, and excluded so Triage never lists it as a file
+                # the arr did not import — whose row's delete removes the
+                # torrent. Shown in File Explorer like a tombstone. One whose
+                # torrent is gone is not claimed, and is an ordinary orphan.
+                if qbit_info is not None and not excluded and sources.is_part_file_name(filename):
+                    excluded = True
                 inode_map.setdefault(file_key, {
                     'trackers': set(), 'status': 'Orphaned',
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
@@ -145,15 +154,33 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     'media_rel_path': None, 'media_excluded': False,
                 })
                 if source_label == 'Torrent':
-                    inode_map[file_key]['torrent_paths'].append(full_path)
-                    if inode_map[file_key]['torrent_rel_path'] is None:
-                        # First occurrence wins for cross-seeded inodes
-                        inode_map[file_key]['size']             = size
-                        inode_map[file_key]['torrent_rel_path'] = rel_path
-                        inode_map[file_key]['torrent_excluded'] = excluded
-                    qbit_info = qbit_file_map.get(full_path)
+                    info = inode_map[file_key]
+                    # Every claim sets a client status, so 'Orphaned' here means
+                    # no path walked so far is a torrent's.
+                    claimed_before = info['status'] != 'Orphaned'
+                    if qbit_info is not None and not claimed_before and info['torrent_paths']:
+                        # The first claim on an inode the walk reached through
+                        # unclaimed paths: those are leftover links (CLEANUP
+                        # C17), and this path leads. The record's path, size and
+                        # `excluded` come from `torrent_paths[0]`, so a leftover
+                        # walked first used to name the record and govern
+                        # whether the live file was hidden — a rule written for
+                        # the leftover hid the torrent's own file.
+                        info['stray_paths'] = list(info['torrent_paths'])
+                        info['torrent_paths'].insert(0, full_path)
+                        info['torrent_rel_path'] = None
+                    else:
+                        info['torrent_paths'].append(full_path)
+                        if qbit_info is None and claimed_before:
+                            # Sparse: only inodes that have one pay for the key.
+                            info.setdefault('stray_paths', []).append(full_path)
+                    if info['torrent_rel_path'] is None:
+                        # The first claimed path wins for cross-seeded inodes,
+                        # else the first walked.
+                        info['size']             = size
+                        info['torrent_rel_path'] = rel_path
+                        info['torrent_excluded'] = excluded
                     if qbit_info:
-                        info = inode_map[file_key]
                         info['trackers'].update(qbit_info['trackers'])
                         info['category'] = qbit_info.get('category', '') or info.get('category', '')
                         # Cross-seeds via distinct hardlinks share an inode but
@@ -405,14 +432,19 @@ def _stamp_orphan(record, info, compiled_exclusions, unverified):
 
 
 def _extra_torrent_paths(inode_map):
-    """Every torrent-tree path that is *not* on a record: `(rel posix | None, orphan)`.
+    """Every torrent-tree path that is *not* on a record: `(rel posix | None, unclaimed)`.
 
-    A record carries its inode's first walked path only, so a live
-    distinct-hardlink cross-seed's second path sits under some folder while
-    appearing on no record at all. Lazy on purpose — the exclusivity test
-    consumes it path by path and accumulates nothing. `None` means a path could
-    not be placed relative to the torrent tree (not reachable by construction);
-    the consumer then refuses every folder rather than guess.
+    A record carries its inode's first path only, so a live distinct-hardlink
+    cross-seed's second path sits under some folder while appearing on no
+    record at all. Lazy on purpose — the exclusivity test consumes it path by
+    path and accumulates nothing. `None` means a path could not be placed
+    relative to the torrent tree (not reachable by construction); the consumer
+    then refuses every folder rather than guess.
+
+    `unclaimed` is true for every path of an orphan and for a live inode's
+    leftover links (C17). A record's first path is the inode's first *claimed*
+    one, so excluding a leftover's folder leaves the live file's `excluded`
+    alone, and a leftover is no more a reason to refuse a folder than an orphan.
     """
     for info in inode_map.values():
         paths = info.get('torrent_paths') or []
@@ -420,11 +452,82 @@ def _extra_torrent_paths(inode_map):
             continue
         base = _torrent_tree_base(info)
         orphan = info.get('status') == 'Orphaned'
+        stray = set(info.get('stray_paths') or ())
         for p in paths[1:]:
+            unclaimed = orphan or p in stray
             if base is None or not p.startswith(base):
-                yield None, orphan
+                yield None, unclaimed
             else:
-                yield p[len(base):].replace('\\', '/'), orphan
+                yield p[len(base):].replace('\\', '/'), unclaimed
+
+
+def _leftover_record(file_key, info, compiled_exclusions, unverified):
+    """A Cleanup row for a live inode's leftover links, or None (CLEANUP C17).
+
+    A **leftover link** is a torrent-tree path that no torrent claims, to bytes a
+    torrent still claims at another path: typically the folder of a cross-seed
+    removed with *keep files*. Orphanhood is decided per inode, so one claimed
+    path made every path of the inode read as seeding, and the leftover was in
+    no report anywhere. Deleting it frees nothing, which is why the byte-shaped
+    report never needed it. It still matters: a tool that judges "imported" by
+    counting hardlinks reads the leftover as a library copy, and keeps a torrent
+    the arr never imported — a qui automation, in issue #26.
+
+    Shaped like an orphan record so Cleanup's paths, states, re-verify and
+    script take it unchanged: `path` is the first leftover, `other_paths` the
+    rest, `leftover: True` is what `app._cleanup_state` reads. It rides the
+    carrier's record as `leftover` (sparse) rather than the torrent list, whose
+    every consumer counts one record per inode. Its `excl_folder` is its own,
+    because a carrier can hold Triage's.
+
+    Leftovers the exclusion rules cover are dropped, as `_stamp_orphan` drops an
+    excluded sibling. `unverified` follows `unverified_spec`: a torrent on an
+    instance that did not answer, or under an unresolved save path, may claim
+    the leftover too.
+    """
+    strays = info.get('stray_paths')
+    if not strays or info.get('status') == 'Orphaned':
+        return None
+    base = _torrent_tree_base(info)
+    if base is None:
+        return None
+    rels, kept = [], []
+    for p in strays:
+        if not p.startswith(base):
+            continue
+        rel = p[len(base):].replace('\\', '/')
+        if compiled_exclusions is not None and \
+                compiled_exclusions.match(p, rel, os.path.basename(p)):
+            continue
+        rels.append(rel)
+        kept.append(p)
+    if not rels:
+        return None
+    rec = {
+        "path": rels[0], "size": info['size'], "inode": file_key[1],
+        "file_id": f"{file_key[0]}:{file_key[1]}",
+        "leftover": True,
+    }
+    if len(rels) > 1:
+        rec["other_paths"] = rels[1:]
+    try:
+        rec["mtime"] = int(os.stat(kept[0]).st_mtime)
+    except (OSError, ValueError, OverflowError):
+        pass
+    if unverified and (unverified.get('all') or any(
+            _path_under(_norm_abs(p), root) for p in kept for root in unverified['roots'])):
+        rec["unverified"] = True
+    return rec
+
+
+def cleanup_working_set(torrent_files):
+    """What the Cleanup page and its delete script read: orphans, then leftovers.
+
+    The compact `cleanup` row, and `app._cleanup_records`' fallback over the
+    full list, are both this, so the two cannot disagree.
+    """
+    return ([f for f in torrent_files if _is_cleanup_relevant(f)]
+            + [f['leftover'] for f in torrent_files if f.get('leftover')])
 
 
 def _dedupe_paths(tree_paths):
@@ -521,6 +624,10 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             record["completion_unknown"] = True
         if info['status'] == 'Orphaned' and not info['torrent_excluded']:
             _stamp_orphan(record, info, compiled_exclusions, unverified)
+        elif info.get('stray_paths'):
+            leftover = _leftover_record(file_key, info, compiled_exclusions, unverified)
+            if leftover:
+                record["leftover"] = leftover
         torrent_files_data.append(record)
     media_files_data = []
     seen_media_keys = set()
@@ -546,7 +653,8 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         media_files_data.append(record)
     _mark_whole_torrents(torrent_files_data, media_files_data)
     _mark_cleanup_folders(torrent_files_data, media_files_data,
-                          extra_paths=_extra_torrent_paths(inode_map))
+                          extra_paths=_extra_torrent_paths(inode_map),
+                          leftovers=[r['leftover'] for r in torrent_files_data if r.get('leftover')])
     return torrent_files_data, media_files_data
 
 
@@ -568,7 +676,7 @@ def _media_root_names(media_files_data):
 _FOLDER_REFUSAL_RANK = {'unverified': 1, 'live_torrent': 2, 'not_established': 3, 'media_root': 4}
 
 
-def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
+def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=(), leftovers=()):
     """Stamp the folder a Cleanup exclusion rule may name (C16 + Cleanup's C7).
 
     Cleanup groups orphans at `dir_segs[:2]`, and a fully selected group can be
@@ -605,12 +713,15 @@ def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
     (`media_root` | `live_torrent` | `unverified` | `not_established`) so the
     page can say why. **Absent both, the page falls back to per-file rules** —
     a database whose last audit predates these fields looks exactly like that.
-    Written only on non-excluded orphans, and `O(paths × 2)` dict lookups.
+    Written only on non-excluded orphans and on `leftovers` (C17's rows, which
+    ride their carriers' records), and `O(paths × 2)` dict lookups. A leftover
+    path refuses nothing: it is no torrent's, and since the walk names a record
+    after its first *claimed* path, a rule over it cannot hide the live file.
     """
+    rows = [r for r in torrent_files_data
+            if r.get('status') == 'Orphaned' and not r.get('excluded')] + list(leftovers)
     candidates = {}
-    for r in torrent_files_data:
-        if r.get('status') != 'Orphaned' or r.get('excluded'):
-            continue
+    for r in rows:
         segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
         if segs:
             candidates.setdefault('/'.join(segs[:2]), None)
@@ -636,13 +747,17 @@ def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
         elif r.get('unverified'):
             for p in [r.get('path')] + list(r.get('other_paths') or []):
                 refuse(p, 'unverified')
-    for rel, orphan in extra_paths:
+    for r in leftovers:
+        if r.get('unverified'):
+            for p in [r.get('path')] + list(r.get('other_paths') or []):
+                refuse(p, 'unverified')
+    for rel, unclaimed in extra_paths:
         if rel is None:
             for folder in candidates:
                 if candidates[folder] is None:
                     candidates[folder] = 'not_established'
             break
-        if not orphan:
+        if not unclaimed:
             refuse(rel, 'live_torrent')
 
     media_roots = _media_root_names(media_files_data)
@@ -650,9 +765,7 @@ def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=()):
         if '/' not in folder and folder.lower() in media_roots:
             candidates[folder] = 'media_root'
 
-    for r in torrent_files_data:
-        if r.get('status') != 'Orphaned' or r.get('excluded'):
-            continue
+    for r in rows:
         segs = str(r.get('path') or '').replace('\\', '/').split('/')[:-1]
         if not segs:
             continue
@@ -969,6 +1082,10 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
             # see app._cleanup_records. Per record, i.e. per inode.
             "orphaned_excluded_count": sum(1 for f in torrent_files
                                            if f['status'] == 'Orphaned' and f.get('excluded')),
+            # Cleanup's leftover-link rows (C17), one per live inode: the rest of
+            # the page's count, beside `orphaned_torrent_count`, for the sidebar
+            # badge. Zero bytes, so the score and Rounds never see them.
+            "leftover_count": sum(1 for f in torrent_files if f.get('leftover')),
             "not_imported_count": sum(1 for f in scoring_torrents if not f['imported'] and f['status'] != 'Orphaned'),
             "dead_seed_count": sum(1 for f in scoring_torrents
                                    if f['imported'] and f['status'] != 'Orphaned'
@@ -1365,14 +1482,30 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
     }
     if not on_pile:
         return resolved
+    # A record is named after its inode's first *claimed* path (C17). A scan from
+    # before that could name it after a leftover link the walk reached first, so
+    # on the first scan after it, that record's path moves. The old spelling is
+    # now one of its leftover paths, and is the same file still on the pile, not
+    # one dug: without this the move paid one shovel point per moved record.
+    pile_posix = None
     still = 0
     for f in torrent_files:
-        if f['path'] not in on_pile:
+        listed = f['path'] in on_pile
+        leftover = f.get('leftover')
+        if not listed and not leftover:
             continue
         # Either still sitting on the pile, or it left by a route that isn't a
         # success (see the carve-outs above).
-        if _is_pile_item(f) or f.get('status') == 'Orphaned' or f.get('excluded'):
+        if not (_is_pile_item(f) or f.get('status') == 'Orphaned' or f.get('excluded')):
+            continue
+        if listed:
             still += 1
+        if leftover:
+            if pile_posix is None:
+                pile_posix = {str(p).replace('\\', '/') for p in on_pile}
+            for p in [leftover.get('path')] + list(leftover.get('other_paths') or []):
+                if p in pile_posix:
+                    still += 1
     return resolved + len(on_pile) - still
 
 
@@ -2283,8 +2416,8 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 [f for f in torrent_files_data if _is_triage_relevant(f)])),
             # Compact Cleanup working set, after the orphan stamps (C10): the
             # page and the delete script read this, never the full torrent list.
-            ('cleanup',  db_prepare_file_results(
-                [f for f in torrent_files_data if _is_cleanup_relevant(f)])),
+            # Orphans, then the leftover links riding their carriers (C17).
+            ('cleanup',  db_prepare_file_results(cleanup_working_set(torrent_files_data))),
             # Compact Dedupe working set (R6, Phase 14): the page and the script
             # read this, never both full lists. References, keyed by tree.
             ('dedupe',   db_prepare_file_results(

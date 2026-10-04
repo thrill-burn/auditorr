@@ -49,6 +49,7 @@ from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_instance_failure, report_note,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key,
+    is_part_file_name,
 )
 
 log = logging.getLogger(__name__)
@@ -128,6 +129,8 @@ def _norm_file(f):
     return {
         'name': f.get('name') or f.get('path') or '',
         'size': f.get('size') or 0,
+        # Not `or 0`: 0 is *Do not download*, and absent must stay absent.
+        'priority': f.get('priority'),
     }
 
 
@@ -543,8 +546,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
         # content_path while it is still downloading, at save_path/name once it
         # has finished — rather than left to default to 'Orphaned'.
         file_names = [f['name'] for f in torrent_files] if torrent_files else None
+        priorities = [f.get('priority') for f in torrent_files] if torrent_files else None
         full_paths = torrent_claimed_paths(
-            save_path, nt['name'], content_path, file_names, complete)
+            save_path, nt['name'], content_path, file_names, complete,
+            torrent_hash=th, priorities=priorities)
 
         if file_names is not None:
             nonempty_file_count += 1
@@ -552,8 +557,11 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 if len(sample_paths) < 3:
                     sample_paths.append({
                         # Anything past the file list is a claim on where an
-                        # unfinished payload may actually be sitting.
-                        'source': 'api' if i < len(file_names) else 'in_flight',
+                        # unfinished payload may actually be sitting, or the
+                        # torrent's part file.
+                        'source': ('api' if i < len(file_names) else
+                                   'part_file' if is_part_file_name(os.path.basename(full_path))
+                                   else 'in_flight'),
                         'raw_save_path': raw_save_path,
                         'mapped_save_path': save_path,
                         'file_name': file_names[i] if i < len(file_names) else '',

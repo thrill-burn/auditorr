@@ -43,7 +43,7 @@ from state import (
     get_state, set_state, try_start_scanning,
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, _is_cleanup_relevant, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS
 from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
@@ -986,11 +986,12 @@ def _norm_abs(path):
 
 
 def _cleanup_paths(rec):
-    """Every torrent-tree path of one orphan record — its own, then `other_paths`.
+    """Every torrent-tree path of one Cleanup record — its own, then `other_paths`.
 
     A record is an **inode** (C5): `_assemble_records` emits one per inode and
-    stamps the inode's other torrent-tree paths on orphans only. Relative and
-    posix, the spelling `other_paths` is stored in.
+    stamps the inode's other torrent-tree paths on orphans only. A leftover
+    record (C17) lists the inode's leftover links and never its claimed path.
+    Relative and posix, the spelling `other_paths` is stored in.
     """
     return [str(rec.get('path') or '').replace('\\', '/')] + list(rec.get('other_paths') or [])
 
@@ -1004,6 +1005,10 @@ def _cleanup_state(rec):
     * `unverified` — the scan could not ask about this file (a failed instance
       on a scan the manual override persisted, or a failed listing whose disk
       fallback found nothing under its save path). It may be a live torrent's.
+    * `torrent_copy` — a leftover link (C17): a torrent claims these bytes at
+      another path, which is never one of this row's. Deleting is lossless and
+      frees nothing, and it stops hardlink-counting tools reading the leftover
+      as a library copy.
     * `library_copy` — a hardlink to the inode sits in `MEDIA_PATH`. Deleting
       is lossless and frees nothing.
     * `linked_elsewhere` — `nlink` exceeds the torrent-tree paths this row
@@ -1023,6 +1028,8 @@ def _cleanup_state(rec):
     """
     if rec.get('unverified'):
         return 'unverified'
+    if rec.get('leftover'):
+        return 'torrent_copy'
     if rec.get('imported') or rec.get('linked_paths'):
         return 'library_copy'
     nlink = rec.get('nlink')
@@ -1040,13 +1047,14 @@ def _cleanup_details(conn=None):
 
 
 def _cleanup_records():
-    """(orphan records, excluded_count) — the compact row, or the full list filtered.
+    """(cleanup records, excluded_count) — the compact row, or the full list filtered.
 
-    The audit persists a compact `cleanup` row (`audit._is_cleanup_relevant`) so
-    neither this page nor the delete script deserializes the full torrent list
-    to read the ~1% it acts on (C10 — Triage's v1.7.0 fix, same shape). A
-    database whose last audit predates the row falls back to the full list until
-    the next scan.
+    The audit persists a compact `cleanup` row (`audit.cleanup_working_set`:
+    non-excluded orphans, then the leftover links riding their carriers' records,
+    C17) so neither this page nor the delete script deserializes the full
+    torrent list to read the ~1% it acts on (C10 — Triage's v1.7.0 fix, same
+    shape). A database whose last audit predates the row falls back to the full
+    list until the next scan, through the same function.
 
     **Excluded orphans do not ride the compact row; their count rides the
     audit's details** (`orphaned_excluded_count`). The row is the working set
@@ -1066,7 +1074,7 @@ def _cleanup_records():
             excluded = _cleanup_details(conn=snap).get('orphaned_excluded_count')
         else:
             full = db_load_file_results('torrents', conn=snap)
-            records = [f for f in full if _is_cleanup_relevant(f)]
+            records = cleanup_working_set(full)
             excluded = sum(1 for f in full if f.get('status') == 'Orphaned' and f.get('excluded'))
             del full
     return [r for r in records if not is_tombstone_path(r.get('path'))], excluded
@@ -1085,7 +1093,10 @@ def _cleanup_claim_candidates(rows, wanted_abs, remote, local):
     * it exposes no `content_path`, or is not known to be complete, and its
       `save_path` contains one — without `content_path` a listing's names are
       not bounded to the torrent's own folder, and an unfinished payload's
-      final paths need not sit under its name.
+      final paths need not sit under its name; or
+    * its part file (`save_path/.<hash>.parts`, C18) is a selected path. That
+      sits beside the payload rather than under it, so neither rule above
+      reaches it for a finished torrent.
 
     Selected paths are expanded into the set of their ancestors once, so this is
     one pass over the listing with set lookups, not a product of the two.
@@ -1114,6 +1125,9 @@ def _cleanup_claim_candidates(rows, wanted_abs, remote, local):
         if any(x and (x in exact or x in ancestors) for x in (root, cp)):
             out.append(r)
             continue
+        if sp and _norm_abs(sources.part_file_path(sp, r.get('hash'))) in exact:
+            out.append(r)
+            continue
         complete = sources.torrent_complete(r.get('progress'), r.get('completion_on'))
         if (not cp or complete is not True) and (not sp or sp in ancestors):
             out.append(r)
@@ -1134,6 +1148,11 @@ def _cleanup_row_claims(row, client_paths, remote, local):
     **`[]` is treated like `None`** — a torrent that lists no files is not
     evidence that nothing sits at its roots, and routing it through the disk
     fallback can only claim more. It is also what the audit itself does on qui.
+
+    The torrent's part file (C18) is claimed whatever the listing said. The
+    shared rule looks for one only where the audit could know to, and this
+    answer is compared against the selection alone, so over-claiming here can
+    only keep a file out of the script.
     """
     sp_client = row.get('save_path') or ''
     save_path = sources.remap_path(sp_client, remote, local)
@@ -1152,8 +1171,10 @@ def _cleanup_row_claims(row, client_paths, remote, local):
                 names.append(c[len(prefix):])
             else:
                 extra.append(sources.remap_path(c, remote, local))
+    part = sources.part_file_path(save_path, row.get('hash'))
     return sources.torrent_claimed_paths(
-        save_path, row.get('name') or '', content_path, names, complete) + extra
+        save_path, row.get('name') or '', content_path, names, complete) \
+        + extra + ([part] if part else [])
 
 
 def _cleanup_live_claims(cfg, rel_paths):
@@ -1237,7 +1258,9 @@ def _cleanup_script_response(cfg, selection):
     C2's failure mode is one click from catastrophic, so nothing may be pre-armed.
 
     A path is accepted only if the last audit listed it as a non-excluded orphan
-    — a record's own path or one of its `other_paths`. Then:
+    or a leftover link (C17) — a record's own path or one of its `other_paths`.
+    A leftover record never lists its inode's claimed path, so that path can
+    never be selected. Then:
 
     * any `unverified` path → 409 `unverified`, so the rule is not only a
       disabled checkbox;
@@ -4109,11 +4132,12 @@ def _triage_exclusion_suggestions(items):
     return sorted(buckets.values(), key=lambda s: -s['count'])
 
 
-# Pile order on the page: the lossless pile first, where green belongs; the
-# irreversible pile second; the one nothing can be done about until a clean scan
+# Pile order on the page: the lossless piles first — the library's, where green
+# belongs, then leftover links a torrent still holds the bytes of (C17); the
+# irreversible pile next; the one nothing can be done about until a clean scan
 # last. CLEANUP Principle 5 — irreversibility outranks yield — decided by the
 # user as option (a), 2026-09-13.
-_CLEANUP_PILES = ('keeps_copy', 'only_copy', 'unverified')
+_CLEANUP_PILES = ('keeps_copy', 'leftover', 'only_copy', 'unverified')
 
 
 @app.route('/api/workflows/cleanup')
@@ -4140,13 +4164,15 @@ def workflows_cleanup():
     for every group.
 
     `pile` is the group's most alarming state: any `unverified` file puts it in
-    `unverified`, else any `last_copy` in `only_copy`, else `keeps_copy` — a
-    group holding both kinds sits in the only-copy pile with per-file states.
+    `unverified`, else any `last_copy` in `only_copy`, else `leftover` when every
+    row is a leftover link (`torrent_copy`, C17), else `keeps_copy` — a group
+    holding several kinds sits in the most alarming pile with per-file states.
     Groups sort by pile, then oldest first; rows oldest first.
 
     `freeable_size` is an **upper bound**: each last-copy inode counted once.
     What a run actually frees is the script's to report. `excluded_count` counts
-    excluded orphan **records** (inodes), not paths.
+    excluded orphan **records** (inodes), not paths. `keeps_copy` counts every
+    lossless row, leftovers included; `leftover` counts those alone.
     """
     records, excluded_count = _cleanup_records()
 
@@ -4170,7 +4196,8 @@ def workflows_cleanup():
         })
 
     states = {s: {'count': 0, 'size': 0}
-              for s in ('library_copy', 'linked_elsewhere', 'last_copy', 'unverified')}
+              for s in ('library_copy', 'linked_elsewhere', 'torrent_copy', 'last_copy',
+                        'unverified')}
     groups = []
     for top, g in folders.items():
         stamps, refused = g.pop('_stamps'), g.pop('_refused')
@@ -4186,7 +4213,8 @@ def workflows_cleanup():
             excl, why = None, 'not_established'
         present = {f['state'] for f in g['files']}
         pile = ('unverified' if 'unverified' in present
-                else 'only_copy' if 'last_copy' in present else 'keeps_copy')
+                else 'only_copy' if 'last_copy' in present
+                else 'leftover' if present == {'torrent_copy'} else 'keeps_copy')
         for f in g['files']:
             states[f['state']]['count'] += 1
             states[f['state']]['size'] += f['size']
@@ -4205,8 +4233,9 @@ def workflows_cleanup():
     groups.sort(key=lambda g: (_CLEANUP_PILES.index(g['pile']), g['oldest_mtime'] is None,
                                g['oldest_mtime'] or 0, g['folder']))
 
-    keeps = {'count': states['library_copy']['count'] + states['linked_elsewhere']['count'],
-             'size':  states['library_copy']['size'] + states['linked_elsewhere']['size']}
+    lossless = ('library_copy', 'linked_elsewhere', 'torrent_copy')
+    keeps = {'count': sum(states[s]['count'] for s in lossless),
+             'size':  sum(states[s]['size'] for s in lossless)}
     return jsonify({
         "status":         "success",
         "groups":         groups,
@@ -4215,6 +4244,7 @@ def workflows_cleanup():
         "total_size":     sum(g['total_size'] for g in groups),
         "freeable_size":  sum(g['freeable_size'] for g in groups),
         "keeps_copy":     keeps,
+        "leftover":       states['torrent_copy'],
         "only_copy":      states['last_copy'],
         "unverified":     states['unverified'],
         "states":         states,

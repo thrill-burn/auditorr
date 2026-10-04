@@ -32,6 +32,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import app
+import audit
 import sources
 from audit import _assemble_records, _walk_directory
 from exclusions import compile_exclusions
@@ -151,7 +152,8 @@ def _audit(torrents, media, file_map=None, patterns=(), **kw):
     mko, _, _, _ = _walk_directory(str(media), 'Media', inode_map, file_map or {},
                                    0, 0, exclusion_patterns=expanded,
                                    compiled_exclusions=compiled)
-    torrent_files, media_files = _assemble_records(tko, mko, inode_map, {}, **kw)
+    torrent_files, media_files = _assemble_records(tko, mko, inode_map, {},
+                                                   compiled_exclusions=compiled, **kw)
     return torrent_files, media_files
 
 
@@ -171,6 +173,24 @@ def trees(tmp_path):
 
 def _posix(p):
     return str(p).replace('\\', '/')
+
+
+def _walk_order(order):
+    """Patch `os.walk` to visit sibling folders in a fixed order.
+
+    NTFS lists alphabetically and ext4 by hash, so which of two hardlinked paths
+    the walk reaches first is not something a test can leave to the filesystem
+    when that is the thing under test. `os.walk` is top-down, so sorting the
+    `dirs` it yields steers the descent.
+    """
+    real = os.walk
+
+    def walk(top, *a, **kw):
+        for root, dirs, files in real(top, *a, **kw):
+            dirs.sort(reverse=(order == 'desc'))
+            files.sort(reverse=(order == 'desc'))
+            yield root, dirs, files
+    return patch('os.walk', walk)
 
 
 def _group(report, folder):
@@ -497,7 +517,7 @@ class TestStates:
                                 'tracker_health': 'working'}}
         torrent_files, _ = _audit(torrents, media, file_map=file_map)
         seeding = next(r for r in torrent_files if r['status'] == 'Seeding')
-        for key in ('mtime', 'nlink', 'other_paths', 'unverified', 'excl_refused'):
+        for key in ('mtime', 'nlink', 'other_paths', 'unverified', 'excl_refused', 'leftover'):
             assert key not in seeding
         orphan = next(r for r in torrent_files if r['status'] == 'Orphaned')
         assert isinstance(orphan['mtime'], int) and orphan['nlink'] == 1
@@ -572,10 +592,15 @@ class TestFolderRules:
         torrents, media = trees
         live = _write(torrents / 'tv-a' / 'Show' / 'e.mkv')
         (torrents / 'tv-b' / 'Show').mkdir(parents=True)
-        os.link(live, torrents / 'tv-b' / 'Show' / 'e.mkv')
+        second = torrents / 'tv-b' / 'Show' / 'e.mkv'
+        os.link(live, second)
         _write(torrents / 'tv-b' / 'Show' / 'stray.nfo')
+        # Both registrations are live. A second path no torrent claims is a
+        # leftover link instead (C17) — see TestLeftoverLinks.
         file_map = {str(live): {'status': 'Seeding', 'trackers': set(), 'hash': 'aaa',
-                                'tracker_health': 'working'}}
+                                'tracker_health': 'working'},
+                    str(second): {'status': 'Seeding', 'trackers': set(), 'hash': 'bbb',
+                                  'tracker_health': 'working'}}
         torrent_files, _ = _audit(torrents, media, file_map=file_map)
         g = _group(_cleanup(torrent_files).get_json(), 'tv-b/Show')
         assert g['excl_folder'] is None
@@ -706,3 +731,165 @@ class TestScriptContract:
         code, out = _run(_text(resp), torrents)
         assert not (torrents / 'PWNED').exists(), out
         assert code == 0, out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# C17 — leftover links: a path no torrent claims, to bytes a torrent still does
+# ═════════════════════════════════════════════════════════════════════════════
+
+LIVE     = 'cross-seed/Rel--aaaa'
+LEFTOVER = 'cross-seed/Rel--cccc'
+
+
+def _leftover_tree(trees):
+    """A cross-seed removed with its files kept: its folder's file is a second
+    hardlink of a live torrent's file (issue #26)."""
+    torrents, media = trees
+    live = _write(torrents / LIVE / 'Rel.mkv', b'v' * 500)
+    (torrents / LEFTOVER).mkdir(parents=True)
+    os.link(live, torrents / LEFTOVER / 'Rel.mkv')
+    file_map = {str(live): {'status': 'Seeding', 'trackers': set(), 'hash': 'aaa',
+                            'tracker_health': 'working'}}
+    return torrents, media, file_map
+
+
+class TestLeftoverLinks:
+
+    @pytest.mark.parametrize('order', ['asc', 'desc'])
+    def test_a_removed_cross_seeds_folder_is_listed_in_its_own_pile(self, trees, order):
+        """Orphanhood is per inode, so one claimed path made the leftover read as
+        seeding and it was in no report at all."""
+        torrents, media, file_map = _leftover_tree(trees)
+        with _walk_order(order):
+            torrent_files, _ = _audit(torrents, media, file_map=file_map)
+        [rec] = torrent_files
+        assert rec['status'] == 'Seeding'
+        assert _posix(rec['path']) == f'{LIVE}/Rel.mkv'
+        assert rec['leftover']['path'] == f'{LEFTOVER}/Rel.mkv'
+
+        report = _cleanup(torrent_files).get_json()
+        g = _group(report, LEFTOVER)
+        assert g['pile'] == 'leftover'
+        assert g['excl_folder'] == LEFTOVER
+        [row] = g['files']
+        assert row['state'] == 'torrent_copy'
+        assert row['paths'] == [f'{LEFTOVER}/Rel.mkv']
+        assert isinstance(row['mtime'], int)
+        assert report['freeable_size'] == 0
+        assert report['leftover'] == {'count': 1, 'size': 500}
+        assert report['keeps_copy'] == {'count': 1, 'size': 500}
+
+    def test_the_live_path_can_never_be_selected(self, trees):
+        torrents, media, file_map = _leftover_tree(trees)
+        torrent_files, _ = _audit(torrents, media, file_map=file_map)
+        resp = _script(torrent_files, [f'{LIVE}/Rel.mkv'])
+        assert resp.status_code == 409
+        assert resp.get_json()['code'] == 'nothing_left'
+
+        resp = _script(torrent_files, [f'{LEFTOVER}/Rel.mkv', f'{LIVE}/Rel.mkv'])
+        assert resp.status_code == 200
+        text = _text(resp)
+        assert f'{LEFTOVER}/Rel.mkv' in text
+        assert 'Rel--aaaa' not in text
+        assert 'a leftover link' in text
+        assert resp.headers['X-Auditorr-Freeable'] == '0'
+
+    @pytest.mark.parametrize('order', ['asc', 'desc'])
+    def test_excluding_the_leftover_folder_leaves_the_live_file_alone(self, trees, order):
+        """The rule the leftover pile offers. A record took its path, size and
+        `excluded` from the first path walked, so where the leftover came first
+        the rule hid the torrent's own file — C16's shape, from the other side."""
+        torrents, media, file_map = _leftover_tree(trees)
+        with _walk_order(order):
+            torrent_files, _ = _audit(torrents, media, file_map=file_map,
+                                      patterns=[f'literal:{LEFTOVER}/'])
+        [rec] = torrent_files
+        assert rec['excluded'] is False
+        assert _posix(rec['path']) == f'{LIVE}/Rel.mkv'
+        assert 'leftover' not in rec
+        assert _all_rows(_cleanup(torrent_files).get_json()) == []
+
+    def test_a_leftover_under_an_unresolved_root_cannot_be_selected(self, trees):
+        """A torrent whose listing failed with nothing found may claim it."""
+        torrents, media, file_map = _leftover_tree(trees)
+        torrent_files, _ = _audit(torrents, media, file_map=file_map, unverified={
+            'all': False, 'roots': [str(torrents / LEFTOVER)]})
+        report = _cleanup(torrent_files).get_json()
+        [row] = _all_rows(report)
+        assert row['state'] == 'unverified'
+        assert _group(report, LEFTOVER)['pile'] == 'unverified'
+        assert _script(torrent_files, row['paths']).get_json()['code'] == 'unverified'
+
+    def test_the_compact_row_and_the_badge_count_carry_leftovers(self, trees):
+        torrents, media, file_map = _leftover_tree(trees)
+        _write(torrents / 'movies' / 'Gone' / 'g.mkv')
+        torrent_files, media_files = _audit(torrents, media, file_map=file_map)
+        working = audit.cleanup_working_set(torrent_files)
+        assert sorted(_posix(r['path']) for r in working) == \
+            [f'{LEFTOVER}/Rel.mkv', 'movies/Gone/g.mkv']
+        with patch.object(audit, 'db_load_history',
+                          return_value={'hourly_stats': [], 'daily_stats': []}):
+            det = audit.process_health_metrics(media_files, torrent_files, {},
+                                               update_history=False)['current']['details']
+        assert det['orphaned_torrent_count'] + det['leftover_count'] == len(working) == 2
+        # Zero bytes freed, so nothing the score or Rounds reads moves.
+        assert det['orphaned_torrent_size'] == 64
+        assert _cleanup(working, compact=True).get_json()['file_count'] == 2
+
+    def test_running_the_script_removes_the_leftover_and_nothing_else(self, trees):
+        torrents, media, file_map = _leftover_tree(trees)
+        torrent_files, _ = _audit(torrents, media, file_map=file_map)
+        resp = _script(torrent_files, [f'{LEFTOVER}/Rel.mkv'], cfg=_local_cfg(torrents))
+        code, out = _run(_text(resp), torrents)
+        assert code == 0, out
+        # Emptied, and its folder was stamped as one a rule may name, so pruned.
+        assert not (torrents / LEFTOVER).exists(), out
+        assert (torrents / LIVE / 'Rel.mkv').read_bytes() == b'v' * 500
+        assert re.search(r'Hardlinked \(space not freed yet\):\s+1 file', out), out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# C18 — a live torrent's libtorrent part file
+# ═════════════════════════════════════════════════════════════════════════════
+
+PART_HASH = 'ab' * 20
+PART      = f'.{PART_HASH}.parts'
+
+
+class TestPartFiles:
+
+    def test_a_live_torrents_part_file_is_kept_out_of_every_workflow(self, trees):
+        """Claimed by the source layer (`sources.part_file_claims`), so it is no
+        orphan; excluded at the walk, so Triage, whose delete beside a row
+        removes the torrent, never lists it as a file the arr did not import."""
+        torrents, media = trees
+        payload = _write(torrents / 'movies' / 'Rel' / 'Rel.mkv')
+        part = _write(torrents / 'movies' / PART)
+        claim = {'status': 'Seeding', 'trackers': set(), 'hash': PART_HASH,
+                 'tracker_health': 'working'}
+        torrent_files, _ = _audit(torrents, media,
+                                  file_map={str(payload): dict(claim), str(part): dict(claim)})
+        rec = next(r for r in torrent_files if PART in r['path'])
+        assert rec['status'] == 'Seeding' and rec['excluded'] is True
+        assert not audit._is_triage_relevant(rec)
+        assert _all_rows(_cleanup(torrent_files).get_json()) == []
+
+    def test_a_part_file_whose_torrent_is_gone_is_an_ordinary_orphan(self, trees):
+        torrents, media = trees
+        _write(torrents / 'movies' / PART)
+        torrent_files, _ = _audit(torrents, media)
+        [row] = _all_rows(_cleanup(torrent_files).get_json())
+        assert row['path'] == f'movies/{PART}'
+        assert row['state'] == 'last_copy'
+
+    def test_the_reverify_drops_a_part_file_whose_torrent_is_back(self):
+        """A finished torrent's `content_path` is its own folder, so the candidate
+        rules written for a payload never reached the file beside it."""
+        records = [_orphan(f'movies/{PART}'), _orphan('movies/Other/o.mkv')]
+        resp = _script(records, [f'movies/{PART}', 'movies/Other/o.mkv'],
+                       rows=[_row(PART_HASH, 'Rel')],
+                       listing={PART_HASH: [f'{REMOTE}/movies/Rel/Rel.mkv']})
+        assert resp.status_code == 200
+        assert PART not in _text(resp)
+        assert resp.headers['X-Auditorr-Dropped'] == '1'
+        resp.fetch.assert_called_once()

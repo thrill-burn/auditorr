@@ -444,6 +444,7 @@ def scriptable_members(group):
 _STATE_NOTE = {
     'library_copy':     'your library keeps a copy',
     'linked_elsewhere': 'another link keeps the data',
+    'torrent_copy':     'a leftover link: a torrent keeps the data at another path',
     'last_copy':        'the only copy',
 }
 
@@ -762,7 +763,9 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         files = sorted(by_folder[folder])
         lines.append(f'# ── {_comment_safe(folder) if folder else "top of the torrent folder"}')
         for p, size, state, n_paths in files:
-            if n_paths > 1:
+            # A leftover's bytes stay with the torrent whatever is deleted, so
+            # "freed when every path goes" would be untrue of it.
+            if n_paths > 1 and state != 'torrent_copy':
                 lines.append(f'# one file at {n_paths} paths here — its space is freed only when '
                              f'every one of them is deleted')
             note = _STATE_NOTE.get(state)

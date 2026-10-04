@@ -36,6 +36,7 @@ than guessing** — the same rule as "could not ask", one layer up.
 """
 
 import os
+import re
 
 
 class SourceConnectionError(Exception):
@@ -155,6 +156,82 @@ def report_instance_failure(report, name, reason):
 # the final name, path equality fails, and a file being actively written reads
 # as an orphan with a green "frees X" beside it (CLEANUP C4a).
 INCOMPLETE_SUFFIX = '.!qB'
+
+
+# ---------------------------------------------------------------------------
+# libtorrent's part file — the skipped files' share of a boundary piece
+# ---------------------------------------------------------------------------
+
+PART_FILE_SUFFIX = '.parts'
+# `.` + a 40-hex torrent id + `.parts`. libtorrent's storage hash is a 20-byte
+# `sha1_hash` on both 1.2 and 2.0 (2.0 truncates a v2 hash to it), so 40 always.
+_PART_FILE_RE = re.compile(r'^\.[0-9a-fA-F]{40}\.parts$')
+
+
+def part_file_path(save_path, torrent_hash):
+    """Where libtorrent keeps this torrent's part file, or '' (CLEANUP C18).
+
+    A piece can straddle a file you download and one set to *Do not download*.
+    libtorrent still writes the whole piece, so the skipped file's share goes
+    into a **part file** named `.<infohash>.parts`, directly in the torrent's
+    save path: beside its folder, not inside it. Read from libtorrent's own
+    storage (RC_2_0: `m_part_file_name("." + to_hex(info_hash) + ".parts")`,
+    opened at `combine_path(m_save_path, m_part_file_name)`), where the hash is
+    `info_hashes().get_best()`. That is exactly what qBittorrent reports as a
+    torrent's `hash` (`InfoHash::toTorrentID` returns `get_best()`), so the name
+    follows from the listing alone.
+
+    No torrent's file listing names it, so it read as an orphan and Cleanup
+    offered it for `rm` with "the only copy" beside it. Deleting it loses those
+    boundary pieces, and the torrent cannot serve them until a recheck fetches
+    them again.
+
+    Joined with `os.path.join`, as the listing's own claims are, so it equals the
+    key the walk builds for the same file.
+    """
+    h = str(torrent_hash or '').strip().lower()
+    if not save_path or not h:
+        return ''
+    return os.path.join(save_path, f'.{h}{PART_FILE_SUFFIX}')
+
+
+def is_part_file_name(name):
+    """True for a file name spelled like a libtorrent part file."""
+    return bool(_PART_FILE_RE.match(str(name or '')))
+
+
+def _skips_files(priorities):
+    """True / False / None — does this torrent set any file to *Do not download*?
+
+    Priority 0 is qBittorrent's *Do not download*. `None` is "could not
+    determine" (no listing, or a listing whose entries carry no priority), which
+    `part_file_claims` answers by looking on disk.
+    """
+    if priorities is None:
+        return None
+    unknown = False
+    for p in priorities:
+        try:
+            if int(p) == 0:
+                return True
+        except (TypeError, ValueError):
+            unknown = True
+    return None if unknown else False
+
+
+def part_file_claims(save_path, torrent_hash, priorities=None):
+    """`[part file path]` when this torrent has one on disk, else `[]`.
+
+    Stat'ed only where one can exist: a torrent that skips a file, or one whose
+    priorities could not be read. A library that skips nothing pays no stat and
+    its `file_map` is byte-identical to before, which keeps `file_map_size`, the
+    plausibility guard's baseline, unmoved. Claimed only when the file is there,
+    so the map never counts a path that does not exist.
+    """
+    path = part_file_path(save_path, torrent_hash)
+    if not path or _skips_files(priorities) is False:
+        return []
+    return [path] if os.path.isfile(path) else []
 
 
 def _posix(path):
@@ -356,7 +433,8 @@ def disk_fallback_paths(save_path, torrent_name, content_path=''):
     return found
 
 
-def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, complete):
+def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, complete,
+                          torrent_hash='', priorities=None):
     """Every on-disk path one torrent claims — **the** claim rule, in one place.
 
     "Orphaned" is the absence of a claim, so what counts as a claim decides what
@@ -386,10 +464,20 @@ def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, com
     * or, with no usable listing, `disk_fallback_paths(save_path, name,
       content_path)` — which over-claims, the fail-safe direction, and returns
       `[]` when nothing is on disk at either root. The caller counts that as
-      `listing_unresolved`; it is never "this torrent has no files".
+      `listing_unresolved`; it is never "this torrent has no files";
+    * and in both cases its libtorrent part file, when it has one on disk
+      (`part_file_claims`, C18). `torrent_hash` names it and `priorities` (one
+      per listed file, or `None`) says whether to look. The fallback adds it only
+      beside a payload it found: where it found nothing, the save path is an
+      unresolved root, and everything under it is already `unverified`.
     """
     if file_names is None:
-        return disk_fallback_paths(save_path, torrent_name, content_path)
+        found = disk_fallback_paths(save_path, torrent_name, content_path)
+        if not found:
+            return found
+        # The part file sits beside the payload, so the fallback's walk of
+        # `save_path/name` never reaches it.
+        return found + part_file_claims(save_path, torrent_hash)
     full_paths = [os.path.join(save_path, n) for n in file_names]
     if complete is not True:
         # An unfinished payload may not be where the listing says it will end
@@ -397,7 +485,7 @@ def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, com
         # `.!qB` suffix enabled.
         full_paths = full_paths + incomplete_claims(
             content_path, torrent_name, file_names, full_paths)
-    return full_paths
+    return full_paths + part_file_claims(save_path, torrent_hash, priorities)
 
 
 # Substrings (lowercased) of tracker status messages that mean the torrent is

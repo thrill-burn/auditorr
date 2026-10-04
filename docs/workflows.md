@@ -249,14 +249,23 @@ still hold this data?**
   on disk — normally your media library's copy — so deleting the torrent-folder
   path loses nothing, and frees nothing either. Clearing this pile is what tidies
   a torrent folder.
-- **This is the only copy** comes second. Deleting these is permanent.
+- **A torrent keeps a copy** comes next: leftover hardlinks. No torrent uses
+  these paths, but a torrent in your client uses the same file at another path.
+  The usual cause is a cross-seed removed with its files kept, which leaves its
+  folder behind. Deleting them frees nothing, since the torrent still holds the
+  data. Clearing them still helps: a tool that decides whether something was
+  imported by counting hardlinks, like a qui automation, reads a leftover as a
+  library copy and keeps a torrent your arr never imported. The torrent's own
+  path is never listed here, so it can't be selected.
+- **This is the only copy** comes after those. Deleting these is permanent.
 - **Could not check** appears only when your client didn't fully answer on the
   last scan. Those files might belong to a live torrent, so they're shown but
   can't be selected until a scan reads every torrent's file list.
 
 Every file carries its state as a coloured dot — **library copy**, **linked
 elsewhere** (a hardlink outside your torrent and media folders, such as a
-snapshot), **only copy** or **could not check** — and its age. The state is
+snapshot), **torrent copy** (a leftover hardlink), **only copy** or **could not
+check** — and its age. The state is
 spelled out only where a file differs from its pile's heading: a release lands
 in the pile of its most alarming file, so a folder under *This is the only copy*
 can still hold a library copy, and that file says so. Within each pile the oldest comes
@@ -333,6 +342,16 @@ torrent and start over. auditorr now accounts for both spellings and follows the
 client's own answer for where a torrent's data currently lives. Neither setting
 is part of the [TRaSH](https://trash-guides.info/) layout, so a by-the-guide
 install was never affected.
+
+**A torrent's part file isn't an orphan either.** When you set some of a
+torrent's files to *Do not download*, qBittorrent keeps the parts of them that
+share pieces with the files you do download in a hidden file named
+`.<torrent hash>.parts`, next to the torrent's folder. No torrent lists it, so it
+used to show up here as an only copy. Deleting it leaves the torrent unable to
+seed those pieces until a recheck downloads them again. auditorr now treats it as
+part of its torrent: File Explorer shows it as excluded, and no workflow lists
+it. A part file left behind by a torrent you've removed is still an orphan, and
+still shows here.
 
 ---
 

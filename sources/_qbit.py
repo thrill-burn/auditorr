@@ -172,10 +172,15 @@ def _fetch_inner(cfg, unresolved_roots=None):
         # listing is `None`: the paths are exactly what we do not have, so the
         # payload is enumerated from disk instead (ported from the qui backend)
         # rather than left to default to 'Orphaned'.
-        listed = None if torrent.hash in failed_listings else \
-            [f.name for f in files_map.get(torrent.hash, [])]
+        listing = None if torrent.hash in failed_listings else files_map.get(torrent.hash, [])
+        listed = None if listing is None else [f.name for f in listing]
+        # Priority 0 (*Do not download*) is what makes libtorrent keep a part
+        # file beside the payload (CLEANUP C18).
+        priorities = None if listing is None else \
+            [getattr(f, 'priority', None) for f in listing]
         full_paths = torrent_claimed_paths(
-            save_path, getattr(torrent, 'name', '') or '', content_path, listed, complete)
+            save_path, getattr(torrent, 'name', '') or '', content_path, listed, complete,
+            torrent_hash=torrent.hash, priorities=priorities)
         if listed is None:
             if full_paths:
                 report['listing_recovered'] += 1
