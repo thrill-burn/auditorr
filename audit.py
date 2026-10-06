@@ -4,7 +4,9 @@ import math
 import time
 import hashlib
 import logging
+import posixpath
 import threading
+import unicodedata
 from datetime import datetime, timedelta
 
 import sources
@@ -76,9 +78,12 @@ _ROOT_NAMES = {'Torrent': 'torrents', 'Media': 'media'}
 # A directory this many segments or fewer below a root is a category or a release
 # folder, and one that cannot be listed hides whole releases (S03).
 _UNLISTABLE_SHALLOW_DEPTH = 2
+# An empty folder changed this recently may be about to be filled — a download
+# starting, a move in progress — so it isn't offered (C27). qui's default.
+EMPTY_DIR_GRACE_SECS = 600
 
 
-def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None, walk_report=None):
+def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None, walk_report=None, empty_dirs=None, protected_dirs=None):
     # Returns an ordered list of file_keys (one per filesystem entry, including
     # cross-seed duplicates) instead of full record dicts. Per-file metadata
     # (rel_path, size, excluded) is folded directly into inode_map to
@@ -134,16 +139,68 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                      depth, root_name)
             return
         walk['unlistable'] += 1
-        # A folder the user's exclusions cover is counted and never refuses the
-        # scan: the way out for one that stays unreadable for good (a NAS
-        # `#recycle`, `lost+found` on a mount point), which used to block every
-        # scan with no override. The walk still does not prune excluded folders.
+        # A folder an exclusion covers is counted and never refuses the scan:
+        # the way out for one that stays unreadable for good, which used to
+        # block every scan with no override. The always-on clutter rules (C24)
+        # already cover a NAS `#recycle` and `lost+found` on a mount point. The
+        # walk still does not prune excluded folders.
         if depth <= _UNLISTABLE_SHALLOW_DEPTH and not (where and _dir_excluded(where, rel)):
             walk['unlistable_shallow'] += 1
         log.warning("Could not list a directory %d level(s) below the %s root (%s)",
                     depth, root_name, type(err).__name__)
 
-    for root, _, files in os.walk(base_path, onerror=_unlistable):
+    # CLEANUP C25: the client and the disk can spell one name in two Unicode
+    # forms. Only a non-ASCII path that misses pays anything: it's looked up in
+    # NFC, then through `nfc_keys`, the client keys whose NFC differs from them,
+    # built on the first such miss of the scan and empty on almost every library.
+    # Two byte-distinct files with the same NFC name both read as the torrent's,
+    # as in qui: claiming is the fail-safe direction.
+    nfc_keys = None
+
+    def _claim_by_nfc(path):
+        nonlocal nfc_keys
+        if nfc_keys is None:
+            nfc_keys = {}
+            for k in qbit_file_map:
+                if not k.isascii() and not unicodedata.is_normalized('NFC', k):
+                    nfc_keys[unicodedata.normalize('NFC', k)] = k
+        key = unicodedata.normalize('NFC', path)
+        hit = qbit_file_map.get(key)
+        if hit is None and key in nfc_keys:
+            hit = qbit_file_map.get(nfc_keys[key])
+        return hit
+
+    # CLEANUP C27 — empty folders, found on the walk that's already happening.
+    # `empty_dirs`, a list, receives `(path, mtime)` for each folder in the
+    # torrent tree holding no file at any depth, outermost only. `os.walk` is a
+    # depth-first pre-order, so a folder is settled the moment the walk moves
+    # out of it: empty when it has no files and every subfolder it listed was
+    # walked and settled empty. A subfolder the walk never entered — a symlink,
+    # unreadable, gone — never settles, so its parent isn't empty either, which
+    # is what `rmdir` would say. An empty folder that is excluded, or is or
+    # holds a folder the client saves into (`protected_dirs`), counts as
+    # content. Held per folder on the current path only, so memory is the
+    # depth of the tree plus the empty folders, never every folder.
+    track_empty = empty_dirs is not None and source_label == 'Torrent'
+    protected = protected_dirs or ()
+    stack = []          # [path, subfolders listed, settled empty, has files, empty kids]
+
+    def _settle(entry):
+        path, n_dirs, n_empty, has_files, kids = entry
+        if (stack and not has_files and n_empty == n_dirs
+                and _norm_abs(path) not in protected
+                and not _dir_excluded(path, os.path.relpath(path, base_path).replace('\\', '/'))):
+            stack[-1][2] += 1
+            stack[-1][4].append(path)       # stands for its own empty kids
+        else:
+            empty_dirs.extend(kids)
+
+    for root, dirs, files in os.walk(base_path, onerror=_unlistable):
+        if track_empty:
+            while stack and not root.startswith(
+                    stack[-1][0] if stack[-1][0].endswith(('/', os.sep)) else stack[-1][0] + os.sep):
+                _settle(stack.pop())
+            stack.append([root, len(dirs), 0, bool(files), []])
         for filename in files:
             full_path = os.path.join(root, filename)
             try:
@@ -154,7 +211,12 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 excluded = (compiled_exclusions.match(full_path, rel_path, filename)
                             if compiled_exclusions is not None
                             else is_excluded(full_path, rel_path, filename, exclusion_patterns))
-                qbit_info = qbit_file_map.get(full_path) if source_label == 'Torrent' else None
+                if source_label == 'Torrent':
+                    qbit_info = qbit_file_map.get(full_path)
+                    if qbit_info is None and not full_path.isascii():
+                        qbit_info = _claim_by_nfc(full_path)
+                else:
+                    qbit_info = None
                 # A live torrent's libtorrent part file (CLEANUP C18) is the
                 # client's bookkeeping, not payload: claimed so Cleanup never
                 # offers it, and excluded so Triage never lists it as a file
@@ -259,6 +321,18 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     set_state(total_files=total_ref[0])
             update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
     walk['stat_errors'] = stat_errors
+    if track_empty:
+        while stack:
+            _settle(stack.pop())
+        now, settled = time.time(), []
+        for path in empty_dirs:
+            try:
+                mtime = os.stat(path).st_mtime
+            except OSError:
+                continue                    # gone since: nothing to offer
+            if now - mtime >= EMPTY_DIR_GRACE_SECS:
+                settled.append((path, int(mtime)))
+        empty_dirs[:] = settled
     return key_order, scanned, stat_errors, oldest_mtime
 
 
@@ -352,6 +426,17 @@ def _build_duplicate_map(inode_map):
 _norm_abs = sources.norm_abs     # the one spelling comparisons share (CR14)
 
 
+def _match_key(path):
+    """A disk path and a client's, spelled to compare: `_norm_abs`, then NFC.
+
+    A failed listing's save path comes from the client and the orphan beside it
+    from the disk. If the two spell an accented folder in different Unicode
+    forms, a plain comparison marks nothing `unverified`, which is the unsafe
+    direction (CLEANUP C25). A key only, never a path to act on.
+    """
+    return sources.nfc(_norm_abs(path))
+
+
 def _path_under(path, root):
     """`path` is `root` or inside it. Both already `_norm_abs`'d; a root of '' or
     '/' contains everything."""
@@ -383,7 +468,7 @@ def unverified_spec(report, unresolved_roots):
     persisted source report carries counts and must stay free of paths.
     """
     failed = bool((report or {}).get('instances_failed'))
-    roots = sorted({_norm_abs(r) for r in (unresolved_roots or []) if r})
+    roots = sorted({_match_key(r) for r in (unresolved_roots or []) if r})
     if not failed and not roots:
         return None
     return {'all': failed, 'roots': roots}
@@ -447,7 +532,7 @@ def _stamp_orphan(record, info, compiled_exclusions, unverified):
     if others:
         record["other_paths"] = others
     if unverified and (unverified.get('all') or any(
-            _path_under(_norm_abs(p), root) for p in paths for root in unverified['roots'])):
+            _path_under(_match_key(p), root) for p in paths for root in unverified['roots'])):
         record["unverified"] = True
 
 
@@ -535,7 +620,7 @@ def _leftover_record(file_key, info, compiled_exclusions, unverified):
     except (OSError, ValueError, OverflowError):
         pass
     if unverified and (unverified.get('all') or any(
-            _path_under(_norm_abs(p), root) for p in kept for root in unverified['roots'])):
+            _path_under(_match_key(p), root) for p in kept for root in unverified['roots'])):
         rec["unverified"] = True
     return rec
 
@@ -548,6 +633,70 @@ def cleanup_working_set(torrent_files):
     """
     return ([f for f in torrent_files if _is_cleanup_relevant(f)]
             + [f['leftover'] for f in torrent_files if f.get('leftover')])
+
+
+# The most folders the `cleanup_folders` row keeps of each kind. The page lists
+# them, and the count in the details is the whole number either way.
+CLEANUP_FOLDERS_MAX = 500
+
+
+def cleanup_unchecked_folders(fallback_roots, local_path):
+    """The torrent folders a scan claimed whole because their file list didn't load (C26).
+
+    `fetch_file_map`'s `fallback_roots`: each torrent whose files came from the
+    disk fallback. Everything under its folder was claimed for it, so a stray
+    file in there can't be an orphan on this scan. Relative to `LOCAL_PATH`,
+    posix, sorted, without duplicates; a root outside the torrent folder isn't
+    Cleanup's to mention.
+    """
+    base = _norm_abs(local_path)
+    if not base:
+        return []
+    prefix = base.rstrip('/') + '/'
+    out = set()
+    for r in fallback_roots or ():
+        n = _norm_abs(r)
+        if n.startswith(prefix) and len(n) > len(prefix):
+            out.add(n[len(prefix):])
+    return sorted(out)
+
+
+def protected_dirs(save_dirs, local_path):
+    """Every folder an empty-folder offer must leave alone (C27), normalised.
+
+    The torrent root, every folder the client saves into (`save_scope`'s
+    `dirs`: live save paths, category folders, the default and incomplete
+    folders) and every folder above one. A few strings per category.
+    """
+    out = set()
+    for d in list(save_dirs or ()) + [local_path]:
+        n = _norm_abs(d)
+        while n and n not in out:
+            out.add(n)
+            parent = posixpath.dirname(n)
+            if parent == n:
+                break
+            n = parent
+    return out
+
+
+def cleanup_empty_folders(empty_dirs, local_path):
+    """The walk's empty folders as Cleanup rows: `{path, mtime}`, oldest first (C27).
+
+    Relative to `LOCAL_PATH` and posix, in the disk's own spelling, since a
+    script line removes them.
+    """
+    base = _norm_abs(local_path)
+    if not base:
+        return []
+    prefix = base.rstrip('/') + '/'
+    out = []
+    for path, mtime in empty_dirs or ():
+        n = _norm_abs(path)
+        if n.startswith(prefix) and len(n) > len(prefix):
+            out.append({'path': n[len(prefix):], 'mtime': mtime})
+    out.sort(key=lambda r: (r['mtime'], r['path']))
+    return out
 
 
 def _dedupe_paths(tree_paths):
@@ -581,10 +730,10 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
                       compiled_exclusions=None, unverified=None):
     if unverified:
         # Normalised once here as well as in `unverified_spec`: every comparison
-        # below is against `_norm_abs` paths, and a root spelled any other way
+        # below is against `_match_key` paths, and a root spelled any other way
         # would silently mark nothing — the unsafe direction.
         unverified = {'all': bool(unverified.get('all')),
-                      'roots': [_norm_abs(r) for r in (unverified.get('roots') or []) if r]}
+                      'roots': [_match_key(r) for r in (unverified.get('roots') or []) if r]}
     torrent_files_data = []
     seen_torrent_keys = set()
     for file_key in torrent_key_order:
@@ -1024,12 +1173,14 @@ def _library_shape(scoring_media):
 
 # Details a scan measures that `process_health_metrics` cannot derive from the
 # stored lists: seeding time comes from the client, the oldest media file from
-# the walk's own stat calls. The config-save recompute rebuilds the dashboard
+# the walk's own stat calls, the folders whose file list didn't load from the
+# source layer (C26). The config-save recompute rebuilds the dashboard
 # from the lists alone and **carries these forward** — it dropped them until
 # Phase 14, so Rounds' Atlas, Old Faithful and Provenance tiles read 0 from a
 # config save until the next scan. (`dedupe_group_count` is recomputed there
 # instead, from the lists the recompute already holds.)
-SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days')
+SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
+                     'cleanup_unchecked_count', 'empty_folder_count', 'empty_folders_unknown')
 
 
 def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
@@ -2144,8 +2295,9 @@ _ANOMALY_FIXES = {
                               "scan again. A manual scan will not accept a missing folder."),
     'root_unlistable':       ("Check that the user auditorr runs as can read the folder, then scan "
                               "again. A manual scan will not accept a folder it could not list. "
-                              "A folder that is meant to stay unreadable (a recycle bin, "
-                              "lost+found) can be added to Excluded Files & Folders instead."),
+                              "Recycle bins, snapshots and lost+found are already left out; "
+                              "any other folder that is meant to stay unreadable can be added "
+                              "to Excluded Files & Folders instead."),
 }
 
 
@@ -2210,8 +2362,15 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # Save roots of listings that failed with nothing found on disk — in
         # memory only, never on the persisted report (see `unverified_spec`).
         unresolved_roots = []
+        # And the folders claimed whole by the disk fallback (C26), likewise.
+        fallback_roots = []
+        # The folders the client saves into (C27). A backend that asked sets
+        # `unknown`; one that never touched it reads as unknown, never as "none".
+        save_scope = {'dirs': set()}
         qbit_file_map, trackers, tracker_snapshot, source_report = sources.fetch_file_map(
-            cfg, unresolved_roots=unresolved_roots)
+            cfg, unresolved_roots=unresolved_roots, fallback_roots=fallback_roots,
+            save_scope=save_scope)
+        empty_dirs = [] if save_scope.get('unknown') is False else None
         set_state(source_file_count=len(qbit_file_map))
         # Everything downstream treats "no client entry for this path" as proof
         # of orphanhood. Check the client's answer against the counts last
@@ -2239,7 +2398,10 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         torrent_key_order, scanned, torrent_errors, _ = _walk_directory(
             cfg.get('LOCAL_PATH',''), 'Torrent', inode_map, qbit_file_map, 0, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
-            compiled_exclusions=compiled_excl, walk_report=filesystem['torrents'])
+            compiled_exclusions=compiled_excl, walk_report=filesystem['torrents'],
+            empty_dirs=empty_dirs,
+            protected_dirs=protected_dirs(save_scope['dirs'], cfg.get('LOCAL_PATH', '')))
+        del save_scope
         # The blackout rule needs the disk side — "the client claims nothing
         # while LOCAL_PATH holds files" — so it runs at the first point that
         # number exists, and before the media walk, the assemble phase and every
@@ -2280,6 +2442,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                         sum(1 for f in torrent_files_data if f.get('unverified')),
                         'an instance did not answer' if _unverified['all']
                         else f"{len(_unverified['roots'])} unresolved save path(s)")
+        unchecked_folders = cleanup_unchecked_folders(fallback_roots, cfg.get('LOCAL_PATH', ''))
+        empty_folders = cleanup_empty_folders(empty_dirs, cfg.get('LOCAL_PATH', ''))
+        del fallback_roots
         _enter_phase("post", "Computing health metrics...")
         # Prize-layer inputs that only exist outside the file records: seeding
         # time rides the source layer's torrent list, oldest_media_age_days the
@@ -2297,6 +2462,13 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # the change log, Singleton and Clone Hunter, so it stays as it is;
             # the badge reads this and falls back to it where absent.
             'dedupe_group_count': dedupe_group_count(torrent_files_data, media_files_data, cfg),
+            # Cleanup's "couldn't check inside these folders" notice (C26). The
+            # count rides the details, which reach the debug report; the folder
+            # names ride `cleanup_folders`, which doesn't.
+            'cleanup_unchecked_count': len(unchecked_folders),
+            # Empty folders (C27), and whether they could be looked for at all.
+            'empty_folder_count': len(empty_folders),
+            'empty_folders_unknown': empty_dirs is None,
         }
         # The history point is staged rather than written: it joins the publish
         # below, because the hourly/daily series accumulates and a point left
@@ -2449,6 +2621,12 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # page and the delete script read this, never the full torrent list.
             # Orphans, then the leftover links riding their carriers (C17).
             ('cleanup',  db_prepare_file_results(cleanup_working_set(torrent_files_data))),
+            # The folders beside it (C26, C27), written every scan so a clean
+            # one replaces the last list. Paths, so never in the details.
+            ('cleanup_folders', db_prepare_file_results(
+                [{'kind': 'unchecked', 'path': p}
+                 for p in unchecked_folders[:CLEANUP_FOLDERS_MAX]]
+                + [{'kind': 'empty', **f} for f in empty_folders[:CLEANUP_FOLDERS_MAX]])),
             # Compact Dedupe working set (R6, Phase 14): the page and the script
             # read this, never both full lists. References, keyed by tree.
             ('dedupe',   db_prepare_file_results(

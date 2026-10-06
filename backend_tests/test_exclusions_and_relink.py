@@ -6,7 +6,7 @@ from arr import arr_search, fetch_arr_media_index, normalize_arr_connections
 from arr import test_arr_connections as _arr_test_connections
 from audit import _compute_tracker_file_stats, _not_imported_paths, process_health_metrics
 from exclusions import compile_exclusions, is_excluded
-from media_server_exclusions import expand_exclusion_patterns
+from media_server_exclusions import expand_exclusion_patterns, is_always_excluded_path
 
 
 class ExclusionRuleTests(unittest.TestCase):
@@ -384,6 +384,23 @@ class CompiledExclusionMatcherTests(unittest.TestCase):
              "torrents/literal-subtree [RAW]/payload.mkv", "payload.mkv"),
             ("/data/torrents/torrents/literal-subtree-other/payload.mkv",
              "torrents/literal-subtree-other/payload.mkv", "payload.mkv"),
+            # OS/NAS clutter (C24, always on): exact names, prefixes, and folder
+            # names in either case — every segment glob now goes through one
+            # combined regex in the compiled matcher, and still one fnmatch
+            # per glob in is_excluded.
+            ("/data/torrents/movies/Film/.DS_Store", "movies/Film/.DS_Store", ".DS_Store"),
+            ("/data/torrents/movies/Film/THUMBS.DB", "movies/Film/THUMBS.DB", "THUMBS.DB"),
+            ("/data/torrents/movies/Film/._Film.mkv", "movies/Film/._Film.mkv", "._Film.mkv"),
+            ("/data/torrents/movies/Film/~$notes.docx", "movies/Film/~$notes.docx", "~$notes.docx"),
+            ("/data/torrents/#recycle/Film/Film.mkv", "#recycle/Film/Film.mkv", "Film.mkv"),
+            ("/data/torrents/.Trash-1000/files/Film.mkv", ".Trash-1000/files/Film.mkv", "Film.mkv"),
+            ("/data/torrents/.zfs/snapshot/daily/Film.mkv", ".zfs/snapshot/daily/Film.mkv", "Film.mkv"),
+            ("/data/torrents/lost+found/#1234", "lost+found/#1234", "#1234"),
+            # ...and what it deliberately leaves alone.
+            ("/data/torrents/music/...And Justice for All (1988)/01.flac",
+             "music/...And Justice for All (1988)/01.flac", "01.flac"),
+            ("/data/torrents/movies/.0123abcd.parts", "movies/.0123abcd.parts", ".0123abcd.parts"),
+            ("/data/torrents/movies/Film/Film.mkv.!qB", "movies/Film/Film.mkv.!qB", "Film.mkv.!qB"),
             # Media files — must NOT be excluded
             ("/data/media/Movies/Movie (2024)/Movie (2024).mkv", "Movies/Movie (2024)/Movie (2024).mkv", "Movie (2024).mkv"),
             ("/data/media/Movies/Movie (2024)/Movie (2024).mp4", "Movies/Movie (2024)/Movie (2024).mp4", "Movie (2024).mp4"),
@@ -408,13 +425,15 @@ class CompiledExclusionMatcherTests(unittest.TestCase):
 
         # Media-server presets alone must never exclude .mkv or .mp4 files.
         # Use a preset-only compiled matcher (no user custom patterns) so that
-        # bareword rules like "Featurettes" don't confound the assertion.
+        # bareword rules like "Featurettes" don't confound the assertion. The
+        # always-on rules ride along with any preset, so a video they cover (an
+        # AppleDouble `._` file, one in a recycle bin) is theirs, not a preset's.
         preset_only = compile_exclusions(expand_exclusion_patterns({
             "EXCLUSION_PATTERNS": [],
             "MEDIA_SERVER_EXCLUSION_PRESETS": ["plex", "jellyfin", "emby", "kodi", "ums"],
         }))
         for full_path, rel_path, filename in corpus:
-            if filename.endswith((".mkv", ".mp4")):
+            if filename.endswith((".mkv", ".mp4")) and not is_always_excluded_path(rel_path):
                 self.assertFalse(
                     preset_only.match(full_path, rel_path, filename),
                     f"Media-server preset should not exclude {filename!r}",

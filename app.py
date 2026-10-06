@@ -48,7 +48,7 @@ from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_in
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
 from exclusions import reads_bracket_as_glob
-from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets, is_tombstone_path
+from media_server_exclusions import normalize_disc_rip_presets, normalize_media_server_presets, is_always_excluded_path
 from watchdog_handler import restart_watchdog, start_watchdog, _scheduled_audit_loop, nudge_watchdog
 from debug import (
     install_ring_buffer, build_debug_report, memory_pressure, cgroup_oom_events,
@@ -1039,7 +1039,7 @@ def _cleanup_details(conn=None):
         return {}
 
 
-def _cleanup_records():
+def _cleanup_records(folders_out=None):
     """(cleanup records, excluded_count) — the compact row, or the full list filtered.
 
     The audit persists a compact `cleanup` row (`audit.cleanup_working_set`:
@@ -1055,9 +1055,13 @@ def _cleanup_records():
     excluded a large folder of orphans would otherwise carry all of it in the
     row just to produce one integer. `None` where the details predate the key.
 
-    Filesystem tombstones are dropped here as well as at the walk, for Dedupe's
-    reason: records from a scan that predates the always-on rule can still carry
-    one as `excluded: False`, and `rm` on a tombstone frees nothing.
+    Filesystem tombstones and OS/NAS clutter (C24) are dropped here as well as at
+    the walk, for Dedupe's reason: records from a scan that predates an always-on
+    rule can still carry one as `excluded: False`, and `rm` on a tombstone frees
+    nothing.
+
+    `folders_out`, a dict, receives the folders beside the files from the same
+    snapshot: `unchecked` (C26) and `empty` (C27).
     """
     # Pinned: the row and the count beside it come from two rows, and the
     # fallback reads a third. One generation or none (S04).
@@ -1070,7 +1074,25 @@ def _cleanup_records():
             records = cleanup_working_set(full)
             excluded = sum(1 for f in full if f.get('status') == 'Orphaned' and f.get('excluded'))
             del full
-    return [r for r in records if not is_tombstone_path(r.get('path'))], excluded
+        if folders_out is not None:
+            # The folders beside the files (C26), from the same generation. A
+            # scan from before the row has none, and says nothing.
+            details = _cleanup_details(conn=snap)
+            rows = (db_load_file_results('cleanup_folders', conn=snap)
+                    if db_has_file_results('cleanup_folders', conn=snap) else [])
+            folders_out['unchecked'] = {
+                'count':   int(details.get('cleanup_unchecked_count') or 0),
+                'folders': [r['path'] for r in rows if r.get('kind') == 'unchecked'],
+            }
+            # C27. `unknown`: the client's categories didn't load, so no folder
+            # was offered. Absent on a scan from before the row: say nothing.
+            folders_out['empty'] = {
+                'count':   int(details.get('empty_folder_count') or 0),
+                'unknown': details.get('empty_folders_unknown') is True,
+                'folders': [{'path': r['path'], 'mtime': r.get('mtime')}
+                            for r in rows if r.get('kind') == 'empty'],
+            }
+    return [r for r in records if not is_always_excluded_path(r.get('path'))], excluded
 
 
 def _cleanup_claim_candidates(rows, wanted_abs, remote, local):
@@ -1094,11 +1116,18 @@ def _cleanup_claim_candidates(rows, wanted_abs, remote, local):
     Selected paths are expanded into the set of their ancestors once, so this is
     one pass over the listing with set lookups, not a product of the two.
 
+    Both sides are compared in NFC (`sources.nfc`, CLEANUP C25): the selection
+    is the disk's spelling and the rows are the client's, and a torrent whose
+    accented folder the two spell differently was no candidate, so its claim on
+    a selected file was never checked.
+
     Deliberately **not** `_trump_candidates`, which answers a different question
     (which torrents can share a file with *each other*).
     """
+    nfc = sources.nfc
     suffix = sources.INCOMPLETE_SUFFIX
-    exact = set(wanted_abs) | {a[:-len(suffix)] for a in wanted_abs if a.endswith(suffix)}
+    wanted_abs = {nfc(a) for a in wanted_abs}
+    exact = wanted_abs | {a[:-len(suffix)] for a in wanted_abs if a.endswith(suffix)}
     ancestors = set()
     for a in wanted_abs:
         d = posixpath.dirname(a)
@@ -1110,11 +1139,11 @@ def _cleanup_claim_candidates(rows, wanted_abs, remote, local):
             d = parent
     out = []
     for r in rows:
-        sp = _norm_abs(sources.remap_path(r.get('save_path') or '', remote, local))
+        sp = nfc(_norm_abs(sources.remap_path(r.get('save_path') or '', remote, local)))
         name = r.get('name') or ''
         cp_raw = r.get('content_path') or ''
-        cp = _norm_abs(sources.remap_path(cp_raw, remote, local)) if cp_raw else ''
-        root = _norm_abs(f'{sp}/{name}') if sp and name else ''
+        cp = nfc(_norm_abs(sources.remap_path(cp_raw, remote, local))) if cp_raw else ''
+        root = nfc(_norm_abs(f'{sp}/{name}')) if sp and name else ''
         if any(x and (x in exact or x in ancestors) for x in (root, cp)):
             out.append(r)
             continue
@@ -1188,6 +1217,8 @@ def _cleanup_landmarks(rows, remote, local):
     root, relative to `LOCAL_PATH`, is there before the run and after it: a
     category folder, or on a flat layout the torrent's own folder or file.
     A few, so one torrent whose files were moved by hand cannot fail the guard.
+    ASCII names first: these are the client's spelling, tested on disk with
+    `[ -e ]`, and an accented one may be stored in the other Unicode form (C25).
     """
     base = _norm_abs(local)
     found = set()
@@ -1201,7 +1232,7 @@ def _cleanup_landmarks(rows, remote, local):
             top = root[len(base.rstrip('/')) + 1:].split('/')[0]
             if top not in ('', '.', '..'):
                 found.add(top)
-    return sorted(found)[:_CLEANUP_LANDMARKS]
+    return sorted(found, key=lambda t: (not t.isascii(), t))[:_CLEANUP_LANDMARKS]
 
 
 def _cleanup_live_claims(cfg, rel_paths, seen=None):
@@ -1231,7 +1262,9 @@ def _cleanup_live_claims(cfg, rel_paths, seen=None):
     """
     remote, local = cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', '')
     base = _norm_abs(local)
-    abs_of = {p: _norm_abs(f'{base}/{p}') for p in rel_paths}
+    # Keyed in NFC (C25): the selection is the disk's spelling, the listings
+    # the client's.
+    abs_of = {p: sources.nfc(_norm_abs(f'{base}/{p}')) for p in rel_paths}
     wanted = set(abs_of.values())
     unreachable = ("Could not reach your torrent client to check the selection just before "
                    "building the script, so no script was built. A torrent added since the last "
@@ -1255,6 +1288,8 @@ def _cleanup_live_claims(cfg, rel_paths, seen=None):
             f"these files.")
     if seen is not None:
         seen['rows'] = rows
+    if not wanted:
+        return set()        # folders only (C27): the listing is all they need
     candidates = _cleanup_claim_candidates(rows, wanted, remote, local)
     if len(candidates) > _CLEANUP_VERIFY_BOUND:
         log.warning("Cleanup: no delete script — %d torrents could claim the selection (bound %d)",
@@ -1275,10 +1310,38 @@ def _cleanup_live_claims(cfg, rel_paths, seen=None):
     claimed = set()
     for row in candidates:
         for p in _cleanup_row_claims(row, listings.get(_reg(row)), remote, local):
-            n = _norm_abs(p)
+            n = sources.nfc(_norm_abs(p))
             if n in wanted:
                 claimed.add(n)
     return {rel for rel, a in abs_of.items() if a in claimed}
+
+
+def _cleanup_busy_folders(rows, folders, remote, local):
+    """The selected empty folders a live torrent saves into now (C27).
+
+    The scan left out every folder the client saves into, but a torrent added or
+    moved since can point at one, and a torrent missing its files has an empty
+    folder of its own. Any live torrent whose save path, folder or content path
+    is the folder or inside it keeps it out of the script. Compared in NFC
+    (C25). The folders above each of those paths are gathered once, so this is
+    one pass over the listing, not a product of the two.
+    """
+    if not folders:
+        return set()
+    nfc = sources.nfc
+    base = nfc(_norm_abs(local))
+    inside = base.rstrip('/') + '/'
+    targets = set()
+    for r in rows:
+        sp = sources.remap_path(r.get('save_path') or '', remote, local)
+        cp = r.get('content_path') or ''
+        for p in (sp, sources.content_root(sp, r.get('name') or '') if sp else '',
+                  sources.remap_path(cp, remote, local) if cp else ''):
+            n = nfc(_norm_abs(p)) if p else ''
+            while n.startswith(inside) and n not in targets:
+                targets.add(n)
+                n = posixpath.dirname(n)
+    return {f for f in folders if nfc(_norm_abs(f'{base}/{f}')) in targets}
 
 
 def _cleanup_script_response(cfg, selection):
@@ -1300,6 +1363,11 @@ def _cleanup_script_response(cfg, selection):
     * claimed paths are dropped and the header says how many;
     * nothing left → 409 `nothing_left`, not a script that does nothing.
 
+    `folders` (C27) selects empty folders the last scan listed, beside or
+    instead of files. The same live listing drops any a torrent now saves into
+    (`_cleanup_busy_folders`), and the script removes the rest with `rmdir`
+    only, so one that gained a file since is left with it.
+
     The body stays plain text so copy and download are unchanged; what the page
     needs to correct its subtitle rides response headers — the verification
     time, the dropped count, the files in the script and the bytes it can free
@@ -1308,7 +1376,11 @@ def _cleanup_script_response(cfg, selection):
     raw = selection.get('paths') if isinstance(selection, dict) else None
     wanted = list(dict.fromkeys(str(p).replace('\\', '/') for p in
                                 (raw if isinstance(raw, list) else []) if str(p).strip()))
-    if not wanted:
+    raw = selection.get('folders') if isinstance(selection, dict) else None
+    wanted_folders = list(dict.fromkeys(
+        f for f in (str(p).replace('\\', '/').strip('/') for p in
+                    (raw if isinstance(raw, list) else [])) if f))
+    if not wanted and not wanted_folders:
         return _CleanupRefusal(
             400, 'selection_required',
             "Select the files to delete first — a delete script is only built for an explicit "
@@ -1319,13 +1391,16 @@ def _cleanup_script_response(cfg, selection):
             "Your torrent folder (LOCAL_PATH) is not configured, so the selection cannot be "
             "checked against your torrent client. Set it in Config first.").response()
 
-    records, excluded_count = _cleanup_records()
+    beside = {}
+    records, excluded_count = _cleanup_records(folders_out=beside)
     by_path = {}
     for rec in records:
         for p in _cleanup_paths(rec):
             by_path[p] = rec
     known = [p for p in wanted if p in by_path]
-    not_in_report = len(wanted) - len(known)
+    listed_empty = {f['path'] for f in (beside.get('empty') or {}).get('folders') or []}
+    known_folders = [f for f in wanted_folders if f in listed_empty]
+    not_in_report = len(wanted) - len(known) + len(wanted_folders) - len(known_folders)
     unverified = sum(1 for p in known if by_path[p].get('unverified'))
     if unverified:
         return _CleanupRefusal(
@@ -1333,7 +1408,7 @@ def _cleanup_script_response(cfg, selection):
             f"{unverified} of the selected files could not be checked on the last scan, so no "
             f"delete script was built. They become checkable again after a scan that reads every "
             f"torrent's file list.", unverified=unverified).response()
-    if not known:
+    if not known and not known_folders:
         return _CleanupRefusal(
             409, 'nothing_left',
             "None of the selected files are orphaned in the last scan, so there is nothing to "
@@ -1348,7 +1423,19 @@ def _cleanup_script_response(cfg, selection):
     if claimed:
         log.info("Cleanup: %d of %d selected file(s) are claimed by a torrent now — "
                  "left out of the delete script", len(claimed), len(known))
-    if not kept:
+    busy = _cleanup_busy_folders(live.get('rows') or [], known_folders,
+                                 cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', ''))
+    kept_folders = [f for f in known_folders if f not in busy]
+    if busy:
+        log.info("Cleanup: %d of %d selected empty folder(s) are where a torrent saves now — "
+                 "left out of the delete script", len(busy), len(known_folders))
+    if not kept and not kept_folders and not known:
+        return _CleanupRefusal(
+            409, 'nothing_left',
+            f"Every selected folder is one a torrent in your client saves into now "
+            f"({len(busy)} folder{'s' if len(busy) != 1 else ''}), so there is nothing to remove.",
+            dropped=0, not_in_report=not_in_report).response()
+    if not kept and not kept_folders:
         return _CleanupRefusal(
             409, 'nothing_left',
             f"Every selected file is in use by a torrent in your client now "
@@ -1377,11 +1464,14 @@ def _cleanup_script_response(cfg, selection):
         units, verified_at=verified_at, dropped=len(claimed), not_in_report=not_in_report,
         excluded_count=excluded_count, safe_folders=safe_folders,
         landmarks=_cleanup_landmarks(live.get('rows') or [], cfg.get('REMOTE_PATH', ''),
-                                     cfg.get('LOCAL_PATH', '')))
+                                     cfg.get('LOCAL_PATH', '')),
+        empty_folders=kept_folders, folders_dropped=len(busy))
     resp = app.response_class(script, mimetype='text/plain; charset=utf-8')
     resp.headers['X-Auditorr-Verified-At'] = str(verified_at)
     resp.headers['X-Auditorr-Dropped'] = str(len(claimed))
     resp.headers['X-Auditorr-Files'] = str(len(kept))
+    resp.headers['X-Auditorr-Folders'] = str(len(kept_folders))
+    resp.headers['X-Auditorr-Folders-Dropped'] = str(len(busy))
     resp.headers['X-Auditorr-Freeable'] = str(sum(u['size'] for u in units if u['frees']))
     return resp
 
@@ -4267,7 +4357,8 @@ def workflows_cleanup():
     excluded orphan **records** (inodes), not paths. `keeps_copy` counts every
     lossless row, leftovers included; `leftover` counts those alone.
     """
-    records, excluded_count = _cleanup_records()
+    beside = {}
+    records, excluded_count = _cleanup_records(folders_out=beside)
 
     folders = {}
     for rec in records:
@@ -4342,6 +4433,12 @@ def workflows_cleanup():
         "unverified":     states['unverified'],
         "states":         states,
         "excluded_count": excluded_count,
+        # Torrent folders whose file list didn't load on the last scan: claimed
+        # whole, so a stray file in one can't be listed above (C26).
+        "unchecked_folders": beside.get('unchecked') or {'count': 0, 'folders': []},
+        # Folders with nothing in them at any depth (C27). Not in `file_count`,
+        # the badge, the score or Rounds: they free nothing and lose nothing.
+        "empty_folders": beside.get('empty') or {'count': 0, 'unknown': False, 'folders': []},
     })
 
 

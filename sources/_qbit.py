@@ -19,7 +19,8 @@ import qbittorrentapi
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_note,
-    torrent_complete, torrent_claimed_paths, remap_path, registration_key,
+    torrent_complete, torrent_claimed_paths, remap_path, registration_key, content_root,
+    client_save_dirs,
 )
 
 log = logging.getLogger(__name__)
@@ -29,17 +30,40 @@ log = logging.getLogger(__name__)
 # fetch_file_map
 # ---------------------------------------------------------------------------
 
-def fetch_file_map(cfg, unresolved_roots=None):
+def _read_save_scope(qbt, remote_path, local_path, save_scope):
+    """The client's default, category and incomplete folders into `save_scope` (C27).
+
+    Two cheap calls. If either fails the scope is `unknown`, and the scan offers
+    no empty folder rather than one qBittorrent may save into again (R1).
+    """
+    save_scope.setdefault('dirs', set())
+    try:
+        dirs = client_save_dirs(dict(qbt.app_preferences()),
+                                {str(k): dict(v) for k, v in dict(qbt.torrents_categories()).items()})
+    except Exception as e:
+        log.info('qbit: preferences or categories did not load (%s) — no empty folders this scan',
+                 type(e).__name__)
+        dirs = None
+    if dirs is None:
+        save_scope['unknown'] = True
+        return
+    save_scope['dirs'].update(remap_path(d, remote_path, local_path) for d in dirs)
+
+
+def fetch_file_map(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
     socket.setdefaulttimeout(30)
     try:
-        return _fetch_inner(cfg, unresolved_roots)
+        return _fetch_inner(cfg, unresolved_roots, fallback_roots, save_scope)
     except (qbittorrentapi.LoginFailed, qbittorrentapi.APIConnectionError) as e:
         raise SourceConnectionError(f"qBittorrent error: {e}") from e
     finally:
         socket.setdefaulttimeout(None)
 
 
-def _fetch_inner(cfg, unresolved_roots=None):
+def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
+    if save_scope is not None:
+        save_scope.setdefault('dirs', set())
+        save_scope.setdefault('unknown', False)
     qbt = qbittorrentapi.Client(
         host=cfg.get('QB_HOST'),
         username=cfg.get('QB_USER'),
@@ -128,6 +152,9 @@ def _fetch_inner(cfg, unresolved_roots=None):
             if not files_ok:
                 failed_listings.add(torrent_hash)
 
+    if save_scope is not None:
+        _read_save_scope(qbt, cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', ''), save_scope)
+
     # Build file map using pre-fetched tracker and file data
     file_map             = {}
     trackers_set         = set()
@@ -150,6 +177,8 @@ def _fetch_inner(cfg, unresolved_roots=None):
         save_path    = remap_path(torrent.save_path, remote_path, local_path)
         content_path = remap_path(
             getattr(torrent, 'content_path', '') or '', remote_path, local_path)
+        if save_scope is not None and save_path:
+            save_scope['dirs'].add(save_path)     # a few distinct strings, not one per torrent
         if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
             status = 'Seeding'
         elif torrent.state in ('downloading', 'stalledDL'):
@@ -184,6 +213,10 @@ def _fetch_inner(cfg, unresolved_roots=None):
         if listed is None:
             if full_paths:
                 report['listing_recovered'] += 1
+                # Claimed whole, so a stray file inside can't be seen (C26).
+                if fallback_roots is not None:
+                    fallback_roots.append(content_root(
+                        save_path, getattr(torrent, 'name', '') or '', content_path))
             else:
                 # What the fallback cannot find stays unresolved and is counted,
                 # not swallowed.

@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 
 from exclusions import compile_exclusions
-from media_server_exclusions import expand_exclusion_patterns, is_tombstone_path
+from media_server_exclusions import expand_exclusion_patterns, is_always_excluded_path
 from sources import norm_abs
 
 log = logging.getLogger(__name__)
@@ -149,10 +149,11 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
       paths it lists), so that costs a reclaim, never topology.
     * **Excluded paths and tombstones are never a member's paths** (#14) — from
       the records' own flags and, for a path with no record of its own, the
-      current exclusion rules through `matcher`. Tombstones are filtered here as
-      well as at the walk on purpose: these records are the *last* scan's, and
-      the walk's exclusion only lands on the next. A member left with no path is
-      no member.
+      current exclusion rules through `matcher`. Tombstones, and since CLEANUP
+      C24 OS/NAS clutter (a snapshot's read-only copy is identical to the live
+      file), are filtered here as well as at the walk on purpose: these records
+      are the *last* scan's, and the walk's exclusion only lands on the next. A
+      member left with no path is no member.
     * **Group id = the smallest path** (F10), which survives a re-audit.
     * **`frees_up_to` = size × (files − 1)** (F2/F3) — a maximum, true only if
       every copy shares a disk and every link to each is known.
@@ -179,7 +180,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
         return _join(f.get('_file_root', local_path), f.get('path'))
 
     def hidden(path, tree):
-        if is_tombstone_path(path):
+        if is_always_excluded_path(path):
             return True
         if matcher is None:
             return False
@@ -190,7 +191,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
 
     excluded_abs, excluded_count = set(), 0
     for f in all_files:
-        tomb = is_tombstone_path(f.get('path'))
+        tomb = is_always_excluded_path(f.get('path'))
         if tomb or f.get('excluded'):
             excluded_abs.add(own_path(f))
             if not tomb and f.get('duplicate_paths'):
@@ -198,7 +199,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
 
     known, sizes, edges = {}, {}, []
     for f in all_files:
-        if not f.get('duplicate_paths') or f.get('excluded') or is_tombstone_path(f.get('path')):
+        if not f.get('duplicate_paths') or f.get('excluded') or is_always_excluded_path(f.get('path')):
             continue
         fid = str(f.get('file_id') or f.get('inode'))
         tree = tree_of(f)
@@ -228,7 +229,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
     for fid, p in edges:
         target = owner.get(p)
         if target is None:
-            if p not in excluded_abs and not is_tombstone_path(p):
+            if p not in excluded_abs and not is_always_excluded_path(p):
                 unresolved.add(p)
             continue
         if target == fid:
@@ -535,6 +536,43 @@ prune_dirs() {
       PRUNED=$((PRUNED+1))
     fi
   done
+}
+
+# remove_empty_folder DIR — a folder the scan found with no file at any depth
+# (CLEANUP C27). Only `rmdir`, deepest first, which refuses a folder with
+# anything in it: one that gained a file, a link or a socket since the scan is
+# left with it, and said so. Not a failure — the folder simply isn't empty.
+remove_empty_folder() {
+  local d="$1" label="${1#./}"
+  FN=$((FN+1))
+  if [ ! -e "$d" ] && [ ! -L "$d" ]; then
+    printf '[folder %s/%s] Already gone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_MISSING=$((F_MISSING+1))
+    return 0
+  fi
+  if [ -L "$d" ] || [ ! -d "$d" ]; then
+    printf '[folder %s/%s] Not a folder any more, left alone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_KEPT=$((F_KEPT+1))
+    return 0
+  fi
+  if [ -n "$(find "$d" ! -type d 2>/dev/null | head -n 1)" ]; then
+    printf '[folder %s/%s] No longer empty, left alone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_KEPT=$((F_KEPT+1))
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '[folder %s/%s] Would remove empty folder: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_WOULD=$((F_WOULD+1))
+    return 0
+  fi
+  find "$d" -depth -type d -exec rmdir {} \\; 2>/dev/null
+  if [ -e "$d" ]; then
+    printf '[folder %s/%s] No longer empty, left alone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_KEPT=$((F_KEPT+1))
+  else
+    printf '[folder %s/%s] Removed empty folder: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_REMOVED=$((F_REMOVED+1))
+  fi
 }"""
 
 _SUMMARY = """\
@@ -542,17 +580,26 @@ echo ""
 echo "================================================"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "Dry run complete — nothing was deleted or removed."
-  echo "  Would delete:   $WOULD / $TOTAL files"
-  echo "  Already gone:   $MISSING"
+  if [ "$TOTAL" -gt 0 ]; then
+    echo "  Would delete:   $WOULD / $TOTAL files"
+    echo "  Already gone:   $MISSING"
+  fi
   if [ "$FAILED" -gt 0 ]; then
     echo "  Not a file:     $FAILED (would be left alone)"
+  fi
+  if [ "$FTOTAL" -gt 0 ]; then
+    echo "  Would remove:   $F_WOULD / $FTOTAL empty folders"
+    [ "$F_KEPT" -gt 0 ] && echo "  No longer empty: $F_KEPT (would be left alone)"
+    [ "$F_MISSING" -gt 0 ] && echo "  Already gone:   $F_MISSING folder(s)"
   fi
   echo "================================================"
   exit 0
 fi
 echo "Cleanup complete."
-echo "  Deleted:        $DELETED / $TOTAL files"
-echo "  Already gone:   $MISSING"
+if [ "$TOTAL" -gt 0 ]; then
+  echo "  Deleted:        $DELETED / $TOTAL files"
+  echo "  Already gone:   $MISSING"
+fi
 if [ "$FAILED" -gt 0 ]; then
   echo "  FAILED:         $FAILED file(s) could not be deleted and are still there."
   echo "                  Check permissions, a read-only mount, or an immutable flag."
@@ -566,7 +613,12 @@ fi
 if [ "$PRUNED" -gt 0 ]; then
   echo "  Removed $PRUNED empty release folder(s)."
 fi
-if [ "$DELETED" -eq 0 ] && [ "$FAILED" -eq 0 ]; then
+if [ "$FTOTAL" -gt 0 ]; then
+  echo "  Removed:        $F_REMOVED / $FTOTAL empty folders"
+  [ "$F_KEPT" -gt 0 ] && echo "  No longer empty: $F_KEPT folder(s), left alone"
+  [ "$F_MISSING" -gt 0 ] && echo "  Already gone:   $F_MISSING folder(s)"
+fi
+if [ "$DELETED" -eq 0 ] && [ "$FAILED" -eq 0 ] && [ "$F_REMOVED" -eq 0 ] && [ "$F_KEPT" -eq 0 ]; then
   echo "  Everything was already gone. If you expected deletions, check this ran in your torrent folder."
 fi
 
@@ -606,7 +658,8 @@ exit 0"""
 
 
 def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
-                         excluded_count=None, safe_folders=(), landmarks=()):
+                         excluded_count=None, safe_folders=(), landmarks=(),
+                         empty_folders=(), folders_dropped=0):
     """The Cleanup delete script, for a selection the client was just asked about.
 
     `units` is one entry per inode: `{'paths': [rel, ...], 'size', 'state',
@@ -644,6 +697,11 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
       belongs to another machine.
     * The nlink accounting is kept as it was — it was already the one honest
       part of the script, and under C5 it is what counts an inode's bytes once.
+    * **Empty folders** (C27, `empty_folders`, relative) are removed after every
+      file, by `remove_empty_folder`: `rmdir` only, deepest first, so a folder
+      that gained anything since the scan keeps it and is counted "no longer
+      empty", which isn't a failure. Each one's parent anchors the guard,
+      unless it's the root or is itself being removed.
     """
     safe = {str(f).replace('\\', '/').strip('/') for f in (safe_folders or ()) if f}
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -663,6 +721,13 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
     # folder, every folder the script does not prune, and what live torrents hold.
     anchors = sorted({(posixpath.dirname(f) if f in safe else f) for f in by_folder} - {''})
     deleted = {p for v in by_folder.values() for p, *_ in v}
+    folders = sorted({str(f).replace('\\', '/').strip('/') for f in empty_folders or ()} - {''})
+
+    def _removed(path):
+        return any(path == f or path.startswith(f + '/') for f in folders)
+
+    anchors += sorted({posixpath.dirname(f) for f in folders}
+                      - set(anchors) - {''} - {a for a in map(posixpath.dirname, folders) if _removed(a)})
     anchors += sorted({str(m).replace('\\', '/').strip('/') for m in landmarks or ()}
                       - set(anchors) - safe - deleted - {'', '.', '..'})
 
@@ -675,6 +740,11 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         '# WARNING: Review carefully before running. This permanently deletes files.',
         f'# {total_files} file(s) — up to {_human_size(freeable)} freed (the script reports what it actually frees)',
     ]
+    if folders:
+        lines.append(f'# {len(folders)} empty folder(s), removed only while still empty')
+    if folders_dropped:
+        lines.append(f'# {folders_dropped} selected folder(s) are where a torrent in your client saves '
+                     f'now, and were left out.')
     if dropped:
         lines.append(f'# {dropped} file(s) are no longer orphaned and were removed from this script.')
     if not_in_report:
@@ -690,6 +760,7 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         "#   3. Check each file's link count (hardlinked = still referenced elsewhere), then delete it",
         '#   4. Count every file as deleted, already gone, or FAILED — a failed delete is never reported as done',
         '#   5. Remove release folders it emptied — never a category folder, never one with anything left in it',
+        '#      and the empty folders you selected, each only while it is still empty',
         '#   6. Compare the space actually freed with what was expected',
         '#',
         '# USAGE:',
@@ -718,8 +789,8 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
     ]
     if anchors:
         lines += [
-            '# Working-directory guard. It looks for folders a completed run leaves in place,',
-            '# so a second run of a finished script still passes it.',
+            '# Working-directory guard. It looks for folders and files a completed run leaves',
+            '# in place, so a second run of a finished script still passes it.',
             '_found=0',
             'for _d in ' + ' '.join(f'./{shlex.quote(a)}' for a in anchors) + '; do',
             '  if [ -e "$_d" ]; then _found=1; break; fi',
@@ -747,7 +818,9 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         ]
     lines += [
         f'TOTAL={total_files}',
+        f'FTOTAL={len(folders)}',
         'N=0; DELETED=0; MISSING=0; FAILED=0; WOULD=0; PRUNED=0',
+        'FN=0; F_REMOVED=0; F_KEPT=0; F_MISSING=0; F_WOULD=0',
         'HARDLINKED_COUNT=0; HARDLINKED_BYTES=0; STANDALONE_COUNT=0; STANDALONE_BYTES=0',
         '',
         'NOW=$(date +%s 2>/dev/null || true)',
@@ -770,6 +843,7 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         f'echo "Checked against your torrent client: {verified_str}"',
         '[ "$DRY_RUN" -eq 1 ] && echo "DRY RUN — nothing will be deleted."',
         f'echo "Files: {total_files} — up to {_human_size(freeable)} freed"',
+    ] + ([f'echo "Empty folders: {len(folders)}"'] if folders else []) + [
         'echo "================================================"',
         'echo ""',
         '',
@@ -797,6 +871,11 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
             if dirs:
                 ordered = sorted(dirs, key=lambda d: (-d.count('/'), d))
                 lines.append('prune_dirs ' + ' '.join(f'./{shlex.quote(d)}' for d in ordered))
+        lines.append('')
+
+    if folders:
+        lines.append('# ── Empty folders')
+        lines += [f'remove_empty_folder ./{shlex.quote(f)}' for f in folders]
         lines.append('')
 
     lines.append(_SUMMARY)

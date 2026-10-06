@@ -46,6 +46,10 @@ function scriptMeta(headers) {
     dropped:    num('X-Auditorr-Dropped'),
     files:      num('X-Auditorr-Files'),
     freeable:   num('X-Auditorr-Freeable'),
+    // Empty folders (CLEANUP C27): in the script, and left out because a
+    // torrent saves into them now.
+    folders:        num('X-Auditorr-Folders'),
+    foldersDropped: num('X-Auditorr-Folders-Dropped'),
   }
 }
 
@@ -77,7 +81,8 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
   const shownSubtitle = !meta ? subtitle
     : meta.kind === 'dedupe'
       ? `${plural(meta.groups, 'group')} · ${plural(meta.files, 'file')} · frees up to ${formatBytes(meta.freesUpTo)}`
-      : `${plural(meta.files, 'file')} · up to ${formatBytes(meta.freeable)} freed`
+      : [meta.files > 0 || !meta.folders ? `${plural(meta.files, 'file')} · up to ${formatBytes(meta.freeable)} freed` : '',
+         meta.folders > 0 ? plural(meta.folders, 'empty folder') : ''].filter(Boolean).join(' · ')
 
   const handleCopy = () => {
     const ta = document.createElement('textarea')
@@ -151,6 +156,11 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
                 {meta.dropped > 0 && (
                   <span style={{ color: 'var(--yellow)' }}>
                     {' '}{meta.dropped} selected file{meta.dropped !== 1 ? 's are' : ' is'} in use by a torrent now and {meta.dropped !== 1 ? 'were' : 'was'} left out.
+                  </span>
+                )}
+                {meta.foldersDropped > 0 && (
+                  <span style={{ color: 'var(--yellow)' }}>
+                    {' '}{meta.foldersDropped} selected folder{meta.foldersDropped !== 1 ? 's are' : ' is'} where a torrent saves now and {meta.foldersDropped !== 1 ? 'were' : 'was'} left out.
                   </span>
                 )}
               </div>

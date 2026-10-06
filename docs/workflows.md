@@ -279,6 +279,29 @@ Files are grouped by release folder so you review whole releases rather than
 individual files, and nothing is ever selected for you. A release folder
 holding a single file is one line naming the folder and the file.
 
+**Empty folders** are listed last, apart from the files: folders in your torrent
+folder with nothing in them at any depth, usually left behind when a torrent's
+files were deleted or moved. Removing them frees nothing, so they don't count
+toward the sidebar badge or the health score. These are never listed, following
+the rules of [qui's Orphan Scan](https://getqui.com/docs/features/orphan-scan/):
+
+- your torrent folder itself;
+- a folder your client saves into, or one above it: a live torrent's save
+  folder, every category's folder, the default save folder and the incomplete
+  downloads folder. An empty category folder is about to be filled again;
+- a folder an exclusion rule covers, or one holding anything at all, a hidden
+  file or a link included;
+- a folder changed in the last ten minutes, which may be a download starting.
+
+If your client's categories didn't load on the last scan, no empty folders are
+offered, and the page says so rather than showing none.
+
+**If a torrent's file list didn't load**, auditorr counts everything in that
+torrent's folder as the torrent's, so nothing in it is offered for deletion by
+mistake. The cost is that a stray file in that folder can't show up here until a
+scan reads the list. The page says when this happened and which folders it
+couldn't look inside, even when there's nothing else to clean up.
+
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
 
 ### The delete script
@@ -303,6 +326,10 @@ The script:
   never as done, and the script exits non-zero;
 - removes release folders it emptied — never a category folder, and never one
   that still holds anything;
+- removes the empty folders you selected, each only while it's still empty. One
+  that gained a file since the scan is left alone and reported as no longer
+  empty. A folder a torrent saves into by the time you build the script is left
+  out of it;
 - is safe to run again: a second run reports everything as already gone.
 
 Run it with `--dry-run` first to see what it would do without touching anything:
@@ -312,7 +339,8 @@ Run it with `--dry-run` first to see what it would do without touching anything:
 
 If a group is something you put there deliberately, **Exclude** it instead and
 it stops being counted against you. You're shown the exact rules first; they
-land in [Config → Excluded Files](configuration.md#excluded-files--folders).
+land in [Config → Excluded Files](configuration.md#excluded-files--folders). An
+empty folder you want to keep is excluded the same way, as a folder rule.
 
 A fully selected release folder becomes one folder rule, but only where auditorr
 has checked that's safe. Otherwise the group's header says why, and excluding

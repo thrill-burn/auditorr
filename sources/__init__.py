@@ -38,6 +38,7 @@ than guessing** — the same rule as "could not ask", one layer up.
 import os
 import re
 import posixpath
+import unicodedata
 
 
 class SourceConnectionError(Exception):
@@ -256,6 +257,25 @@ def norm_abs(path):
     return posixpath.normpath(p) if p else ''
 
 
+def nfc(path):
+    """`path` in Unicode NFC, for matching a name on disk against a client's (CLEANUP C25).
+
+    One name can be stored in two Unicode forms: `é` as one code point (NFC) or
+    as `e` plus a combining accent (NFD). A Mac writes NFD over SMB, and some
+    filesystems normalise names on the way in, so the disk and the client can
+    spell the same file two ways. Compared as raw strings, the file read as an
+    orphan and the torrent as missing it. qui's Orphan Scan matches in NFC for
+    the same reason.
+
+    **A key for comparing, never a path to act on**: on a filesystem that keeps
+    names byte for byte, the NFC spelling of an NFD file doesn't exist, so
+    nothing that opens, stats or writes a script line may use it. ASCII, which
+    is nearly every path, comes back unchanged after `str.isascii()`, which is
+    constant time.
+    """
+    return path if path.isascii() else unicodedata.normalize('NFC', path)
+
+
 def torrent_complete(progress, completion_on):
     """True | False | None — is this torrent's payload whole?
 
@@ -454,6 +474,73 @@ def disk_fallback_paths(save_path, torrent_name, content_path=''):
     return found
 
 
+# Characters qBittorrent replaces with a space when it makes a folder name out
+# of a category name (`Utils::Fs::toValidPath`). `/` isn't one: it separates a
+# subcategory from its parent.
+_QBT_INVALID_PATH_CHARS = re.compile(r'[:?"*<>|]+')
+
+
+def _is_abs(path):
+    return path.startswith('/') or bool(re.match(r'^[A-Za-z]:/', path))
+
+
+def _category_dir(name, categories, default_save_path, use_subcategories):
+    """One category's folder, the way qBittorrent's `categorySavePath` works it out.
+
+    Its own save path if it has one (relative is under the default save path).
+    With none, a subcategory nests under its parent's folder when subcategories
+    are on, and anything else is the default save path plus the name. `''` when
+    the answer needs a default save path the client didn't give.
+    """
+    opts = categories.get(name) if isinstance(categories, dict) else None
+    own = (opts.get('savePath') or opts.get('save_path')) if isinstance(opts, dict) else ''
+    own = _posix(str(own or ''))
+    if own:
+        if _is_abs(own):
+            return posixpath.normpath(own)
+        return posixpath.normpath(posixpath.join(default_save_path, own)) if default_save_path else ''
+    if use_subcategories and '/' in name.strip('/'):
+        parent, _, last = name.strip('/').rpartition('/')
+        base = _category_dir(parent, categories, default_save_path, use_subcategories)
+    else:
+        base, last = default_save_path, name
+    if not base:
+        return ''
+    return posixpath.normpath(posixpath.join(base, _QBT_INVALID_PATH_CHARS.sub(' ', last)))
+
+
+def client_save_dirs(preferences, categories):
+    """The folders qBittorrent saves into besides a torrent's own save path (CLEANUP C27).
+
+    The default save path, every category's folder (`_category_dir`) and the
+    incomplete-downloads folder when it's on: an empty one of these is about to
+    be saved into again, so it's never an empty folder for Cleanup to offer.
+    Client-side spelling; the caller remaps. **None when either answer isn't a
+    dict**: could not ask, so the scan offers no empty folder at all (R1).
+    """
+    if not isinstance(preferences, dict) or not isinstance(categories, dict):
+        return None
+    default = _posix(str(preferences.get('save_path') or '')).rstrip('/') or ''
+    nest = bool(preferences.get('use_subcategories'))
+    dirs = [_category_dir(str(name), categories, default, nest) for name in categories]
+    if default:
+        dirs.append(default)
+    if preferences.get('temp_path_enabled') and preferences.get('temp_path'):
+        dirs.append(_posix(str(preferences['temp_path'])))
+    return [d for d in dirs if d]
+
+
+def content_root(save_path, torrent_name, content_path=''):
+    """Where a torrent's payload sits, for naming it: `save_path/name`, else `content_path`.
+
+    `save_path/name` first, because it's the folder `disk_fallback_paths` walks
+    that holds the sidecars as well, so it's what a stray file sits in. Posix.
+    """
+    if save_path and torrent_name:
+        return posixpath.join(_posix(save_path), _posix(torrent_name))
+    return _posix(content_path or save_path or '')
+
+
 def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, complete,
                           torrent_hash='', priorities=None):
     """Every on-disk path one torrent claims — **the** claim rule, in one place.
@@ -590,7 +677,7 @@ def _source(cfg):
     return cfg.get('TORRENT_SOURCE', 'qbit')
 
 
-def fetch_file_map(cfg, unresolved_roots=None):
+def fetch_file_map(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
     """(file_map, sorted_trackers, tracker_snapshot, report).
 
     `report` is a `new_source_report` dict describing how completely the client
@@ -604,10 +691,25 @@ def fetch_file_map(cfg, unresolved_roots=None):
     orphans there `unverified` (CLEANUP §5.3). **An out-parameter, in memory
     only, on purpose:** the report is persisted and reaches
     `/api/debug/report`, which must stay free of paths.
+
+    `fallback_roots`, when a list, receives the remapped content root
+    (`content_root`) of every torrent whose files came from the disk fallback
+    and were found: a failed listing on either backend, and an empty one on
+    qui. Everything under it was claimed for that torrent, so a stray file
+    there can't be seen, and the Cleanup page says so (CLEANUP C26). In memory
+    only, for the same reason.
+
+    `save_scope`, when a dict, receives `dirs`, a set of the local folders the
+    client saves into (every live torrent's save path, and `client_save_dirs`),
+    and `unknown`, true when an instance's preferences or categories didn't
+    load. Empty-folder detection (C27) never offers one of those, and offers
+    nothing when it's unknown.
     """
     if _source(cfg) == 'qui':
-        return _qui_fetch_file_map(cfg, unresolved_roots=unresolved_roots)
-    return _qbit_fetch_file_map(cfg, unresolved_roots=unresolved_roots)
+        return _qui_fetch_file_map(cfg, unresolved_roots=unresolved_roots,
+                                   fallback_roots=fallback_roots, save_scope=save_scope)
+    return _qbit_fetch_file_map(cfg, unresolved_roots=unresolved_roots,
+                                fallback_roots=fallback_roots, save_scope=save_scope)
 
 
 def test_connection(payload):

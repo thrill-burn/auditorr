@@ -18,8 +18,9 @@ from audit import _assemble_records, _mark_cleanup_folders, _mark_whole_torrents
 from db import (EXCLUSION_PATTERNS_MAX, EXCLUSION_PATTERN_MAX_CHARS,
                 validate_config)
 from exclusions import compile_exclusions, is_excluded
-from media_server_exclusions import (TOMBSTONE_PATTERNS, expand_exclusion_patterns,
-                                     is_tombstone_path)
+from media_server_exclusions import (ALWAYS_EXCLUDED_PATTERNS, SYSTEM_CLUTTER_PATTERNS,
+                                     TOMBSTONE_PATTERNS, expand_exclusion_patterns,
+                                     is_always_excluded_path)
 from scripts import _build_dup_groups, dup_group_inputs
 
 
@@ -487,12 +488,12 @@ class TombstoneTests(unittest.TestCase):
     """
 
     def test_the_predicate_matches_both_families(self):
-        self.assertTrue(is_tombstone_path(_TOMB))
-        self.assertTrue(is_tombstone_path('x/y/.nfs0000000004a1b2c300000001'))
-        self.assertFalse(is_tombstone_path(_LIVE))
+        self.assertTrue(is_always_excluded_path(_TOMB))
+        self.assertTrue(is_always_excluded_path('x/y/.nfs0000000004a1b2c300000001'))
+        self.assertFalse(is_always_excluded_path(_LIVE))
         # Not over-eager: a real file merely starting with a dot is untouched.
-        self.assertFalse(is_tombstone_path('movies/Film/.plexmatch'))
-        self.assertFalse(is_tombstone_path('movies/Film/film.nfo'))
+        self.assertFalse(is_always_excluded_path('movies/Film/.plexmatch'))
+        self.assertFalse(is_always_excluded_path('movies/Film/film.nfo'))
 
     def test_they_are_excluded_on_every_install_without_being_configured(self):
         patterns = expand_exclusion_patterns({'EXCLUSION_PATTERNS': []})
@@ -580,6 +581,108 @@ class TombstoneTests(unittest.TestCase):
         # Phase 10: a group is a set of equal files (`members`, one per inode),
         # not a canonical plus `files`. Rewritten deliberately; same fixture.
         self.assertEqual(len(out['groups'][0]['members']), 2)
+
+
+# ── C24 — OS and NAS clutter, always excluded ─────────────────────────────────
+
+_RELEASE = 'Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]'
+
+# One of each kind the list covers, as it would sit in a torrent folder.
+_CLUTTER = [
+    f'{_RELEASE}/.DS_Store',
+    f'{_RELEASE}/Thumbs.db',
+    f'{_RELEASE}/DESKTOP.INI',
+    f'{_RELEASE}/._{_RELEASE}.mkv',
+    f'{_RELEASE}/.goutputstream-5XZ1Q2',
+    f'{_RELEASE}/~$notes.docx',
+    f'{_RELEASE}/@eaDir/{_RELEASE}.mkv/SYNOPHOTO_THUMB_M.jpg',
+    f'{_RELEASE}/.@__thumb/s100.jpg',
+    f'#recycle/{_RELEASE}/episode.mkv',
+    f'@Recycle/{_RELEASE}/episode.mkv',
+    f'.Recycle.Bin/{_RELEASE}/episode.mkv',
+    f'.Trash-1000/files/{_RELEASE}/episode.mkv',
+    f'.zfs/snapshot/daily-2026-10-01/{_RELEASE}/episode.mkv',
+    f'#snapshot/GMT-07_2026.10.01/{_RELEASE}/episode.mkv',
+    'lost+found/#123456',
+    f'$RECYCLE.BIN/S-1-5-21/{_RELEASE}.mkv',
+    'System Volume Information/IndexerVolumeGuid',
+]
+
+# Named like clutter, and real.
+_NOT_CLUTTER = [
+    'music/...And Justice for All (1988)/01 Blackened.flac',  # qui's `..*` would hide it
+    f'{_RELEASE}/.0123456789abcdef0123456789abcdef01234567.parts',  # C18 decides
+    f'{_RELEASE}/episode.mkv.!qB',                                   # C4a decides
+    'movies/Recycle (2020)/Recycle.2020.1080p.mkv',
+    'movies/eaDir/x.mkv',
+    'movies/Snapshot.2021.1080p/Snapshot.2021.1080p.mkv',
+]
+
+
+class ClutterTests(unittest.TestCase):
+    """qui's Orphan Scan default ignores, adopted with three deliberate changes.
+
+    A Mac browsing a share writes `.DS_Store` into every folder it opens, which
+    made each one an orphan in Cleanup and blocked that torrent's folder
+    exclusion in Triage. A snapshot folder's files are read-only copies.
+    """
+
+    def test_it_is_excluded_on_every_install_without_being_configured(self):
+        patterns = expand_exclusion_patterns({'EXCLUSION_PATTERNS': []})
+        for p in SYSTEM_CLUTTER_PATTERNS:
+            self.assertIn(p, patterns)
+        matcher = compile_exclusions(patterns)
+        for rel in _CLUTTER:
+            full, name = f'/data/torrents/{rel}', rel.rsplit('/', 1)[-1]
+            self.assertTrue(matcher.match(full, rel, name), rel)
+            self.assertTrue(is_excluded(full, rel, name, patterns), rel)
+            self.assertTrue(is_always_excluded_path(rel), rel)
+            self.assertTrue(is_always_excluded_path(full), rel)
+
+    def test_real_files_named_like_clutter_are_left_alone(self):
+        matcher = compile_exclusions(expand_exclusion_patterns({'EXCLUSION_PATTERNS': []}))
+        for rel in _NOT_CLUTTER + [_LIVE]:
+            full, name = f'/data/torrents/{rel}', rel.rsplit('/', 1)[-1]
+            self.assertFalse(matcher.match(full, rel, name), rel)
+            self.assertFalse(is_always_excluded_path(rel), rel)
+
+    def test_a_ds_store_no_longer_blocks_a_folder_exclusion(self):
+        """The tombstone's T6 interaction, for the commonest clutter there is."""
+        recs = [
+            {'path': _LIVE, 'size': 1, 'status': 'Seeding', 'excluded': False,
+             'imported': False, 'hash': 'AAA', 'tracker_health': 'unknown'},
+            {'path': f'{_RELEASE}/.DS_Store', 'size': 1, 'status': 'Orphaned',
+             'excluded': True, 'imported': False, 'hash': '', 'tracker_health': 'unknown'},
+        ]
+        _mark_whole_torrents(recs, [])
+        self.assertEqual(recs[0]['excl_folder'], _RELEASE)
+
+    def test_a_snapshot_copy_is_never_a_dedupe_member_even_from_stale_records(self):
+        """Identical to the live file, read-only, and on a scan from before C24
+        still `excluded: False`."""
+        snap = f'.zfs/snapshot/daily/{_LIVE}'
+        stale = [
+            {'path': snap, 'size': 100, 'inode': 1, 'file_id': '46:1', 'excluded': False,
+             'duplicate_paths': [f'/data/torrents/{_LIVE}']},
+            {'path': _LIVE, 'size': 100, 'inode': 2, 'file_id': '46:2', 'excluded': False,
+             'duplicate_paths': [f'/data/torrents/{snap}']},
+        ]
+        out = _build_dup_groups(
+            dup_group_inputs(stale, [], '/data/torrents', '/data/media'),
+            '/data/torrents', '/data/media')
+        self.assertEqual(out['groups'], [])
+
+    def test_a_name_rule_set_answers_the_same_one_pass_as_through_match(self):
+        """`match_names` is the per-record predicate's fast path, and refuses a
+        rule set it can't answer for."""
+        matcher = compile_exclusions(ALWAYS_EXCLUDED_PATTERNS)
+        for rel in _CLUTTER + _NOT_CLUTTER + [_LIVE, _TOMB]:
+            self.assertEqual(matcher.match_names(rel),
+                             matcher.match(rel, rel, rel.rsplit('/', 1)[-1]), rel)
+        with self.assertRaises(ValueError):
+            compile_exclusions(['contains:sample']).match_names('a/sample.mkv')
+        with self.assertRaises(ValueError):
+            compile_exclusions(['ext:nfo']).match_names('a/b.nfo')
 
 
 # ── C8's optional half: a hint for a rule that is read as a glob (Phase 14) ───

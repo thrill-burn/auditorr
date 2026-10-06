@@ -5,7 +5,7 @@ import { useToast } from '../Toast'
 import {
   WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
   Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete,
-  ConfirmExcludeModal, SectionHeading, StatBox, Dot, MONO_TITLE, tint,
+  ConfirmExcludeModal, SectionHeading, StatBox, Dot, MONO_TITLE, tint, Disclosure,
 } from './shared'
 
 // Exclusion rules are built from real paths, so they are written as `literal:`
@@ -153,6 +153,44 @@ function StateLabel({ state, dot = false }) {
 
 function Unselectable() {
   return <span title={STATE.unverified.title} style={{ width: 15, height: 15, borderRadius: 'var(--r-sm)', border: '1.5px dashed var(--border2)', flexShrink: 0, cursor: 'not-allowed' }} />
+}
+
+// Torrent folders whose file list didn't load on the last scan (C26). The scan
+// counted everything in them as the torrent's, which is the safe direction, so
+// a stray file inside one can't be listed below. Said here, even on a page with
+// nothing to clean, rather than leaving "no orphans" to imply they were checked.
+function UncheckedFolders({ unchecked }) {
+  const [open, setOpen] = useState(false)
+  if (!unchecked?.count) return null
+  const folders = unchecked.folders || []
+  const more = unchecked.count - folders.length
+  return (
+    <WorkflowWarning>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        {plural(unchecked.count, 'torrent folder')} couldn’t be checked for stray files
+      </div>
+      <div>
+        Their file lists didn’t load from your client on the last scan, so everything in them was
+        counted as the torrent’s. A file that isn’t part of its torrent shows up here after a scan
+        that reads its list.
+      </div>
+      {folders.length > 0 && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Disclosure open={open} onClick={() => setOpen(o => !o)}>
+            {open ? 'Hide folders' : 'Show folders'}
+          </Disclosure>
+          {open && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {folders.map(f => (
+                <div key={f} title={f} style={{ ...READOUT, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f}</div>
+              ))}
+              {more > 0 && <div style={{ ...READOUT, fontFamily: 'inherit' }}>and {more} more</div>}
+            </div>
+          )}
+        </div>
+      )}
+    </WorkflowWarning>
+  )
 }
 
 // A row is an inode (C5). A cross-seeded orphan lists every torrent-folder path
@@ -315,9 +353,68 @@ function Pile({ pile, groups, selected, onToggleFile, onToggleKeys }) {
   )
 }
 
+// Folders with nothing in them at any depth (C27). Not a pile: a pile is
+// organised by what survives deleting a file, and these hold none. Last on the
+// page, since they free nothing; the script removes each only while it's still
+// empty. `unknown` means the client's categories didn't load, so none were
+// offered — said rather than shown as "no empty folders".
+function EmptyFolders({ empty, selected, onToggle, onToggleAll }) {
+  const folders = empty?.folders || []
+  if (empty?.unknown) {
+    return (
+      <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
+        Empty folders weren’t looked for on the last scan: your torrent client’s categories didn’t load,
+        and a category’s folder is never offered.
+      </div>
+    )
+  }
+  if (folders.length === 0) return null
+  const keys = folders.map(f => f.path)
+  const allChecked  = keys.every(k => selected.has(k))
+  const someChecked = !allChecked && keys.some(k => selected.has(k))
+  const more = (empty.count || 0) - folders.length
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <SectionHeading
+        check={{ checked: allChecked, indeterminate: someChecked, onChange: () => onToggleAll(keys) }}
+        dot="var(--text-dim)" title="Empty folders"
+        meta={more > 0 ? `${folders.length} of ${empty.count} folders` : plural(folders.length, 'folder')}
+        desc="Nothing in them at any depth. Removing them frees nothing, and the script removes each only while it’s still empty."
+      />
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+        {folders.map((f, i) => {
+          const checked = selected.has(f.path)
+          return (
+            <div key={f.path} onClick={() => onToggle(f.path)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'pointer',
+                borderTop: i === 0 ? 'none' : '1px solid var(--border)',
+                background: checked ? tint('var(--accent)', 2) : 'var(--surface)',
+              }}>
+              <Checkbox checked={checked} onChange={() => onToggle(f.path)} />
+              <span style={{ width: 11, flexShrink: 0 }} />
+              <span title={f.path} style={{ ...MONO_TITLE, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {f.path}
+              </span>
+              <span style={{ flex: 1 }} />
+              <span style={READOUT}>{ageLabel(f.mtime)}</span>
+            </div>
+          )
+        })}
+      </div>
+      {more > 0 && (
+        <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
+          {plural(more, 'more empty folder')} show up after a scan once these are gone.
+        </div>
+      )}
+    </section>
+  )
+}
+
 // Rows excluded since the last audit, by primary path. Module-level so it
 // outlives the component — see the same set in Triage.jsx for why.
 const DISMISSED = new Set()
+const DISMISSED_FOLDERS = new Set()
 
 export default function Cleanup({ onNavigate, onScript, triageCount }) {
   const toast = useToast()
@@ -327,6 +424,8 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
   // Row keys — a row's first path. No default selection, ever (§6): C2's failure
   // mode was one click from catastrophic, and the page is never pre-armed.
   const [selected, setSelected] = useState(() => new Set())
+  // Empty folders (C27), by path. Their own set: a folder isn't a file row.
+  const [selectedFolders, setSelectedFolders] = useState(() => new Set())
   const [busy,     setBusy]     = useState(null)
   const [confirmExclude, setConfirmExclude] = useState(false)
 
@@ -334,6 +433,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     setLoading(true)
     setError(null)
     setSelected(new Set())
+    setSelectedFolders(new Set())
     api.cleanupReport()
       .then(r => setReport({
         ...r,
@@ -342,6 +442,10 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
         groups: (r?.groups || [])
           .map(g => ({ ...g, files: (g.files || []).filter(f => !DISMISSED.has(f.path)) }))
           .filter(g => g.files.length > 0),
+        empty_folders: r?.empty_folders && {
+          ...r.empty_folders,
+          folders: (r.empty_folders.folders || []).filter(f => !DISMISSED_FOLDERS.has(f.path)),
+        },
       }))
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
@@ -350,7 +454,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
   useEffect(() => { load() }, [load])
   // The report is built from the last audit, so running a delete script changes
   // nothing here until a scan has seen it. This is what clears the rows.
-  useAuditComplete(useCallback(() => { DISMISSED.clear(); load() }, [load]))
+  useAuditComplete(useCallback(() => { DISMISSED.clear(); DISMISSED_FOLDERS.clear(); load() }, [load]))
 
   const groups = report?.groups || []
   const rowByKey = useMemo(() => {
@@ -387,14 +491,35 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     })
   }, [])
 
+  const toggleFolder = useCallback(path => {
+    setSelectedFolders(prev => {
+      const next = new Set(prev)
+      next.has(path) ? next.delete(path) : next.add(path)
+      return next
+    })
+  }, [])
+  const toggleFolders = useCallback(paths => {
+    setSelectedFolders(prev => {
+      const allIn = paths.every(p => prev.has(p))
+      const next = new Set(prev)
+      paths.forEach(p => allIn ? next.delete(p) : next.add(p))
+      return next
+    })
+  }, [])
+
+  const nFolders = selectedFolders.size
+  const anySelected = selected.size > 0 || nFolders > 0
+  const folderNote = nFolders > 0 ? plural(nFolders, 'empty folder') : ''
+
   const handleDeleteScript = () => {
     onScript({
       scriptType: 'orphaned_torrents_delete',
       title: 'Orphaned Torrent Delete Script',
       // Replaced by the server's own count once the script arrives: the script
       // is built after a fresh check of the client, which can drop files.
-      subtitle: `${plural(selectedPaths.length, 'file')} · up to ${formatBytes(selFreeable)} freed`,
-      body: { paths: selectedPaths },
+      subtitle: [selectedPaths.length > 0 && `${plural(selectedPaths.length, 'file')} · up to ${formatBytes(selFreeable)} freed`, folderNote]
+        .filter(Boolean).join(' · '),
+      body: { paths: selectedPaths, folders: [...selectedFolders] },
     })
   }
 
@@ -423,8 +548,10 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     for (const p of chosen) {
       if (!covered.has(p)) patterns.push(literal(p))
     }
+    // An empty folder you want to keep: a subtree rule, so it stops being offered.
+    for (const f of selectedFolders) patterns.push(literal(f, true))
     return patterns
-  }, [groups, selectedPaths])
+  }, [groups, selectedPaths, selectedFolders])
 
   const handleExclude = async () => {
     setBusy('exclude')
@@ -433,13 +560,19 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
       toast(resp.message || `Added ${resp.added} exclusion rules`,
             resp.refused ? 'warning' : 'success')
       selected.forEach(k => DISMISSED.add(k))
+      selectedFolders.forEach(f => DISMISSED_FOLDERS.add(f))
       setReport(r => ({
         ...r,
         groups: (r?.groups || [])
           .map(g => ({ ...g, files: g.files.filter(f => !selected.has(f.path)) }))
           .filter(g => g.files.length > 0),
+        empty_folders: r?.empty_folders && {
+          ...r.empty_folders,
+          folders: (r.empty_folders.folders || []).filter(f => !selectedFolders.has(f.path)),
+        },
       }))
       setSelected(new Set())
+      setSelectedFolders(new Set())
       setConfirmExclude(false)
     } catch (e) {
       toast(e.message, 'error')
@@ -474,11 +607,21 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
 
       {loading && <LoadingRow label="Loading orphaned files…" />}
 
+      {!loading && <UncheckedFolders unchecked={report?.unchecked_folders} />}
+
       {!loading && !error && totalFiles === 0 && (
-        <EmptyState
-          title="No orphaned torrents"
-          sub="Every file in your torrent folder belongs to a torrent your client knows about. Nothing to clean up."
-        />
+        report?.unchecked_folders?.count > 0 ? (
+          <EmptyState
+            title="No orphaned torrents found"
+            sub="Every file auditorr could check belongs to a torrent your client knows about. The folders above couldn’t be checked."
+          />
+        ) : (
+          <EmptyState
+            title="No orphaned torrents"
+            sub={`Every file in your torrent folder belongs to a torrent your client knows about.${
+              report?.empty_folders?.folders?.length ? '' : ' Nothing to clean up.'}`}
+          />
+        )
       )}
 
       {!loading && totalFiles > 0 && (
@@ -520,28 +663,36 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
                 onToggleFile={toggleFile} onToggleKeys={toggleKeys} />
             )
           })}
-
-          {selected.size > 0 && (
-            <ActionBar summary={`${plural(selectedRows.length, 'file')} selected · ${selKeeps} keep a copy · ${selOnly.length} only copy · up to ${formatBytes(selFreeable)} freed`}>
-              <Button onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
-                {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
-              </Button>
-              <Button variant="danger" onClick={handleDeleteScript} disabled={busy != null}>
-                Generate Delete Script
-              </Button>
-            </ActionBar>
-          )}
-
-          {confirmExclude && excludePatterns.length > 0 && (
-            <ConfirmExcludeModal
-              patterns={excludePatterns}
-              subtitle={`Built from the ${plural(selectedRows.length, 'file')} you selected.`}
-              busy={busy === 'exclude'}
-              onCancel={() => setConfirmExclude(false)}
-              onConfirm={handleExclude}
-            />
-          )}
         </>
+      )}
+
+      {!loading && (
+        <EmptyFolders empty={report?.empty_folders} selected={selectedFolders}
+          onToggle={toggleFolder} onToggleAll={toggleFolders} />
+      )}
+
+      {anySelected && (
+        <ActionBar summary={[
+          selected.size > 0 && `${plural(selectedRows.length, 'file')} selected · ${selKeeps} keep a copy · ${selOnly.length} only copy · up to ${formatBytes(selFreeable)} freed`,
+          nFolders > 0 && `${folderNote} selected`,
+        ].filter(Boolean).join(' · ')}>
+          <Button onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
+            {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
+          </Button>
+          <Button variant="danger" onClick={handleDeleteScript} disabled={busy != null}>
+            Generate Delete Script
+          </Button>
+        </ActionBar>
+      )}
+
+      {confirmExclude && excludePatterns.length > 0 && (
+        <ConfirmExcludeModal
+          patterns={excludePatterns}
+          subtitle={`Built from the ${[selected.size > 0 && plural(selectedRows.length, 'file'), folderNote].filter(Boolean).join(' and ')} you selected.`}
+          busy={busy === 'exclude'}
+          onCancel={() => setConfirmExclude(false)}
+          onConfirm={handleExclude}
+        />
       )}
       <SpinKeyframes />
     </WorkflowPage>

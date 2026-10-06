@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import sources
 from sources import _qbit, _qui
 from exclusions import compile_exclusions
+from media_server_exclusions import expand_exclusion_patterns
 import audit
 from audit import (
     source_plausibility, _guard_scan, _SourceAnomaly,
@@ -107,7 +108,8 @@ class QbitListingFailureTests(unittest.TestCase):
     for a torrent that is live and seeding.
     """
 
-    def _run(self, *, fail_files=(), fail_trackers=(), isfile=(), isdir=(), walk=None):
+    def _run(self, *, fail_files=(), fail_trackers=(), isfile=(), isdir=(), walk=None,
+             fallback_roots=None):
         client = _FakeQbtClient(
             torrents=[_torrent('aaa', 'Alpha'), _torrent('bbb', 'Bravo')],
             files={'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']},
@@ -116,7 +118,23 @@ class QbitListingFailureTests(unittest.TestCase):
              patch.object(sources.os.path, 'isfile', lambda p: p in isfile), \
              patch.object(sources.os.path, 'isdir', lambda p: p in isdir), \
              patch.object(sources.os, 'walk', lambda root: (walk or {}).get(root, [])):
-            return _qbit.fetch_file_map(_qbit_cfg())
+            return _qbit.fetch_file_map(_qbit_cfg(), fallback_roots=fallback_roots)
+
+    def test_a_folder_claimed_whole_is_named_for_cleanup(self):
+        """CLEANUP C26: a stray file in a recovered torrent's folder is claimed
+        with it, so Cleanup has to say which folders it couldn't look inside."""
+        root = os.path.join('/data/torrents/movies', 'Bravo')
+        roots = []
+        self._run(fail_files={'bbb'}, isdir={root},
+                  walk={root: [(root, [], ['b.mkv', 'stray.txt'])]}, fallback_roots=roots)
+        self.assertEqual(roots, ['/data/torrents/movies/Bravo'])
+
+    def test_a_healthy_or_unresolved_listing_names_no_folder(self):
+        """Unresolved is C1's `unverified`, already on the page; healthy hides nothing."""
+        for fail in ((), {'bbb'}):
+            roots = []
+            self._run(fail_files=fail, fallback_roots=roots)
+            self.assertEqual(roots, [], fail)
 
     def test_a_healthy_scan_reports_no_failures(self):
         file_map, _, _, report = self._run()
@@ -316,6 +334,21 @@ class QuiShortListingTests(unittest.TestCase):
         with patch.object(_qui, '_session', return_value=sess), \
                 self.assertRaises(sources.SourceConnectionError):
             sources.list_torrents(self.CFG)
+
+    def test_an_empty_listing_claimed_from_disk_names_its_folder(self):
+        """CLEANUP C26 on qui, where an empty listing takes the disk fallback too
+        (qui may not expose per-torrent file lists), and hides a stray the same way."""
+        root = os.path.join('/data/torrents/movies', 'aaa')
+        sess = self._session([[self._torrent('aaa')]], total=1)
+        roots = []
+        with patch.object(_qui, '_session', return_value=sess), \
+             patch.object(sources.os.path, 'isfile', lambda p: False), \
+             patch.object(sources.os.path, 'isdir', lambda p: p == root), \
+             patch.object(sources.os, 'walk',
+                          lambda r: [(root, [], ['a.mkv', 'stray.txt'])] if r == root else []):
+            file_map, _t, _s, _report = _qui.fetch_file_map(self.CFG, fallback_roots=roots)
+        self.assertIn(os.path.join(root, 'stray.txt'), file_map)
+        self.assertEqual(roots, ['/data/torrents/movies/aaa'])
 
     def test_a_listing_that_reaches_its_total_is_complete(self):
         sess = self._session([[self._torrent(h) for h in ('aaa', 'bbb', 'ccc')]], total=3)
@@ -1034,10 +1067,15 @@ class WalkReportsWhatItCouldNotSeeTests(unittest.TestCase):
         self.assertEqual(walk['unlistable_shallow'], 1)
         self.assertTrue(walk['exists'])
 
-    def _walk_refusing(self, refused, error, patterns=()):
-        """Walk `_tree` with each folder in `refused` (relative) raising `error`."""
+    def _walk_refusing(self, refused, error, patterns=(), extra=()):
+        """Walk `_tree`, plus the files in `extra`, with each folder in `refused`
+        (relative) raising `error`."""
         with tempfile.TemporaryDirectory() as base:
             self._tree(base)
+            for rel in extra:
+                path = os.path.join(base, *rel.split('/'))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                open(path, 'wb').close()
             refused = {os.path.normcase(os.path.join(base, *r.split('/'))) for r in refused}
             real_scandir = os.scandir
 
@@ -1077,6 +1115,19 @@ class WalkReportsWhatItCouldNotSeeTests(unittest.TestCase):
         for rule in ('literal:tv/Show/', 'name:Show', 'tv/Show/'):
             with self.subTest(rule=rule):
                 walk = self._walk_refusing({'tv/Show'}, denied, patterns=[rule])
+                self.assertEqual((walk['unlistable'], walk['unlistable_shallow']), (1, 0))
+                self.assertIsNone(audit.filesystem_plausibility('torrents', walk, None))
+
+    def test_an_unreadable_recycle_bin_needs_no_rule_at_all(self):
+        """CLEANUP C24: the always-on clutter list covers the folders C22's
+        hint named, so a NAS recycle bin or lost+found at the root never
+        refuses a scan, on an install with no exclusions configured."""
+        denied = lambda p: PermissionError(13, 'Permission denied', p)     # noqa: E731
+        always = expand_exclusion_patterns({'EXCLUSION_PATTERNS': []})
+        for folder in ('#recycle', 'lost+found', '@eaDir', '.Trash-99'):
+            with self.subTest(folder=folder):
+                walk = self._walk_refusing({folder}, denied, patterns=always,
+                                           extra=(f'{folder}/x.mkv',))
                 self.assertEqual((walk['unlistable'], walk['unlistable_shallow']), (1, 0))
                 self.assertIsNone(audit.filesystem_plausibility('torrents', walk, None))
 

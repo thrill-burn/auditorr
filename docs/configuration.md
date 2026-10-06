@@ -295,18 +295,42 @@ matches whether you write the path relative (`movies/…`) or absolute
 
 ### Always ignored
 
-Two patterns apply on every install and are not configurable: `.fuse_hidden*`
-and `.nfs*`. These are **filesystem tombstones** — when a file is deleted while
-a process still has it open, the filesystem can't free it, so it renames it out
-of the way and drops that name when the last handle closes. FUSE (Unraid user
-shares) and NFS both do this.
+Two kinds of file are excluded on every install, and aren't configurable.
+They still appear in File Explorer marked as excluded, and count in Cleanup's
+Excluded box, so nothing is hidden from you; auditorr just never offers to act
+on them.
 
-The file has already been deleted; what's left is bookkeeping for a delete that
-hasn't finished, and it disappears on its own. Treating one as media meant
-offering to deduplicate a file against itself, or to delete something already
-deleted. They still appear in File Explorer marked as excluded, so you can see
-them if one is sticking around — which usually means a process is holding a
-handle open and needs restarting.
+**Filesystem tombstones**, `.fuse_hidden*` and `.nfs*`. When a file is deleted
+while a process still has it open, the filesystem can't free it, so it renames
+it out of the way and drops that name when the last handle closes. FUSE (Unraid
+user shares) and NFS both do this. The file has already been deleted; what's
+left is bookkeeping for a delete that hasn't finished, and it disappears on its
+own. Treating one as media meant offering to deduplicate a file against itself,
+or to delete something already deleted. If one is sticking around, a process is
+usually holding a handle open and needs restarting.
+
+**Operating-system and NAS clutter**, which belongs to whatever made it rather
+than to any torrent. A Mac browsing a share leaves `.DS_Store` in every folder
+it opens, and each one used to show up in Cleanup:
+
+| Kind | Names |
+| --- | --- |
+| Desktop files | `.DS_Store`, `._*`, `.directory`, `desktop.ini`, `Thumbs.db`, `.goutputstream-*`, `.#*`, `~$*` |
+| Trash and recycle bins (folders) | `.Trashes`, `.Trash-*`, `.Recycle.Bin`, `.recycle`, `#recycle`, `@Recycle`, `$RECYCLE.BIN` |
+| Snapshots (folders) | `.snapshot`, `.snapshots`, `#snapshot`, `.zfs` |
+| Thumbnails and metadata (folders) | `@eaDir`, `.@__thumb`, `.AppleDB`, `.AppleDouble`, `.TemporaryItems` |
+| Filesystem (folders) | `lost+found`, `System Volume Information` |
+
+Names match in any case, and a folder's rule covers everything inside it. The
+list is [qui's Orphan Scan](https://getqui.com/docs/features/orphan-scan)
+default ignores, plus QNAP's and Synology's own folders. Two of qui's are left
+out on purpose. Its `..*` rule would also hide a real release whose name starts
+with two dots, such as `...And Justice for All`. And `*.parts` / `*.!qB` files
+are already handled: they count as part of their torrent while it's in your
+client, and show up in Cleanup once it's gone.
+
+Because these folders are excluded, an unreadable recycle bin or `lost+found`
+never stops a scan.
 
 ### Presets
 

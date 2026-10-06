@@ -49,7 +49,7 @@ from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_instance_failure, report_note,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key,
-    is_part_file_name,
+    is_part_file_name, content_root, client_save_dirs,
 )
 
 log = logging.getLogger(__name__)
@@ -378,7 +378,8 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                      seen, seed_totals=None, report=None, unresolved_roots=None):
+                      seen, seed_totals=None, report=None, unresolved_roots=None,
+                      fallback_roots=None, save_scope=None):
     """One instance's torrents, folded into the shared maps.
 
     `seen` is the cross-instance bookkeeping, and it is **three sets, not one**
@@ -529,6 +530,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
 
         raw_save_path = nt['save_path']
         save_path     = remap_path(raw_save_path, remote_path, local_path)
+        if save_scope is not None and save_path:
+            save_scope['dirs'].add(save_path)     # a few distinct strings, not one per torrent
 
         # How many distinct torrents this client holds, and how many of them are
         # registered more than once. Counts only — reported, never acted on here.
@@ -615,6 +618,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
         else:
             empty_file_count += 1
             recovered = full_paths
+            # A failed listing and an empty one both claim the folder whole, so
+            # a stray file inside it can't be seen (CLEANUP C26). Local, remapped.
+            if recovered and fallback_roots is not None:
+                fallback_roots.append(content_root(save_path, nt['name'], content_path))
             for full_path in recovered:
                 disk_fallback_count += 1
                 if len(sample_paths) < 3:
@@ -671,10 +678,34 @@ def _process_instance(session, base, inst, remote_path, local_path,
 # fetch_file_map
 # ---------------------------------------------------------------------------
 
-def fetch_file_map(cfg, unresolved_roots=None):
+def _read_save_scope(sess, base, inst, remote_path, local_path, save_scope):
+    """One instance's default, category and incomplete folders into `save_scope` (C27).
+
+    qui serves qBittorrent's own answers at `/preferences` and `/categories`.
+    Either failing, or not being a dict, makes the scope `unknown`: the scan
+    then offers no empty folder rather than one qBittorrent may save into (R1).
+    The instance itself still counts as answered; its torrents did.
+    """
+    try:
+        prefs = sess.get(f"{base}/api/instances/{inst['id']}/preferences", timeout=15)
+        prefs.raise_for_status()
+        cats = sess.get(f"{base}/api/instances/{inst['id']}/categories", timeout=15)
+        cats.raise_for_status()
+        dirs = client_save_dirs(prefs.json(), cats.json())
+    except Exception as e:
+        log.info("qui[%s]: preferences or categories did not load (%s) — no empty folders "
+                 "this scan", inst.get('name', '?'), type(e).__name__)
+        dirs = None
+    if dirs is None:
+        save_scope['unknown'] = True
+        return
+    save_scope['dirs'].update(remap_path(d, remote_path, local_path) for d in dirs)
+
+
+def fetch_file_map(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
     socket.setdefaulttimeout(30)
     try:
-        return _fetch_inner(cfg, unresolved_roots)
+        return _fetch_inner(cfg, unresolved_roots, fallback_roots, save_scope)
     except SourceConnectionError:
         raise
     except requests.exceptions.ConnectionError as e:
@@ -688,7 +719,10 @@ def fetch_file_map(cfg, unresolved_roots=None):
         socket.setdefaulttimeout(None)
 
 
-def _fetch_inner(cfg, unresolved_roots=None):
+def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
+    if save_scope is not None:
+        save_scope.setdefault('dirs', set())
+        save_scope.setdefault('unknown', False)
     base    = cfg.get('QUI_HOST', '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
     remote_path = cfg.get('REMOTE_PATH', '')
@@ -737,8 +771,11 @@ def _fetch_inner(cfg, unresolved_roots=None):
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
                                seen, seed_totals, report=report,
-                               unresolved_roots=unresolved_roots)
+                               unresolved_roots=unresolved_roots,
+                               fallback_roots=fallback_roots, save_scope=save_scope)
             report['instances_ok'] += 1
+            if save_scope is not None:
+                _read_save_scope(sess, base, inst, remote_path, local_path, save_scope)
         except Exception as e:
             # Skipping an instance is still the right call — the others have
             # real answers and one unreachable box should not fail the scan —
