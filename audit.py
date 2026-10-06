@@ -2,7 +2,6 @@ import os
 import gc
 import math
 import time
-import posixpath
 import hashlib
 import logging
 import threading
@@ -110,15 +109,36 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         root_name)
         return key_order, scanned, stat_errors, oldest_mtime
 
+    def _dir_excluded(where, rel):
+        name = os.path.basename(os.fspath(where).rstrip('/\\'))
+        if compiled_exclusions is not None:
+            return compiled_exclusions.match(os.fspath(where), rel, name)
+        return bool(exclusion_patterns) and is_excluded(os.fspath(where), rel, name,
+                                                        exclusion_patterns)
+
     def _unlistable(err):
-        walk['unlistable'] += 1
         where = getattr(err, 'filename', None)
         try:
             rel = os.path.relpath(os.fspath(where), base_path) if where else '.'
-            depth = len([s for s in rel.replace('\\', '/').split('/') if s not in ('', '.')])
+            rel = rel.replace('\\', '/')
+            depth = len([s for s in rel.split('/') if s not in ('', '.')])
         except (TypeError, ValueError):
-            depth = 0
-        if depth <= _UNLISTABLE_SHALLOW_DEPTH:
+            rel, depth = '.', 0
+        # CR6, CLEANUP C22. A folder gone since its parent was listed — a move on
+        # completion, an arr renaming a folder, a Cleanup script running — hides
+        # nothing, and refusing the scan for it said "check permissions". Only
+        # below the root: the root itself going away is a mount, and is counted.
+        if isinstance(err, FileNotFoundError) and depth > 0:
+            walk['vanished'] = walk.get('vanished', 0) + 1     # sparse: rarely there
+            log.info("A directory %d level(s) below the %s root went away during the walk",
+                     depth, root_name)
+            return
+        walk['unlistable'] += 1
+        # A folder the user's exclusions cover is counted and never refuses the
+        # scan: the way out for one that stays unreadable for good (a NAS
+        # `#recycle`, `lost+found` on a mount point), which used to block every
+        # scan with no override. The walk still does not prune excluded folders.
+        if depth <= _UNLISTABLE_SHALLOW_DEPTH and not (where and _dir_excluded(where, rel)):
             walk['unlistable_shallow'] += 1
         log.warning("Could not list a directory %d level(s) below the %s root (%s)",
                     depth, root_name, type(err).__name__)
@@ -329,9 +349,7 @@ def _build_duplicate_map(inode_map):
     return duplicate_map
 
 
-def _norm_abs(path):
-    p = str(path or '').replace('\\', '/')
-    return posixpath.normpath(p) if p else ''
+_norm_abs = sources.norm_abs     # the one spelling comparisons share (CR14)
 
 
 def _path_under(path, root):
@@ -346,13 +364,15 @@ def unverified_spec(report, unresolved_roots):
     """Which orphans the scan could not ask about, or None (CLEANUP §5.3).
 
     Since Phase 2 a failed listing claims whatever sits at its roots, so a
-    per-file unknown is reachable in exactly two cases, and both are derived
-    here rather than guessed:
+    per-file unknown is derived here rather than guessed, from two facts:
 
-    * **`all`** — the scan persisted even though a client instance failed. The
-      plausibility guard refuses that on every trigger but a manual scan, which
-      is the explicit override; a torrent on the instance that did not answer is
-      invisible, so every orphan of that scan is `unverified`.
+    * **`all`** — the scan persisted even though a client instance failed: a
+      torrent on the instance that did not answer is invisible, so every orphan
+      of that scan is `unverified`. **No persisted scan reaches this today.**
+      Since decision 1 (a) (Phase 12) `instances_unavailable` refuses on every
+      trigger, a manual scan included, so a scan carrying `instances_failed`
+      never persists. Kept as defence in depth, for a guard that ever loosens
+      (CODE_REVIEW_2026-09-27 CR12, CLEANUP C21).
     * **`roots`** — torrents whose listing failed *and* whose disk fallback found
       nothing (`listing_unresolved`). Their files could be anywhere under their
       save path, so every orphan under it is `unverified`. Blunt when it fires —
@@ -954,7 +974,7 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
         safe[owner] = folder
 
     for r in torrent_files_data:
-        h = r.get('hash')
+        h = torrent_record_key(r)
         if h in whole and _is_triage_relevant(r):
             r["whole_torrent"] = True
             if h in safe:
@@ -1779,13 +1799,20 @@ def source_plausibility(report, baseline, disk_file_count=None):
     only needed for the blackout rule; pass None to run the rules that do not
     need the walk (so a hopeless scan can bail before paying for it).
 
-    The three rules, in the order they are cheapest to evaluate:
+    The rules, every one a manual scan refuses before every one it may accept
+    (`_ACCEPTABLE_BY_HAND`), because the first anomaly is the answer:
 
+      instances  an instance did not answer, or listed only part of its torrents
+      blind      too much of the client could not be asked at all
       collapse   the client answered, but with far fewer torrents or files than
                  `baseline` — the reference, the largest counts persisted in
                  the last `_GUARD_REFERENCE_DAYS` days (`reference_counts`)
-      blind      too much of the client could not be asked at all
       blackout   the client claims nothing while the disk holds files
+
+    **The order is load-bearing (CLEANUP C19).** The collapses used to run
+    before `blind`, so a client mid-restart, listing 40% of its torrents with
+    half their file lists unreadable, read as a collapse, and a manual scan
+    accepted a failed read and restarted the reference window from it.
 
     `blackout` deliberately needs **no baseline**, because the worst case has
     none: a first-ever scan that lands while qBittorrent is still loading its
@@ -1810,6 +1837,16 @@ def source_plausibility(report, baseline, disk_file_count=None):
             'detail': {'instances_failed': failed_instances},
         }
 
+    unresolved = int(report.get('listing_unresolved') or 0)
+    if torrents and unresolved > torrents * _GUARD_UNRESOLVED_FRACTION:
+        return {
+            'code': 'listings_unavailable',
+            'message': (f"{unresolved} of {torrents} torrent(s) ({_pct(unresolved, torrents)}%) "
+                        f"would not report their files, and their payload could not be found on "
+                        f"disk either. There is no evidence either way about those files."),
+            'detail': {'listing_unresolved': unresolved, 'torrent_count': torrents},
+        }
+
     if prev_torrents >= _GUARD_MIN_BASELINE and \
             torrents < prev_torrents * (1 - _GUARD_DROP_FRACTION):
         return {
@@ -1828,16 +1865,6 @@ def source_plausibility(report, baseline, disk_file_count=None):
                         f"{prev_mapped} (the most in the last {_GUARD_REFERENCE_DAYS} days) — "
                         f"a {_pct(prev_mapped - mapped, prev_mapped)}% drop."),
             'detail': {'file_map_size': mapped, 'previous': prev_mapped},
-        }
-
-    unresolved = int(report.get('listing_unresolved') or 0)
-    if torrents and unresolved > torrents * _GUARD_UNRESOLVED_FRACTION:
-        return {
-            'code': 'listings_unavailable',
-            'message': (f"{unresolved} of {torrents} torrent(s) ({_pct(unresolved, torrents)}%) "
-                        f"would not report their files, and their payload could not be found on "
-                        f"disk either. There is no evidence either way about those files."),
-            'detail': {'listing_unresolved': unresolved, 'torrent_count': torrents},
         }
 
     if disk_file_count and mapped == 0:
@@ -2106,7 +2133,9 @@ def _guard_filesystem(root, block, reference, trigger, file_map_size=0):
 _ACCEPT_BY_HAND_TEXT = "If this is expected, run a scan manually to accept it."
 _ANOMALY_FIXES = {
     'instances_unavailable': ("Check that every qui instance is connected and answering, then "
-                              "scan again. A manual scan will not accept a listing that failed."),
+                              "scan again. A manual scan will not accept a listing that failed. "
+                              "An instance you no longer use can be disabled in qui, and "
+                              "auditorr will leave it out."),
     'listings_unavailable':  ("Check the torrent path mapping (Remote and Local torrent path) and "
                               "that the client is answering, then scan again. A manual scan will "
                               "not accept listings that failed."),
@@ -2114,7 +2143,9 @@ _ANOMALY_FIXES = {
                               "network share that has not finished mounting looks like this — then "
                               "scan again. A manual scan will not accept a missing folder."),
     'root_unlistable':       ("Check that the user auditorr runs as can read the folder, then scan "
-                              "again. A manual scan will not accept a folder it could not list."),
+                              "again. A manual scan will not accept a folder it could not list. "
+                              "A folder that is meant to stay unreadable (a recycle bin, "
+                              "lost+found) can be added to Excluded Files & Folders instead."),
 }
 
 

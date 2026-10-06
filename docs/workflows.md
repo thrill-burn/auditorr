@@ -292,7 +292,10 @@ client, or any qui instance, doesn't answer, no script is built.
 
 The script:
 
-- checks that it's running in your torrent folder;
+- checks that it's running in your torrent folder, by looking for folders that
+  will still be there after it runs: your category folders, or the folders of
+  torrents you're still seeding. In the rare case it has none to look for, it
+  says so and, run from a terminal, asks before deleting;
 - warns if it was generated more than a day ago (it doesn't refuse — the clock on
   the machine running it isn't auditorr's);
 - counts every file as **deleted**, **already gone** or **FAILED**. A delete that

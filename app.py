@@ -417,7 +417,7 @@ def startup():
         # fcntl not available (Windows) — just run without locking
         _startup_sequence()
 
-threading.Thread(target=startup, daemon=True).start()
+threading.Thread(target=startup, name='startup', daemon=True).start()
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -972,17 +972,10 @@ class _CleanupRefusal(Exception):
                         "message": self.message, **self.extra}), self.status
 
 
-def _norm_abs(path):
-    """An absolute path spelled for comparison: posix separators, no `//` or `..`.
-
-    Every comparison in the re-verify goes through this on both sides, so a
-    Windows test path, a trailing slash on `LOCAL_PATH` and a client that joins
-    with a doubled separator all compare equal. Normalising can only make more
-    paths match, and a match *drops* a file from the script — so it errs in the
-    fail-safe direction.
-    """
-    p = str(path or '').replace('\\', '/')
-    return posixpath.normpath(p) if p else ''
+# Every comparison in the re-verify goes through this on both sides, so a Windows
+# test path, a trailing slash on `LOCAL_PATH` and a client that joins with a
+# doubled separator all compare equal. One spelling app-wide (CR14).
+_norm_abs = sources.norm_abs
 
 
 def _cleanup_paths(rec):
@@ -1177,8 +1170,45 @@ def _cleanup_row_claims(row, client_paths, remote, local):
         + extra + ([part] if part else [])
 
 
-def _cleanup_live_claims(cfg, rel_paths):
+_CLEANUP_LANDMARKS = 5
+
+
+def _cleanup_landmarks(rows, remote, local):
+    """Top-level entries of the torrent folder that live torrents hold (CLEANUP C20).
+
+    The script's working-directory guard needs names a finished run leaves in
+    place, and the selection supplies them only where something sits above a
+    release folder. With no category folder, which is the reference box's
+    layout, a release folder is one segment deep and its parent is the torrent
+    folder itself, so no guard was emitted at all (CODE_REVIEW_2026-09-27 CR5).
+
+    A complete torrent's payload is on disk under its `save_path/name`, and the
+    script never deletes a file a live torrent claims (the re-verify dropped any
+    it selected) or prunes a folder holding one. So the first segment of that
+    root, relative to `LOCAL_PATH`, is there before the run and after it: a
+    category folder, or on a flat layout the torrent's own folder or file.
+    A few, so one torrent whose files were moved by hand cannot fail the guard.
+    """
+    base = _norm_abs(local)
+    found = set()
+    for r in rows:
+        if sources.torrent_complete(r.get('progress'), r.get('completion_on')) is not True:
+            continue
+        sp = _norm_abs(sources.remap_path(r.get('save_path') or '', remote, local))
+        name = r.get('name') or ''
+        root = _norm_abs(f'{sp}/{name}') if sp and name else ''
+        if base and root.startswith(base.rstrip('/') + '/'):
+            top = root[len(base.rstrip('/')) + 1:].split('/')[0]
+            if top not in ('', '.', '..'):
+                found.add(top)
+    return sorted(found)[:_CLEANUP_LANDMARKS]
+
+
+def _cleanup_live_claims(cfg, rel_paths, seen=None):
     """The selected paths a live torrent claims **right now** (CLEANUP C3 + C4c).
+
+    `seen`, a dict, receives the live listing as `rows`, for the script's
+    working-directory guard (`_cleanup_landmarks`).
 
     The fact a delete script rests on — *no torrent claims this file* — is the
     one fact the script cannot check: it runs on the host, often on another
@@ -1223,6 +1253,8 @@ def _cleanup_live_claims(cfg, rel_paths):
             f"{len(failed)} of {total} torrent-client instance(s) did not answer ({names}), so no "
             f"script was built — a torrent on an instance that did not answer could be using "
             f"these files.")
+    if seen is not None:
+        seen['rows'] = rows
     candidates = _cleanup_claim_candidates(rows, wanted, remote, local)
     if len(candidates) > _CLEANUP_VERIFY_BOUND:
         log.warning("Cleanup: no delete script — %d torrents could claim the selection (bound %d)",
@@ -1307,8 +1339,9 @@ def _cleanup_script_response(cfg, selection):
             "None of the selected files are orphaned in the last scan, so there is nothing to "
             "delete.", dropped=0, not_in_report=not_in_report).response()
 
+    live = {}
     try:
-        claimed = _cleanup_live_claims(cfg, known)
+        claimed = _cleanup_live_claims(cfg, known, seen=live)
     except _CleanupRefusal as refusal:
         return refusal.response()
     kept = [p for p in known if p not in claimed]
@@ -1342,7 +1375,9 @@ def _cleanup_script_response(cfg, selection):
     safe_folders = {str(r['excl_folder']).replace('\\', '/') for r in records if r.get('excl_folder')}
     script = build_cleanup_script(
         units, verified_at=verified_at, dropped=len(claimed), not_in_report=not_in_report,
-        excluded_count=excluded_count, safe_folders=safe_folders)
+        excluded_count=excluded_count, safe_folders=safe_folders,
+        landmarks=_cleanup_landmarks(live.get('rows') or [], cfg.get('REMOTE_PATH', ''),
+                                     cfg.get('LOCAL_PATH', '')))
     resp = app.response_class(script, mimetype='text/plain; charset=utf-8')
     resp.headers['X-Auditorr-Verified-At'] = str(verified_at)
     resp.headers['X-Auditorr-Dropped'] = str(len(claimed))
@@ -3158,8 +3193,11 @@ def workflows_trump_search_release():
     })
 
 
-def _trump_reverify(cfg, items, data):
+def _trump_reverify(cfg, items, data, seen=None):
     """Re-resolve the posted group and compare. None to proceed, else `(payload, status)`.
+
+    `seen`, a dict, receives the live listing it compared against as `rows`:
+    the removal's outcome check needs to know what was there before.
 
     `execute` runs it twice when it grabs (Phase 12): before the grab, so a
     refused group grabs nothing, and again before the removal, because the
@@ -3191,6 +3229,8 @@ def _trump_reverify(cfg, items, data):
         rows = sources.list_torrents(cfg)
     except sources.SourceConnectionError as e:
         return {"status": "error", "message": str(e)}, 502
+    if seen is not None:
+        seen['rows'] = rows
     posted_keys, ambiguous, absent = _resolve_registrations(
         rows, [_reg(i) for i in items])
     if ambiguous:
@@ -3378,6 +3418,43 @@ def workflows_trump_execute():
     return jsonify({**payload, "replayed": False}), code
 
 
+def _trump_remove(cfg, items, before, stages):
+    """Remove the confirmed group with its files, and say what left the client.
+
+    Returns `(removed, error)`, where `removed` counts registrations the client
+    no longer lists (`_removal_outcomes`, S09), not what was submitted. The
+    stage used to read "Removed N torrent(s)" from the submitted count, so the
+    same release on two qui instances read as removed while one stayed
+    registered on the deleted files (CODE_REVIEW_2026-09-27 CR2, TRUMPED TR22).
+    Triage's route has reported per registration since S09; this is the same
+    check. `removed` is also what Rounds credits.
+    """
+    regs, _ambiguous, absent = _resolve_registrations(before, [_reg(i) for i in items])
+    regs = regs + absent
+    error = ''
+    try:
+        sources.remove_torrents(cfg, items, delete_files=True)
+    except sources.SourceConnectionError as e:
+        error = str(e)
+    outcomes = _removal_outcomes(cfg, regs, before)
+    removed = sum(1 for o in outcomes.values() if o == 'removed')
+    left = sum(1 for o in outcomes.values() if o in ('still_listed', 'unknown'))
+    of = f"{removed} of {len(regs)}"
+    if error:
+        stages.set('remove', 'failed',
+                   f"Could not remove the old torrents ({error}). " +
+                   (f"{of} left the client; the rest are still in it — remove them there."
+                    if removed else "They are still in your client — remove them there."))
+    elif left:
+        stages.set('remove', 'failed',
+                   f"Removed {of} torrent(s). {left} could not be confirmed gone from your "
+                   "client — check it, and remove any that are still there with their files.",
+                   code='removal_unconfirmed')
+    else:
+        stages.set('remove', 'done', f"Removed {removed} torrent(s) and their files")
+    return removed, error
+
+
 def _trump_execute(cfg, data, items, release, grabbing, stages):
     """The stages of one execute, in order. Returns `(payload, status)`."""
     service = data.get('service')
@@ -3391,8 +3468,9 @@ def _trump_execute(cfg, data, items, release, grabbing, stages):
     # different path. The expansion is re-run from the confirmed seeds and must
     # land on exactly the posted set — before the grab, so a refused group grabs
     # nothing.
+    live = {}
     if items:
-        refusal = _trump_reverify(cfg, items, data)
+        refusal = _trump_reverify(cfg, items, data, seen=live)
         if refusal is not None:
             return refusal
         stages.set('reverify', 'done', f"The group of {len(items)} torrent(s) is as you confirmed it")
@@ -3406,9 +3484,23 @@ def _trump_execute(cfg, data, items, release, grabbing, stages):
     queue_checked = None
     if grabbing and arr_id is not None and not data.get('force'):
         season = data.get('season_number')
-        queued = queue_records_for_item(
-            cfg, service, data.get('connection_id'), arr_id,
-            season_number=season if isinstance(season, int) else None)
+        season = season if isinstance(season, int) and not isinstance(season, bool) else None
+        episode_ids = None
+        if service == 'sonarr':
+            # Scoped to the episodes of the library files being replaced (CR8,
+            # TRUMPED TR23). With no scope `queue_records_for_item` falls back to
+            # the whole series, so any unrelated episode downloading refused the
+            # swap as already queued. With none at all, it is not checked.
+            sets = _watch_episode_sets(cfg, data.get('connection_id'), arr_id,
+                                       _int_list(data.get('library_file_ids')))
+            episode_ids = sorted({e for s in sets or [] for e in s}) or None
+        unscoped = service == 'sonarr' and episode_ids is None and season is None
+        if unscoped:
+            queued = None
+        else:
+            queued = queue_records_for_item(
+                cfg, service, data.get('connection_id'), arr_id,
+                episode_ids=episode_ids, season_number=season)
         queue_checked = queued is not None
         if queued:
             titles = [q.get('title') for q in queued if q.get('title')]
@@ -3417,6 +3509,8 @@ def _trump_execute(cfg, data, items, release, grabbing, stages):
                                "Nothing was removed or grabbed."}, 409
         stages.set('queue_check', 'done' if queue_checked else 'skipped',
                    f"Not already in {arr_name}'s queue" if queue_checked
+                   else (f"Could not tell which episodes this replaces, so {arr_name}'s queue "
+                         "was not checked") if unscoped
                    else f"Could not read {arr_name}'s queue, so it was not checked")
     else:
         stages.set('queue_check', 'skipped', "Grab anyway" if grabbing and data.get('force')
@@ -3445,7 +3539,7 @@ def _trump_execute(cfg, data, items, release, grabbing, stages):
                                         "torrents and their files are untouched.")
     elif items:
         # Resolved again after the grab: the replacement is in the client now.
-        refusal = _trump_reverify(cfg, items, data) if grabbed else None
+        refusal = _trump_reverify(cfg, items, data, seen=live) if grabbed else None
         if refusal is not None:
             body, _status = refusal
             if body.get('code') == 'group_changed':
@@ -3460,13 +3554,7 @@ def _trump_execute(cfg, data, items, release, grabbing, stages):
                        code=body.get('code'))
         else:
             stages.acted = True
-            try:
-                removed = sources.remove_torrents(cfg, items, delete_files=True)
-                stages.set('remove', 'done', f"Removed {removed} torrent(s) and their files")
-            except sources.SourceConnectionError as e:
-                removal_error = str(e)
-                stages.set('remove', 'failed', f"Could not remove the old torrents ({e}). They are "
-                                               "still in your client — remove them there.")
+            removed, removal_error = _trump_remove(cfg, items, live.get('rows') or [], stages)
     else:
         stages.set('remove', 'skipped', "Nothing to remove")
 
@@ -3781,8 +3869,13 @@ def workflows_triage():
         keys = with_title_aliases(title_match_keys(parsed['title']), title_aliases)
         is_episode = parsed['season'] is not None
         preferred = 'sonarr' if is_episode else 'radarr'
-        lib_rows = rank_arr_candidates(
-            next((lib_by_title[k] for k in keys if k in lib_by_title), []), parsed, service=preferred)
+        # Gated per key, as `title_rows` below is: a key holding only the wrong
+        # service's rows (a film under the release's own title) must not end the
+        # search before an alias reaches the series (T17).
+        lib_rows = next((ranked for ranked in
+                         (rank_arr_candidates(lib_by_title.get(k, []), parsed, service=preferred)
+                          for k in keys)
+                         if ranked), [])
         if is_episode:
             # Same episode, or any episode of the same season for season packs
             se_tag = (f"s{parsed['season']:02d}e{parsed['episode']:02d}" if parsed['episode'] is not None

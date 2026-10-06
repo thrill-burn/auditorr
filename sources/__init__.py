@@ -37,6 +37,7 @@ than guessing** — the same rule as "could not ask", one layer up.
 
 import os
 import re
+import posixpath
 
 
 class SourceConnectionError(Exception):
@@ -238,6 +239,23 @@ def _posix(path):
     return (path or '').replace('\\', '/')
 
 
+def norm_abs(path):
+    """A path spelled for comparison: `/` separators, no `//`, `.` or `..`.
+
+    The one spelling every path comparison in the app shares. It was three
+    copies, `app._norm_abs`, `audit._norm_abs` and `scripts._abs`, each
+    documented as the one (CODE_REVIEW_2026-09-27 CR14); those names are now
+    this. Unconditional, so the checked-in tests take the branch the container
+    takes: the audit joins with `os.path.join`, which is `\\` on a Windows dev
+    machine. Normalising can only make more paths compare equal. In Cleanup's
+    re-verify a match drops a file from the script, and in Dedupe a Linux name
+    holding a real backslash reads as missing, `stale`, which cannot be
+    selected: the fail-safe direction in both.
+    """
+    p = str(path or '').replace('\\', '/')
+    return posixpath.normpath(p) if p else ''
+
+
 def torrent_complete(progress, completion_on):
     """True | False | None — is this torrent's payload whole?
 
@@ -270,9 +288,12 @@ def torrent_complete(progress, completion_on):
         except (TypeError, ValueError):
             p = None
         if p is not None:
-            # A value above 1.0 can only be a 0-100 scale. Measured 0-1 on both
-            # backends, but reading 42.5 as "complete" is the corrupting
-            # direction, so the scale is inferred rather than assumed.
+            # Measured 0-1 on both backends. A value above 1.0 is read as a
+            # 0-100 scale, because reading 42.5 as "complete" is the corrupting
+            # direction. That guard is partial, not an inferred scale (CR13): on
+            # a 0-100 scale exactly 1.0 means 1% and still reads complete, which
+            # no single value can tell apart. A backend that ever answers 0-100
+            # must say so where it calls this.
             return p >= 100.0 if p > 1.0 else p >= 1.0
     if completion_on is not None:
         try:

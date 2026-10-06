@@ -222,8 +222,11 @@ def _run(script_text, cwd, *args, path_prefix=None):
     env = dict(os.environ)
     if path_prefix:
         env['PATH'] = str(path_prefix) + os.pathsep + env.get('PATH', '')
+    # No terminal on stdin, as from cron or a pipe: a script that would ask
+    # (`[ -t 0 ]`) must not wait for an answer here.
     proc = subprocess.run([_bash(), str(script), *args], cwd=str(cwd),
-                          capture_output=True, env=env, timeout=120)
+                          capture_output=True, env=env, timeout=120,
+                          stdin=subprocess.DEVNULL)
     out = proc.stdout.decode('utf-8', 'replace') + proc.stderr.decode('utf-8', 'replace')
     return proc.returncode, out
 
@@ -717,6 +720,62 @@ class TestScriptContract:
         code, out = _run(text, torrents)
         assert code == 0, out
         assert 'regenerate' in out.lower()
+        assert not target.exists()
+
+    def test_a_flat_layout_still_gets_a_working_directory_guard(self, tmp_path):
+        """CODE_REVIEW_2026-09-27 CR5 (CLEANUP C20).
+
+        With no category folder a release folder is one segment deep, so the
+        anchor the guard used, its parent, is the torrent folder itself, and no
+        guard was emitted. That is the reference box's layout. A live torrent
+        beside it is there before the run and after it, so the guard names that.
+        """
+        torrents = tmp_path / 'torrents'
+        target = _write(torrents / 'Some.Release.2020' / 'a.mkv')
+        _write(torrents / 'Live.Release.2021' / 'l.mkv')
+        records = [_orphan('Some.Release.2020/a.mkv', size=64, excl_folder='Some.Release.2020')]
+        rows = [_row('lll', 'Live.Release.2021', save_path=REMOTE)]
+        text = _text(_script(records, ['Some.Release.2020/a.mkv'], rows=rows,
+                             cfg=_local_cfg(torrents)))
+        assert 'Live.Release.2021' in text
+
+        elsewhere = tmp_path / 'home'
+        _write(elsewhere / 'notes.txt')
+        code, out = _run(text, elsewhere)
+        assert code == 1, out
+        assert 'does not look like your torrent directory' in out
+
+        first, out = _run(text, torrents)
+        assert first == 0, out
+        assert not target.exists()
+        assert not (torrents / 'Some.Release.2020').exists(), "the emptied release folder stays"
+        second, out = _run(text, torrents)
+        assert second == 0, out
+        assert 'already gone' in out.lower()
+
+    def test_a_torrent_still_downloading_is_no_landmark(self):
+        """Its final path need not exist yet."""
+        rows = [_row('ddd', 'Downloading.2022', save_path=REMOTE, progress=0.4, completion_on=0),
+                _row('lll', 'Live.Release.2021', save_path=REMOTE)]
+        assert app._cleanup_landmarks(rows, REMOTE, '/srv/torrents') == ['Live.Release.2021']
+
+    def test_a_category_folder_is_the_landmark_where_there_is_one(self):
+        rows = [_row('lll', 'Live.Release.2021', save_path=REMOTE + '/movies'),
+                _row('mmm', 'Other', save_path='/elsewhere/movies')]     # outside LOCAL_PATH
+        assert app._cleanup_landmarks(rows, REMOTE, '/srv/torrents') == ['movies']
+
+    def test_with_nothing_to_check_against_it_says_so_and_asks(self, tmp_path):
+        """No category folder and no live torrent to name: the script cannot
+        guard, so it says where it is about to delete, and asks where it can.
+        From a pipe it cannot ask, and carries on as before."""
+        torrents = tmp_path / 'torrents'
+        target = _write(torrents / 'Some.Release.2020' / 'a.mkv')
+        records = [_orphan('Some.Release.2020/a.mkv', size=64, excl_folder='Some.Release.2020')]
+        text = _text(_script(records, ['Some.Release.2020/a.mkv'], cfg=_local_cfg(torrents)))
+        assert 'Is this your torrent folder? [y/N]' in text
+        code, out = _run(text, torrents)
+        assert code == 0, out
+        assert 'cannot check that it is running in your torrent directory' in out
         assert not target.exists()
 
     def test_a_newline_in_a_file_name_is_never_a_command(self, tmp_path):

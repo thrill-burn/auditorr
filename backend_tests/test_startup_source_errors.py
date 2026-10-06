@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import threading
 import time
 from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
@@ -491,6 +492,13 @@ def _startup_attempts(code):
     Returns how many scans it ran."""
     import app
     import audit as audit_mod
+    # Importing app starts its own startup thread. Run first in a fresh process,
+    # this test imports it here, and that thread then reaches
+    # `_run_startup_audit` under the patches below (time.sleep is patched
+    # process-wide) and appends attempts of its own.
+    for t in threading.enumerate():
+        if t.name == 'startup':
+            t.join(timeout=30)
     attempts = []
 
     def refused_scan(trigger, persist_source_errors=True):

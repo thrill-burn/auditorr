@@ -491,9 +491,16 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   // and tie-break on screen; editing the new title left the old search. The
   // picks read the new title too, to tell the replacement from the original.
   const titlesKey = oldTitles.map(t => t.trim()).filter(Boolean).join('\n')
+  // Keyed on the group's membership, not the object (TR24). Execute's 409
+  // `partial` marks the same group partial with a new object, and keying on
+  // the object threw away step 4's search, so the user acknowledged in step 3
+  // and had to search again.
+  const groupKey = group
+    ? group.torrents.map(t => t.reg || `${t.instance_id ?? ''}:${t.hash}`).sort().join(',')
+    : ''
   useEffect(() => { setPicks(null); setSelected({}); setGroup(null) }, [titlesKey, indexer, newTitle])
-  useEffect(() => { setSearch(null); setConflict(null); setChosenRelease(null) }, [newTitle, group])
-  useEffect(() => { setAckPartial(false) }, [group])
+  useEffect(() => { setSearch(null); setConflict(null); setChosenRelease(null) }, [newTitle, groupKey])
+  useEffect(() => { setAckPartial(false) }, [groupKey])
 
   const reset = useCallback(() => {
     setPmText(''); setOldTitles([]); setNewTitle(''); setParsed(false)
@@ -630,8 +637,13 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
       if (r.grabbed === false) parts.push(`The grab failed (${r.grab_error}) — nothing was removed`)
       if (r.removed) parts.push(`removed ${r.removed} torrent${r.removed !== 1 ? 's' : ''}`)
       if (r.removal_error) parts.push('but the old torrents are still in your client')
+      // `removed` counts what left the client; a removal it can't confirm
+      // fails its stage without an error (TR22).
+      const unconfirmed = !r.removal_error &&
+        (r.stages || []).some(s => s.stage === 'remove' && s.status === 'failed')
+      if (unconfirmed) parts.push(`but ${r.requested - r.removed} could not be confirmed gone`)
       toast(parts.join(' and ') || 'Done',
-            r.grabbed === false || r.removal_error ? 'error' : 'success')
+            r.grabbed === false || r.removal_error || unconfirmed ? 'error' : 'success')
     } catch (e) {
       // An answer arrived, whatever it said, so this confirmation is spent: the
       // next attempt is a new operation. Only a request that got no answer at

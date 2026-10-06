@@ -291,14 +291,24 @@ class _Thread:
 
 
 def _execute(body, rows=ROWS3, paths=SHARED3, cfg=None, queue=None, thread=_Thread, list_error=None,
-             grab=None, remove_error=None, listings=None):
+             grab=None, remove_error=None, listings=None, sticky=()):
     """`listings`, when given, answers successive client listings in turn (the
-    last one repeats) — what the group looks like before the grab, then after."""
+    last one repeats) — what the group looks like before the grab, then after.
+    `sticky`: registration keys the client still lists after it was asked to
+    remove them."""
     cfg = {'ALLOW_CLIENT_DELETE': True, **(cfg or {})}
     _Thread.started = []
-    remove = MagicMock(side_effect=remove_error if remove_error
-                       else (lambda _c, items, delete_files=True: len(items)))
+    # The client after a removal lists what was not removed: the removal stage
+    # reports what left, by registration (S09), not what was submitted (CR2).
+    gone = set()
+
+    def _remove(_c, items, delete_files=True):
+        gone.update(app._reg(i) for i in items if app._reg(i) not in sticky)
+        return len(items)
+
+    remove = MagicMock(side_effect=remove_error if remove_error else _remove)
     grab = grab or MagicMock(return_value={})
+    queue_mock = MagicMock(return_value=[] if queue is None else queue)
     # Keyed by registration, as `sources.fetch_torrent_file_paths` answers
     # since S05 — a listing mock answers only what the real one does.
     fetch = MagicMock(side_effect=lambda _c, items: {app._reg(i): paths.get(i['hash'])
@@ -309,19 +319,27 @@ def _execute(body, rows=ROWS3, paths=SHARED3, cfg=None, queue=None, thread=_Thre
     else:
         listing = (MagicMock(side_effect=list_error) if list_error
                    else MagicMock(return_value=list(rows)))
+    after = listings[-1] if listings else rows
+
+    def _detailed(_c):
+        return ([r for r in after if app._reg(r) not in gone],
+                app.sources.new_source_report('qui'))
+
     with patch.object(app, 'db_load_config', return_value=cfg), \
          patch.object(app.sources, 'list_torrents', listing), \
+         patch.object(app.sources, 'list_torrents_detailed', side_effect=_detailed), \
+         patch.object(app, '_REMOVAL_RECHECK_SECS', 0), \
          patch.object(app.sources, 'fetch_torrent_file_paths', fetch), \
          patch.object(app.sources, 'fetch_torrent_details', return_value={}), \
          patch.object(app.sources, 'remove_torrents', remove), \
          patch.object(app, 'grab_release', grab), \
-         patch.object(app, 'queue_records_for_item', return_value=[] if queue is None else queue), \
+         patch.object(app, 'queue_records_for_item', queue_mock), \
          patch.object(app, 'db_update_meta') as meta, \
          patch.object(app, 'try_start_scanning', return_value=True) as scan, \
          patch.object(app, 'nudge_watchdog') as nudge, \
          patch.object(app.threading, 'Thread', thread):
         resp = app.app.test_client().post('/api/workflows/trump/execute', json=body)
-    return resp, SimpleNamespace(remove=remove, grab=grab, meta=meta, scan=scan,
+    return resp, SimpleNamespace(remove=remove, grab=grab, meta=meta, scan=scan, queue=queue_mock,
                                  nudge=nudge, threads=list(_Thread.started))
 
 
@@ -426,6 +444,28 @@ class TestGrabWithoutDeleting:
         resp, m = _execute(dict(RELEASE, force=True), queue=[{'title': 'Rel.2020.2160p-NEW'}])
         assert resp.status_code == 200
         m.grab.assert_called_once()
+
+    def test_a_sonarr_queue_check_asks_about_the_replaced_episodes_only(self):
+        """CODE_REVIEW_2026-09-27 CR8 (TRUMPED TR23). The page sends neither a
+        season nor episode ids, so the check fell back to any entry on the
+        series, and an unrelated episode downloading refused the swap."""
+        sonarr = dict(RELEASE, service='sonarr', library_file_ids=[501])
+        with patch.object(app, '_watch_episode_sets', return_value=[[11, 12]]) as sets:
+            resp, m = _execute(sonarr)
+        assert resp.status_code == 200
+        sets.assert_called_once_with({'ALLOW_CLIENT_DELETE': True}, 'r1', 7, [501])
+        _args, kw = m.queue.call_args
+        assert kw['episode_ids'] == [11, 12]
+
+    def test_a_sonarr_queue_check_with_no_scope_is_skipped_not_series_wide(self):
+        sonarr = dict(RELEASE, service='sonarr')
+        with patch.object(app, '_watch_episode_sets', return_value=None):
+            resp, m = _execute(sonarr, queue=[{'title': 'Other.Show.S02E05'}])
+        assert resp.status_code == 200, "an unrelated download refused the swap"
+        m.queue.assert_not_called()
+        stage = _stages(resp)['queue_check']
+        assert stage['status'] == 'skipped'
+        assert 'which episodes' in stage['message']
 
     def test_the_queue_is_checked_before_anything_is_deleted(self):
         resp, m = _execute(dict(RELEASE, hashes=_items('aaa', 'bbb', 'ccc'), seed_hashes=['aaa']),
@@ -570,6 +610,31 @@ class TestGrabFirst:
         assert {k: v['status'] for k, v in _stages(resp).items()} == {
             'reverify': 'done', 'queue_check': 'done', 'grab': 'done',
             'remove': 'done', 'watch': 'done'}
+
+    def test_a_torrent_still_in_the_client_is_not_reported_removed(self):
+        """CODE_REVIEW_2026-09-27 CR2 (TRUMPED TR22). The stage read "Removed N"
+        off the submitted count, so a registration the client kept (the same
+        release on a second qui instance, before `remove_torrents` posted to
+        each) read as removed while it sat on deleted files."""
+        sticky = app.sources.registration_key(1, 'ccc')
+        resp, m = _execute(dict(SWAP), sticky={sticky})
+        body, remove = resp.get_json(), _stages(resp)['remove']
+        assert remove['status'] == 'failed'
+        assert remove['code'] == 'removal_unconfirmed'
+        assert remove['message'].startswith('Removed 2 of 3 torrent(s). 1 could not be confirmed')
+        assert body['removed'] == 2
+        assert body['status'] == 'partial'
+        # Rounds pays for what left, not for what was asked.
+        (_key, fn), _kw = next(c for c in m.meta.call_args_list if c[0][0] == 'ns_progress')
+        assert fn({})['trump_torrents'] == 2
+
+    def test_a_removal_that_failed_part_way_says_how_many_left(self):
+        def _partial(_c, items, delete_files=True):
+            raise app.sources.SourceConnectionError('qui HTTP error: 500')
+        resp, _m = _execute(dict(SWAP), remove_error=_partial)
+        remove = _stages(resp)['remove']
+        assert remove['status'] == 'failed'
+        assert 'still in your client' in remove['message']
 
 
 # ═════════════════════════════════════════════════════════════════════════════

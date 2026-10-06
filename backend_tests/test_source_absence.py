@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import sources
 from sources import _qbit, _qui
+from exclusions import compile_exclusions
 import audit
 from audit import (
     source_plausibility, _guard_scan, _SourceAnomaly,
@@ -447,6 +448,37 @@ class PlausibilityGuardTests(unittest.TestCase):
                     file_map_size=3000),
             {'torrent_count': 100, 'file_map_size': 5000}, disk_file_count=5000)
         self.assertEqual(anomaly['code'], 'listings_unavailable')
+
+    def test_a_collapse_never_masks_a_failed_read(self):
+        """CODE_REVIEW_2026-09-27 CR4 (CLEANUP C19).
+
+        The rules returned the first anomaly, and the collapses, which a manual
+        scan may accept, ran before `listings_unavailable`, which it never may.
+        A client mid-restart listing 40% of its torrents with half their file
+        lists unreadable read as a collapse, and a manual scan accepted it and
+        restarted the reference window from it.
+        """
+        report = _report(torrent_count=400, listing_failures=200, listing_unresolved=200,
+                         file_map_size=2000)
+        baseline = {'torrent_count': 1000, 'file_map_size': 5000}
+        self.assertEqual(source_plausibility(report, baseline)['code'], 'listings_unavailable')
+        with self.assertRaises(_SourceAnomaly) as refused:
+            _guard_scan(report, baseline, 'manual')
+        self.assertEqual(refused.exception.anomaly['code'], 'listings_unavailable')
+
+    def test_every_rule_a_manual_scan_refuses_runs_before_every_rule_it_accepts(self):
+        """The order, held whole: a report tripping every source rule at once
+        answers with the first rule outside `_ACCEPTABLE_BY_HAND`."""
+        report = _report(torrent_count=10, listing_failures=9, listing_unresolved=9,
+                         file_map_size=0, instances_total=2)
+        sources.report_instance_failure(report, 'second', 'timed out')
+        baseline = {'torrent_count': 1000, 'file_map_size': 5000}
+        self.assertEqual(source_plausibility(report, baseline, disk_file_count=5000)['code'],
+                         'instances_unavailable')
+        report['instances_failed'] = []
+        anomaly = source_plausibility(report, baseline, disk_file_count=5000)
+        self.assertEqual(anomaly['code'], 'listings_unavailable')
+        self.assertNotIn(anomaly['code'], audit._ACCEPTABLE_BY_HAND)
 
     def test_a_few_unresolved_listings_do_not_refuse_the_whole_scan(self):
         """Per-file `unverified` is Cleanup's job (roadmap Phase 8). The guard is
@@ -1001,6 +1033,66 @@ class WalkReportsWhatItCouldNotSeeTests(unittest.TestCase):
         self.assertEqual(walk['unlistable'], 2)
         self.assertEqual(walk['unlistable_shallow'], 1)
         self.assertTrue(walk['exists'])
+
+    def _walk_refusing(self, refused, error, patterns=()):
+        """Walk `_tree` with each folder in `refused` (relative) raising `error`."""
+        with tempfile.TemporaryDirectory() as base:
+            self._tree(base)
+            refused = {os.path.normcase(os.path.join(base, *r.split('/'))) for r in refused}
+            real_scandir = os.scandir
+
+            def scandir(path='.'):
+                if os.path.normcase(os.path.normpath(os.fspath(path))) in refused:
+                    raise error(os.fspath(path))
+                return real_scandir(path)
+
+            walk = {}
+            compiled = compile_exclusions(list(patterns)) if patterns else None
+            with patch('os.scandir', scandir):
+                _walk_directory(base, 'Torrent', {}, {}, 0, 0, exclusion_patterns=list(patterns),
+                                total_ref=[0], walk_report=walk, compiled_exclusions=compiled)
+        return walk
+
+    def test_a_folder_that_vanished_mid_walk_hides_nothing(self):
+        """CODE_REVIEW_2026-09-27 CR6 (CLEANUP C22).
+
+        A release folder moved or pruned between its parent's listing and its
+        own (qBittorrent moving a finished download, an arr renaming a folder, a
+        Cleanup script running) raised `FileNotFoundError`, which counted as
+        unlistable, and the scan refused with "check permissions"."""
+        walk = self._walk_refusing({'movies/Rel'},
+                                   lambda p: FileNotFoundError(2, 'No such file', p))
+        self.assertEqual((walk['unlistable'], walk['unlistable_shallow']), (0, 0))
+        self.assertEqual(walk['vanished'], 1)
+        self.assertIsNone(audit.filesystem_plausibility('torrents', walk, None))
+
+    def test_an_unreadable_folder_an_exclusion_covers_does_not_refuse_the_scan(self):
+        """The way out for a permanently unreadable folder near a root — a
+        Synology `#recycle`, `lost+found` on a mount point — which used to block
+        every scan with no override."""
+        denied = lambda p: PermissionError(13, 'Permission denied', p)     # noqa: E731
+        walk = self._walk_refusing({'tv/Show'}, denied)
+        self.assertEqual(walk['unlistable_shallow'], 1)
+
+        for rule in ('literal:tv/Show/', 'name:Show', 'tv/Show/'):
+            with self.subTest(rule=rule):
+                walk = self._walk_refusing({'tv/Show'}, denied, patterns=[rule])
+                self.assertEqual((walk['unlistable'], walk['unlistable_shallow']), (1, 0))
+                self.assertIsNone(audit.filesystem_plausibility('torrents', walk, None))
+
+    def test_the_root_itself_vanishing_still_counts(self):
+        """Depth 0 is the mount going away, not a folder being moved."""
+        with tempfile.TemporaryDirectory() as base:
+            self._tree(base)
+            walk = {}
+
+            def scandir(path='.'):
+                raise FileNotFoundError(2, 'No such file', os.fspath(path))
+
+            with patch('os.scandir', scandir):
+                _walk_directory(base, 'Torrent', {}, {}, 0, 0, exclusion_patterns=[],
+                                total_ref=[0], walk_report=walk)
+        self.assertEqual(walk['unlistable_shallow'], 1)
 
     def test_a_root_that_is_not_there_says_so(self):
         walk = {}

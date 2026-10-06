@@ -118,10 +118,13 @@ class CategoryDirGroupingTests(unittest.TestCase):
 class WholeTorrentMarkingTests(unittest.TestCase):
     """The audit's positive evidence about what a Triage row may exclude."""
 
-    def _records(self, *specs, media=()):
+    def _records(self, *specs, media=(), instance_id=None):
         recs = [{'path': p, 'size': 1, 'status': 'Seeding', 'excluded': False,
                  'imported': imported, 'hash': h, 'tracker_health': 'unknown'}
                 for p, h, imported in specs]
+        if instance_id is not None:
+            for r in recs:
+                r['instance_id'] = instance_id
         _mark_whole_torrents(recs, [{'path': p} for p in media])
         return recs
 
@@ -131,6 +134,25 @@ class WholeTorrentMarkingTests(unittest.TestCase):
             ('tv/Show.S01/e02.mkv', 'AAA', False))
         self.assertTrue(all(r.get('whole_torrent') for r in recs))
         self.assertTrue(all(r.get('excl_folder') == 'tv/Show.S01' for r in recs))
+
+    def test_qui_records_are_stamped_exactly_as_qbit_records_are(self):
+        """CODE_REVIEW_2026-09-27 CR3 (TRIAGE T16).
+
+        The passes that build `whole` and `safe` key by registration (Phase 13),
+        while the stamping loop read the bare hash, so a qui record, whose key
+        is `<instance>:<hash>`, was never stamped. The reference box runs qui
+        with no category directory, so this brought back the 200-character
+        dead end `test_a_release_folder_one_segment_deep_is_offered` is about.
+        """
+        specs = (('Dark Matter (2024) S01 [cTurtle]/S01E03.mkv', 'AAA', False),
+                 ('Dark Matter (2024) S01 [cTurtle]/S01E06.mkv', 'AAA', False))
+        media = ['tv/Dark Matter (2024)/Season 01/ep.mkv']
+        qbit = self._records(*specs, media=media)
+        qui = self._records(*specs, media=media, instance_id=1)
+        for q, r in zip(qbit, qui):
+            self.assertTrue(r.get('whole_torrent'))
+            self.assertEqual(r.get('excl_folder'), 'Dark Matter (2024) S01 [cTurtle]')
+            self.assertEqual({k: v for k, v in r.items() if k != 'instance_id'}, q)
 
     def test_a_partially_imported_torrent_is_not_marked(self):
         recs = self._records(

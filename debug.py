@@ -187,6 +187,13 @@ def sanitize_text(text):
     return s
 
 
+def _sanitized_failures(failures):
+    """A source report's `instances_failed`, each name and reason scrubbed: a
+    reason is the raw exception text, which names the host it could not reach."""
+    return [{'name': sanitize_text(f.get('name')), 'reason': sanitize_text(f.get('reason'))}
+            for f in (failures or []) if isinstance(f, dict)]
+
+
 def sanitize_exclusion_pattern(pat):
     """Keep structural rule syntax; hash anything that could be a media name."""
     p = str(pat).strip()
@@ -636,14 +643,16 @@ def build_debug_report(version):
             'reference':   db_get_meta('source_reference'),
             'last_report': (lambda r: {
                 **r, 'notes': [sanitize_text(n) for n in (r.get('notes') or [])],
-                'instances_failed': [
-                    {'name': sanitize_text(f.get('name')),
-                     'reason': sanitize_text(f.get('reason'))}
-                    for f in (r.get('instances_failed') or [])
-                ],
+                'instances_failed': _sanitized_failures(r.get('instances_failed')),
             } if r else None)(db_get_meta('last_source_report')),
+            # An instances_unavailable refusal carries the same failures in its
+            # detail, each reason a raw exception that names the host (CR7).
             'last_anomaly': (lambda a: {
                 **a, 'message': sanitize_text(a.get('message')),
+                **({'detail': {**a['detail'], 'instances_failed':
+                               _sanitized_failures(a['detail']['instances_failed'])}}
+                   if isinstance(a.get('detail'), dict) and 'instances_failed' in a['detail']
+                   else {}),
             } if a else None)(db_get_meta('last_source_anomaly')),
         },
         'crash_evidence': {

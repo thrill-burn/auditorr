@@ -278,10 +278,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               title={unconfirmed === 'unknown'
                 ? `The ${client?.name || 'client'} instance holding this torrent did not answer after the removal, so auditorr cannot say whether it left. It stays here until the next scan.`
                 : `auditorr asked ${client?.name || 'the client'} to remove this torrent and it was still listed a moment later. It stays here until the next scan shows what happened.`}
-              style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0,
-                border: '1px solid var(--yellow)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
-              }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0 }}
             >
               removal unconfirmed
             </span>
@@ -289,10 +286,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {rescanned && (
             <span
               title="Handed to Sonarr/Radarr. The arr imports on its own schedule, and this row is built from the last audit — it clears once a scan has seen the result."
-              style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0,
-                border: '1px solid var(--blue)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
-              }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0 }}
             >
               rescan sent
             </span>

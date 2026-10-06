@@ -7,6 +7,7 @@ from datetime import datetime
 
 from exclusions import compile_exclusions
 from media_server_exclusions import expand_exclusion_patterns, is_tombstone_path
+from sources import norm_abs
 
 log = logging.getLogger(__name__)
 
@@ -81,17 +82,10 @@ def dup_group_inputs(torrent_files, media_files, local_path, media_path):
                for f in media_files if is_dedupe_relevant(f)])
 
 
-def _abs(path):
-    """An absolute path spelled for comparison: `/` separators, no `//` or `.`.
-
-    The audit joins paths with `os.path.join`, which is `\\` on a Windows dev
-    machine, so every path on both sides of a comparison goes through this —
-    unconditionally, so the checked-in tests take the branch the container
-    takes. A Linux file name that really contains a backslash is misspelled by
-    it and then reads as missing: the `stale` state, which cannot be selected.
-    """
-    p = str(path or '').replace('\\', '/')
-    return posixpath.normpath(p) if p else ''
+# Every path on both sides of a comparison goes through this. A Linux file name
+# that really contains a backslash is misspelled by it and then reads as
+# missing: the `stale` state, which cannot be selected. One spelling (CR14).
+_abs = norm_abs
 
 
 def _join(root, rel):
@@ -612,15 +606,17 @@ exit 0"""
 
 
 def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
-                         excluded_count=None, safe_folders=()):
+                         excluded_count=None, safe_folders=(), landmarks=()):
     """The Cleanup delete script, for a selection the client was just asked about.
 
     `units` is one entry per inode: `{'paths': [rel, ...], 'size', 'state',
     'frees'}` — every selected path of that inode, its size once, its
     `_cleanup_state`, and whether deleting these paths frees the bytes (a last
     copy with every path selected). `verified_at` is the epoch of the live
-    re-verify, `dropped` the selected paths a torrent claims now, and
-    `safe_folders` the release folders the audit stamped as `excl_folder`.
+    re-verify, `dropped` the selected paths a torrent claims now,
+    `safe_folders` the release folders the audit stamped as `excl_folder`, and
+    `landmarks` top-level entries of the torrent folder that live torrents hold
+    (`app._cleanup_landmarks`), which a finished run leaves in place.
 
     The contract (CLEANUP §5.5), each part of which `backend_tests/test_cleanup.py`
     checks by **running** the script:
@@ -633,9 +629,13 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
       never counted as space freed (C11). Exits 1 if anything failed.
     * **Idempotent.** The working-directory guard checks for folders a completed
       run leaves in place (the parent of each safe release folder, or the folder
-      itself where the script removes nothing), not for the first file it
-      deletes — which made every finished run fail its own re-run. A directory
-      holding none of them is still an error.
+      itself where the script removes nothing, and the landmarks), not for the
+      first file it deletes — which made every finished run fail its own re-run.
+      A directory holding none of them is still an error. **The landmarks are
+      what make that true with no category folder** (CLEANUP C20): a one-segment
+      release folder anchors on the torrent folder itself, which names nothing,
+      so on that layout no guard was emitted at all. With nothing to name, the
+      script says so and asks before deleting, where it can ask.
     * After a group's files, empty folders are removed **no higher than the
       group's `excl_folder`**, and not at all for a group without one — a
       category dir, a folder shared with a live torrent, or the root (C13).
@@ -660,8 +660,11 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
     total_files = sum(len(v) for v in by_folder.values())
     freeable = sum(int(u.get('size') or 0) for u in units if u.get('frees'))
     # What a completed run leaves behind: the category above each safe release
-    # folder, and every folder the script does not prune.
+    # folder, every folder the script does not prune, and what live torrents hold.
     anchors = sorted({(posixpath.dirname(f) if f in safe else f) for f in by_folder} - {''})
+    deleted = {p for v in by_folder.values() for p, *_ in v}
+    anchors += sorted({str(m).replace('\\', '/').strip('/') for m in landmarks or ()}
+                      - set(anchors) - safe - deleted - {'', '.', '..'})
 
     lines = [
         '#!/bin/bash',
@@ -719,13 +722,26 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
             '# so a second run of a finished script still passes it.',
             '_found=0',
             'for _d in ' + ' '.join(f'./{shlex.quote(a)}' for a in anchors) + '; do',
-            '  if [ -d "$_d" ]; then _found=1; break; fi',
+            '  if [ -e "$_d" ]; then _found=1; break; fi',
             'done',
             'if [ "$_found" -eq 0 ]; then',
             '  echo "ERROR: This does not look like your torrent directory."',
-            f'  printf \'  Expected to find the folder: %s\\n\' {shlex.quote(anchors[0])}',
+            f'  printf \'  Expected to find: %s\\n\' {shlex.quote(anchors[0])}',
             '  echo "  cd into your torrent folder and try again."',
             '  exit 1',
+            'fi',
+            '',
+        ]
+    else:
+        lines += [
+            '# Nothing is known to be in your torrent folder after this run, so there is',
+            '# nothing to check the working directory against. Asked instead, where it can ask.',
+            'echo "⚠ This script cannot check that it is running in your torrent directory."',
+            'printf \'  It deletes paths relative to: %s\\n\' "$(pwd)"',
+            'if [ "$DRY_RUN" -eq 0 ] && [ -t 0 ]; then',
+            '  printf \'  Is this your torrent folder? [y/N] \'',
+            '  read -r _ok || _ok=""',
+            '  case "$_ok" in y|Y|yes|YES) ;; *) echo "Stopped. Nothing was deleted."; exit 1 ;; esac',
             'fi',
             '',
         ]

@@ -126,12 +126,12 @@ you which check failed:
 
 | The message says | What it means | What to do |
 |---|---|---|
-| …instance(s) did not answer, or listed only part of their torrents | a qui instance failed, or its listing stopped short of the total it advertised | get every instance connected and answering, then scan again |
+| …instance(s) did not answer, or listed only part of their torrents | a qui instance failed, qui shows it as disconnected, or its listing stopped short of the total it advertised | get every instance connected and answering, then scan again. An instance you no longer use can be disabled in qui, and auditorr leaves it out |
 | …would not report their files, and their payload could not be found on disk | more than a quarter of your torrents' file listings failed | check [Path Mappings](configuration.md#path-mappings), and that the client is answering |
 | The torrent client reported N torrent(s), down from… | far fewer torrents than lately — a real removal, or a client that lost its session | if the drop is real, run a **manual scan** to accept it |
 | The torrent client accounted for no files at all… | the client answered with nothing while your torrent folder is full | as above |
 | The torrent/media folder is not there | the folder isn't mounted into the container | fix the mount, then scan again |
-| …folder(s) at a category or release level could not be listed | a permissions problem | give the user auditorr runs as read access to it |
+| …folder(s) at a category or release level could not be listed | a permissions problem | give the user auditorr runs as read access to it. A folder that's meant to stay unreadable, like a NAS recycle bin or `lost+found`, can go in [Excluded Files & Folders](configuration.md#excluded-files--folders) instead |
 | The torrent/media folder holds N file(s), down from… | far fewer files than lately — a real deletion, or a mount that came back empty | if it's real, run a **manual scan** to accept it |
 
 **A manual scan accepts a change; it never accepts a failed read.** A library

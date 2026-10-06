@@ -174,6 +174,25 @@ class TriageInstanceRankingTests(unittest.TestCase):
         self.assertEqual(item['verdict'], 'not_in_library')
         self.assertIsNone(item['library'])
 
+    def test_a_key_holding_only_the_wrong_service_does_not_end_the_search(self):
+        """CODE_REVIEW_2026-09-27 CR10 (TRIAGE T17). The library rows were taken
+        from the first title key with any rows, then gated to the service, so a
+        film under the release's own title emptied them and the alias that leads
+        to the series was never tried. `title_rows` already gated inside the
+        loop. It failed toward `import_pending`, the safe direction."""
+        ep = 'tv/Kyojin.S01E02.1080p.WEB-DL/Kyojin.S01E02.1080p.WEB-DL.mkv'
+        film = {'connection_id': 'r1', 'connection_name': 'Films', 'service': 'radarr',
+                'title': 'Kyojin', 'year': 2015, 'arr_id': 42, 'file_id': 1,
+                'path': '/m/Kyojin (2015)/Kyojin.mkv', 'relative_path': 'Kyojin.mkv',
+                'title_slug': 'kyojin', 'file_quality_name': 'WEBDL-1080p', 'file_hdr': ''}
+        titles = [{'service': 'sonarr', 'connection_id': 'tv', 'arr_id': 12, 'title': 'Show',
+                   'title_slug': 'show', 'year': 2019, 'has_file': True,
+                   'alt_titles': ['Kyojin']}]
+        media = [film, _episode_row('tv', 'TV', 'WEBDL-1080p', '1080p', 12)]
+        item = _triage([_rec(hash='EP', path=ep)], media=media, titles=titles)['items'][0]
+        self.assertEqual(item['verdict'], 'superseded')
+        self.assertEqual((item['library']['service'], item['library']['arr_id']), ('sonarr', 12))
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # T5 — a row is honest about its spread, and about its size
