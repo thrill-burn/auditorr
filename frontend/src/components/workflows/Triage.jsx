@@ -1125,7 +1125,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>
                 <span style={{ fontWeight: 600 }}>Tidy up Triage</span>
-                <span style={{ color: 'var(--text-dim)' }}> — some torrents only linger here because of files Sonarr/Radarr never import. Exclude them in one click (saved to Config → Excluded Files, editable there):</span>
+                <span style={{ color: 'var(--text-dim)' }}> — some torrents here hold nothing Sonarr/Radarr will import. Exclude them in one click. The rule applies everywhere, Cleanup included (saved to Config → Excluded Files, editable there):</span>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {report.suggestions.map(s => (

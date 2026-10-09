@@ -1,4 +1,5 @@
 import os
+import re
 import gc
 import math
 import time
@@ -10,6 +11,7 @@ import unicodedata
 from datetime import datetime, timedelta
 
 import sources
+from arr import VIDEO_EXTENSIONS
 from exclusions import is_excluded, compile_exclusions
 from scripts import dedupe_group_count, dedupe_row
 from media_server_exclusions import expand_exclusion_patterns
@@ -734,7 +736,7 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         # would silently mark nothing — the unsafe direction.
         unverified = {'all': bool(unverified.get('all')),
                       'roots': [_match_key(r) for r in (unverified.get('roots') or []) if r]}
-    torrent_files_data = []
+    torrent_files_data, sidecar_candidates = [], []
     seen_torrent_keys = set()
     for file_key in torrent_key_order:
         # Cross-seeded files share an inode across multiple torrent directories.
@@ -752,16 +754,17 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         kept_hash     = info.get('hash', '')
         dead_siblings = [c for h, c in info.get('unreg_claimants', {}).items()
                          if h != kept_hash] if info.get('tracker_health') != 'unregistered' else []
+        # A torrent is imported iff a hardlink to its inode exists inside the
+        # media library (the media walk populates media_paths). nlink > 1 is
+        # NOT a valid proxy: cross-seeding hardlinks the same release across
+        # several tracker dirs, so nlink > 1 is true for never-imported files
+        # too (issue #15).
+        imported = len(info['media_paths']) > 0
         record = {
             "path": info['torrent_rel_path'], "size": info['size'], "inode": file_key[1],
             "file_id": file_id,
             "status": info['status'],
-            # A torrent is imported iff a hardlink to its inode exists inside the
-            # media library (the media walk populates media_paths). nlink > 1 is
-            # NOT a valid proxy: cross-seeding hardlinks the same release across
-            # several tracker dirs, so nlink > 1 is true for never-imported files
-            # too (issue #15).
-            "imported": len(info['media_paths']) > 0,
+            "imported": imported,
             "trackers": list(info['trackers']) or ["None"],
             "linked_paths": info['media_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
@@ -797,6 +800,10 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             leftover = _leftover_record(file_key, info, compiled_exclusions, unverified)
             if leftover:
                 record["leftover"] = leftover
+        # `_mark_sidecars`' first pass, here so that an imported file costs it
+        # nothing: a library with nothing to stamp never pays for a second walk.
+        if not imported and _is_sidecar_candidate(record):
+            sidecar_candidates.append(record)
         torrent_files_data.append(record)
     media_files_data = []
     seen_media_keys = set()
@@ -820,6 +827,8 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             if extra:
                 record["dedupe_paths"] = extra
         media_files_data.append(record)
+    # Before the whole-torrent stamps, which read it.
+    _mark_sidecars(torrent_files_data, sidecar_candidates)
     _mark_whole_torrents(torrent_files_data, media_files_data)
     _mark_cleanup_folders(torrent_files_data, media_files_data,
                           extra_paths=_extra_torrent_paths(inode_map),
@@ -995,6 +1004,113 @@ def _stamp_torrent_files(row_records, files_of):
             r['torrent_files'] = files_of[h]
 
 
+# A scene sample clip, which the arrs reject on import (`Sample`). Read off the
+# file's own name or the folder it sits in, never the whole path, so a release
+# folder named for a film called *Sample* doesn't make every file under it one.
+_SAMPLE_NAME_RE = re.compile(r'(?:^|[ .\-_])sample(?:[ .\-_]|$)', re.IGNORECASE)
+_SAMPLE_DIRS = frozenset({'sample', 'samples'})
+
+
+def _is_video_path(path):
+    # From the last dot: one with a separator after it is in a folder name, and
+    # the slice then holds a `/` and matches nothing — the same answer splitext
+    # gives, without splitting the path.
+    path = path or ''
+    return path[path.rfind('.'):].lower() in VIDEO_EXTENSIONS
+
+
+def _is_sample_path(path):
+    path = path or ''
+    if 'sample' not in path.lower():     # nearly every video: one substring test
+        return False
+    segs = path.replace('\\', '/').rsplit('/', 2)
+    if len(segs) > 1 and segs[-2].lower() in _SAMPLE_DIRS:
+        return True
+    return bool(_SAMPLE_NAME_RE.search(posixpath.splitext(segs[-1])[0]))
+
+
+def _is_sidecar_candidate(r):
+    """Not imported, and not media an arr would import: `_mark_sidecars`' pass 1."""
+    if (r.get('imported') or not r.get('hash') or r.get('excluded') or r.get('incomplete')
+            or r.get('status') == 'Orphaned'):
+        return False
+    path = r.get('path')
+    return not _is_video_path(path) or _is_sample_path(path)
+
+
+def _mark_sidecars(torrent_files_data, candidates=None):
+    """`sidecar` — a file of a torrent whose video is in the library, that no arr imports (TRIAGE T19).
+
+    An `.nfo`, `.txt`, `.jpg` or `.srt` beside a film, or the release's sample
+    clip. Sonarr and Radarr import the video and leave these where they are, so
+    every one read as *not imported* — and "not imported" is the Triage pile, so
+    nearly every scene release in a library was a Triage row, listing its
+    24 KB `.nfo` under "Same quality as library" with a remove beside it. The
+    verdict came off the `.nfo`'s own name (a row with no video takes its
+    largest file), which parsed as the very film the library holds, hardlinked
+    from this torrent. A dead seed fared worse: its `.nfo` made it a
+    not-imported torrent, which outranks the dead seed, so the safest removal
+    Triage has read as *Unregistered — not imported*.
+
+    The way out the page offered was an `ext:nfo` exclusion chip, and an
+    exclusion is global: it also hides a stray `.nfo` no torrent claims, which
+    is a Cleanup orphan (issue #26 — a user's `ext:txt`, added to quiet Triage,
+    hid exactly the stray file Cleanup existed to find).
+
+    **The evidence is the torrent's own video in the library**, judged per
+    registration — `(instance_id, hash)`, the pair `torrent_record_key` spells:
+    a torrent with nothing imported is still a Triage row with every file on
+    it, and a torrent with no video at all (music, books) still reads as not
+    imported, which is what Triage's extension chips are for. A sample is a
+    video by extension, so it is named separately. Positive evidence only: a
+    record with no hash, or a database from before this stamp, reads as not
+    imported, as it always did.
+
+    `imported` stays false — the file has no library link, and the change log's
+    "newly imported" diff reads that flag. Sparse, like `incomplete`: written
+    only on the records it describes.
+
+    It runs on every scan, so its cost is measured (`.internal/sidecar_bench/`).
+    Pass 1 is `_is_sidecar_candidate`, which `_assemble_records` runs inside its
+    own loop on the files that aren't imported and passes in as `candidates`:
+    a library with nothing to stamp then pays nothing past that. In pass 2 a
+    registration's imported files are tested only until one is a video. A first
+    version tested every imported file's name, which cost 0.6 s per 590,000
+    records on a library where every torrent has an `.nfo`.
+    """
+    if candidates is None:
+        candidates = [r for r in torrent_files_data if _is_sidecar_candidate(r)]
+    if not candidates:
+        return
+    want = {}
+    for r in candidates:
+        want.setdefault(r['hash'], set()).add(r.get('instance_id'))
+    # Pass 2 — which of those registrations has a video in the library. One
+    # leaves `want` at its first video, and the pass ends when none is left.
+    held = set()
+    for r in torrent_files_data:
+        if not r.get('imported'):
+            continue
+        insts = want.get(r.get('hash'))
+        if insts is None:
+            continue
+        inst = r.get('instance_id')
+        if inst not in insts:
+            continue
+        path = r.get('path')
+        if _is_video_path(path) and not _is_sample_path(path):
+            h = r['hash']
+            held.add((inst, h))
+            insts.discard(inst)
+            if not insts:
+                del want[h]
+                if not want:
+                    break
+    for r in candidates:
+        if (r.get('instance_id'), r['hash']) in held:
+            r['sidecar'] = True
+
+
 def _mark_whole_torrents(torrent_files_data, media_files_data):
     """Stamp the two facts Triage needs to build a folder exclusion safely (T6).
 
@@ -1003,7 +1119,9 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
     torrent contributes only its not-imported files to Triage, so from there it
     looks whole, while its common folder is the release folder that also holds
     the imported ones. Excluding that folder drops files from the walk that were
-    never the problem, and they leave the health score with them.
+    never the problem, and they leave the health score with them. A sidecar
+    (`_mark_sidecars`) has no say: it is on no row and counts as nothing, so a
+    dead seed's `.nfo` doesn't cost it the folder rule.
 
     `excl_folder` — the folder that is actually safe to exclude as a subtree, or
     absent. **This replaced a "≥2 path segments" rule, which was a proxy for the
@@ -1054,7 +1172,10 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
         h = torrent_record_key(r)
         if not h:
             continue
-        imported_states.setdefault(h, set()).add(bool(r.get('imported')))
+        states = imported_states.setdefault(h, set())
+        imported = bool(r.get('imported'))
+        if imported or not r.get('sidecar'):
+            states.add(imported)
         files_of[h] = files_of.get(h, 0) + 1
         if _is_triage_relevant(r):
             relevant.add(h)
@@ -1205,8 +1326,11 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
     hardlinked_media_size = sum(f['size'] for f in scoring_media if f.get('linked_paths'))
     total_torrents_size   = sum(f['size'] for f in scoring_torrents)
     orphaned_torrent_size = sum(f['size'] for f in scoring_torrents if f['status'] == 'Orphaned')
-    not_imported_size     = sum(f['size'] for f in scoring_torrents
-                                if not f['imported'] and f['status'] != 'Orphaned')
+    # A sidecar of a torrent the library holds is not "not imported" (T19). An
+    # unfinished download still is, here: T4 left the per-file figure alone.
+    not_imported = [f for f in scoring_torrents
+                    if not f['imported'] and f['status'] != 'Orphaned' and not f.get('sidecar')]
+    not_imported_size = sum(f['size'] for f in not_imported)
     seen_files = set()
     dup_size = dup_count = 0
     for f in scoring_media + scoring_torrents:
@@ -1257,7 +1381,7 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
             # the page's count, beside `orphaned_torrent_count`, for the sidebar
             # badge. Zero bytes, so the score and Rounds never see them.
             "leftover_count": sum(1 for f in torrent_files if f.get('leftover')),
-            "not_imported_count": sum(1 for f in scoring_torrents if not f['imported'] and f['status'] != 'Orphaned'),
+            "not_imported_count": len(not_imported),
             "dead_seed_count": sum(1 for f in scoring_torrents
                                    if f['imported'] and f['status'] != 'Orphaned'
                                    and f.get('tracker_health') == 'unregistered'),
@@ -1624,6 +1748,10 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
       - getting excluded — hidden, not dug. Triage renders its exclusion
         suggestion chips right beside the delete button, so this is the normal
         case, and paying for it would turn "add a pattern" into a points button.
+      - becoming a sidecar (T19) — the file didn't change; what counts as the
+        pile did. The first scan to stamp them takes every `.nfo` of every
+        imported torrent off the pile at once, which without this paid a point
+        each. A torrent that imports later pays for its video, as it always did.
 
     Counting transitions needs no exclusion guard beyond that: excluding a file
     leaves it in the walk, so it produces no phantom transition. This is why the
@@ -1667,7 +1795,8 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
             continue
         # Either still sitting on the pile, or it left by a route that isn't a
         # success (see the carve-outs above).
-        if not (_is_pile_item(f) or f.get('status') == 'Orphaned' or f.get('excluded')):
+        if not (_is_pile_item(f) or f.get('status') == 'Orphaned' or f.get('excluded')
+                or f.get('sidecar')):
             continue
         if listed:
             still += 1
@@ -1735,7 +1864,7 @@ def _compute_tracker_file_stats(torrent_files):
             elif f['status'] == 'Orphaned':
                 s['orphaned_count'] += 1
                 s['orphaned_size']  += f['size']
-            if not f.get('imported') and f['status'] != 'Orphaned':
+            if not f.get('imported') and f['status'] != 'Orphaned' and not f.get('sidecar'):
                 s['not_imported_count'] += 1
                 s['not_imported_size']  += f['size']
     return stats
@@ -1757,12 +1886,17 @@ def _is_not_imported_torrent(f):
     exposed no usable completion field the row stays visible carrying its
     status, because auditorr never hides anything silently (T3/T15's rule) — the
     honest failure is a row you can see and judge, not a row that vanished.
+
+    **Nor is a sidecar** (T19, `_mark_sidecars`): the `.nfo` or sample of a
+    torrent whose video the library holds. No arr imports one, so it can never
+    leave the pile, and it made nearly every scene release a Triage row.
     """
     return (
         not f.get('excluded')
         and not f.get('imported')
         and f.get('status') != 'Orphaned'
         and not f.get('incomplete')
+        and not f.get('sidecar')
     )
 
 
@@ -1785,7 +1919,7 @@ def _is_triage_relevant(f):
     if f.get('status') == 'Orphaned':
         return False
     if not f.get('imported'):
-        return not f.get('incomplete')
+        return not f.get('incomplete') and not f.get('sidecar')
     return f.get('tracker_health') == 'unregistered'
 
 

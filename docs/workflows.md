@@ -438,6 +438,14 @@ released as `No.tengo.miedo.S01…` resolves to the series Sonarr calls *I'm Not
 Afraid*, and reads as *Import pending* rather than *Not in library*. An exact
 title match always takes priority.
 
+**A torrent's extra files don't count once its video is in your library.**
+Sonarr and Radarr import a release's video and leave its `.nfo`, `.txt`,
+artwork, subtitles and sample clip in the torrent folder. Those are part of an
+imported torrent, not files waiting to import, so they never make a torrent a
+Triage row, and they don't count toward Not Imported anywhere else either. A
+torrent with nothing in your library still lists all its files, and one with no
+video at all (music, books) is listed as before.
+
 **One verdict per torrent, earned by all of its files.** A season pack is one
 decision, but its episodes don't always agree — one may already be in your
 library while another is still waiting to import. Every video file is judged,
@@ -542,12 +550,17 @@ registration, and the registration is what needs removing.
 
 ### Exclusion suggestions
 
-When torrents linger only because of files Sonarr/Radarr will never import,
-Triage offers one-click filters built from your actual files: non-video
-sidecars (`.sfv`, checksums), scene sample clips, and full-disc rip structures.
-Clicking one writes a real exclusion into
+When torrents hold nothing Sonarr/Radarr will import, Triage offers one-click
+filters built from your actual files: a file type (for a torrent with no video
+in it), scene sample clips, and full-disc rip structures. Clicking one writes a
+real exclusion into
 [Config → Excluded Files](configuration.md#excluded-files--folders), where you
 can see and undo it. Subtitles and Extras are deliberately never suggested.
+
+An exclusion applies everywhere, Cleanup included. A rule like `ext:txt` also
+hides a stray `.txt` that no torrent holds, which is exactly what Cleanup is
+there to find. You don't need one for a torrent's `.nfo` or sample: once its
+video is in your library, those no longer reach Triage.
 
 ---
 

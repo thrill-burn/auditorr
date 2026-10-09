@@ -187,7 +187,7 @@ The score is out of 100, split across four components:
 | --- | --- | --- |
 | **Hardlinked Media** | 70 | Directly proportional: the share of your library size that is hardlinked to a torrent. |
 | **Orphaned Torrents** | 10 | Full marks at zero; falls to zero when orphaned size reaches the threshold below. |
-| **Not Imported** | 10 | Same shape, on torrent data with no library file. |
+| **Not Imported** | 10 | Same shape, on torrent data with no library file. A torrent's `.nfo`, artwork and sample don't count once its video is in your library. |
 | **Duplicate Files** | 10 | Same shape, on bit-identical files that don't share an inode. |
 
 ### Weighting

@@ -4268,6 +4268,11 @@ def workflows_triage_verify():
 # let the UI drop the affected rows immediately (the real exclusion only takes
 # effect on the next audit walk). Subtitles and Extras/Featurettes are
 # deliberately NOT suggested — those are often kept on purpose.
+#
+# A torrent whose video is in the library no longer reaches this list for its
+# `.nfo` or sample (`audit._mark_sidecars`, T19), so an `ext:` chip now means a
+# torrent with no video at all. They were the common case, and the chip that
+# answered them was a global rule that also hid stray files from Cleanup (#26).
 _DISC_SEGMENTS = {'bdmv': 'bluray', 'certificate': 'bluray', 'video_ts': 'dvd', 'audio_ts': 'dvd'}
 _SAMPLE_RE     = re.compile(r'(?:^|[ .\-_/])sample(?:[ .\-_/]|$)')
 _DISC_PATTERNS = {'bluray': ['BDMV', 'CERTIFICATE'], 'dvd': ['VIDEO_TS', 'AUDIO_TS']}
@@ -4296,7 +4301,7 @@ def _triage_exclusion_suggestions(items):
             key = f'ext:{sub}'
             b = buckets.setdefault(key, {
                 'id': key, 'label': f'{sub} files',
-                'detail': 'sidecar files Sonarr/Radarr never import',
+                'detail': 'torrents with no video, which Sonarr/Radarr can’t import',
                 'patterns': [f'ext:{sub.lstrip(".")}'], 'match': [sub], 'count': 0, 'size': 0})
         elif kind == 'sample':
             b = buckets.setdefault('sample', {
