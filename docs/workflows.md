@@ -332,8 +332,17 @@ The script:
   out of it;
 - is safe to run again: a second run reports everything as already gone.
 
-Run it with `--dry-run` first to see what it would do without touching anything:
-`bash orphaned_torrents_delete.sh --dry-run`.
+Save the script anywhere: it doesn't need to be in your torrent folder. Give it
+your torrent folder as your host sees it (the script's header names the folder
+auditorr sees, your **Local torrent path**), and run it with `--dry-run` first to
+see what it would do without touching anything:
+
+```bash
+bash orphaned_torrents_delete.sh --dry-run /mnt/user/data/torrents
+bash orphaned_torrents_delete.sh /mnt/user/data/torrents
+```
+
+Or `cd` into your torrent folder first and leave the folder off.
 
 ### Excluding a group
 
@@ -630,8 +639,10 @@ Every file gets an outcome — linked, already linked, left alone (with the
 reason), or **FAILED** — and space counts as freed only once every link to a copy
 has been replaced. It is safe to run twice: the second run reports everything as
 already linked. If a run is interrupted, or a rename fails part-way, nothing is
-missing; run it again and it finishes. `bash dedupe.sh --dry-run` checks and
-compares everything and changes nothing. The script needs GNU `stat` (any Linux,
+missing; run it again and it finishes. Like the Cleanup script, it can be kept
+anywhere: give it the folder its header names, as your host sees it
+(`bash dedupe.sh --dry-run /mnt/user/data`), or `cd` there first.
+`--dry-run` checks and compares everything and changes nothing. The script needs GNU `stat` (any Linux,
 not macOS), and says up front how much it will read — `cmp` reads both copies of
 every file, which on a spinning array can take hours. When it finishes, auditorr
 notices the changes and scans again shortly.

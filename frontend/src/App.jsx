@@ -150,6 +150,9 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
         {!error && (
           <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 'var(--font-base)', color: 'var(--text-dim)', flexShrink: 0 }}>
             ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
+            <div style={{ marginTop: 6 }}>
+              Save it anywhere; it doesn’t need to be in your data folder. Give it the folder to work in when you run it, as the top of the script shows.
+            </div>
             {meta && (
               <div style={{ marginTop: 6 }}>
                 Checked against your torrent client at {new Date(meta.verifiedAt * 1000).toLocaleTimeString()} — run it soon; it warns if it is more than a day old.

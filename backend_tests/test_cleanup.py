@@ -234,10 +234,10 @@ def _bash():
     return found
 
 
-def _run(script_text, cwd, *args, path_prefix=None):
+def _run(script_text, cwd, *args, path_prefix=None, env_extra=None):
     script = cwd.parent / f'cleanup_{len(list(cwd.parent.glob("cleanup_*.sh")))}.sh'
     script.write_bytes(script_text.encode('utf-8'))
-    env = dict(os.environ)
+    env = {**os.environ, **(env_extra or {})}
     if path_prefix:
         env['PATH'] = str(path_prefix) + os.pathsep + env.get('PATH', '')
     # No terminal on stdin, as from cron or a pipe: a script that would ask
@@ -364,6 +364,81 @@ class TestAlreadyRight:
         resp = _cleanup([_orphan('movies/Rel/a.mkv')], compact=False)
         assert resp.status_code == 200
         assert resp.get_json()['file_count'] == 1
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The folder as an argument — the script can be kept anywhere
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestFolderArgument:
+    """The script used to say `cd` into the torrent folder and run it, which
+    read as "copy it there", and the copy is a stray file in the torrent folder.
+    Now the folder can be named on the command line and the script `cd`s into
+    it. The working-directory guard checks it like any other folder."""
+
+    def _setup(self, tmp_path):
+        torrents = tmp_path / 'torrents'
+        _write(torrents / 'movies' / 'Rel' / 'a.mkv')
+        resp = _script([_orphan('movies/Rel/a.mkv', size=64)], ['movies/Rel/a.mkv'],
+                       cfg=_local_cfg(torrents), compact=False)
+        home = tmp_path / 'home'
+        home.mkdir()
+        return torrents, home, _text(resp)
+
+    def test_it_runs_in_the_folder_it_is_given_from_anywhere(self, tmp_path):
+        torrents, home, text = self._setup(tmp_path)
+        code, out = _run(text, home, _posix(torrents))
+        assert code == 0, out
+        assert not (torrents / 'movies' / 'Rel' / 'a.mkv').exists()
+        assert 'Folder: ' in out
+        assert list(home.iterdir()) == []
+
+    def test_the_usage_names_the_folder_auditorr_sees(self, tmp_path):
+        torrents, _, text = self._setup(tmp_path)
+        assert f'the folder auditorr sees as {torrents}' in text
+        assert 'bash orphaned_torrents_delete.sh --dry-run /path/to/torrents' in text
+
+    @pytest.mark.parametrize('order', ['flag_first', 'folder_first'])
+    def test_dry_run_goes_either_side_of_the_folder(self, tmp_path, order):
+        torrents, home, text = self._setup(tmp_path)
+        args = ['--dry-run', _posix(torrents)]
+        code, out = _run(text, home, *(args if order == 'flag_first' else reversed(args)))
+        assert code == 0, out
+        assert 'Would delete' in out
+        assert (torrents / 'movies' / 'Rel' / 'a.mkv').exists()
+
+    @pytest.mark.parametrize('args', [
+        ['{tmp}/missing'],                   # no such folder
+        [''],                                # an empty name, as from an unset variable
+        ['{tmp}/torrents', '{tmp}/torrents'],  # two folders
+        ['--force'],                         # an unknown option is still refused
+    ])
+    def test_a_bad_argument_changes_nothing(self, tmp_path, args):
+        torrents, home, text = self._setup(tmp_path)
+        code, out = _run(text, home, *[a.format(tmp=_posix(tmp_path)) for a in args])
+        assert code == 2, out
+        assert (torrents / 'movies' / 'Rel' / 'a.mkv').exists()
+
+    def test_the_wrong_folder_is_still_caught_by_the_guard(self, tmp_path):
+        torrents, home, text = self._setup(tmp_path)
+        code, out = _run(text, torrents, _posix(home))
+        assert code == 1 and 'ERROR' in out and 'Looked in:' in out, out
+        assert (torrents / 'movies' / 'Rel' / 'a.mkv').exists()
+
+    def test_cdpath_cannot_send_a_relative_name_elsewhere(self, tmp_path):
+        """With `CDPATH` exported, a bare `cd torrents` tries its entries before
+        the current folder. A decoy holding the same file must be left alone."""
+        host = tmp_path / 'host'
+        torrents = host / 'torrents'
+        _write(torrents / 'movies' / 'Rel' / 'a.mkv')
+        decoy = host / 'decoy' / 'torrents'
+        _write(decoy / 'movies' / 'Rel' / 'a.mkv')
+        text = _text(_script([_orphan('movies/Rel/a.mkv', size=64)], ['movies/Rel/a.mkv'],
+                             cfg=_local_cfg(torrents), compact=False))
+        code, out = _run(text, host, 'torrents', env_extra={'CDPATH': 'decoy'})
+        assert code == 0, out
+        assert not (torrents / 'movies' / 'Rel' / 'a.mkv').exists()
+        assert (decoy / 'movies' / 'Rel' / 'a.mkv').exists()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

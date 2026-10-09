@@ -18,6 +18,7 @@ import threading
 import traceback
 from collections import deque
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 from db import (DATA_DIR, DB_FILE, DEFAULT_CONFIG, SCORE_WEIGHT_KEYS,
                 score_weight_points,
@@ -111,13 +112,17 @@ _SAFE_EXTENSIONS = {
 # An already-sanitized segment ("~a1b2c3" / "~a1b2c3.mkv") — must pass through
 # unchanged so running the sanitizer twice never re-hashes (hash stability).
 _HASHED_SEG_RE = re.compile(r'~[0-9a-f]{6}(\.[A-Za-z0-9]{1,5})?')
+# What the text sanitizer puts in place of an address. A URL's path is hashed
+# segment by segment after its host is redacted, and `<host>` reads better
+# than a hash of the word "<host>".
+_PLACEHOLDERS = {'<host>', '<ip>', '<token>'}
 
 
 def sanitize_segment(seg):
     """Keep generic segments; replace identifying ones with a stable hash."""
     if not seg:
         return seg
-    if _HASHED_SEG_RE.fullmatch(seg):
+    if _HASHED_SEG_RE.fullmatch(seg) or seg in _PLACEHOLDERS:
         return seg
     base, ext = os.path.splitext(seg)
     core = re.sub(r'[\s_\-0-9]+', '', base).lower()
@@ -138,6 +143,21 @@ def sanitize_path(p):
 
 
 _URL_RE      = re.compile(r'(https?://)([^\s/\'"]+)')
+# A connection error names its host without a scheme as well. requests and
+# urllib3 write `HTTPConnectionPool(host='qui.lan', port=7476)`, `Failed to
+# resolve 'qui.lan'` and `Connection to qui.lan timed out` into one message, so
+# the URL rule alone published every host that was a name rather than an IP.
+# The quoted spelling is `_QUOTED_HOST_RE`.
+_HOST_KW_RE  = re.compile(r'''(\bhost=)(['"])[^'"\s]+\2''')
+_CONN_TO_RE  = re.compile(r'(\bConnection to )[^\s\'"]+( timed out)')
+# A quoted value shaped like a host: dotted labels, the last starting with a
+# letter so a version or a time never matches, and an optional port. It has to
+# hold a dot or a port, or every quoted word (`'utf-8'`, `'save_path'`) would.
+# A pass of its own rather than a branch of `_sanitize_quoted`, because urllib3
+# nests it (`"…Failed to resolve 'qui.lan' (…)"`) and `_QUOTED_RE` pairs the
+# outer quotes; with no spaces allowed inside, this one can't.
+_QUOTED_HOST_RE = re.compile(
+    r'''(['"])((?:[A-Za-z0-9-]+\.)*[A-Za-z][A-Za-z0-9-]*(?::\d{1,5})?)\1''')
 _IP_RE       = re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b')
 _TOKEN_RE    = re.compile(r'\b[0-9a-fA-F]{24,}\b')
 _NIX_PATH_RE = re.compile(r'(?:/[^/\s\'",;]+){2,}/?')
@@ -169,12 +189,31 @@ def _sanitize_quoted(m):
     return m.group(0)
 
 
+def _quoted_host(m):
+    quote, inner = m.group(1), m.group(2)
+    if '.' not in inner and ':' not in inner:
+        return m.group(0)
+    # A file or a release name is hashed by `_sanitize_quoted`, never called a host.
+    if os.path.splitext(inner)[1].lower() in _SAFE_EXTENSIONS or _MEDIA_HINT_RE.search(inner):
+        return m.group(0)
+    return f'{quote}<host>{quote}'
+
+
+def _redact_hosts(s):
+    """The spellings of a host that can only be a host: a URL's, urllib3's
+    `host='…'` and `Connection to … timed out`. Safe on any string in the
+    report, which is why `_scrub_addresses` runs it over all of them."""
+    s = _URL_RE.sub(lambda m: m.group(1) + '<host>', s)
+    s = _HOST_KW_RE.sub(lambda m: f'{m.group(1)}{m.group(2)}<host>{m.group(2)}', s)
+    return _CONN_TO_RE.sub(r'\1<host>\2', s)
+
+
 def sanitize_text(text):
     """Scrub log/error text: paths hashed per-segment, hosts/IPs/tokens redacted."""
     if not text:
         return text
-    s = str(text)
-    s = _URL_RE.sub(lambda m: m.group(1) + '<host>', s)
+    s = _redact_hosts(str(text))
+    s = _QUOTED_HOST_RE.sub(_quoted_host, s)
     s = _IP_RE.sub('<ip>', s)
     s = _TOKEN_RE.sub('<token>', s)
     # Quoted spans first — quotes are the only reliable delimiter for paths and
@@ -496,6 +535,69 @@ def _sanitized_config(cfg):
     }
 
 
+# Every address auditorr is configured with. Scrubbing the report field by
+# field is how CR7 happened: `last_anomaly`'s detail was the one field nobody
+# routed through `sanitize_text`, and it published the qui address. These are
+# redacted from every string in the report as its last step, so a field that
+# skips the sanitizer, or an error spelling a host no rule above knows, still
+# can't carry one.
+_ADDRESS_KEYS = ('QB_HOST', 'QUI_HOST', 'QB_EXTERNAL_URL', 'QUI_EXTERNAL_URL',
+                 'SONARR_URL', 'RADARR_URL', 'SONARR_EXTERNAL_URL', 'RADARR_EXTERNAL_URL')
+
+
+def _configured_hosts(cfg):
+    values = [cfg.get(k) for k in _ADDRESS_KEYS]
+    for c in cfg.get('ARR_CONNECTIONS') or []:
+        if isinstance(c, dict):
+            values += [c.get('base_url'), c.get('url'), c.get('external_url')]
+    hosts = set()
+    for v in values:
+        v = str(v or '').strip()
+        if not v:
+            continue
+        try:  # QB_HOST is often written without a scheme ("nas.lan:8080")
+            host = urlsplit(v if '://' in v else f'http://{v}').hostname
+        except ValueError:
+            continue
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _configured_host_re(cfg):
+    """One pattern for every configured host. A name with a dot or a colon (a
+    domain, an IP) goes wherever it appears. A single-label name goes only in a
+    host's position, after `//` or `@` or before a port: most installs reach qui
+    and the arrs by Docker service name, and redacting `qui` or `sonarr` as a
+    word would erase it from every log line and key in the report."""
+    hosts = _configured_hosts(cfg)
+    named = sorted((h for h in hosts if '.' in h or ':' in h), key=len, reverse=True)
+    bare  = sorted((h for h in hosts if h not in named), key=len, reverse=True)
+    alts = []
+    if named:
+        alts.append(r'(?<![\w.-])(?:%s)(?![\w-]|\.[\w-])' % '|'.join(map(re.escape, named)))
+    if bare:
+        b = '|'.join(map(re.escape, bare))
+        alts.append(rf'(?:(?<=//)|(?<=@))(?:{b})(?![\w.-])|(?<![\w.-])(?:{b})(?=:\d)')
+    return re.compile('|'.join(alts), re.IGNORECASE) if alts else None
+
+
+def _scrub_addresses(obj, host_re):
+    """Redact hosts from every string in the report, keys included. Only the
+    rules that can't mistake something else for a host run here: paths and
+    names are hashed per field, because hashing a whole report would erase
+    the structure it is read by."""
+    if isinstance(obj, str):
+        s = _redact_hosts(obj)
+        return host_re.sub('<host>', s) if host_re else s
+    if isinstance(obj, dict):
+        return {_scrub_addresses(k, host_re): _scrub_addresses(v, host_re)
+                for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_scrub_addresses(v, host_re) for v in obj]
+    return obj
+
+
 def _db_stats():
     stats = {}
     try:
@@ -578,6 +680,7 @@ def _recent_runs_sanitized(limit=20):
 
 def build_debug_report(version):
     state = get_state()
+    cfg = db_load_config()
     runs, runs_last_24h = _recent_runs_sanitized()
     report = {
         '_readme': (
@@ -611,7 +714,7 @@ def build_debug_report(version):
             'trusted_networks':  len([p for p in os.environ.get(
                 'AUDITORR_TRUSTED_NETWORKS', '').split(',') if p.strip()]),
         },
-        'config': _sanitized_config(db_load_config()),
+        'config': _sanitized_config(cfg),
         'scan_state': {
             **{k: state.get(k) for k in (
                 'is_scanning', 'progress', 'phase', 'last_audit_time',
@@ -688,4 +791,4 @@ def build_debug_report(version):
             for r in _recent_logs()
         ],
     }
-    return report
+    return _scrub_addresses(report, _configured_host_re(cfg))

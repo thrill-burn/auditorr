@@ -463,6 +463,36 @@ class TestAlreadyRight:
         assert code != 0 and 'ERROR' in out, out
         assert [lib.ino(p) for p in paths] == before
 
+    def test_it_links_in_the_folder_it_is_given_from_anywhere(self, tmp_path):
+        """The folder can be an argument, so the script needn't sit in the data
+        folder. Options go either side of it."""
+        lib = Lib(tmp_path)
+        paths = _pack(lib, 2, 'two', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        assert 'Give it the folder on your host that auditorr sees as' in text
+        home = tmp_path / 'home'
+        home.mkdir()
+        code, out = _run(text, home, _posix(lib.root), '--dry-run')
+        assert code == 0, out
+        assert lib.ino(paths[0]) != lib.ino(paths[1])
+        code, out = _run(text, home, _posix(lib.root))
+        assert code == 0, out
+        assert lib.ino(paths[0]) == lib.ino(paths[1])
+        assert list(home.iterdir()) == []
+
+    def test_a_folder_that_is_not_there_changes_nothing(self, tmp_path):
+        lib = Lib(tmp_path)
+        paths = _pack(lib, 2, 'two', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        before = [lib.ino(p) for p in paths]
+        code, out = _run(text, lib.root, _posix(tmp_path / 'missing'))
+        assert code == 2 and 'no folder' in out, out
+        assert [lib.ino(p) for p in paths] == before
+
     def test_the_health_scores_duplicate_count_is_untouched(self, tmp_path):
         """DEDUPE §8: the grouping work is page-and-script only. The dashboard,
         the change log, Singleton and Clone Hunter read `duplicate_count`, which

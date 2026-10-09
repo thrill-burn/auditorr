@@ -1465,7 +1465,8 @@ def _cleanup_script_response(cfg, selection):
         excluded_count=excluded_count, safe_folders=safe_folders,
         landmarks=_cleanup_landmarks(live.get('rows') or [], cfg.get('REMOTE_PATH', ''),
                                      cfg.get('LOCAL_PATH', '')),
-        empty_folders=kept_folders, folders_dropped=len(busy))
+        empty_folders=kept_folders, folders_dropped=len(busy),
+        torrent_root=cfg.get('LOCAL_PATH') or None)
     resp = app.response_class(script, mimetype='text/plain; charset=utf-8')
     resp.headers['X-Auditorr-Verified-At'] = str(verified_at)
     resp.headers['X-Auditorr-Dropped'] = str(len(claimed))

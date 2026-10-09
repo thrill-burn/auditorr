@@ -446,6 +446,45 @@ _STATE_NOTE = {
 _CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f]')
 
 
+def _script_args(flags, options_help):
+    """The option loop both scripts share, and the folder to run in.
+
+    Every path in a script is relative to the folder it runs in, and that is a
+    folder on the host, which auditorr in its container can't name. The scripts
+    used to say `cd` there and run them, which read as "put the script there",
+    and a copy left behind in the torrent folder is itself a stray file. So the
+    one argument that isn't an option names the folder, and the script `cd`s
+    into it before doing anything else. Nothing after that changes: the
+    working-directory guard checks it exactly as it checks a folder you `cd`'d
+    into. `CDPATH` is cleared, or a relative name could land somewhere else.
+    """
+    return [
+        'TARGET=""; HAVE_TARGET=0',
+        'for arg in "$@"; do',
+        '  case "$arg" in',
+        *[f'    {pattern}) {action} ;;' for pattern, action in flags],
+        f'    -*) echo "Unknown option: $arg ({options_help})"; exit 2 ;;',
+        '    *)',
+        '      if [ "$HAVE_TARGET" -eq 1 ]; then',
+        '        echo "ERROR: give one folder, not two. Nothing was changed."',
+        '        exit 2',
+        '      fi',
+        '      TARGET="$arg"; HAVE_TARGET=1 ;;',
+        '  esac',
+        'done',
+        '',
+        "# Given a folder, run from it, as if you had cd'd there first.",
+        'if [ "$HAVE_TARGET" -eq 1 ]; then',
+        '  if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then',
+        '    printf \'ERROR: there is no folder at: %s\\n\' "$TARGET"',
+        '    echo "  Nothing was changed."',
+        '    exit 2',
+        '  fi',
+        '  CDPATH= cd -- "$TARGET" || { echo "ERROR: could not open that folder. Nothing was changed."; exit 2; }',
+        'fi',
+    ]
+
+
 def _comment_safe(text):
     """Text that can sit on a `#` line without ending it.
 
@@ -659,7 +698,7 @@ exit 0"""
 
 def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
                          excluded_count=None, safe_folders=(), landmarks=(),
-                         empty_folders=(), folders_dropped=0):
+                         empty_folders=(), folders_dropped=0, torrent_root=None):
     """The Cleanup delete script, for a selection the client was just asked about.
 
     `units` is one entry per inode: `{'paths': [rel, ...], 'size', 'state',
@@ -693,6 +732,9 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
       group's `excl_folder`**, and not at all for a group without one — a
       category dir, a folder shared with a live torrent, or the root (C13).
     * `--dry-run` prints what it would do and touches nothing.
+    * The torrent folder can be passed as an argument (`_script_args`), so the
+      script can be kept anywhere. `torrent_root` is `LOCAL_PATH`, named in the
+      usage so the reader knows which host folder that is.
     * `VERIFIED_AT` and a warning past a day, never a refusal: the host clock
       belongs to another machine.
     * The nlink accounting is kept as it was — it was already the one honest
@@ -704,6 +746,8 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
       unless it's the root or is itself being removed.
     """
     safe = {str(f).replace('\\', '/').strip('/') for f in (safe_folders or ()) if f}
+    torrent_note = (f', the folder auditorr sees as {_comment_safe(torrent_root)}'
+                    if torrent_root else '')
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     verified_str = datetime.fromtimestamp(int(verified_at)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -763,24 +807,20 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         '#      and the empty folders you selected, each only while it is still empty',
         '#   6. Compare the space actually freed with what was expected',
         '#',
-        '# USAGE:',
-        '#   cd /path/to/your/torrent/directory',
-        '#   bash orphaned_torrents_delete.sh             # delete',
-        '#   bash orphaned_torrents_delete.sh --dry-run   # show what it would do; change nothing',
+        '# USAGE: keep this file anywhere. It does not need to be in your torrent folder.',
+        f'# Give it your torrent folder as your host sees it{torrent_note}:',
+        '#   bash orphaned_torrents_delete.sh --dry-run /path/to/torrents   # show what it would do; change nothing',
+        '#   bash orphaned_torrents_delete.sh /path/to/torrents             # delete',
+        '# Or cd into your torrent folder and leave the folder off.',
         '#',
-        '# All file paths are relative to your torrent directory.',
+        '# All file paths are relative to your torrent folder.',
         '# Safe to run again: anything already deleted is reported as already gone.',
         '',
         'set -uo pipefail',
         '',
         f'VERIFIED_AT={int(verified_at)}',
         'DRY_RUN=0',
-        'for arg in "$@"; do',
-        '  case "$arg" in',
-        '    --dry-run|-n) DRY_RUN=1 ;;',
-        '    *) echo "Unknown option: $arg (the only option is --dry-run)"; exit 2 ;;',
-        '  esac',
-        'done',
+        *_script_args([('--dry-run|-n', 'DRY_RUN=1')], 'the only option is --dry-run'),
         '',
         _FMT_BYTES,
         '',
@@ -797,8 +837,10 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
             'done',
             'if [ "$_found" -eq 0 ]; then',
             '  echo "ERROR: This does not look like your torrent directory."',
+            '  printf \'  Looked in: %s\\n\' "$(pwd)"',
             f'  printf \'  Expected to find: %s\\n\' {shlex.quote(anchors[0])}',
-            '  echo "  cd into your torrent folder and try again."',
+            '  echo "  Give the script your torrent folder (bash <script> /path/to/torrents),"',
+            '  echo "  or cd into it, and try again. Nothing was deleted."',
             '  exit 1',
             'fi',
             '',
@@ -840,6 +882,7 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         '',
         'echo "================================================"',
         'echo "auditorr Orphaned Torrent Cleanup"',
+        'printf \'Folder: %s\\n\' "$(pwd)"',
         f'echo "Checked against your torrent client: {verified_str}"',
         '[ "$DRY_RUN" -eq 1 ] && echo "DRY RUN — nothing will be deleted."',
         f'echo "Files: {total_files} — up to {_human_size(freeable)} freed"',
@@ -1302,7 +1345,8 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
     * Inherited from Cleanup's (CLEANUP §5.5): `set -uo pipefail` with no `-e`;
       every path `./`-prefixed with `--` before it; outcome buckets (linked,
       already linked, left alone with a reason, **FAILED**), with FAILED exiting
-      1; `--dry-run`; a generated-at stamp that warns past a day; `awk` bytes;
+      1; `--dry-run`; the folder as an optional argument (`_script_args`);
+      a generated-at stamp that warns past a day; `awk` bytes;
       nothing path- or config-derived in a comment except through
       `_comment_safe` — `script_root` included (S10).
     * Refuses to start without GNU `stat -c`, and says up front how much `cmp`
@@ -1366,11 +1410,12 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
         '#      missing',
         '#   7. Count space as freed only when every link to a copy has been replaced',
         '#',
-        '# USAGE:',
-        f'#   cd <the folder on your host that auditorr sees as {root_note}>',
-        '#   bash dedupe.sh                  # link',
-        '#   bash dedupe.sh --dry-run        # check and compare everything; change nothing',
-        '#   bash dedupe.sh --allow-sparse   # also link files that look unfinished (compressed filesystems)',
+        '# USAGE: keep this file anywhere. It does not need to be in your data folder.',
+        f'# Give it the folder on your host that auditorr sees as {root_note}:',
+        '#   bash dedupe.sh --dry-run /path/to/data        # check and compare everything; change nothing',
+        '#   bash dedupe.sh /path/to/data                  # link',
+        '#   bash dedupe.sh --allow-sparse /path/to/data   # also link files that look unfinished (compressed filesystems)',
+        '# Or cd into that folder and leave the folder off.',
         '#',
         '# Needs GNU stat (any Linux; not macOS). Install "pv" for a progress bar while large',
         '# files are compared; without it you get a heartbeat.',
@@ -1383,13 +1428,8 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
         f'GENERATED_AT={int(generated_at)}',
         'DRY_RUN=0',
         'ALLOW_SPARSE=0',
-        'for arg in "$@"; do',
-        '  case "$arg" in',
-        '    --dry-run|-n) DRY_RUN=1 ;;',
-        '    --allow-sparse) ALLOW_SPARSE=1 ;;',
-        '    *) echo "Unknown option: $arg (options: --dry-run, --allow-sparse)"; exit 2 ;;',
-        '  esac',
-        'done',
+        *_script_args([('--dry-run|-n', 'DRY_RUN=1'), ('--allow-sparse', 'ALLOW_SPARSE=1')],
+                      'options: --dry-run, --allow-sparse'),
         '',
         '# BSD and macOS stat have no -c, and every check below reads it.',
         'if ! stat -c %i . >/dev/null 2>&1; then',
@@ -1417,8 +1457,10 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
             'done',
             'if [ "$_found" -eq 0 ]; then',
             '  echo "ERROR: This does not look like the folder this script was built for."',
+            '  printf \'  Looked in: %s\\n\' "$(pwd)"',
             f'  printf \'  Expected to find: %s\\n\' {shlex.quote(guard[0])}',
-            '  echo "  cd into the folder described at the top of this script and try again."',
+            '  echo "  Give the script the folder described at the top of it (bash <script> /path/to/data),"',
+            '  echo "  or cd into that folder, and try again. Nothing was changed."',
             '  exit 1',
             'fi',
             '',
@@ -1438,6 +1480,7 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
         '',
         'echo "================================================"',
         'echo "auditorr Dedupe"',
+        'printf \'Folder: %s\\n\' "$(pwd)"',
         '[ "$DRY_RUN" -eq 1 ] && echo "DRY RUN — nothing will be changed."',
         f'echo "{n_groups} group(s) · {n_files} files · up to {_human_size(frees)} freed"',
         f'echo "Comparing reads up to {_human_size(reads)} from disk."',
