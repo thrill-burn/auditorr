@@ -134,6 +134,8 @@ export const api = {
   excludePatterns: (patterns) => req('/workflows/exclude', { method: 'POST', body: JSON.stringify({ patterns }) }),
   removeTorrents: (items, deleteFiles = 'auto', plan) => req('/workflows/remove_torrents', { method: 'POST', body: JSON.stringify({ items, delete_files: deleteFiles, ...(plan ? { plan } : {}) }) }),
   triageResolveGroups: (hashes) => req('/workflows/triage/resolve_groups', { method: 'POST', body: JSON.stringify({ hashes }) }),
+  triageReplacePlan: (params) => req('/workflows/triage/replace_plan', { method: 'POST', body: JSON.stringify(params) }),
+  triageReplace:     (params) => req('/workflows/triage/replace',      { method: 'POST', body: JSON.stringify(params) }),
   trumpParse:        (pmText)  => req('/workflows/trump/parse',          { method: 'POST', body: JSON.stringify({ pm_text: pmText }) }),
   trumpResolveGroup: (oldTitles, seedHashes, indexer, newTitle) => req('/workflows/trump/resolve_group', { method: 'POST', body: JSON.stringify({ old_titles: oldTitles, seed_hashes: seedHashes, indexer, new_title: newTitle }) }),
   trumpSearchRelease: (params) => req('/workflows/trump/search_release', { method: 'POST', body: JSON.stringify(params) }),

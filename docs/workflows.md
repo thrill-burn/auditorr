@@ -408,7 +408,7 @@ they need six different responses.
 | **Dead seed — imported** | The tracker has dropped the torrent, but the file was imported and your library hardlink still holds the data. | Delete via the client. Lossless — the library keeps the file. |
 | **Dead registration** | This particular registration is dead, but the payload is alive via a working cross-seed or the library copy. | Delete this registration; the data stays. |
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
-| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). |
+| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). A season spread over several torrents? [Replace with this pack](#replace-with-this-pack). |
 | **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Trigger a rescan. |
 | **Could not check** | A Sonarr/Radarr instance didn't answer, so whether your library holds these is unknown. Only appears while something is unreachable. | Fix the connection and reload. Don't act on these meanwhile. |
 | **Not in library** | Neither arr knows about it, under its own title or any alternate title they hold. | Import it, exclude it, or remove it — but note these files are the only copy. |
@@ -452,6 +452,14 @@ library while another is still waiting to import. Every video file is judged,
 and the row takes the verdict whose action deletes least (*Could not check*,
 then *Import pending*, then *Superseded*, then *Not in library*). A row whose
 files disagree says so: `18 files · 3 verdicts`.
+
+**A pack is compared episode by episode.** Each episode is compared with your
+library's own file for it, so a season Sonarr upgraded as it aired (some
+episodes at 2160p, the rest at 1080p) shows every library quality beside the
+row. The row sits under *Higher* if any episode is an upgrade, under *Same* if
+any episode matches and none is better, and under *Lower* only when every
+episode is lower. Its title names the episodes it holds, like
+*Show · S01E01–E02*.
 
 **A row shows the whole torrent.** A row can list only part of its torrent — a
 partly imported season shows the episodes that didn't import — while removing
@@ -516,19 +524,57 @@ that can't reach the arr never counts as the file landing.
 **Force import** is the way past it. It uses the arr's own *Import Anyway*,
 replacing the library file with this release. It appears on superseded items
 that are the **same quality** as the file you already have — typically after a
-trump, where the tracker made you swap one release for an equivalent one.
+trump, where the tracker made you swap one release for an equivalent one. On a
+pack, it imports only the episodes at the same quality, and an episode your
+library holds better stays as it is.
 
 If the torrent is genuinely worse than what you have — 1080p against a 2160p
-library file, a WEB-DL against a Bluray — the action isn't offered at all. That
-refusal isn't a bug to work around; those torrents are fine as cross-seeds, and
-your library is right to keep the better copy. If you do want one of them anyway
-— a corrupt library file, or a 1080p Remux auditorr ranks below a 2160p WEB-DL
-because resolution decides first — use Sonarr/Radarr's own Manual Import, which
-handles one deliberate file at a time.
+library file, a WEB-DL against a Bluray — Force import isn't offered at all.
+Those torrents are fine as cross-seeds, and your library is right to keep the
+better copy. If you meant to have the lower quality (you lowered a show's
+profile to save space, say), see [Replace with this pack](#replace-with-this-pack),
+which does it only where nothing is lost. For anything else, such as a 1080p
+Remux auditorr ranks below a 2160p WEB-DL because resolution decides first, use
+Sonarr/Radarr's own Manual Import.
 
-> Force import replaces a file you already have. It's the one Triage action that
-> changes your library rather than your torrent client, so it's deliberately
-> narrow.
+> Force import and Replace with this pack replace files you already have. They're
+> the Triage actions that change your library rather than your torrent client,
+> so they're deliberately narrow.
+
+### Replace with this pack
+
+Sonarr fills a season as it airs, taking each episode from whichever group or
+tracker has it, and upgrades episodes one at a time. By the end, a season can be
+spread over several torrents, and a season pack hardlinked over the lot puts it
+back on one. Sonarr won't do that itself when the pack is the same quality or
+lower than some of what you hold. *Replace with this pack* does.
+
+It's offered on superseded TV rows. When two or more packs of the same season are
+in your client, Triage recommends one: the better release, which is also the one
+Sonarr would keep. Failing that, the one already supplying more of your library.
+Its button is green, and the dialog opens on it whichever row you clicked. You
+can switch to the other pack there.
+
+The dialog checks your client and Sonarr live and lists every episode of the
+pack:
+
+- **replace**: the pack's file goes over Sonarr's, as a hardlink. A lower-quality
+  file replaces yours **only when your library file has another hardlink**,
+  usually the torrent you downloaded it from. Your better copy then stays on
+  disk, and the dialog names the torrent holding it.
+- **already**: your library file already is this pack's.
+- **add**: Sonarr has no file for that episode.
+- **keep**, with the reason: the better file is its only copy, it couldn't be
+  checked, or Sonarr holds those episodes split differently across files.
+
+Nothing leaves your client. After the next scan, Triage lists what no longer
+supplies your library, such as the other pack and the single-episode torrents
+behind the old files, for you to remove when they've seeded enough. If your
+Sonarr profile still wants the higher quality, Sonarr may upgrade those
+episodes again.
+
+A torrent that hasn't finished downloading can't be used, and nothing happens if
+your client or Sonarr doesn't answer in full.
 
 ### Exclude
 

@@ -273,6 +273,41 @@ class TriageVerdictSpreadTests(unittest.TestCase):
         self.assertEqual(item['torrent_files'], 2)
 
 
+class TriageRowEpisodesTests(unittest.TestCase):
+    """A row's `episodes` is every episode its videos hold, and the title reads
+    it. The title named the representative's episode, so a season pack with
+    two episodes left read "Small Prophets · S01E01" beside "2 of 6 files", and
+    an imported dead seed's list was its representative's alone."""
+
+    def _files(self, *episodes, **over):
+        return [_rec(hash='PACK', size=100 + n, path=f'{PACK}/Show.S01E{n:02d}.1080p.WEB-DL.mkv', **over)
+                for n in episodes]
+
+    def test_a_not_imported_pack_lists_every_episode(self):
+        item = _triage(self._files(1, 2))['items'][0]
+        self.assertEqual(item['episodes'], [1, 2])
+
+    def test_an_imported_dead_seed_lists_every_episode(self):
+        """Judged on its representative alone, which is right for the verdict,
+        but its row still holds every video."""
+        item = _triage(self._files(1, 2, 3, imported=True, tracker_health='unregistered'))['items'][0]
+        self.assertEqual(item['verdict'], 'dead_seed')
+        self.assertEqual(item['episodes'], [1, 2, 3])
+
+    def test_a_dead_registration_lists_its_carriers_episodes(self):
+        files = self._files(4, 5, imported=True, tracker_health='working',
+                            dead_siblings=[{'hash': 'DEAD', 'instance_id': 1}])
+        item = _triage(files)['items'][0]
+        self.assertEqual(item['verdict'], 'dead_registration')
+        self.assertEqual(item['episodes'], [4, 5])
+
+    def test_an_extra_with_no_episode_number_leaves_no_list(self):
+        """The row's title then names no episode rather than one file's."""
+        files = self._files(1, 2) + [_rec(hash='PACK', size=1, path='tv/Featurette.1080p.WEB-DL.mkv')]
+        item = _triage(files)['items'][0]
+        self.assertIsNone(item['episodes'])
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # T8 — one cap, stated in numbers
 # ═════════════════════════════════════════════════════════════════════════════

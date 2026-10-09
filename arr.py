@@ -412,6 +412,29 @@ def sonarr_episodes_by_file(cfg, connection_id, series_id):
     return out
 
 
+def sonarr_series_episodes(cfg, connection_id, series_id):
+    """Every episode of one series as `[{id, season, episode, file_id}]`, or None.
+
+    `sonarr_episodes_by_file`'s source, without dropping the episodes that hold
+    no file: Triage's replace (T22) has to name an episode a pack would add as
+    well as the ones it replaces. `file_id` is 0 for an episode with no file.
+    `None` is "could not ask", as there.
+    """
+    conns = normalize_arr_connections(cfg, service='sonarr')
+    conn = next((c for c in conns if c['id'] == connection_id), None)
+    if conn is None:
+        return None
+    try:
+        episodes = _arr_get(conn['base_url'], conn['api_key'],
+                            f'/api/v3/episode?seriesId={series_id}')
+    except Exception as e:
+        log.warning("Could not list episodes for series %s on %s: %s", series_id, connection_id, e)
+        return None
+    return [{'id': ep['id'], 'season': ep.get('seasonNumber'), 'episode': ep.get('episodeNumber'),
+             'file_id': ep.get('episodeFileId') or 0}
+            for ep in episodes or [] if ep.get('id') is not None]
+
+
 def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None, file_path=None):
     """Fetch the interactive release search for a single Arr item.
 
@@ -2133,6 +2156,18 @@ def compare_release_quality(parsed, lib_quality_name):
     if t_src != l_src:
         return 'higher' if t_src > l_src else 'lower'
     return 'same'
+
+
+def release_quality_rank(parsed):
+    """(resolution rank, source rank) of a parsed release, for ordering two releases.
+
+    `compare_release_quality`'s own ordering, for when both sides are releases
+    rather than one being an arr quality name: Triage ranks two packs of one
+    season by it (T22). 0 for a field that didn't parse, so an unparsed release
+    sorts below any parsed one.
+    """
+    return (_effective_res_rank(parsed.get('resolution'), parsed.get('source')),
+            _SOURCE_RANK.get(parsed.get('source'), 0))
 
 
 def _parse_year_from_name(name):
