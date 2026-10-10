@@ -10,6 +10,14 @@ T22. Consolidating such a season onto one pack the client holds: every episode
 of the pack goes over Sonarr's file as a hardlink, a lower release only where
 the library file has another link (the better bytes stay on disk), read live.
 The replace tests stat real hardlinked files in `tmp_path`.
+
+T23. The plan asked for the pack's file list with a bare `{hash, instance_id}`,
+and qui roots each file at the save path it's handed, so on qui every episode
+came back `unchecked`. The fixture's listing mock joins names to the save path
+the way qui does, which is what catches it.
+
+T24. A lower release over a library file nothing else links is `unseeded`:
+replaced only when the confirm says `include_unseeded`.
 """
 import os
 from unittest.mock import patch
@@ -195,16 +203,41 @@ def box(tmp_path):
     return state
 
 
+def _listing_like_qui(listing, row):
+    """`fetch_torrent_file_paths` as qui answers it (T23).
+
+    qui's file listing names each file relative to the save path, and the
+    backend roots it at the `save_path` of the item it's handed. A static map
+    hid the bug, because it answered with absolute paths whatever was asked.
+    """
+    root = (row or {}).get('save_path', '')
+    names = None if listing is None else [p[len(root) + 1:] for p in listing]
+
+    def fetch(cfg, items):
+        out = {}
+        for i in items:
+            key = app.sources.registration_key(i.get('instance_id'), i.get('hash'))
+            sp = (i.get('save_path') or '').rstrip('/\\')
+            # The listing's own spelling under its own root, so a posted path
+            # still matches on Windows; `/<name>` under none, as qui did.
+            out[key] = None if names is None else [
+                p if sp == root else f'{sp}/{n}' for p, n in zip(listing, names)]
+        return out
+    return fetch
+
+
 def _patched(box, **over):
     s = {**box, **over}
+    rows = s['rows'] if 'rows' in s else ([s['row']] if s['row'] else [])
     return [
         patch.object(app, 'db_load_config', return_value=s['cfg']),
         patch.object(app, 'normalize_arr_connections', side_effect=lambda cfg, **kw: [CONN]),
-        patch.object(app.sources, 'list_torrents_detailed',
-                     return_value=([s['row']] if s['row'] else [], s['report'])),
-        patch.object(app.sources, 'fetch_torrent_file_paths', return_value={f'1:{HASH}': s['listing']}),
+        patch.object(app.sources, 'list_torrents_detailed', return_value=(rows, s['report'])),
+        patch.object(app.sources, 'fetch_torrent_file_paths',
+                     side_effect=_listing_like_qui(s['listing'], box['row'])),
         patch.object(app, 'sonarr_series_episodes', return_value=s['episodes']),
         patch.object(app, 'fetch_arr_media_index_result', return_value=(s['index'], [])),
+        patch.object(app, 'queue_records_for_item', return_value=s.get('queue', [])),
     ]
 
 
@@ -219,8 +252,8 @@ def _post(url, box, body=None, **over):
         return resp.status_code, resp.get_json()
 
 
-def _plan(box, **over):
-    return _post('/api/workflows/triage/replace_plan', box, **over)
+def _plan(box, body=None, **over):
+    return _post('/api/workflows/triage/replace_plan', box, body=body, **over)
 
 
 class TestReplacePlan:
@@ -229,12 +262,33 @@ class TestReplacePlan:
         status, plan = _plan(box)
         assert status == 200
         acts = {e['label']: (e['action'], e.get('reason')) for e in plan['entries']}
-        assert acts == {'E01': ('replace', None), 'E02': ('skip', 'only_copy'), 'E03': ('already', None),
+        assert acts == {'E01': ('replace', None), 'E02': ('unseeded', None), 'E03': ('already', None),
                         'E04': ('add', None), 'E05': ('replace', None)}
         e01 = next(e for e in plan['entries'] if e['label'] == 'E01')
         assert (e01['cmp'], e01['replaces']['linked'], e01['replaces']['quality']) == ('lower', True, 'WEBDL-2160p')
+        e02 = next(e for e in plan['entries'] if e['label'] == 'E02')
+        assert (e02['cmp'], e02['replaces']['linked']) == ('lower', False)
         assert plan['downgrades'] == 1
+        assert plan['counts']['unseeded'] == 1
         assert plan['release'] == 'Show.S01.1080p.BluRay-SbR'
+
+    def test_the_file_list_is_asked_for_with_the_torrents_save_path(self, box):
+        """T23 — the box's Small Prophets plan was six `unchecked`. qui roots each
+        file at the save path it's handed, and the plan handed it none."""
+        status, plan = _plan(box)
+        assert status == 200
+        assert not [e for e in plan['entries'] if e.get('reason') == 'unchecked']
+
+    def test_a_hash_with_no_instance_resolves_to_its_one_registration(self, box):
+        """The season-pack watch knows only the download's hash (T25)."""
+        status, plan = _plan(box, body={'instance_id': None})
+        assert status == 200
+        assert (plan['reg'], plan['instance_id']) == (f'1:{HASH}', 1)
+
+    def test_a_hash_with_no_instance_on_two_instances_refuses(self, box):
+        rows = [box['row'], {**box['row'], 'reg': f'2:{HASH}', 'instance_id': 2, 'instance_name': 'second'}]
+        status, body = _plan(box, body={'instance_id': None}, rows=rows)
+        assert (status, body['code']) == (409, 'registration_ambiguous')
 
     def test_a_library_file_holding_more_episodes_than_the_pack_file_is_not_split(self, box):
         """Replacing one file recycles every episode of it (amendment 1)."""
@@ -271,17 +325,19 @@ class TestReplacePlan:
 
 class TestReplace:
 
-    def _replace(self, box, paths, reads, **over):
+    def _replace(self, box, paths, reads, extra=None, **over):
         reader = patch.object(app, 'read_arr_file_id', side_effect=reads)
         importer = patch.object(app, 'force_manual_import_by_id', return_value={})
         nudge = patch.object(app, 'nudge_watchdog')
         with reader as r, importer as imp, nudge as n, patch.object(app, '_REPLACE_WAIT', 0):
-            status, body = _post('/api/workflows/triage/replace', box, body={'paths': paths}, **over)
+            status, body = _post('/api/workflows/triage/replace', box,
+                                 body={'paths': paths, **(extra or {})}, **over)
         return status, body, r, imp, n
 
     def test_it_imports_what_was_confirmed_and_is_still_safe_as_hardlinks(self, box):
         p = box['paths']
-        # E02 was posted but is only_copy now: dropped, never sent.
+        # E02 was posted, but it's unseeded and the confirm didn't include
+        # unseeded episodes: dropped, never sent.
         reads = [[[101, 11], [104, 0]], [[101, 91], [104, 94]]]
         status, body, reader, imp, nudge = self._replace(box, [p[1], p[2], p[4]], reads)
         assert status == 200
@@ -294,8 +350,40 @@ class TestReplace:
         assert _base(kw['download_folder']) == 'Show.S01.1080p.BluRay-SbR'
         assert kw['only_episode_ids'] == [101, 104]
         assert kw['whole_episode_sets'] == [[101]]
+        assert kw['download_id'] is None
         assert reader.call_args_list[0].kwargs['episode_ids'] == [101, 104]
         nudge.assert_called_once()
+
+    def test_an_unseeded_episode_is_replaced_only_when_the_switch_says_so(self, box):
+        """T24 — the user's trade: E02's only copy goes, and E02 gains a seed."""
+        p = box['paths']
+        reads = [[[102, 12]], [[102, 92]]]
+        status, body, _, imp, _ = self._replace(box, [p[2]], reads, extra={'include_unseeded': True})
+        assert (status, body['replaced'], body['dropped']) == (200, ['E02'], [])
+        kw = imp.call_args.kwargs
+        assert [_base(x) for x in kw['only_paths']] == [_base(p[2])]
+        assert kw['whole_episode_sets'] == [[102]]
+
+    def test_a_truthy_switch_that_is_not_true_is_not_consent(self, box):
+        status, body, _, imp, _ = self._replace(box, [box['paths'][2]], [], extra={'include_unseeded': 'yes'})
+        assert (status, body['code'], body['dropped']) == (409, 'nothing_to_replace', ['E02'])
+        imp.assert_not_called()
+
+    def test_a_pack_sonarr_is_tracking_is_imported_against_its_download(self, box):
+        """T25 — a grabbed pack sits in Sonarr's queue as importBlocked, and only
+        an import naming the download closes it."""
+        queue = [{'downloadId': HASH.upper(), 'seriesId': 12}]
+        reads = [[[101, 11]], [[101, 91]]]
+        _, _, _, imp, _ = self._replace(box, [box['paths'][1]], reads, queue=queue)
+        assert imp.call_args.kwargs['download_id'] == HASH.upper()
+
+    def test_a_replace_from_a_season_pack_watch_closes_the_watch(self, box):
+        watch = {'status': 'ready', 'source': 'season_pack', 'message': '', 'completed_at': 1.0}
+        reads = [[[101, 11]], [[101, 91]]]
+        with patch.dict(app._import_watches, {'w1': watch}):
+            self._replace(box, [box['paths'][1]], reads, extra={'watch_id': 'w1'})
+        assert watch['status'] == 'done'
+        assert watch['message'] == 'Replaced 1 library file'
 
     def test_an_episode_whose_file_did_not_change_is_pending_not_replaced(self, box):
         p = box['paths']

@@ -44,7 +44,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag
+from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
 from exclusions import reads_bracket_as_glob
@@ -2382,6 +2382,25 @@ def workflows_triage_replace_plan():
 _REPLACE_WAIT = 30
 
 
+def _tracked_download_id(cfg, connection_id, arr_id, torrent_hash):
+    """Sonarr's own download id for this torrent when its queue holds it, else None (T25).
+
+    A pack grabbed through Sonarr and not imported sits in its queue as
+    `importBlocked`, and an import that doesn't name the download leaves it
+    there for good. Named, Sonarr closes the tracked download once the files
+    land. Only a download the queue actually lists is named, because Sonarr's
+    ManualImport looks a named download up and expects to find it. A queue that
+    can't be read names nothing: the import works either way, and only the
+    leftover queue entry is at stake.
+    """
+    if not torrent_hash:
+        return None
+    records = queue_records_for_item(cfg, 'sonarr', connection_id, arr_id) or []
+    want = str(torrent_hash).upper()
+    return next((r['downloadId'] for r in records
+                 if str(r.get('downloadId') or '').upper() == want), None)
+
+
 @app.route('/api/workflows/triage/replace', methods=['POST'])
 @require_auth
 def workflows_triage_replace():
@@ -2391,7 +2410,9 @@ def workflows_triage_replace():
     a path the dialog posted *and* the fresh plan still replaces or adds is
     imported. One the fresh plan would now skip (its library file lost its other
     link since the dialog opened, say) is dropped and named in `dropped`; one it
-    would now add that the user never saw is left alone.
+    would now add that the user never saw is left alone. An `unseeded` entry
+    (T24) is importable only when the confirm also says `include_unseeded`, the
+    dialog's switch: posting its path alone is not consent to delete the file.
 
     The import is Sonarr's ManualImport with `replaceExistingFiles`, in Copy mode
     (HardLinkOrCopy: Move would pull the file out from under the seed), scoped by
@@ -2409,9 +2430,10 @@ def workflows_triage_replace():
     posted = {str(p) for p in (data.get('paths') or [])}
     if not posted:
         return _triage_refusal('selection_required', 'No episodes were confirmed.', 400)
-    doable = [e for e in plan['entries'] if e['action'] in ('replace', 'add') and e['path'] in posted]
+    importable = ('replace', 'add', 'unseeded') if data.get('include_unseeded') is True else ('replace', 'add')
+    doable = [e for e in plan['entries'] if e['action'] in importable and e['path'] in posted]
     dropped = [e['label'] for e in plan['entries']
-               if e['path'] in posted and e['action'] not in ('replace', 'add')]
+               if e['path'] in posted and e['action'] not in importable]
     if not doable:
         return _triage_refusal('nothing_to_replace',
                                'Nothing you confirmed can still be replaced. Nothing was sent to Sonarr.',
@@ -2436,6 +2458,7 @@ def workflows_triage_replace():
               if plan['folder'] else targets[0][0])
     try:
         force_manual_import_by_id(cfg, 'sonarr', conn_id, arr_id,
+                                  download_id=_tracked_download_id(cfg, conn_id, arr_id, plan['hash']),
                                   download_folder=lookup, only_paths=[t[1] for t in targets],
                                   import_mode='Copy', only_episode_ids=episode_ids,
                                   whole_episode_sets=[e['replaces']['episode_ids'] for e in doable if e['replaces']],
@@ -2463,8 +2486,251 @@ def workflows_triage_replace():
     log.info("Triage replace: %d of %d file(s) replaced on %s", len(replaced), len(doable), conn_id)
     if replaced:
         nudge_watchdog('library files replaced')
+        # Opened from a season-pack watch's Replace (T25): that watch is now
+        # done, observed the way every watch's `done` is, by the file ids.
+        watch = _import_watches.get(str(data.get('watch_id') or ''))
+        if watch is not None and watch.get('source') == 'season_pack' and watch.get('status') == 'ready':
+            watch['message'] = f"Replaced {len(replaced)} library file{'s' if len(replaced) != 1 else ''}"
+            watch['status'] = 'done'
+            watch['completed_at'] = time.time()
     return jsonify({'status': 'success', 'replaced': replaced, 'pending': pending,
                     'dropped': dropped, 'requested': len(doable)})
+
+
+# ── T25: Find the season pack ────────────────────────────────────────────────
+# At the end of a season a good tracker kills its single episodes and posts a
+# pack. Triage lists the singles as dead seeds, and Backfill lists the episodes
+# nothing seeds any more. This is the path from either page to the pack in the
+# library: look for the pack in the client, else search Sonarr for one, grab
+# it, follow the download, then open T22's replace once it's in the client. The
+# replace is the only step that touches the library, so T22's rules hold over
+# all of it: a live plan, the confirmed plan binds, an unseeded episode only
+# behind the dialog's switch.
+
+def _season_pack_target(cfg, data):
+    """`((conn, arr_id, season), None)` from a request body, or `(None, refusal)`."""
+    conn_id = str(data.get('connection_id') or '')
+    try:
+        arr_id, season = int(data.get('arr_id')), int(data.get('season'))
+    except (TypeError, ValueError):
+        return None, _triage_refusal('bad_request', 'A season pack needs the Sonarr series and season.', 400)
+    conn = next((c for c in normalize_arr_connections(cfg, service='sonarr') if c['id'] == conn_id), None)
+    if conn is None:
+        return None, _triage_refusal('unknown_connection', 'That Sonarr connection is no longer configured.', 404)
+    return (conn, arr_id, season), None
+
+
+def _season_library(cfg, conn_id, arr_id, season):
+    """The season as Sonarr holds it now, one entry per episode, or None if Sonarr didn't answer.
+
+    Each entry: Sonarr's episode id and number, whether it holds a file, that
+    file's quality, and `linked`: whether the library file has another
+    hardlink (True), has none and so is unseeded (False), or couldn't be stat'ed
+    (None). The dialog reads it as which episodes a pack would move off their
+    own torrent and which it would give a seed.
+    """
+    episodes = sonarr_series_episodes(cfg, conn_id, arr_id)
+    try:
+        index, errors = fetch_arr_media_index_result(cfg)
+    except Exception as e:
+        log.warning("Season pack: media index unavailable: %s", e)
+        return None
+    if episodes is None or any(e.get('connection_id') == conn_id for e in errors):
+        return None
+    files = {r['file_id']: r for r in index
+             if r.get('connection_id') == conn_id and r.get('service') == 'sonarr'
+             and r.get('arr_id') == arr_id and r.get('file_id')}
+    out = []
+    for e in sorted((e for e in episodes if e['season'] == season and e['episode'] is not None),
+                    key=lambda e: e['episode']):
+        lib = files.get(e['file_id']) if e['file_id'] else None
+        linked = None
+        if lib:
+            try:
+                linked = os.stat(lib['path']).st_nlink > 1
+            except (OSError, ValueError):
+                linked = None
+        out.append({'id': e['id'], 'episode': e['episode'], 'has_file': bool(e['file_id']),
+                    'quality': (lib or {}).get('file_quality_name') or '', 'linked': linked})
+    return out
+
+
+_SEASON_TOKEN_RE = re.compile(r'\b[Ss]\d{1,2}\b')
+
+
+def _client_season_packs(rows, series, season):
+    """The client's torrents named as a pack of this series' season, best first.
+
+    By name, as Triage matches a release to the library: the parsed title
+    against the series' title and its alternate titles (T15), Sonarr's
+    one-sided year gate, the season, and no episode number (a single is not a
+    pack). Complete packs come first, then the better release.
+
+    A pack's name has no `SxxEyy` for the title parse to stop at, so its parsed
+    title runs on through the season (`Small Prophets S01`, and a language tag
+    after it). The title is the part before the season token.
+    """
+    keys = set()
+    for t in [series.get('title') or '', *(series.get('alt_titles') or ())]:
+        # Sonarr disambiguates with a year (`Doctor Who (2005)`), which the
+        # release spells as its year token, and the title parse takes as one.
+        keys |= title_match_keys(t) | title_match_keys(re.sub(r'\s*\(\d{4}\)\s*$', '', t))
+    packs = []
+    for r in rows:
+        name = r.get('name') or ''
+        parsed = parse_release_info(name)
+        if parsed['season'] != season or parsed['episode'] is not None:
+            continue
+        title = _SEASON_TOKEN_RE.split(parsed['title'] or '', maxsplit=1)[0].strip()
+        if not (title_match_keys(title) & keys) or not arr_year_ok({**parsed, 'title': title}, series):
+            continue
+        packs.append({
+            'reg': _reg(r), 'hash': r.get('hash') or '', 'instance_id': r.get('instance_id'),
+            'name': name, 'group': _display_group(name), 'quality': parsed['quality_label'],
+            'size': r.get('size') or 0, 'tracker': r.get('tracker') or '',
+            'complete': sources.torrent_complete(r.get('progress'), r.get('completion_on')),
+            '_rank': release_quality_rank(parsed),
+        })
+    packs.sort(key=lambda p: (p['complete'] is True, p['_rank']), reverse=True)
+    for p in packs:
+        del p['_rank']
+    return packs
+
+
+@app.route('/api/workflows/season_pack/lookup', methods=['POST'])
+@require_auth
+def workflows_season_pack_lookup():
+    """T25, step one — the season in the library, and any pack of it already in the client.
+
+    Live and cheap: one Sonarr episode list, the cached media index, a stat per
+    library file and one client listing. Nothing here searches an indexer,
+    because a pack the client already holds needs no download.
+    """
+    cfg = db_load_config()
+    target, refusal = _season_pack_target(cfg, request.json or {})
+    if refusal:
+        return refusal
+    conn, arr_id, season = target
+    library = _season_library(cfg, conn['id'], arr_id, season)
+    titles, title_errors = fetch_arr_all_titles_result(cfg)
+    series = next((t for t in titles if t.get('service') == 'sonarr'
+                   and t.get('connection_id') == conn['id'] and t.get('arr_id') == arr_id), None)
+    if library is None or (series is None and any(e.get('connection_id') == conn['id'] for e in title_errors)):
+        return _triage_refusal('sonarr_unavailable', f"{conn['name']} did not answer in full.", 502)
+    if series is None:
+        return _triage_refusal('not_in_sonarr', f"{conn['name']} no longer manages this series.", 404)
+    try:
+        rows, report = sources.list_torrents_detailed(cfg)
+        client_checked = not report.get('instances_failed')
+    except Exception as e:
+        log.warning("Season pack: torrent listing failed: %s", e)
+        rows, client_checked = [], False
+    return jsonify({
+        'status': 'success', 'connection_id': conn['id'], 'connection_name': conn['name'],
+        'arr_id': arr_id, 'season': season, 'title': series.get('title') or '', 'year': series.get('year'),
+        'library': library, 'packs': _client_season_packs(rows, series, season),
+        # A client that didn't answer, or answered in part, may hold the pack.
+        'client_checked': client_checked,
+        'client_name': 'qui' if cfg.get('TORRENT_SOURCE') == 'qui' else 'qBittorrent',
+    })
+
+
+def _vs_library(release, library):
+    """`{higher, same, lower, unknown: n}` — a release's quality against each library episode.
+
+    Sonarr's own quality name for the release where it gave one, else the
+    title's parse; `compare_release_quality` against each episode's file.
+    """
+    res, src = parse_quality_name(release.get('quality_name') or '')
+    parsed = ({'resolution': res, 'source': src} if res
+              else parse_release_info(release.get('title') or ''))
+    out = {'higher': 0, 'same': 0, 'lower': 0, 'unknown': 0}
+    for e in library:
+        if e['has_file']:
+            out[compare_release_quality(parsed, e['quality'])] += 1
+    return out
+
+
+@app.route('/api/workflows/season_pack/releases', methods=['POST'])
+@require_auth
+def workflows_season_pack_releases():
+    """T25, step two — the season packs Sonarr's search returns, the singles' tracker first.
+
+    Sonarr's season search (`fetch_release_matrix`, which drops Usenet, B14),
+    kept to full-season releases of this season (`_release_in_scope`). Within
+    that, a release on a tracker the page posted (the dead singles' own, where
+    the pack usually is) leads, then Sonarr's own order, as Backfill's default
+    ranking is. Nothing is dropped for being on another tracker.
+    """
+    cfg = db_load_config()
+    data = request.json or {}
+    target, refusal = _season_pack_target(cfg, data)
+    if refusal:
+        return refusal
+    conn, arr_id, season = target
+    trackers = [str(t)[:200] for t in (data.get('trackers') or [])[:10] if isinstance(t, str) and t.strip()]
+    library = _season_library(cfg, conn['id'], arr_id, season) or []
+    try:
+        releases = fetch_release_matrix(cfg, 'sonarr', conn['id'], arr_id, season_number=season)
+    except Exception as e:
+        log.warning("Season pack: release search failed on %s: %s", conn['id'], e)
+        return _triage_refusal('search_failed', f'Release search failed: {e}', 502)
+    packs = []
+    for r in releases:
+        if not r.get('full_season') or not _release_in_scope(r, 'season', [], season=season):
+            continue
+        packs.append({**r, 'vs_library': _vs_library(r, library),
+                      'preferred': any(tracker_matches_indexer(t, r.get('indexer') or '') for t in trackers)})
+    packs.sort(key=lambda r: not r['preferred'])
+    return jsonify({'status': 'success', 'releases': packs, 'searched': len(releases)})
+
+
+@app.route('/api/workflows/season_pack/grab', methods=['POST'])
+@require_auth
+def workflows_season_pack_grab():
+    """T25, step three — grab the pack and follow the download.
+
+    B12's queue check first, scoped to the season's episodes, refused 409
+    `already_queued` unless `force`. Then the grab, then a watch
+    (`_start_pack_watch`) that follows the download and, once it's in the
+    client, hands the replace dialog its hash. Nothing is force-imported: the
+    library changes only through T22's replace, which the user confirms.
+    """
+    cfg = db_load_config()
+    data = request.json or {}
+    target, refusal = _season_pack_target(cfg, data)
+    if refusal:
+        return refusal
+    conn, arr_id, season = target
+    guid, indexer_id = data.get('guid') or '', data.get('indexer_id')
+    if not guid or indexer_id is None:
+        return _triage_refusal('bad_request', 'guid and indexer_id are required.', 400)
+    library = _season_library(cfg, conn['id'], arr_id, season)
+    if library is None:
+        return _triage_refusal('sonarr_unavailable',
+                               f"{conn['name']} did not list this season's episodes, so the download "
+                               "couldn't be followed. Nothing was grabbed.", 502)
+    episode_ids = [e['id'] for e in library]
+    queue_checked = None
+    if not data.get('force'):
+        queued = queue_records_for_item(cfg, 'sonarr', conn['id'], arr_id,
+                                        episode_ids=episode_ids or None, season_number=season)
+        queue_checked = queued is not None
+        if queued:
+            titles = [q.get('title') for q in queued if q.get('title')]
+            return jsonify({"status": "error", "code": "already_queued", "titles": titles[:5],
+                            "message": f"Already in Sonarr's queue: {titles[0] if titles else 'this season'}"}), 409
+    try:
+        grab_release(cfg, 'sonarr', conn['id'], guid, indexer_id)
+    except Exception as e:
+        return _grab_failure(e, 'sonarr', guid)
+    title = str(data.get('series_title') or '').strip()[:200]
+    label = f"{title or 'Season'} · S{season:02d} pack"
+    held = [e['id'] for e in library if e['has_file']]
+    job_id = _start_pack_watch(cfg, conn['id'], arr_id, season, label, held or episode_ids,
+                               info_hash=_clean_token(data.get('info_hash'), limit=128),
+                               series_title=title)
+    return jsonify({'status': 'success', 'job_id': job_id, 'queue_checked': queue_checked})
 
 
 @app.route('/api/workflows/import_check', methods=['POST'])
@@ -3966,11 +4232,22 @@ def _triage_replace_plan(cfg, data):
       lowered to save space.
     * `add` — Sonarr holds no file for these episodes.
     * `already` — the library file *is* the pack's (one inode).
-    * `skip`, with a `reason`: `only_copy` (a lower release over a file with no
-      other link — the downgrade would lose it), `unchecked` (a file that
-      couldn't be stat'ed: an unknown is never lossless), `split` (Sonarr holds
-      these episodes in a different split of files, and replacing one file
-      recycles every episode of it, amendment 1), `not_in_series`, `unparsed`.
+    * `unseeded` (T24) — a lower release (or one whose quality couldn't be
+      compared) over a library file with **no** other link. Replacing it deletes
+      that file, and the episode gains a seed. The user's trade, not auditorr's:
+      a library seeded at lower quality over one unseeded at higher. Imported
+      only when the confirm posts `include_unseeded`, which the dialog's switch
+      sets, off by default.
+    * `skip`, with a `reason`: `unchecked` (a file that couldn't be stat'ed: an
+      unknown is never lossless), `split` (Sonarr holds these episodes in a
+      different split of files, and replacing one file recycles every episode
+      of it, amendment 1), `not_in_series`, `unparsed`.
+
+    **The torrent is the live listing's row**, and the row is what the file
+    listing is asked for (T23): qui roots each file at the save path it's
+    handed, and a bare `{hash, instance_id}` rooted every file at `/`. A hash
+    posted with no instance (the season-pack watch knows only the download's
+    hash) resolves to its one registration, or refuses as ambiguous (S05).
 
     Refusals: an unknown connection, the torrent gone from the client or an
     instance that didn't answer, a torrent not known to be complete (hardlinking
@@ -3991,22 +4268,25 @@ def _triage_replace_plan(cfg, data):
     if conn is None:
         return None, _triage_refusal('unknown_connection', 'That Sonarr connection is no longer configured.', 404)
 
-    reg = sources.registration_key(iid, h)
     try:
         rows, report = sources.list_torrents_detailed(cfg)
     except Exception as e:
         log.warning("Triage replace: torrent listing failed: %s", e)
         return None, _triage_refusal('client_unavailable', 'The torrent client did not answer.', 502)
-    row = next((r for r in rows if r.get('reg') == reg), None)
+    regs, ambiguous, _absent = _resolve_registrations(rows, [sources.registration_key(iid, h)])
+    if ambiguous:
+        return None, _ambiguous_registration_refusal(ambiguous)
+    row = next((r for r in rows if regs and _reg(r) == regs[0]), None)
     if row is None:
         if report.get('instances_failed'):
             return None, _triage_refusal('client_unavailable',
                                          'A torrent client instance did not answer, so auditorr cannot check this torrent.', 502)
         return None, _triage_refusal('not_in_client', 'This torrent is no longer in your client.', 409)
+    reg, iid = regs[0], row.get('instance_id')
     if sources.torrent_complete(row.get('progress'), row.get('completion_on')) is not True:
         return None, _triage_refusal('incomplete',
                                      'This torrent is not known to be complete, and a file still being written must not go into the library.', 409)
-    listing = sources.fetch_torrent_file_paths(cfg, [{'hash': h, 'instance_id': iid}]).get(reg)
+    listing = sources.fetch_torrent_file_paths(cfg, [row]).get(reg)
     if not listing:
         return None, _triage_refusal('listing_unavailable', "The client didn't return this torrent's file list.", 502)
 
@@ -4085,7 +4365,7 @@ def _triage_replace_plan(cfg, data):
         elif cmp in ('higher', 'same') or st_lib.st_nlink > 1:
             entry.update(action='replace')
         else:
-            entry.update(action='skip', reason='only_copy')
+            entry.update(action='unseeded')
 
     if not entries:
         return None, _triage_refusal('no_episodes', f'This torrent holds no episode of season {season}.', 409)
@@ -5190,28 +5470,37 @@ def workflows_grab_release():
     try:
         grab_release(cfg, service, connection_id, guid, indexer_id)
         return jsonify({"status": "success", "queue_checked": queue_checked})
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors='replace')
-        msg = f"HTTP {e.code}: {e.reason}"
-        parsed = False
-        try:
-            msg = json.loads(body).get('message') or msg
-            parsed = True
-        except Exception:
-            pass
-        log.warning("Grab failed for %s/%s: %s", service, guid, msg)
-        out = {"status": "error", "message": msg}
-        # The one failure a fresh search fixes: the guid fell out of the arr's
-        # release cache, which both arrs answer with a 404 and this message.
-        # Anything else — an indexer error, an auth failure, a timeout on a grab
-        # the arr may already have processed — is surfaced as it is and never
-        # retried automatically, because the retry grabs a second copy (B12).
-        if 'requested release in cache' in msg.lower() or (e.code == 404 and not parsed):
-            out['code'] = 'stale_release'
-        return jsonify(out), 400
     except Exception as e:
+        return _grab_failure(e, service, guid)
+
+
+def _grab_failure(e, service, guid):
+    """The answer to a `grab_release` that raised: the arr's own words, as a 400.
+
+    Shared by Backfill's grab and the season-pack grab (T25), so both say the
+    same thing about the same failure.
+    """
+    if not isinstance(e, urllib.error.HTTPError):
         log.warning("Grab failed for %s/%s: %s", service, guid, e)
         return jsonify({"status": "error", "message": str(e)}), 400
+    body = e.read().decode(errors='replace')
+    msg = f"HTTP {e.code}: {e.reason}"
+    parsed = False
+    try:
+        msg = json.loads(body).get('message') or msg
+        parsed = True
+    except Exception:
+        pass
+    log.warning("Grab failed for %s/%s: %s", service, guid, msg)
+    out = {"status": "error", "message": msg}
+    # The one failure a fresh search fixes: the guid fell out of the arr's
+    # release cache, which both arrs answer with a 404 and this message.
+    # Anything else — an indexer error, an auth failure, a timeout on a grab
+    # the arr may already have processed — is surfaced as it is and never
+    # retried automatically, because the retry grabs a second copy (B12).
+    if 'requested release in cache' in msg.lower() or (e.code == 404 and not parsed):
+        out['code'] = 'stale_release'
+    return jsonify(out), 400
 
 
 # Generate runs, keyed by id (B4). This was one process-wide slot: navigating
@@ -5980,9 +6269,12 @@ _UNREADABLE = object()
 
 # Terminal watch statuses. `done` is the only success, and it needs an
 # observation: the arr's file for this target changed (S07). The panel renders
-# `error`, `failed` and `unreadable` red, the rest dim.
+# `error`, `failed` and `unreadable` red, the rest dim. `ready` is a season-pack
+# watch's (T25): the download is in the client and the replace waits on the
+# user, so the panel keeps it for `_READY_WATCH_TTL` rather than a minute.
 WATCH_TERMINAL = frozenset({'done', 'error', 'failed', 'unreadable', 'unobserved',
-                            'no_new_file', 'timed_out', 'unconfirmed'})
+                            'no_new_file', 'timed_out', 'unconfirmed', 'ready'})
+_READY_WATCH_TTL = 3600
 
 
 def _read_target_files(cfg, service, connection_id, arr_id, episode_ids):
@@ -6236,6 +6528,111 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
     return job_id
 
 
+def _start_pack_watch(cfg, connection_id, arr_id, season, title, episode_ids, info_hash=None,
+                      series_title=''):
+    """Follow a season-pack grab into the client, on a daemon thread (T25). Returns the job id.
+
+    The import watch's queue reading (S07) without its force import. Sonarr
+    imports a pack that upgrades every episode on its own, and that's `done`,
+    seen the way the import watch sees it: every scoped episode's file changed.
+    A pack it holds back (not an upgrade, Sonarr parks it `importBlocked`) ends
+    `ready`, with `replace` naming the torrent for T22's dialog. The user
+    decides what goes into the library from there, episode by episode.
+
+    The torrent is named by the release's info hash where the indexer gave one,
+    else by the one download id Sonarr's queue holds for these episodes. Two
+    ids is a guess, and the watch says so rather than naming either. Every key
+    exists from creation and is only reassigned, because a request thread
+    iterates this dict (`progress`'s rule).
+    """
+    job_id = secrets.token_hex(8)
+    watch = {
+        'status':       'queued',
+        'message':      'Queued — waiting for download client',
+        'title':        title,
+        'service':      'sonarr',
+        'source':       'season_pack',
+        'progress':     None,
+        'completed_at': None,
+        # `{hash, instance_id, connection_id, arr_id, season, title}` once the
+        # pack is known to be in the client: what the panel's Replace opens.
+        'replace':      None,
+    }
+    _import_watches[job_id] = watch
+
+    def do_watch():
+        def finish(status, message, torrent_hash=None):
+            if torrent_hash:
+                # Lower-cased: Sonarr spells a qBittorrent hash upper-case
+                # (`DownloadId = torrent.Hash.ToUpper()`), and both clients list
+                # it lower-case.
+                watch['replace'] = {'hash': str(torrent_hash).lower(), 'instance_id': None,
+                                    'connection_id': connection_id, 'arr_id': arr_id, 'season': season,
+                                    'title': series_title}
+            watch['status']       = status
+            watch['message']      = message
+            watch['progress']     = None
+            watch['completed_at'] = time.time()
+
+        try:
+            correlate = {'download_id': info_hash, 'episode_ids': None if info_hash else episode_ids}
+            # Time for the client and Sonarr to register the grab before the first read.
+            time.sleep(8)
+
+            def on_downloading():
+                watch['status']  = 'downloading'
+                watch['message'] = 'Downloading'
+
+            def on_progress(fraction):
+                watch['progress'] = fraction
+
+            baseline = _read_target_files(cfg, 'sonarr', connection_id, arr_id, episode_ids)
+            res = poll_queue_until_clear(cfg, 'sonarr', connection_id, arr_id,
+                                         on_downloading=on_downloading, on_progress=on_progress,
+                                         **correlate)
+            if res['outcome'] == 'downloading':
+                watch['status']  = 'downloading'
+                watch['message'] = 'Downloading — waiting for completion'
+                res = poll_queue_until_clear(cfg, 'sonarr', connection_id, arr_id, timeout=7200,
+                                             seen=True, on_progress=on_progress, **correlate)
+            outcome = res['outcome']
+            if outcome == 'no_connection':
+                return finish('error', 'The Sonarr connection this grab was made on is not configured')
+            if outcome == 'unreadable':
+                return finish('unreadable', "Could not read Sonarr's queue, so auditorr cannot tell "
+                                            "what happened to this grab — check Activity → Queue in Sonarr")
+            if outcome == 'failed':
+                detail = '; '.join(res['messages'])
+                return finish('failed', 'The download failed in Sonarr' + (f': {detail}' if detail else ''))
+            if outcome == 'downloading':
+                return finish('timed_out', 'Still downloading after two hours. Once it finishes, '
+                                           'Triage lists the pack with its Replace action')
+            if outcome in ('cleared', 'unobserved'):
+                landed = _await_landing(cfg, 'sonarr', connection_id, arr_id, episode_ids, baseline)
+                if landed:
+                    return finish('done', 'Sonarr imported the pack itself')
+                if outcome == 'unobserved':
+                    return finish('unobserved', "Never appeared in Sonarr's queue — check that the "
+                                                "grab reached your download client")
+                return finish('no_new_file', "Left Sonarr's queue without importing it. If the pack "
+                                             "is in your client, its episodes can still replace the season's",
+                              info_hash)
+            # import_pending: finished, and Sonarr is holding the import.
+            ids = {str(r.get('downloadId') or '') for r in res['records'] if r.get('downloadId')}
+            torrent_hash = info_hash or (next(iter(ids)) if len(ids) == 1 else None)
+            if not torrent_hash:
+                return finish('error', "Downloaded, but Sonarr's queue holds more than one download "
+                                       "for this season, so auditorr can't tell which is the pack. "
+                                       "After the next scan Triage lists it with its Replace action")
+            return finish('ready', 'Sonarr held the import back', torrent_hash)
+        except Exception as e:
+            log.warning("Season pack watch failed for sonarr/%s: %s", arr_id, e)
+            finish('error', str(e))
+
+    threading.Thread(target=do_watch, daemon=True).start()
+    return job_id
+
+
 @app.route('/api/workflows/watch_import/status')
 @require_auth
 def workflows_watch_import_status():
@@ -6253,17 +6650,20 @@ def workflows_watch_import_active():
     # one place Backfill's in-memory jobs are reliably swept (B13).
     _sweep_backfill_jobs()
     now = time.time()
-    # Expire jobs completed more than 5 minutes ago
-    expired = [k for k, v in _import_watches.items() if v.get('completed_at') and now - v['completed_at'] > 300]
+    # Expire jobs completed more than 5 minutes ago, and a season pack waiting
+    # on its replace (`ready`, T25) after an hour.
+    expired = [k for k, v in list(_import_watches.items()) if v.get('completed_at')
+               and now - v['completed_at'] > (_READY_WATCH_TTL if v.get('status') == 'ready' else 300)]
     for k in expired:
-        del _import_watches[k]
+        _import_watches.pop(k, None)
     # Return active jobs + jobs completed within the last 60s (so their end states
     # are briefly visible). Keyed on `completed_at`, not on a list of statuses: a
-    # watch has more ways to end than done and error since Phase 12 (S07).
+    # watch has more ways to end than done and error since Phase 12 (S07). A
+    # `ready` one stays as long as it's kept, because it's waiting on the user.
     jobs = []
     for job_id, watch in list(_import_watches.items()):
         ct = watch.get('completed_at')
-        if not ct or now - ct < 60:
+        if not ct or now - ct < 60 or watch.get('status') == 'ready':
             jobs.append({'job_id': job_id, **{k: v for k, v in watch.items() if k != 'completed_at'}})
     return jsonify({'jobs': jobs})
 

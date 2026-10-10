@@ -9,6 +9,7 @@ import {
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
 } from './shared'
+import { SeasonPackModal } from './SeasonPack'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // Candidates arrive grouped, scoped and labelled with their root folder by the
@@ -185,7 +186,22 @@ function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
 // ── Result item ───────────────────────────────────────────────────────────────
 const RELEASE_GRID = 'minmax(0,1fr) 100px 62px 72px 40px 90px 40px 44px 84px 72px'
 
+// T25 — an episode row exists because part of its season is still seeded, so
+// Backfill won't search the season as a pack (B1). The season-pack dialog is
+// the deliberate version of that: it looks for a pack in the client first, and
+// whatever it grabs only reaches the library through the replace's own confirm.
+function seasonPackTarget(item) {
+  if (item.arr_service !== 'sonarr' || item.scope !== 'episode' || item.season_number == null
+      || item.arr_id == null || !item.arr_connection_id) return null
+  return { connection_id: item.arr_connection_id, arr_id: item.arr_id, season: item.season_number,
+           title: item.arr_title, trackers: [] }
+}
+
 function ResultItem({ item }) {
+  // T25 — the season-pack dialog, when this row's chip opened it. The target is
+  // memoised: the dialog looks the season up again whenever it changes.
+  const [packOpen, setPackOpen] = useState(false)
+  const packTarget = useMemo(() => seasonPackTarget(item), [item])
   // grabStates: { [guid]: 'idle' | 'grabbing' | 'refreshing' | 'grabbed' | 'queued' | 'error' }
   const [grabStates,    setGrabStates]    = useState({})
   const [grabErrors,    setGrabErrors]    = useState({})
@@ -450,6 +466,14 @@ function ResultItem({ item }) {
             </div>
           )}
         </div>
+
+        {packTarget && (
+          <Button size="chip" variant="subtle" onClick={e => { e.stopPropagation(); setPackOpen(true) }}
+            title="Look for a pack of this whole season in your client or in Sonarr, then replace the season's library files with it. Episodes still seeded by their own torrents are listed first, so you see what moves">
+            Season pack…
+          </Button>
+        )}
+        {packOpen && packTarget && <SeasonPackModal target={packTarget} onCancel={() => setPackOpen(false)} />}
 
         {/* Service link — the same chip Triage's rows carry. With no link
             address it is only a label, and says so by not being a button. */}

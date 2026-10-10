@@ -1132,6 +1132,13 @@ def fetch_torrent_file_paths(cfg, items):
     not in control flow. A total failure (unreachable host, no eligible
     instances) leaves every requested registration at `None` rather than
     returning a map of empty lists.
+
+    **An item with no `save_path` answers `None` too** (TRIAGE T23). qui's file
+    listing names each file relative to the torrent, and this joins it to the
+    caller's save path; with none, every path came back as `/<name>`, which no
+    filesystem holds. T22's plan passed a bare `{hash, instance_id}`, so every
+    episode read as unchecked on qui while qbit, which looks the save path up
+    itself, worked. A path that can't exist is a wrong answer, not an unknown.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
@@ -1149,10 +1156,13 @@ def fetch_torrent_file_paths(cfg, items):
         sess = _session(api_key)
         eligible, unreachable = _list_instances(sess, base)
         eligible_ids = [i['id'] for i in eligible]
-        ambiguous = unasked = 0
+        ambiguous = unasked = rootless = 0
         for key, i in wanted:
             h  = i.get('hash')
-            sp = (i.get('save_path') or '').rstrip('/')
+            if not i.get('save_path'):
+                rootless += 1
+                continue
+            sp = i['save_path'].rstrip('/')
             inst = i.get('instance_id')
             if inst in eligible_ids:
                 try_ids = [inst]
@@ -1195,6 +1205,9 @@ def fetch_torrent_file_paths(cfg, items):
         if unasked:
             log.warning('qui: %d torrent(s) are on, or could be on, an instance qui cannot reach; '
                         'their file listings are unknown', unasked)
+        if rootless:
+            log.warning('qui: %d file listing(s) were asked for without a save path; '
+                        'they are unknown rather than rooted at /', rootless)
     except Exception as e:
         log.warning('qui: fetch_torrent_file_paths failed: %s', e)
     return result

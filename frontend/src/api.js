@@ -136,6 +136,10 @@ export const api = {
   triageResolveGroups: (hashes) => req('/workflows/triage/resolve_groups', { method: 'POST', body: JSON.stringify({ hashes }) }),
   triageReplacePlan: (params) => req('/workflows/triage/replace_plan', { method: 'POST', body: JSON.stringify(params) }),
   triageReplace:     (params) => req('/workflows/triage/replace',      { method: 'POST', body: JSON.stringify(params) }),
+  // T25 — Find the season pack: the client first, then Sonarr's search, then the grab.
+  seasonPackLookup:   (params) => req('/workflows/season_pack/lookup',   { method: 'POST', body: JSON.stringify(params) }),
+  seasonPackReleases: (params) => req('/workflows/season_pack/releases', { method: 'POST', body: JSON.stringify(params) }),
+  seasonPackGrab:     (params) => req('/workflows/season_pack/grab',     { method: 'POST', body: JSON.stringify(params) }),
   trumpParse:        (pmText)  => req('/workflows/trump/parse',          { method: 'POST', body: JSON.stringify({ pm_text: pmText }) }),
   trumpResolveGroup: (oldTitles, seedHashes, indexer, newTitle) => req('/workflows/trump/resolve_group', { method: 'POST', body: JSON.stringify({ old_titles: oldTitles, seed_hashes: seedHashes, indexer, new_title: newTitle }) }),
   trumpSearchRelease: (params) => req('/workflows/trump/search_release', { method: 'POST', body: JSON.stringify(params) }),

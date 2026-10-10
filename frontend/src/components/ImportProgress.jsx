@@ -1,5 +1,7 @@
-import React from 'react'
-import { CloseButton } from './workflows/shared'
+import React, { useState } from 'react'
+import { CloseButton, Button } from './workflows/shared'
+import { ReplaceModal, replaceOutcome } from './workflows/SeasonPack'
+import { useToast } from './Toast'
 
 // An import watch has more ways to end than done and error (Phase 12, S07).
 // `done` is the only success, and the server reaches it only when the arr's file
@@ -38,6 +40,16 @@ const STAGE_CONFIG = {
   no_new_file: { label: 'No new file',       color: 'var(--text-dim)', icon: 'dash'    },
   timed_out:   { label: 'Still downloading', color: 'var(--text-dim)', icon: 'dash'    },
   unconfirmed: { label: 'Unconfirmed',       color: 'var(--text-dim)', icon: 'dash'    },
+  // T25 — a season pack in the client, waiting on the replace. Not green: the
+  // library hasn't changed yet, and green is an observed import.
+  ready:       { label: 'Downloaded',        color: 'var(--accent)',   icon: 'check'   },
+}
+
+// A season-pack watch that knows its torrent, and ended where the replace is
+// the next step: Sonarr holding the import, or the download leaving the queue
+// without one.
+function canReplace(job) {
+  return job.source === 'season_pack' && !!job.replace && (job.status === 'ready' || job.status === 'no_new_file')
 }
 
 function StageIcon({ type, color }) {
@@ -60,7 +72,24 @@ function StageIcon({ type, color }) {
 }
 
 export default function ImportProgress({ open, jobs, onClose }) {
-  if (!open) return null
+  const toast = useToast()
+  // The season-pack job whose Replace opened the dialog.
+  const [replaceJob, setReplaceJob] = useState(null)
+
+  const dialog = replaceJob && (
+    <ReplaceModal
+      title={replaceJob.replace.title}
+      season={replaceJob.replace.season}
+      packs={[{ reg: replaceJob.replace.hash, params: replaceJob.replace, name: replaceJob.title }]}
+      watchId={replaceJob.job_id}
+      onCancel={() => setReplaceJob(null)}
+      onDone={resp => {
+        setReplaceJob(null)
+        toast(replaceOutcome(resp), resp.pending?.length || resp.dropped?.length ? 'warning' : 'success')
+      }}
+    />
+  )
+  if (!open) return dialog || null
 
   const activeCount = jobs.filter(j => WATCH_ACTIVE.includes(j.status)).length
 
@@ -148,11 +177,20 @@ export default function ImportProgress({ open, jobs, onClose }) {
                     <div style={{ width: pct + '%', height: '100%', background: 'var(--accent)', borderRadius: 'var(--r-pill)', transition: 'width 0.4s ease' }} />
                   </div>
                 )}
+                {canReplace(job) && (
+                  <div style={{ marginTop: 6 }}>
+                    <Button size="sm" onClick={() => setReplaceJob(job)}
+                      title="See what this pack would replace in your library, episode by episode, before anything happens">
+                      Replace in library…
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           )
         })}
       </div>
+      {dialog}
 
       <style>{`
         @keyframes importSpin  { to { transform: rotate(360deg); } }

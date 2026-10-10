@@ -382,10 +382,17 @@ function AppInner() {
   }, [fetchResults, pollOnce])
 
   useEffect(() => {
+    // T25 — a season pack that has downloaded waits on the user's replace, so
+    // the panel opens the first time each one is seen ready.
+    const seenReady = new Set()
     const pollImports = async () => {
       try {
         const data = await api.watchImportActive()
-        setActiveImports(data.jobs || [])
+        const jobs = data.jobs || []
+        setActiveImports(jobs)
+        const fresh = jobs.filter(j => j.status === 'ready' && !seenReady.has(j.job_id))
+        fresh.forEach(j => seenReady.add(j.job_id))
+        if (fresh.length) setImportPanelOpen(true)
       } catch (_) {}
     }
     importIntervalRef.current = setInterval(pollImports, 5000)

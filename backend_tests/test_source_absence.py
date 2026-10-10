@@ -263,6 +263,13 @@ class QuiFilePathsTests(unittest.TestCase):
         self.assertEqual(out['1:aaa'], ['/d/a.mkv'])
         self.assertIsNone(out['1:bbb'])
 
+    def test_an_item_with_no_save_path_is_unknown_not_rooted_at_slash(self):
+        """TRIAGE T23 — qui names files relative to the save path, so without one
+        every path came back as `/<name>`, which no filesystem holds."""
+        with patch.object(_qui, '_session', return_value=self._session({'aaa': ['a.mkv']})):
+            out = _qui.fetch_torrent_file_paths(self.CFG, [{'hash': 'aaa', 'instance_id': 1}])
+        self.assertIsNone(out['1:aaa'])
+
     def test_an_instance_that_answers_with_no_files_answers_an_empty_list(self):
         with patch.object(_qui, '_session', return_value=self._session({'aaa': []})):
             out = _qui.fetch_torrent_file_paths(

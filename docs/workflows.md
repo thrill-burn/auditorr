@@ -143,6 +143,11 @@ release, and those are left off an episode row. Where Sonarr hasn't numbered
 every file of a show, auditorr can't show that a season is fully unseeded, so
 it searches episode by episode.
 
+When you *do* want the whole season on one pack, a single-episode row has a
+**Season pack…** button. It opens [Find the season pack](#find-the-season-pack),
+which checks your client for a pack first and shows which episodes are still
+seeded before anything moves.
+
 A release offered on a row has to cover **exactly** what that row's file holds,
 in the **same season**. A file holding two episodes (`S01E01E02`) is only
 offered two-episode releases: Sonarr replaces the whole existing file when it
@@ -405,7 +410,7 @@ they need six different responses.
 
 | Verdict | What it means | Usual response |
 | --- | --- | --- |
-| **Dead seed — imported** | The tracker has dropped the torrent, but the file was imported and your library hardlink still holds the data. | Delete via the client. Lossless — the library keeps the file. |
+| **Dead seed — imported** | The tracker has dropped the torrent, but the file was imported and your library hardlink still holds the data. | Delete via the client. Lossless — the library keeps the file. A single episode at the end of a season? [Find the season pack](#find-the-season-pack). |
 | **Dead registration** | This particular registration is dead, but the payload is alive via a working cross-seed or the library copy. | Delete this registration; the data stays. |
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
 | **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). A season spread over several torrents? [Replace with this pack](#replace-with-this-pack). |
@@ -533,7 +538,8 @@ library file, a WEB-DL against a Bluray — Force import isn't offered at all.
 Those torrents are fine as cross-seeds, and your library is right to keep the
 better copy. If you meant to have the lower quality (you lowered a show's
 profile to save space, say), see [Replace with this pack](#replace-with-this-pack),
-which does it only where nothing is lost. For anything else, such as a 1080p
+which does it where nothing is lost, and over an unseeded file only if you
+switch that on. For anything else, such as a 1080p
 Remux auditorr ranks below a 2160p WEB-DL because resolution decides first, use
 Sonarr/Radarr's own Manual Import.
 
@@ -564,8 +570,16 @@ pack:
   disk, and the dialog names the torrent holding it.
 - **already**: your library file already is this pack's.
 - **add**: Sonarr has no file for that episode.
-- **keep**, with the reason: the better file is its only copy, it couldn't be
-  checked, or Sonarr holds those episodes split differently across files.
+- **keep**, with the reason: it couldn't be checked, or Sonarr holds those
+  episodes split differently across files.
+
+**Unseeded episodes are your call.** An episode where the pack is lower quality
+and your library file has *no* other hardlink (nothing seeds it, usually because
+you removed its torrent) is listed as kept, with a switch under the list: *Also
+replace N unseeded episodes*. Replacing one deletes your current file, since
+it's the only copy, or Sonarr moves it to its recycle bin if you've set one. In
+exchange the episode is seeded again, at the pack's quality. The switch is off
+each time the dialog opens.
 
 Nothing leaves your client. After the next scan, Triage lists what no longer
 supplies your library, such as the other pack and the single-episode torrents
@@ -575,6 +589,35 @@ episodes again.
 
 A torrent that hasn't finished downloading can't be used, and nothing happens if
 your client or Sonarr doesn't answer in full.
+
+### Find the season pack
+
+At the end of a season, a good tracker often removes its single episodes and
+posts one season pack in their place. Triage then lists those singles as dead
+seeds, and **Find season pack…** on one of them is the way to the pack. The same
+dialog opens from **Season pack…** on a Backfill episode row.
+
+1. **Your library and your client first.** The dialog lists the season as
+   Sonarr holds it, each run of episodes marked seeded or unseeded, then any pack
+   of that season already in your client. If one is complete, **Replace with
+   this pack…** goes straight to [the replace](#replace-with-this-pack). No
+   indexer is searched unless you ask.
+2. **Otherwise, Sonarr's search.** Only full-season releases of this season are
+   listed. Releases on the tracker your dropped episodes came from are listed
+   first, and the first of those is picked for you, because that's usually where
+   the pack is. Each release says how it compares with your library (for
+   example *same as 4 · lower than 2*).
+3. **Grab it.** The grab is refused if Sonarr already has this season in its
+   queue, with a *Grab anyway* to override. auditorr then follows the download in
+   **Import Jobs**. If Sonarr imports the pack itself because it's an upgrade,
+   the job ends there. If Sonarr holds it back, the job says *Downloaded*, the
+   panel opens on its own, and **Replace in library…** opens the replace for that
+   pack. The job stays for an hour. After that, or after a restart, the next scan
+   lists the pack in Triage with its own *Replace with this pack…*.
+
+Nothing goes into your library until you confirm the replace. Removing the dead
+singles is Triage's usual removal, which loses nothing because your library holds
+their files. Do it before or after.
 
 ### Exclude
 
