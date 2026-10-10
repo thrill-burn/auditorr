@@ -555,7 +555,15 @@ spread over several torrents, and a season pack hardlinked over the lot puts it
 back on one. Sonarr won't do that itself when the pack is the same quality or
 lower than some of what you hold. *Replace with this pack* does.
 
-It's offered on superseded TV rows. When two or more packs of the same season are
+**Switch seasons over to a pack**, at the top of Triage, is where to start. It
+lists each season with a pack in your client, with a **Replace S01 with this
+pack…** button, and each season where the tracker dropped two or more of your
+singles but no pack is in your client yet, with **Find season pack…** (see
+[below](#find-the-season-pack)). Seasons whose singles were dropped come first,
+because that's a season that has ended, and the first season's button is the
+page's main one. After four seasons the rest fold away.
+
+The same replace is offered on the superseded TV rows themselves. When two or more packs of the same season are
 in your client, Triage recommends one: the better release, which is also the one
 Sonarr would keep. Failing that, the one already supplying more of your library.
 Its button is green, and the dialog opens on it whichever row you clicked. You
@@ -594,8 +602,10 @@ your client or Sonarr doesn't answer in full.
 
 At the end of a season, a good tracker often removes its single episodes and
 posts one season pack in their place. Triage then lists those singles as dead
-seeds, and **Find season pack…** on one of them is the way to the pack. The same
-dialog opens from **Season pack…** on a Backfill episode row.
+seeds. Once two or more of a season's singles are dead, the season is listed
+under *Switch seasons over to a pack* at the top of Triage, with **Find season
+pack…**. The same button is on each dead single's row, and the same dialog opens
+from **Season pack…** on a Backfill episode row.
 
 1. **Your library and your client first.** The dialog lists the season as
    Sonarr holds it, each run of episodes marked seeded or unseeded, then any pack

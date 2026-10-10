@@ -6,7 +6,7 @@ import { useToast } from '../Toast'
 import {
   WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
   ArrErrorsWarning, ActionBar, Button, Spinner, SpinKeyframes, SectionHeading, QualityChip, Checkbox,
-  ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning, Segmented,
+  ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning, Segmented, Disclosure,
 } from './shared'
 import { ReplaceModal, SeasonPackModal } from './SeasonPack'
 
@@ -281,6 +281,141 @@ function seasonPackTarget(item) {
            title: lib.title || item.parsed?.title, trackers: item.trackers || [] }
 }
 
+// The server's `season_key`, for any row of a Sonarr season.
+function seasonKeyOf(item) {
+  const lib = item.library
+  const season = item.parsed?.season
+  if (lib?.service !== 'sonarr' || lib.arr_id == null || !lib.connection_id || season == null) return null
+  return `${lib.connection_id}|${lib.arr_id}|${season}`
+}
+
+// Seasons switched over this session, so a replaced season's line doesn't come
+// back as a Find line built from its dead singles. Cleared with DISMISSED.
+const SWITCHED = new Set()
+
+// Switching a finished season over to its pack, as one list with the season as
+// the unit: a pack in the client that can replace the library (T22), else a
+// season whose singles the tracker dropped (T25). A lone dead single is left to
+// its row's chip: one dead episode is a trump or a nuke more often than a
+// season's end. A season whose singles died leads, since that's the season
+// being over; then seasons with a pack; then the ones still to find a pack for.
+function seasonSwitches(items) {
+  const seasons = new Map()
+  for (const i of items) {
+    const key = seasonKeyOf(i)
+    if (!key || SWITCHED.has(key)) continue
+    const s = seasons.get(key) || { key, packs: [], dead: [] }
+    if (canReplace(i) && isPack(i)) s.packs.push(i)
+    else if (seasonPackTarget(i)) s.dead.push(i)
+    seasons.set(key, s)
+  }
+  const size = i => i.torrent_size ?? i.total_size ?? 0
+  const out = []
+  for (const s of seasons.values()) {
+    if (s.packs.length) {
+      const lead = s.packs.find(p => p.reg === p.season_pick) || [...s.packs].sort((a, b) => size(b) - size(a))[0]
+      out.push({ ...s, kind: 'replace', lead })
+    } else if (s.dead.length >= 2) {
+      const lead = s.dead[0]
+      const target = { ...seasonPackTarget(lead), trackers: [...new Set(s.dead.flatMap(d => d.trackers || []))] }
+      out.push({ ...s, kind: 'find', lead, target })
+    }
+  }
+  const order = s => (s.kind === 'replace' ? 0 : 2) + (s.dead.length ? 0 : 1)
+  const name = s => `${s.lead.library?.title || s.lead.parsed?.title || ''} ${String(s.lead.parsed?.season).padStart(3, '0')}`
+  return out.sort((a, b) => order(a) - order(b) || b.dead.length - a.dead.length || name(a).localeCompare(name(b)))
+}
+
+const SWITCHES_SHOWN = 4
+
+// The season-pack step, at the top of the page because it's the normal end of
+// a season rather than an exception: the singles' tracker posts a pack, and the
+// library moves onto it. The first season's button is the page's one primary.
+function SeasonSwitches({ seasons, clientName, onReplace, onFind }) {
+  const [open, setOpen] = useState(false)
+  if (seasons.length === 0) return null
+  const shown = open ? seasons : seasons.slice(0, SWITCHES_SHOWN)
+  const ready = seasons.filter(s => s.kind === 'replace').length
+  const meta = [ready && `${ready} ready`, seasons.length - ready && `${seasons.length - ready} to find`]
+    .filter(Boolean).join(' · ')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <SectionHeading check={null} dot="var(--green)" title="Switch seasons over to a pack" meta={meta}
+        desc={`When a season ends, a good tracker drops its single episodes and posts a pack. Move your library onto the pack, as hardlinks, and one torrent seeds the whole season. You see every episode before anything changes, and nothing leaves ${clientName}.`}
+      />
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+        {shown.map((s, n) => (
+          <SeasonSwitchRow key={s.key} season={s} lead={n === 0} clientName={clientName}
+            onReplace={onReplace} onFind={onFind} />
+        ))}
+      </div>
+      {seasons.length > SWITCHES_SHOWN && (
+        <div style={{ marginLeft: 42 }}>
+          <Disclosure open={open} onClick={() => setOpen(o => !o)}>
+            {open ? 'Show fewer' : `${seasons.length - SWITCHES_SHOWN} more season${seasons.length - SWITCHES_SHOWN !== 1 ? 's' : ''}`}
+          </Disclosure>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SeasonSwitchRow({ season: s, lead, clientName, onReplace, onFind }) {
+  const item = s.lead
+  const lib = item.library || {}
+  const sNum = `S${String(item.parsed?.season).padStart(2, '0')}`
+  const libQualities = lib.qualities || (lib.quality_name ? [lib.quality_name] : [])
+  const dead = s.dead.length
+  const others = s.packs.length - 1
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {lib.title || item.parsed?.title}{lib.year ? ` (${lib.year})` : ''} · {sNum}
+        </div>
+        {s.kind === 'replace' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, flexWrap: 'wrap' }}>
+            <span title={item.name || item.rep_path} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
+              {packName(item)}
+            </span>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+              {formatBytes(item.torrent_size ?? item.total_size)} · in {clientName}
+              {others > 0 ? ` · ${others} other pack${others !== 1 ? 's' : ''}` : ''}
+              {libQualities.length > 0 ? ' ·' : ''}
+            </span>
+            {libQualities.length > 0 && (
+              <>
+                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>vs library</span>
+                {libQualities.map(q => <QualityChip key={q} label={q} dim unknown />)}
+              </>
+            )}
+          </div>
+        )}
+        {dead > 0 && (
+          <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 4 }}>
+            {s.kind === 'replace'
+              ? `The tracker dropped ${dead === 1 ? 'one' : dead} of this season’s singles.`
+              : `The tracker dropped ${dead} of this season’s singles, which usually means it posted a pack. auditorr looks in ${clientName} first, then searches Sonarr.`}
+          </div>
+        )}
+      </div>
+      {s.kind === 'replace' ? (
+        <Button variant={lead ? 'primary' : 'secondary'} onClick={() => onReplace(item)}
+          title="Import the pack over the files Sonarr holds for this season, as hardlinks. The dialog shows each episode before anything happens."
+        >
+          Replace {sNum} with this pack…
+        </Button>
+      ) : (
+        <Button variant={lead ? 'primary' : 'secondary'} onClick={() => onFind(s.target)}
+          title="Look for this season's pack in your client, else search Sonarr's indexers for one, then replace the season with it"
+        >
+          Find season pack…
+        </Button>
+      )}
+    </div>
+  )
+}
+
 function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, onReplace, onFindPack, pending, rescanned, unconfirmed }) {
   const p = item.parsed || {}
   const seTag = episodeTag(item)
@@ -376,9 +511,11 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               ))}
             </>
           )}
+          {/* Green unless another pack of the season is the pick. A season's
+              only pack has no pick, and read grey beside its own chips. */}
           {canReplace(item) && onReplace && (
-            <Button size="chip" variant={pick === item.reg ? undefined : 'subtle'}
-              tone={pick === item.reg ? 'var(--green)' : undefined}
+            <Button size="chip" variant={!pick || pick === item.reg ? undefined : 'subtle'}
+              tone={!pick || pick === item.reg ? 'var(--green)' : undefined}
               onClick={e => { e.stopPropagation(); onReplace(item) }}
               title={replaceTitle}
             >
@@ -733,7 +870,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // scan has run. Hooking the audit-complete event is therefore the only thing
   // that actually clears those rows; the actions themselves nudge the watchdog
   // so that scan comes within a cooldown rather than at the next scheduled one.
-  useAuditComplete(useCallback(() => { DISMISSED.clear(); load() }, [load]))
+  useAuditComplete(useCallback(() => { DISMISSED.clear(); SWITCHED.clear(); load() }, [load]))
 
   const items = report?.items || []
   const byVerdict = useMemo(() => {
@@ -745,6 +882,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     for (const k of Object.keys(m)) m[k].sort((a, b) => b.total_size - a.total_size)
     return m
   }, [items])
+  const switches = useMemo(() => seasonSwitches(items), [items])
 
   const selectedItems = useMemo(() => items.filter(i => selected.has(itemKey(i))), [items, selected])
   // What an action on the selection touches: each torrent in full where the row
@@ -1082,6 +1220,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     if (replaced.length && !pending.length) {
       toast(`Replaced ${replaced.join(', ')} with ${packName(pack)}. The next scan lists what no longer supplies your library.${skipped}`, 'success')
       DISMISSED.add(itemKey(pack))
+      if (seasonKeyOf(pack)) SWITCHED.add(seasonKeyOf(pack))
       setReport(r => ({ ...r, items: (r?.items || []).filter(i => itemKey(i) !== itemKey(pack)) }))
     } else if (replaced.length) {
       toast(`Replaced ${replaced.join(', ')}. ${pending.join(', ')} not confirmed yet — check Activity in Sonarr.${skipped}`, 'warning')
@@ -1228,6 +1367,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             extra={'Library matching is incomplete, so “Could Not Check” replaces “Not in Library” for anything that matched nothing, '
                  + 'and some rows below may read “Import Pending” for files that are in fact imported.'}
           />
+
+          <SeasonSwitches seasons={switches} clientName={client?.name || 'your client'}
+            onReplace={setReplaceFor} onFind={setPackFor} />
 
           {report?.suggestions?.length > 0 && (
             <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', display: 'flex', flexDirection: 'column', gap: 8 }}>
