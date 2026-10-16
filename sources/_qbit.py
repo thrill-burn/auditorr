@@ -18,7 +18,7 @@ import qbittorrentapi
 
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
-    new_source_report, report_note,
+    new_source_report, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key, content_root,
     client_save_dirs,
 )
@@ -111,6 +111,12 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # WebUI calls each for the whole library on every scan; a timeout or a 5xx
     # during a client restart is an ordinary event, and it hit whichever
     # torrents lost the race, differently every scan.
+    #
+    # A failed tracker call is `hosts = None`, not `['Unknown']`, which is the
+    # real answer for a torrent with no tracker URL. The torrent is still filed
+    # under `Unknown` below, but counted, because its upload has left its own
+    # tracker's total for this one scan and the next scan puts it back. Read as
+    # a delta, that return was a day of several terabytes nobody uploaded.
     def _fetch_torrent_data(torrent):
         try:
             entries = [{'url': t.url, 'status': t.status, 'msg': t.msg}
@@ -121,7 +127,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
             health, msg = classify_tracker_entries(entries)
         except Exception as e:
             log.debug('qbit: tracker listing failed for %s: %s', torrent.hash, e)
-            hosts = ['Unknown']
+            hosts = None
             health, msg = 'unknown', ''
         try:
             files = list(_get_thread_client().torrents_files(torrent_hash=torrent.hash))
@@ -164,7 +170,10 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     local_path           = cfg.get('LOCAL_PATH', '')
 
     for torrent in torrents:
-        hosts     = tracker_map.get(torrent.hash, ['Unknown'])
+        hosts     = tracker_map.get(torrent.hash)
+        if hosts is None:
+            report['tracker_failures'] += 1
+            hosts = ['Unknown']
         seed_secs = int(getattr(torrent, 'seeding_time', 0) or 0)
         if seed_secs > 0:
             seed_byte_secs += (torrent.size or 0) * seed_secs
@@ -290,6 +299,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # '_'-prefixed: every per-tracker loop already skips these.
     tracker_snapshot['_seed_byte_secs'] = seed_byte_secs
     tracker_snapshot['_max_seed_secs']  = max_seed_secs
+    mark_trackers_unanswered(tracker_snapshot, report, len(torrents), 'qbit')
 
     report['file_map_size']    = len(file_map)
     report['listing_failures'] = len(failed_listings)

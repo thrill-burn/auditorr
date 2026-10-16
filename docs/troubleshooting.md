@@ -179,6 +179,40 @@ scanning carries on.
 
 ---
 
+## One day's upload is far higher than your trackers show
+
+**Symptom:** a day on the upload chart shows terabytes, where your usual day is
+gigabytes, and the trackers' own stats show nothing like it.
+
+Upload per day is the difference between scans: each one records how much every
+tracker's torrents have uploaded in total. When a scan couldn't get the tracker
+list for some torrents, it filed their upload under no tracker. Their trackers
+seemed to drop for one scan, and when the next scan put the upload back, the
+chart counted it as new. This happened most often when auditorr started while
+your client was still starting.
+
+Since this fix, a scan like that is left out of the upload stats and the day is
+measured from the scan before it to the scan after it. Days recorded before the
+fix keep their wrong figure until you remove the scan that caused it:
+
+1. Open `http://<your-host>:8677/api/upload_snapshots?days=30`. Find the entry
+   on that day with an `Unknown` tracker where your trackers' `uploaded` figures
+   are lower than in the entries before and after it. Copy its `taken_at`.
+2. Remove that one entry, using its `taken_at` as both ends of the range:
+
+   ```bash
+   curl -X POST http://<your-host>:8677/api/upload_snapshots/delete \
+     -H 'Content-Type: application/json' \
+     -d '{"from": "2026-10-11T12:58:22.679645", "to": "2026-10-11T12:58:22.679645"}'
+   ```
+
+   If you set `AUDITORR_SECRET`, add `-H 'X-Auditorr-Secret: <your key>'`.
+
+The answer should say `"deleted": 1`. The scan stays in Audit History. Only its
+upload figures are removed.
+
+---
+
 ## A torrent is registered on more than one qui instance
 
 **Symptom:** removing a torrent in Triage, or confirming a group in Trumped, says

@@ -47,7 +47,7 @@ import requests
 
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
-    new_source_report, report_instance_failure, report_note,
+    new_source_report, report_instance_failure, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key,
     is_part_file_name, content_root, client_save_dirs,
 )
@@ -336,7 +336,9 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
     Returns (hosts, (health, msg), files, files_ok) — the tracker entries are
     classified here (dead-seed detection) since status/msg ride along with the
     same call. `files_ok` is False when the file listing could not be fetched,
-    which is a different thing from a torrent that reports no files.
+    which is a different thing from a torrent that reports no files. `hosts` is
+    None when the tracker list could not be fetched, which is a different thing
+    from a torrent with no tracker URL (`['Unknown']`); see `_qbit.py`.
     """
     try:
         tr_resp = session.get(
@@ -355,7 +357,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
             for t in raw_trackers
         ])
     except Exception:
-        hosts  = ['Unknown']
+        hosts  = None
         health = ('unknown', '')
 
     try:
@@ -430,7 +432,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     th, hosts, health, files, files_ok = future.result()
                 except Exception:
                     th    = _norm_torrent(futures[future])['hash']
-                    hosts, health, files, files_ok = ['Unknown'], ('unknown', ''), [], False
+                    hosts, health, files, files_ok = None, ('unknown', ''), [], False
                 if th:
                     tracker_map[th] = hosts
                     health_map[th]  = health
@@ -449,7 +451,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 if not f.done():
                     th = _norm_torrent(t)['hash']
                     if th:
-                        tracker_map.setdefault(th, ['Unknown'])
+                        tracker_map.setdefault(th, None)
                         health_map.setdefault(th, ('unknown', ''))
                         files_map.setdefault(th, [])
                         failed_listings.add(th)
@@ -518,7 +520,11 @@ def _process_instance(session, base, inst, remote_path, local_path,
         th = nt['hash']
         if not th:
             continue
-        hosts  = tracker_map.get(th, ['Unknown'])
+        hosts  = tracker_map.get(th)
+        if hosts is None:
+            if report is not None:
+                report['tracker_failures'] += 1
+            hosts = ['Unknown']
         status = _torrent_status(nt['state'])
         # Completion is its own question: `_torrent_status` reads the state
         # string, where a paused incomplete and a paused complete are the same
@@ -797,6 +803,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # '_'-prefixed: every per-tracker loop already skips these.
     tracker_snapshot['_seed_byte_secs'] = seed_totals['byte_secs']
     tracker_snapshot['_max_seed_secs']  = seed_totals['max_secs']
+    mark_trackers_unanswered(tracker_snapshot, report, report['torrent_count'], 'qui')
 
     report['file_map_size'] = len(file_map)
     if report['listing_failures']:

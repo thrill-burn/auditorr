@@ -35,10 +35,13 @@ cannot name an instance for a hash registered more than once **refuses rather
 than guessing** — the same rule as "could not ask", one layer up.
 """
 
+import logging
 import os
 import re
 import posixpath
 import unicodedata
+
+log = logging.getLogger(__name__)
 
 
 class SourceConnectionError(Exception):
@@ -89,6 +92,16 @@ def new_source_report(source):
 
       distinct_torrents   distinct infohashes across every instance
       multi_registered    hashes registered on more than one instance
+
+    And one for the other per-torrent call:
+
+      tracker_failures    torrents whose tracker list could not be fetched.
+                          Their upload is filed under `Unknown`, which is also
+                          the real answer for a torrent with no tracker URL, so
+                          the upload snapshot carries the count as
+                          `_trackers_unanswered` and `compute_upload_stats`
+                          leaves that snapshot out. It does not set `partial`:
+                          the file claims don't depend on it.
     """
     return {
         'source':              source,
@@ -96,6 +109,7 @@ def new_source_report(source):
         'distinct_torrents':   0,
         'multi_registered':    0,
         'file_map_size':       0,
+        'tracker_failures':    0,
         'listing_failures':    0,
         'listing_recovered':   0,
         'listing_unresolved':  0,
@@ -137,6 +151,29 @@ def report_note(report, message):
     notes = report.setdefault('notes', [])
     if message not in notes and len(notes) < _MAX_REPORT_NOTES:
         notes.append(message)
+
+
+def mark_trackers_unanswered(snapshot, report, torrent_total, label):
+    """Mark an upload snapshot whose tracker attribution is incomplete.
+
+    A torrent whose tracker list could not be fetched has its cumulative upload
+    filed under `Unknown`, so its tracker's total dips for this scan and comes
+    back on the next. `compute_upload_stats` skips a negative delta as a counter
+    reset and then counts the return in full: on 2026-10-11 a startup scan with
+    776 files' worth of failed tracker calls read as 3.9 TB uploaded in one
+    afternoon, where 94 GB was real. The key tells it to leave the snapshot out.
+
+    Sparse: written only when something failed, so a healthy scan's snapshot is
+    unchanged. A count, never a hash (the report reaches /api/debug/report).
+    """
+    failed = report.get('tracker_failures', 0)
+    if not failed:
+        return
+    snapshot['_trackers_unanswered'] = failed
+    log.warning('%s: tracker list failed for %d of %d torrent(s); this scan is left out '
+                'of the upload stats', label, failed, torrent_total)
+    report_note(report, f"tracker list failed for {failed} of {torrent_total} torrents; "
+                        f"this scan is left out of the upload stats")
 
 
 def report_instance_failure(report, name, reason):

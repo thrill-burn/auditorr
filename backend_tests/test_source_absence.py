@@ -193,6 +193,123 @@ class QbitListingFailureTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# A failed tracker call is not a torrent with no tracker
+# ---------------------------------------------------------------------------
+
+class _NoTrackerQbtClient(_FakeQbtClient):
+    """'bbb' has no http/udp tracker URL (DHT only): `Unknown` is the real answer."""
+
+    def torrents_trackers(self, torrent_hash=None):
+        if torrent_hash == 'bbb':
+            return [_Obj(url='** [DHT] **', status=2, msg='')]
+        return super().torrents_trackers(torrent_hash)
+
+
+class QbitTrackerFailureTests(unittest.TestCase):
+    """Both were `['Unknown']`, so a scan where some tracker calls failed moved
+    those torrents' cumulative upload out of their trackers for one scan. The
+    next scan moved it back, and the upload chart read the return as new upload
+    (3.9 TB on a 94 GB day, the reference box, 2026-10-11)."""
+
+    def _run(self, client_cls=_FakeQbtClient, fail_trackers=()):
+        client = client_cls(
+            torrents=[_torrent('aaa', 'Alpha'), _torrent('bbb', 'Bravo')],
+            files={'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']},
+            fail_trackers=fail_trackers)
+        with patch.object(_qbit.qbittorrentapi, 'Client', return_value=client):
+            return _qbit.fetch_file_map(_qbit_cfg())
+
+    def test_a_healthy_scan_leaves_the_snapshot_unmarked(self):
+        _, _, snapshot, report = self._run()
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
+
+    def test_a_failed_tracker_call_is_counted_and_marks_the_snapshot(self):
+        _, _, snapshot, report = self._run(fail_trackers={'bbb'})
+        self.assertEqual(report['tracker_failures'], 1)
+        self.assertEqual(snapshot['_trackers_unanswered'], 1)
+        self.assertTrue(any('tracker list failed' in n for n in report['notes']))
+        # Still filed under Unknown: the file records need a tracker set.
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+
+    def test_a_torrent_with_no_tracker_url_is_an_answer(self):
+        _, _, snapshot, report = self._run(client_cls=_NoTrackerQbtClient)
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
+
+    def test_a_tracker_failure_does_not_mark_the_scan_partial(self):
+        """`partial` describes the file claims, which a tracker list never touches."""
+        _, _, _, report = self._run(fail_trackers={'bbb'})
+        self.assertFalse(report['partial'])
+
+
+class QuiTrackerFailureTests(unittest.TestCase):
+    def _run(self, fail_trackers=(), no_trackers=()):
+        torrents = [
+            {'hash': h, 'name': n, 'save_path': '/data/torrents/movies', 'size': 100,
+             'state': 'uploading', 'uploaded': 10, 'progress': 1.0,
+             'completion_on': 1789000000, 'content_path': f'/data/torrents/movies/{n}'}
+            for h, n in (('aaa', 'Alpha'), ('bbb', 'Bravo'))
+        ]
+        files = {'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']}
+
+        class _Resp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        class _Sess:
+            headers = {}
+
+            def get(_self, url, **kw):
+                if url.endswith('/api/instances'):
+                    return _Resp([{'id': 1, 'name': 'main', 'connected': True,
+                                   'hasLocalFilesystemAccess': True}])
+                if url.endswith('/torrents'):
+                    page = (kw.get('params') or {}).get('page', 0)
+                    return _Resp({'torrents': torrents if page == 0 else [],
+                                  'total': len(torrents)})
+                h = url.split('/torrents/')[1].split('/')[0]
+                if url.endswith('/trackers'):
+                    if h in fail_trackers:
+                        raise RuntimeError('tracker call timed out')
+                    if h in no_trackers:
+                        return _Resp([{'url': '** [DHT] **', 'status': 2, 'msg': ''}])
+                    return _Resp([{'url': 'http://tracker.example/announce',
+                                   'status': 2, 'msg': ''}])
+                return _Resp([{'name': n} for n in files.get(h, [])])
+
+        with patch.object(_qui, '_session', return_value=_Sess()):
+            return _qui.fetch_file_map(
+                {'QUI_HOST': 'http://qui:7476', 'QUI_API_KEY': 'k',
+                 'LOCAL_PATH': '/data/torrents', 'REMOTE_PATH': '/data/torrents'})
+
+    def test_a_healthy_scan_leaves_the_snapshot_unmarked(self):
+        _, _, snapshot, report = self._run()
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
+
+    def test_a_failed_tracker_call_is_counted_and_marks_the_snapshot(self):
+        _, _, snapshot, report = self._run(fail_trackers={'bbb'})
+        self.assertEqual(report['tracker_failures'], 1)
+        self.assertEqual(snapshot['_trackers_unanswered'], 1)
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+        self.assertEqual(snapshot['tracker.example']['uploaded'], 10)
+
+    def test_a_torrent_with_no_tracker_url_is_an_answer(self):
+        _, _, snapshot, report = self._run(no_trackers={'bbb'})
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
+
+
+# ---------------------------------------------------------------------------
 # TR1a — fetch_torrent_file_paths must distinguish None from []
 # ---------------------------------------------------------------------------
 

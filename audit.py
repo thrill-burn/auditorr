@@ -1453,8 +1453,16 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
     summary inside the publish, after writing this scan's own snapshot, which is
     what keeps the stored figure identical to the pre-Phase-13 ordering.
     """
-    rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
-                                   conn=conn)
+    all_rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
+                                       conn=conn)
+    # A scan that could not fetch some torrents' tracker lists filed their
+    # upload under `Unknown`, so every tracker it touched dips for that scan
+    # and returns on the next. A dip reads as a counter reset and is skipped,
+    # and the return counts in full: one such scan put 3.9 TB on a 94 GB day.
+    # Leaving the scan out of every per-tracker series diffs the scan before
+    # it against the scan after it, so the interval's real upload still counts.
+    # Its `_library` block doesn't depend on trackers, and is kept.
+    rows = [r for r in all_rows if not r['snapshot'].get('_trackers_unanswered')]
     if len(rows) < 2:
         return None
 
@@ -1508,22 +1516,23 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
     # Use the last snapshot of each day (all rows, not just delta pairs)
     daily_point_by_tracker = {}
     daily_library_by_date  = {}
-    for row in rows:
+    for row in all_rows:
         try:
             t = datetime.fromisoformat(row['taken_at'])
         except ValueError:
             continue
         date_str = t.strftime('%Y-%m-%d')
-        day_stats = {}
-        for host, snap_data in row['snapshot'].items():
-            if host == 'Unknown' or host.startswith('_'):
-                continue
-            day_stats[host] = {
-                'seeding_size':      snap_data.get('seeding_size', 0),
-                'orphaned_size':     snap_data.get('orphaned_size', 0),
-                'not_imported_size': snap_data.get('not_imported_size', 0),
-            }
-        daily_point_by_tracker[date_str] = day_stats
+        if not row['snapshot'].get('_trackers_unanswered'):
+            day_stats = {}
+            for host, snap_data in row['snapshot'].items():
+                if host == 'Unknown' or host.startswith('_'):
+                    continue
+                day_stats[host] = {
+                    'seeding_size':      snap_data.get('seeding_size', 0),
+                    'orphaned_size':     snap_data.get('orphaned_size', 0),
+                    'not_imported_size': snap_data.get('not_imported_size', 0),
+                }
+            daily_point_by_tracker[date_str] = day_stats
         # Library-wide block (hardlinked/duplicates) — absent in old snapshots
         lib = row['snapshot'].get('_library')
         if isinstance(lib, dict):
