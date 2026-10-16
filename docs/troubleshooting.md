@@ -386,22 +386,26 @@ torrent's files are the only copy you have.
 Other rows are unaffected — a title that *did* match still reports *Superseded*
 or *Import Pending* normally. One thing to know while a banner is showing:
 *Import Pending* can be over-reported, because a file that really did import
-looks unimported when the library list couldn't be read. Rescanning it is
+looks unimported when the library list couldn't be read. Retrying its import is
 harmless either way.
 
 ---
 
-## Trigger Rescan doesn't import anything
+## Retry import doesn't import anything
 
-Read the toast — it now carries Sonarr/Radarr's actual answer rather than a
-blanket "rescan triggered". Two answers are common:
+*Retry import* was called *Trigger Rescan* before. Read the toast: it carries
+Sonarr/Radarr's actual answer rather than a blanket "rescan triggered". Two
+answers are common:
 
 **"Not an upgrade for existing movie file"** or **"Not a quality revision
-upgrade"** — the arr already has a file for this title and won't replace it with
-something equal or worse. Rescanning again will never change that. If the
-release really is equivalent (a trump replacement, typically), use
-[Force import](workflows.md#rescan-vs-force-import) instead. If it's genuinely
-lower quality, the arr is right and there's nothing to fix.
+upgrade"**: the arr already has a file for this title and won't replace it with
+something equal or worse. Retrying will never change that. Triage no longer
+offers Retry import on a row it knows is the same quality or lower, so you'll
+mostly see this where it couldn't compare the two. If the release really is
+equivalent (a trump replacement, typically), use
+[Force import](workflows.md#retry-import-vs-force-import) instead. If it's lower
+and you want it in your library anyway, to seed it, use the row's
+[Force import over …](workflows.md#force-import-over-a-better-file).
 
 **"No matching title — the file could not be identified"** — the arr couldn't
 tell what the release is from its name. Import it by hand from the arr's own
@@ -410,7 +414,7 @@ Manual Import, or fix the naming.
 If nothing happens at all and no reason is given, auditorr couldn't reach the
 arr to ask; check **Test Connection** in Config.
 
-> A rescan imports by hardlink and leaves the torrent seeding. It will never
+> Retry import imports by hardlink and leaves the torrent seeding. It will never
 > move your file out from under the client.
 
 ---

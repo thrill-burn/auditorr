@@ -8,7 +8,7 @@ import {
   ArrErrorsWarning, ActionBar, Button, Spinner, SpinKeyframes, SectionHeading, QualityChip, Checkbox,
   ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning, Segmented, Disclosure,
 } from './shared'
-import { ReplaceModal, SeasonPackModal } from './SeasonPack'
+import { ReplaceModal, SeasonPackModal, ForceImportModal } from './SeasonPack'
 
 const VERDICTS = [
   {
@@ -29,7 +29,7 @@ const VERDICTS = [
   },
   {
     key: 'import_pending', label: 'Import Pending', color: 'var(--blue)',
-    desc: 'Managed by Sonarr/Radarr but missing from the library — the import likely failed or was skipped. Trigger a rescan to retry.',
+    desc: 'Managed by Sonarr/Radarr but missing from the library — the import likely failed or was skipped. Retry import asks them to try again.',
   },
   {
     key: 'library_unknown', label: 'Could Not Check', color: 'var(--yellow)',
@@ -54,7 +54,7 @@ const QUALITY_BUCKETS = [
   },
   {
     key: 'higher', label: 'Higher quality than library', color: 'var(--green)',
-    desc: 'Better than what your library holds. A rescan lets Sonarr/Radarr upgrade the library copy, unless you chose the lower quality on purpose (a smaller profile, or a pack you replaced the season with). Then this torrent is yours to keep seeding or remove.',
+    desc: 'Better than what your library holds. Retry import lets Sonarr/Radarr upgrade the library copy, unless you chose the lower quality on purpose (a smaller profile, or a pack you replaced the season with). Then this torrent is yours to keep seeding or remove.',
   },
   {
     key: 'same', label: 'Same quality as library', color: 'var(--blue)',
@@ -62,7 +62,7 @@ const QUALITY_BUCKETS = [
   },
   {
     key: 'lower', label: 'Lower quality than library', color: 'var(--yellow)',
-    desc: 'Your library already has better. Safe to delete once the torrent has earned its keep.',
+    desc: 'Your library already has better. Safe to delete once the torrent has earned its keep. Or seed this one instead: Force import puts it over the library file, and says first whether the better file stays on disk.',
   },
   {
     key: 'unknown', label: 'Quality comparison unavailable', color: 'var(--text-dim)',
@@ -195,13 +195,50 @@ function canDeepLink(client, item) {
   return client?.name === 'qui' && item.hash && item.instance_id != null
 }
 
-// Force import replaces the file the arr already holds, so it is only offered
-// where auditorr scored this release as the *same* quality as that file. A
-// downgrade stays blocked — Sonarr/Radarr are right to refuse those, and the
-// rescan action now reports their reason rather than a blank success.
+// The bulk Force import replaces the file the arr already holds, so it is only
+// offered where auditorr scored this release as the *same* quality as that
+// file. A downgrade is never forced in bulk: it goes one row at a time through
+// `canForceOver`'s dialog, which reads both files live first.
 function canForceImport(item) {
   const lib = item.library
   return !!lib && lib.quality_cmp === 'same' && !!lib.arr_id && !!lib.connection_id
+}
+
+// Retry import asks the arr to import under its own rules, which take a new
+// file or an upgrade and nothing else. So it's offered only where that can
+// succeed: not on a torrent that's already imported (a dead seed or
+// registration), not on a title no arr knows, and not over a library file at
+// least as good as this release. It used to be offered on every row, and on a
+// lower one it could only fail Radarr's "not an upgrade" check.
+function canRetryImport(item) {
+  if (['dead_seed', 'dead_registration', 'not_in_library'].includes(item.verdict)) return false
+  const lib = item.library
+  return !(lib?.quality_name && (item.is_duplicate || lib.quality_cmp === 'same' || lib.quality_cmp === 'lower'))
+}
+
+// T26 — one release forced over the library file it's lower than (or can't be
+// compared with), for a Radarr movie or a single Sonarr episode. The arrs
+// refuse these themselves, because they aren't upgrades. The dialog reads both
+// files live and says whether the better one stays on disk (another hardlink)
+// or is deleted (T24's unseeded case, behind its switch). A Sonarr pack
+// switches its season over instead (`canReplace`).
+function canForceOver(item) {
+  const lib = item.library
+  if (item.verdict !== 'superseded' || !item.hash || item.is_duplicate) return false
+  if (lib?.quality_cmp !== 'lower' && lib?.quality_cmp !== 'unknown') return false
+  if (lib.service === 'radarr') return lib.arr_id != null && !!lib.connection_id
+  return canReplace(item) && !isPack(item)
+}
+
+// What the force-import dialog posts: a movie, with the videos the audit
+// matched to it (a collection's other films are never imported over it), or
+// the episode's season.
+function forceParams(item) {
+  const lib = item.library
+  return lib.service === 'radarr'
+    ? { service: 'radarr', hash: item.hash, instance_id: item.instance_id,
+        connection_id: lib.connection_id, arr_id: lib.arr_id, files: lib.match_files || [] }
+    : replaceParams(item)
 }
 
 // The arr reports every scan command as completed even when its import
@@ -416,7 +453,7 @@ function SeasonSwitchRow({ season: s, lead, clientName, onReplace, onFind }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, onReplace, onFindPack, pending, rescanned, unconfirmed }) {
+function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, onReplace, onForceImport, onFindPack, pending, rescanned, unconfirmed }) {
   const p = item.parsed || {}
   const seTag = episodeTag(item)
   const filename = (item.rep_path || '').replace(/\\/g, '/').split('/').pop()
@@ -429,10 +466,11 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
     : ''
   const pick = item.season_pick
   const replaceTitle = !pick
-    ? `Import this ${isPack(item) ? 'pack' : 'release'} over the files Sonarr holds for these episodes, as hardlinks. You see each episode before anything happens.`
+    ? 'Import this pack over the files Sonarr holds for these episodes, as hardlinks. You see each episode before anything happens.'
     : pick === item.reg
       ? 'The recommended pack for this season: import it over the files Sonarr holds, as hardlinks. You see each episode before anything happens.'
       : 'Another pack of this season is the recommended one. The dialog shows both.'
+  const arrName = lib?.connection_name || (lib?.service === 'radarr' ? 'Radarr' : 'Sonarr')
 
   return (
     <div
@@ -487,7 +525,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               title="Handed to Sonarr/Radarr. The arr imports on its own schedule, and this row is built from the last audit — it clears once a scan has seen the result."
               style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0 }}
             >
-              rescan sent
+              import requested
             </span>
           )}
         </div>
@@ -513,21 +551,30 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           )}
           {/* Green unless another pack of the season is the pick. A season's
               only pack has no pick, and read grey beside its own chips. */}
-          {canReplace(item) && onReplace && (
+          {canReplace(item) && isPack(item) && onReplace && (
             <Button size="chip" variant={!pick || pick === item.reg ? undefined : 'subtle'}
               tone={!pick || pick === item.reg ? 'var(--green)' : undefined}
               onClick={e => { e.stopPropagation(); onReplace(item) }}
               title={replaceTitle}
             >
-              Replace with this {isPack(item) ? 'pack' : 'release'}…
+              Replace with this pack…
+            </Button>
+          )}
+          {/* T26 — the label names the file it goes over: the clarifier that
+              this is a downgrade the arr refused, not an import it missed. */}
+          {canForceOver(item) && onForceImport && (
+            <Button size="chip" tone="var(--green)"
+              onClick={e => { e.stopPropagation(); onForceImport(item) }}
+              title={`Import this release over the file ${arrName} holds, as a hardlink, so a torrent you seed supplies your library. ${arrName} refuses it on its own because it isn't an upgrade. The dialog says whether your current file stays on disk before anything happens.`}
+            >
+              Force import over {lib.quality_name || 'library file'}…
             </Button>
           )}
           {/* T2 — more than one instance holds this title. The row names them and
-              says which one a rescan or force import goes to, rather than
-              picking silently. */}
+              says which one an import goes to, rather than picking silently. */}
           {lib?.others?.length > 0 && (
             <span
-              title={`${lib.others.length + 1} ${lib.service} instances hold this title. Rescan and force import go to ${lib.connection_name || 'the best match'}${lib.quality_name ? ` (${lib.quality_name})` : ''}. ${lib.others.map(o => `${o.name || o.connection_id} ${o.quality_name ? `holds ${o.quality_name}` : 'holds it too'}`).join('; ')}.`}
+              title={`${lib.others.length + 1} ${lib.service} instances hold this title. Retry import and force import go to ${lib.connection_name || 'the best match'}${lib.quality_name ? ` (${lib.quality_name})` : ''}. ${lib.others.map(o => `${o.name || o.connection_id} ${o.quality_name ? `holds ${o.quality_name}` : 'holds it too'}`).join('; ')}.`}
               style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
             >
               on {lib.connection_name || lib.service} · also {lib.others.map(o => o.name || o.connection_id).join(', ')}
@@ -688,9 +735,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
   const [selected, setSelected] = useState(() => new Set())
-  const [busy,     setBusy]     = useState(null)   // 'rescan' | 'exclude' | 'delete' | null
+  const [busy,     setBusy]     = useState(null)   // 'rescan' | 'force' | 'exclude' | 'delete' | null
   // Items handed to Sonarr/Radarr this session. Deleting or excluding drops the
-  // row immediately, but a rescan cannot: the arr imports on its own schedule
+  // row immediately, but a retried import cannot: the arr imports on its own schedule
   // and tells us nothing, and the row is built from audit-time data anyway. So
   // the row stays and says so, rather than looking like the click did nothing.
   const [rescanned, setRescanned] = useState(() => new Set())
@@ -698,6 +745,8 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const [confirmExclude, setConfirmExclude] = useState(false)
   // T22 — the row whose Replace chip opened the dialog.
   const [replaceFor, setReplaceFor] = useState(null)
+  // T26 — the row whose Force import chip opened the dialog.
+  const [forceFor, setForceFor] = useState(null)
   // T25 — the season a dead seed's Find season pack chip opened.
   const [packFor, setPackFor] = useState(null)
   // Cross-seed groups resolved live when the delete modal opens, keyed by the
@@ -917,6 +966,10 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // the action is absent rather than disabled for the others, because the rows
   // already sit under a "lower than library" heading that says why.
   const forceImportItems = selectedItems.filter(i => i.verdict === 'superseded' && canForceImport(i))
+
+  // Absent, like the two above, when nothing selected is a row the arr's own
+  // import could take.
+  const retryItems = selectedItems.filter(canRetryImport)
 
   // Same shape as forceImportItems: the action applies to the rows it makes
   // sense for, and is absent when the selection holds none of them.
@@ -1143,7 +1196,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     setBusy('rescan')
     const sonarrPaths = []
     const radarrPaths = []
-    for (const item of selectedItems) {
+    for (const item of retryItems) {
       const svc = item.library?.service
       if (svc === 'radarr') radarrPaths.push(item.rep_path)
       else if (svc === 'sonarr') sonarrPaths.push(item.rep_path)
@@ -1152,7 +1205,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     // Snapshot the arr's file ids *before* the scan command, so the watcher
     // below has something to compare against. Only items matched to a library
     // entry can be watched; the rest fall back to clearing on the next audit.
-    const watchable = selectedItems.filter(
+    const watchable = retryItems.filter(
       i => i.library?.arr_id != null && i.library?.connection_id && i.library?.service)
     const baseline = watchable.length ? await snapshotFileIds(watchable) : null
     let ok = 0
@@ -1166,9 +1219,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
         // Mark the whole submitted batch rather than matching results back to
         // rows: the arr reports per *scan target*, which is the release folder
         // or the file itself, not the rep_path that was sent.
-        const keys = selectedItems.map(itemKey)
+        const keys = retryItems.map(itemKey)
         setRescanned(prev => new Set([...prev, ...keys]))
-        toast('Rescan sent to Sonarr/Radarr — watching for the import', 'success')
+        toast('Import requested from Sonarr/Radarr — watching for it to land', 'success')
         if (baseline) watchForImport(watchable, baseline)
       } else if (rejected.length === results.length) {
         toast(`Nothing will import — ${rejectionSummary(rejected)}`, 'error')
@@ -1226,6 +1279,22 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       toast(`Replaced ${replaced.join(', ')}. ${pending.join(', ')} not confirmed yet — check Activity in Sonarr.${skipped}`, 'warning')
     } else {
       toast(`Sonarr accepted the import, but ${pending.join(', ')} hasn't changed yet — check Activity → Queue there.${skipped}`, 'warning')
+    }
+  }
+
+  // T26 — the same answer for one release forced over one file. No season is
+  // switched: a single episode says nothing about the rest of its season.
+  const handleForced = (resp, item) => {
+    setForceFor(null)
+    const arr = item.library?.connection_name || (item.library?.service === 'radarr' ? 'Radarr' : 'Sonarr')
+    const { replaced = [], pending = [] } = resp
+    if (replaced.length) {
+      toast(`Force imported ${packName(item)} into ${replaced.join(', ')}. The next scan lists the torrent still holding the old file.`, 'success')
+      DISMISSED.add(itemKey(item))
+      setReport(r => ({ ...r, items: (r?.items || []).filter(i => itemKey(i) !== itemKey(item)) }))
+      setSelected(prev => new Set([...prev].filter(k => k !== itemKey(item))))
+    } else {
+      toast(`${arr} accepted the import, but its file for ${pending.join(', ')} hasn't changed yet — check Activity → Queue there.`, 'warning')
     }
   }
 
@@ -1416,6 +1485,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     onOpenClient={openInClient}
                     onNavigate={onNavigate}
                     onReplace={setReplaceFor}
+                    onForceImport={setForceFor}
                     onFindPack={setPackFor}
                     pending={!!verify?.running && !!item.hash && !item.verified}
                     rescanned={rescanned.has(itemKey(item))}
@@ -1462,13 +1532,16 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
 
           {selectedItems.length > 0 && (
             <ActionBar summary={`${selectedItems.length} torrent${selectedItems.length !== 1 ? 's' : ''} selected · ${selectedFiles} file${selectedFiles !== 1 ? 's' : ''} · ${formatBytes(selectedSize)}`}>
-              <Button onClick={handleRescan} disabled={busy != null} title="Tell Sonarr/Radarr to rescan these folders and retry the import">
-                {busy === 'rescan' ? 'Rescanning…' : 'Trigger Rescan'}
-              </Button>
+              {retryItems.length > 0 && (
+                <Button onClick={handleRescan} disabled={busy != null}
+                  title="Ask Sonarr/Radarr to scan these and import them. They decide, and they take only a new file or an upgrade, so anything refused comes back with their reason.">
+                  {busy === 'rescan' ? 'Asking…' : `Retry import (${retryItems.length})`}
+                </Button>
+              )}
               {forceImportItems.length > 0 && (
                 <Button onClick={handleForceImport} disabled={busy != null}
-                  title={`Replace the library file with this release via Sonarr/Radarr's "Import Anyway" — the only way past the upgrade check a same-quality swap can never pass`}>
-                  {busy === 'force' ? 'Importing…' : `Force import (${forceImportItems.length})`}
+                  title={`Replace the library file with this release, which is the same quality, via Sonarr/Radarr's "Import Anyway". They refuse a same-quality swap on their own, because it isn't an upgrade.`}>
+                  {busy === 'force' ? 'Importing…' : `Force import · same quality (${forceImportItems.length})`}
                 </Button>
               )}
               {excludableItems.length > 0 && (
@@ -1537,6 +1610,18 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
 
           {packFor && (
             <SeasonPackModal target={packFor} onCancel={() => setPackFor(null)} />
+          )}
+
+          {forceFor && (
+            <ForceImportModal
+              title={forceFor.library?.service === 'radarr'
+                ? `${forceFor.library.title || forceFor.parsed?.title}${forceFor.library.year ? ` (${forceFor.library.year})` : ''}`
+                : `${forceFor.library?.title || forceFor.parsed?.title}${episodeTag(forceFor)}`}
+              params={forceParams(forceFor)}
+              clientName={client?.name || 'your client'}
+              onCancel={() => setForceFor(null)}
+              onDone={resp => handleForced(resp, forceFor)}
+            />
           )}
 
           {confirmOpen && (

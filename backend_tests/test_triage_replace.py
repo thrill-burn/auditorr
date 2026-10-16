@@ -18,6 +18,11 @@ the way qui does, which is what catches it.
 
 T24. A lower release over a library file nothing else links is `unseeded`:
 replaced only when the confirm says `include_unseeded`.
+
+T26. The same plan and replace for a Radarr movie. Radarr refuses a lower
+release as "not an upgrade", and Triage's only way past that was Sonarr's. The
+box's case: Buddy (2026), WEBDL-2160p in the library and hardlinked to its own
+torrent, a 1080p WEB-DL seeding on three trackers in the client.
 """
 import os
 from unittest.mock import patch
@@ -407,3 +412,226 @@ class TestReplace:
         status, body, _, imp, _ = self._replace(box, [], [])
         assert (status, body['code']) == (400, 'selection_required')
         imp.assert_not_called()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# T26 — a Radarr movie, forced over its library file
+# ═════════════════════════════════════════════════════════════════════════════
+
+MOVIE_HASH = 'C' * 40
+MOVIES = {'id': 'movies', 'service': 'radarr', 'name': 'Radarr', 'base_url': 'http://radarr:7878',
+          'api_key': 'k', 'remote_path': '', 'media_path': '', 'local_media_path': ''}
+RELEASE = 'Buddy.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-CHORTLE'
+
+
+@pytest.fixture
+def movie_box(tmp_path):
+    """Buddy (2026) as the box holds it: the library's WEBDL-2160p file is a
+    hardlink of its own torrent's, and the client seeds a 1080p WEB-DL."""
+    torrents, media = tmp_path / 'torrents', tmp_path / 'media'
+    release = _touch(str(torrents / 'radarr' / f'{RELEASE}.mkv'), b'x' * 10)
+    lib = str(media / 'movies' / 'Buddy (2026)' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv')
+    _touch(lib)
+    os.link(lib, str(torrents / 'radarr' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
+    return {
+        'cfg': {'LOCAL_PATH': str(torrents), 'REMOTE_PATH': ''},
+        'listing': [release],
+        'row': {'reg': f'1:{MOVIE_HASH}', 'hash': MOVIE_HASH, 'name': RELEASE,
+                'progress': 1.0, 'completion_on': 1, 'instance_id': 1,
+                'save_path': str(torrents / 'radarr'), 'content_path': release},
+        'report': {'instances_failed': []},
+        'index': [{'connection_id': 'movies', 'service': 'radarr', 'arr_id': 587, 'file_id': 900,
+                   'path': lib, 'file_quality_name': 'WEBDL-2160p', 'title': 'Buddy', 'year': 2026}],
+        'file_id': 900, 'release': release, 'lib': lib, 'torrents': torrents,
+    }
+
+
+def _movie_post(url, box, body=None, reads=None, **over):
+    from contextlib import ExitStack
+    s = {**box, **over}
+    reads = reads if reads is not None else [s['file_id']]
+    with ExitStack() as stack:
+        for p in (
+            patch.object(app, 'db_load_config', return_value=s['cfg']),
+            patch.object(app, 'normalize_arr_connections',
+                         side_effect=lambda cfg, **kw: [MOVIES] if kw.get('service') == 'radarr' else [CONN]),
+            patch.object(app.sources, 'list_torrents_detailed',
+                         return_value=([s['row']] if s['row'] else [], s['report'])),
+            patch.object(app.sources, 'fetch_torrent_file_paths',
+                         side_effect=_listing_like_qui(s['listing'], box['row'])),
+            patch.object(app, 'fetch_arr_media_index_result', return_value=(s['index'], s.get('errors', []))),
+            # Radarr's queue only: Sonarr's holds nothing of a movie.
+            patch.object(app, 'queue_records_for_item',
+                         side_effect=lambda cfg, service, *a, **k: s.get('queue', []) if service == 'radarr' else []),
+        ):
+            stack.enter_context(p)
+        reader = stack.enter_context(patch.object(app, 'read_arr_file_id', side_effect=reads))
+        imp = stack.enter_context(patch.object(app, 'force_manual_import_by_id', return_value={}))
+        nudge = stack.enter_context(patch.object(app, 'nudge_watchdog'))
+        stack.enter_context(patch.object(app, '_REPLACE_WAIT', 0))
+        # As the page posts it: `files` is the row's `library.match_files`.
+        payload = {'service': 'radarr', 'hash': MOVIE_HASH, 'instance_id': 1,
+                   'connection_id': 'movies', 'arr_id': 587, 'files': [f'{RELEASE}.mkv'], **(body or {})}
+        resp = app.app.test_client().post(url, json=payload)
+        return resp.status_code, resp.get_json(), reader, imp, nudge
+
+
+def _movie_plan(box, body=None, **over):
+    status, plan, *_ = _movie_post('/api/workflows/triage/replace_plan', box, body=body, **over)
+    return status, plan
+
+
+def _movie_lib(arr_id, title, year, name):
+    return {'connection_id': 'movies', 'connection_name': 'Radarr', 'service': 'radarr', 'title': title,
+            'year': year, 'arr_id': arr_id, 'file_id': arr_id * 10, 'path': f'/media/movies/{title} ({year})/{name}',
+            'relative_path': name, 'title_slug': title.lower(), 'file_quality_name': 'Bluray-2160p', 'file_hdr': ''}
+
+
+class TestMovieMatchFiles:
+
+    def test_a_movie_row_names_the_videos_matched_to_its_movie(self):
+        """A collection's films match movies of their own. Only the row's own
+        movie's files may be forced over it."""
+        folder = 'radarr/Back.to.the.Future.Trilogy.1080p.BluRay-GRP'
+        records = [_rec(hash='COL', size=200, path=f'{folder}/Back.to.the.Future.1985.1080p.BluRay-GRP.mkv'),
+                   _rec(hash='COL', size=300, path=f'{folder}/Back.to.the.Future.Part.II.1989.1080p.BluRay-GRP.mkv')]
+        media = [_movie_lib(1, 'Back to the Future', 1985, 'Back.to.the.Future.1985.2160p.mkv'),
+                 _movie_lib(2, 'Back to the Future Part II', 1989, 'Back.to.the.Future.Part.II.1989.2160p.mkv')]
+        lib = _triage(records, media)[0]['library']
+        # One film's file, and the one whose year is the matched movie's.
+        [name] = lib['match_files']
+        assert str(lib['year']) in name
+
+    def test_a_sonarr_row_carries_no_match_files(self):
+        records = [_rec(hash='EP', path='tv/Show.S01E02.1080p.WEB-DL-GRP.mkv')]
+        assert 'match_files' not in _triage(records, [_lib(2, 'WEBDL-1080p', '1080p')])[0]['library']
+
+
+class TestMoviePlan:
+
+    def test_a_lower_release_over_a_linked_library_file_is_a_lossless_replace(self, movie_box):
+        """The box's Buddy: the 2160p bytes stay on disk in AOC's torrent."""
+        status, plan = _movie_plan(movie_box)
+        assert status == 200
+        assert (plan['service'], plan['title'], plan['release']) == ('radarr', 'Buddy (2026)', RELEASE)
+        [entry] = plan['entries']
+        assert (entry['action'], entry['cmp'], entry['label']) == ('replace', 'lower', 'Buddy (2026)')
+        assert (entry['replaces']['linked'], entry['replaces']['quality'], entry['replaces']['group']) \
+            == (True, 'WEBDL-2160p', 'AOC')
+        assert plan['downgrades'] == 1
+
+    def test_a_lower_release_over_the_only_copy_is_unseeded(self, movie_box):
+        os.remove(str(movie_box['torrents'] / 'radarr' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
+        status, plan = _movie_plan(movie_box)
+        assert [e['action'] for e in plan['entries']] == ['unseeded']
+        assert plan['downgrades'] == 0
+
+    def _folder(self, movie_box):
+        folder = movie_box['torrents'] / 'radarr' / RELEASE
+        return folder, {**movie_box['row'], 'content_path': str(folder)}
+
+    def test_the_matched_video_is_the_movie_and_the_rest_are_extras(self, movie_box):
+        folder, row = self._folder(movie_box)
+        main = _touch(str(folder / f'{RELEASE}.mkv'), b'x' * 50)
+        extra = _touch(str(folder / 'Featurettes' / 'Behind.the.Scenes.mkv'), b'x' * 5)
+        sample = _touch(str(folder / 'Sample' / f'{RELEASE}.sample.mkv'), b'x' * 3)
+        status, plan = _movie_plan(movie_box, listing=[main, extra, sample], row=row)
+        acts = {_base(e['path']): (e['action'], e.get('reason')) for e in plan['entries']}
+        assert acts == {f'{RELEASE}.mkv': ('replace', None), 'Behind.the.Scenes.mkv': ('skip', 'extra')}
+        assert _base(plan['folder']) == RELEASE
+
+    def test_a_collections_larger_film_is_never_forced_over_the_matched_one(self, movie_box):
+        """The hazard: 'the largest video' of a collection can be another film,
+        and the import would file it under this movie's id."""
+        folder, row = self._folder(movie_box)
+        mine = _touch(str(folder / f'{RELEASE}.mkv'), b'x' * 20)
+        sequel = _touch(str(folder / 'Buddy.2.2028.1080p.AMZN.WEB-DL-CHORTLE.mkv'), b'x' * 90)
+        status, plan = _movie_plan(movie_box, listing=[mine, sequel], row=row)
+        acts = {_base(e['path']): (e['action'], e.get('reason')) for e in plan['entries']}
+        assert acts == {f'{RELEASE}.mkv': ('replace', None), _base(sequel): ('skip', 'extra')}
+
+    def test_several_videos_and_no_matched_files_plan_nothing(self, movie_box):
+        folder, row = self._folder(movie_box)
+        videos = [_touch(str(folder / f'{RELEASE}.mkv'), b'x' * 20),
+                  _touch(str(folder / 'Buddy.2.2028.1080p.AMZN.WEB-DL-CHORTLE.mkv'), b'x' * 90)]
+        status, plan = _movie_plan(movie_box, body={'files': []}, listing=videos, row=row)
+        assert {(e['action'], e.get('reason')) for e in plan['entries']} == {('skip', 'unchecked')}
+
+    def test_matched_files_the_torrent_does_not_hold_refuse(self, movie_box):
+        status, body = _movie_plan(movie_box, body={'files': ['Some.Other.Movie.mkv']})
+        assert (status, body['code']) == (409, 'not_matched')
+
+    def test_several_matched_videos_with_one_unstatable_plan_nothing(self, movie_box):
+        """The largest is unknown, so the movie is."""
+        missing = str(movie_box['torrents'] / 'radarr' / 'gone' / f'{RELEASE}.mkv')
+        status, plan = _movie_plan(movie_box, listing=[movie_box['release'], missing])
+        assert {(e['action'], e.get('reason')) for e in plan['entries']} == {('skip', 'unchecked')}
+
+    def test_a_file_id_the_index_has_not_seen_yet_is_unchecked(self, movie_box):
+        status, plan = _movie_plan(movie_box, file_id=901)
+        assert [(e['action'], e.get('reason')) for e in plan['entries']] == [('skip', 'unchecked')]
+
+    def test_a_movie_with_no_file_is_an_add(self, movie_box):
+        status, plan = _movie_plan(movie_box, file_id=0)
+        assert [e['action'] for e in plan['entries']] == ['add']
+
+    @pytest.mark.parametrize('over, status, code', [
+        ({'reads': OSError('timed out')}, 502, 'radarr_unavailable'),
+        ({'errors': [{'connection_id': 'movies'}]}, 502, 'radarr_unavailable'),
+        ({'row': None}, 409, 'not_in_client'),
+        ({'listing': None}, 502, 'listing_unavailable'),
+    ])
+    def test_what_could_not_be_asked_refuses(self, movie_box, over, status, code):
+        got_status, body = _movie_plan(movie_box, **over)
+        assert (got_status, body['code']) == (status, code)
+
+    def test_a_torrent_with_no_video_refuses(self, movie_box):
+        nfo = _touch(str(movie_box['torrents'] / 'radarr' / f'{RELEASE}.nfo'))
+        status, body = _movie_plan(movie_box, listing=[nfo])
+        assert (status, body['code']) == (409, 'no_video')
+
+
+class TestMovieReplace:
+
+    def _replace(self, box, reads, extra=None, **over):
+        return _movie_post('/api/workflows/triage/replace', box, reads=reads,
+                           body={'paths': [box['release']], **(extra or {})}, **over)
+
+    def test_it_imports_the_release_as_a_hardlink_and_confirms_by_the_movies_file_id(self, movie_box):
+        # The plan's read, the baseline, then the file id moving.
+        status, body, reader, imp, nudge = self._replace(movie_box, [900, 900, 901])
+        assert status == 200
+        assert (body['replaced'], body['pending'], body['dropped']) == (['Buddy (2026)'], [], [])
+        args, kw = imp.call_args
+        assert args[1:4] == ('radarr', 'movies', 587)
+        assert kw['import_mode'] == 'Copy'
+        assert kw['media_folder_fallback'] is False
+        assert [_base(p) for p in kw['only_paths']] == [f'{RELEASE}.mkv']
+        # A single-file torrent is looked up as the file, never its category folder.
+        assert _base(kw['download_folder']) == f'{RELEASE}.mkv'
+        assert (kw['only_episode_ids'], kw['whole_episode_sets']) == (None, None)
+        assert all(c.args[1] == 'radarr' for c in reader.call_args_list)
+        nudge.assert_called_once()
+
+    def test_an_unseeded_movie_needs_the_switch(self, movie_box):
+        os.remove(str(movie_box['torrents'] / 'radarr' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
+        status, body, _, imp, _ = self._replace(movie_box, [900])
+        assert (status, body['code'], body['dropped']) == (409, 'nothing_to_replace', ['Buddy (2026)'])
+        imp.assert_not_called()
+        status, body, _, imp, _ = self._replace(movie_box, [900, 900, 901], extra={'include_unseeded': True})
+        assert (status, body['replaced']) == (200, ['Buddy (2026)'])
+
+    def test_a_file_id_that_did_not_move_is_pending(self, movie_box):
+        status, body, _, _, nudge = self._replace(movie_box, [900, 900, 900])
+        assert (body['replaced'], body['pending']) == ([], ['Buddy (2026)'])
+        nudge.assert_not_called()
+
+    def test_a_baseline_that_cannot_be_read_sends_nothing(self, movie_box):
+        status, body, _, imp, _ = self._replace(movie_box, [900, OSError('timed out')])
+        assert (status, body['code']) == (502, 'radarr_unavailable')
+        imp.assert_not_called()
+
+    def test_a_download_radarr_is_tracking_is_imported_against_it(self, movie_box):
+        queue = [{'downloadId': MOVIE_HASH.upper(), 'movieId': 587}]
+        _, _, _, imp, _ = self._replace(movie_box, [900, 900, 901], queue=queue)
+        assert imp.call_args.kwargs['download_id'] == MOVIE_HASH.upper()

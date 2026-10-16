@@ -2382,20 +2382,20 @@ def workflows_triage_replace_plan():
 _REPLACE_WAIT = 30
 
 
-def _tracked_download_id(cfg, connection_id, arr_id, torrent_hash):
-    """Sonarr's own download id for this torrent when its queue holds it, else None (T25).
+def _tracked_download_id(cfg, service, connection_id, arr_id, torrent_hash):
+    """The arr's own download id for this torrent when its queue holds it, else None (T25).
 
-    A pack grabbed through Sonarr and not imported sits in its queue as
-    `importBlocked`, and an import that doesn't name the download leaves it
-    there for good. Named, Sonarr closes the tracked download once the files
-    land. Only a download the queue actually lists is named, because Sonarr's
-    ManualImport looks a named download up and expects to find it. A queue that
-    can't be read names nothing: the import works either way, and only the
-    leftover queue entry is at stake.
+    A pack grabbed through Sonarr (or a movie through Radarr) and not imported
+    sits in its queue as `importBlocked`, and an import that doesn't name the
+    download leaves it there for good. Named, the arr closes the tracked
+    download once the files land. Only a download the queue actually lists is
+    named, because ManualImport looks a named download up and expects to find
+    it. A queue that can't be read names nothing: the import works either way,
+    and only the leftover queue entry is at stake.
     """
     if not torrent_hash:
         return None
-    records = queue_records_for_item(cfg, 'sonarr', connection_id, arr_id) or []
+    records = queue_records_for_item(cfg, service, connection_id, arr_id) or []
     want = str(torrent_hash).upper()
     return next((r['downloadId'] for r in records
                  if str(r.get('downloadId') or '').upper() == want), None)
@@ -2414,13 +2414,17 @@ def workflows_triage_replace():
     (T24) is importable only when the confirm also says `include_unseeded`, the
     dialog's switch: posting its path alone is not consent to delete the file.
 
-    The import is Sonarr's ManualImport with `replaceExistingFiles`, in Copy mode
+    The import is ManualImport with `replaceExistingFiles`, in Copy mode
     (HardLinkOrCopy: Move would pull the file out from under the seed), scoped by
-    path, by episode id and by each replaced file's whole episode set
-    (amendment 1). It's confirmed by those episodes' own file ids, read with the
-    raising reader, so a baseline that can't be read refuses before anything is
-    sent (S07). No client call changes anything: the torrents stay as they are,
-    and the next scan lists whatever no longer supplies the library.
+    path and, on Sonarr, by episode id and by each replaced file's whole episode
+    set (amendment 1). It's confirmed by the arr's own file ids (the episodes',
+    or the movie's), read with the raising reader, so a baseline that can't be
+    read refuses before anything is sent (S07). No client call changes anything:
+    the torrents stay as they are, and the next scan lists whatever no longer
+    supplies the library.
+
+    A Radarr plan (T26, `service: 'radarr'`) takes the same route: one release
+    forced over the movie's one file, under the same rules.
     """
     cfg = db_load_config()
     data = request.json or {}
@@ -2429,27 +2433,28 @@ def workflows_triage_replace():
         return refusal
     posted = {str(p) for p in (data.get('paths') or [])}
     if not posted:
-        return _triage_refusal('selection_required', 'No episodes were confirmed.', 400)
+        return _triage_refusal('selection_required', 'Nothing was confirmed.', 400)
     importable = ('replace', 'add', 'unseeded') if data.get('include_unseeded') is True else ('replace', 'add')
     doable = [e for e in plan['entries'] if e['action'] in importable and e['path'] in posted]
     dropped = [e['label'] for e in plan['entries']
                if e['path'] in posted and e['action'] not in importable]
     if not doable:
         return _triage_refusal('nothing_to_replace',
-                               'Nothing you confirmed can still be replaced. Nothing was sent to Sonarr.',
+                               f"Nothing you confirmed can still be replaced. Nothing was sent to {plan['connection_name']}.",
                                409, dropped=dropped)
 
-    conn_id, arr_id = plan['connection_id'], plan['arr_id']
-    episode_ids = sorted({i for e in doable for i in e['episode_ids']})
+    service, conn_id, arr_id = plan['service'], plan['connection_id'], plan['arr_id']
+    # Sonarr's file ids are read per episode; a movie has one, Radarr's movieFileId.
+    episode_ids = sorted({i for e in doable for i in e['episode_ids']}) if service == 'sonarr' else None
     try:
-        before = read_arr_file_id(cfg, 'sonarr', conn_id, arr_id, episode_ids=episode_ids)
+        before = read_arr_file_id(cfg, service, conn_id, arr_id, episode_ids=episode_ids)
     except Exception as e:
         log.warning("Triage replace: could not read the current files on %s: %s", conn_id, e)
-        return _triage_refusal('sonarr_unavailable',
+        return _triage_refusal(f'{service}_unavailable',
                                f"{plan['connection_name']} did not report its current files, so the replace "
                                "could not be confirmed. Nothing was sent.", 502)
 
-    conn = next(c for c in normalize_arr_connections(cfg, service='sonarr') if c['id'] == conn_id)
+    conn = next(c for c in normalize_arr_connections(cfg, service=service) if c['id'] == conn_id)
     remote, local = cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', '')
     arr_remote = (conn.get('remote_path') or '').strip()
     targets = [arr_import_target(sources.remap_path(e['path'], remote, local), local, arr_remote)
@@ -2457,11 +2462,12 @@ def workflows_triage_replace():
     lookup = (arr_import_target(sources.remap_path(plan['folder'], remote, local), local, arr_remote)[1]
               if plan['folder'] else targets[0][0])
     try:
-        force_manual_import_by_id(cfg, 'sonarr', conn_id, arr_id,
-                                  download_id=_tracked_download_id(cfg, conn_id, arr_id, plan['hash']),
+        force_manual_import_by_id(cfg, service, conn_id, arr_id,
+                                  download_id=_tracked_download_id(cfg, service, conn_id, arr_id, plan['hash']),
                                   download_folder=lookup, only_paths=[t[1] for t in targets],
                                   import_mode='Copy', only_episode_ids=episode_ids,
-                                  whole_episode_sets=[e['replaces']['episode_ids'] for e in doable if e['replaces']],
+                                  whole_episode_sets=([e['replaces']['episode_ids'] for e in doable if e['replaces']]
+                                                      if service == 'sonarr' else None),
                                   media_folder_fallback=False)
     except ValueError as e:
         return _triage_refusal('not_importable', str(e), 409, dropped=dropped)
@@ -2469,20 +2475,26 @@ def workflows_triage_replace():
         log.exception("Triage replace: the import failed on %s", conn_id)
         return _triage_refusal('import_failed', str(e), 502, dropped=dropped)
 
-    old = {ep: fid for ep, fid in before}
-    want, changed = set(episode_ids), set()
+    def _landed(reading):
+        """The paths of `doable` whose library file is a new one in this reading."""
+        if service == 'radarr':
+            return {e['path'] for e in doable} if reading and reading != before else set()
+        old, new = dict(before), dict(reading)
+        changed = {ep for ep in episode_ids if new.get(ep) and new.get(ep) != old.get(ep)}
+        return {e['path'] for e in doable if set(e['episode_ids']) <= changed}
+
+    done = set()
     deadline = time.monotonic() + _REPLACE_WAIT
     while True:
         try:
-            new = {ep: fid for ep, fid in read_arr_file_id(cfg, 'sonarr', conn_id, arr_id, episode_ids=episode_ids)}
-            changed = {ep for ep in want if new.get(ep) and new.get(ep) != old.get(ep)}
+            done = _landed(read_arr_file_id(cfg, service, conn_id, arr_id, episode_ids=episode_ids))
         except Exception:
             pass
-        if changed == want or time.monotonic() >= deadline:
+        if len(done) == len(doable) or time.monotonic() >= deadline:
             break
         time.sleep(2)
-    replaced = [e['label'] for e in doable if set(e['episode_ids']) <= changed]
-    pending = [e['label'] for e in doable if not set(e['episode_ids']) <= changed]
+    replaced = [e['label'] for e in doable if e['path'] in done]
+    pending = [e['label'] for e in doable if e['path'] not in done]
     log.info("Triage replace: %d of %d file(s) replaced on %s", len(replaced), len(doable), conn_id)
     if replaced:
         nudge_watchdog('library files replaced')
@@ -4213,8 +4225,199 @@ def _replace_label(numbers):
     return first if len(numbers) == 1 else f'{first}–E{numbers[-1]:02d}'
 
 
+def _replace_torrent(cfg, data):
+    """The torrent a replace imports from, read live: `((row, reg, listing), None)` or `(None, refusal)`.
+
+    **The torrent is the live listing's row**, and the row is what the file
+    listing is asked for (T23): qui roots each file at the save path it's
+    handed, and a bare `{hash, instance_id}` rooted every file at `/`. A hash
+    posted with no instance (the season-pack watch knows only the download's
+    hash) resolves to its one registration, or refuses as ambiguous (S05).
+    Refuses for the torrent gone from the client or an instance that didn't
+    answer, a torrent not known to be complete (hardlinking a file still being
+    written puts a partial file in the library, DEDUPE F6's hazard), and a file
+    list that didn't load.
+    """
+    h, iid = str(data.get('hash') or '').strip(), data.get('instance_id')
+    try:
+        rows, report = sources.list_torrents_detailed(cfg)
+    except Exception as e:
+        log.warning("Triage replace: torrent listing failed: %s", e)
+        return None, _triage_refusal('client_unavailable', 'The torrent client did not answer.', 502)
+    regs, ambiguous, _absent = _resolve_registrations(rows, [sources.registration_key(iid, h)])
+    if ambiguous:
+        return None, _ambiguous_registration_refusal(ambiguous)
+    row = next((r for r in rows if regs and _reg(r) == regs[0]), None)
+    if row is None:
+        if report.get('instances_failed'):
+            return None, _triage_refusal('client_unavailable',
+                                         'A torrent client instance did not answer, so auditorr cannot check this torrent.', 502)
+        return None, _triage_refusal('not_in_client', 'This torrent is no longer in your client.', 409)
+    reg = regs[0]
+    if sources.torrent_complete(row.get('progress'), row.get('completion_on')) is not True:
+        return None, _triage_refusal('incomplete',
+                                     'This torrent is not known to be complete, and a file still being written must not go into the library.', 409)
+    listing = sources.fetch_torrent_file_paths(cfg, [row]).get(reg)
+    if not listing:
+        return None, _triage_refusal('listing_unavailable', "The client didn't return this torrent's file list.", 502)
+    return (row, reg, listing), None
+
+
+def _replace_lookup_folder(row, listing):
+    """Where the arr looks the files up: the torrent's own folder, or '' for none.
+
+    A multi-file torrent's content path is its own folder unless it was added
+    without one (then it's the save path, a category folder, whose listing
+    identifies nothing). `_scan_target`'s rule, the second segment below
+    LOCAL_PATH, assumes a category folder, so on a flat layout it names one
+    episode's file and the rest of the pack is never listed.
+    """
+    content = row.get('content_path') or ''
+    return content if (len(listing) > 1 and content
+                       and _norm_abs(content) != _norm_abs(row.get('save_path') or '')) else ''
+
+
+def _judge_replace(entry, lib, st_pack, parsed, file_id, episode_ids):
+    """Settle one plan entry against the library file it would go over.
+
+    Sets `action`, and `replaces` and `cmp` once both files were stat'ed: see
+    `_triage_replace_plan` for what each action means. An unknown (no index row,
+    a file that can't be stat'ed) is `skip · unchecked`, never lossless.
+    """
+    try:
+        st_lib = os.stat(lib['path']) if lib else None
+    except (OSError, ValueError):
+        st_lib = None
+    if lib is None or st_pack is None or st_lib is None or not st_lib.st_ino:
+        entry.update(action='skip', reason='unchecked')
+        return
+    cmp = compare_release_quality(parsed, lib.get('file_quality_name') or '')
+    lib_file = posixpath.basename(str(lib.get('path') or '').replace('\\', '/'))
+    entry['replaces'] = {
+        'file_id':  file_id,
+        'file':     lib_file,
+        # Who still holds a linked file's other copy, as the dialog names it.
+        'group':    _display_group(lib_file),
+        'quality':  lib.get('file_quality_name') or '',
+        'linked':   st_lib.st_nlink > 1,
+        'episode_ids': episode_ids,
+    }
+    entry['cmp'] = cmp
+    if (st_lib.st_dev, st_lib.st_ino) == (st_pack.st_dev, st_pack.st_ino):
+        entry.update(action='already')
+    elif cmp in ('higher', 'same') or st_lib.st_nlink > 1:
+        entry.update(action='replace')
+    else:
+        entry.update(action='unseeded')
+
+
+def _plan_summary(entries):
+    """`counts` per action, and `downgrades`: lower-or-unknown releases replacing a
+    library file, lossless only because that file has another link."""
+    counts = {}
+    for e in entries:
+        counts[e['action']] = counts.get(e['action'], 0) + 1
+    return {'counts': counts,
+            'downgrades': sum(1 for e in entries if e['action'] == 'replace' and e.get('cmp') not in ('higher', 'same'))}
+
+
+def _movie_replace_plan(cfg, data):
+    """What force-importing one release over a Radarr movie's file would do, read live (T26).
+
+    T22's plan for a movie, under T22's and T24's rules. Radarr holds one file
+    per movie, so one entry imports: the largest of the videos Triage matched to
+    this movie, which the page posts by file name as `files` (the row's
+    `library.match_files`). Every other video is `skip · extra`: a featurette,
+    or a collection's other films, which match movies of their own and must
+    never go over this one. Samples are left out, as for a pack. Without
+    `files`, only a torrent with one video is planned. Where the largest
+    candidate is unknown (one couldn't be stat'ed), they're all `unchecked`.
+
+    The movie's file id is read from Radarr now (the raising reader: could not
+    ask refuses), and its path and quality from the media index row holding
+    that id. An index older than Radarr's last import has no such row, which is
+    `unchecked`, as a stat that fails is.
+    """
+    conn_id = str(data.get('connection_id') or '')
+    try:
+        arr_id = int(data.get('arr_id'))
+    except (TypeError, ValueError):
+        arr_id = None
+    if not str(data.get('hash') or '').strip() or not conn_id or arr_id is None:
+        return None, _triage_refusal('bad_request', 'A force import needs the torrent and the Radarr movie it goes into.', 400)
+    conn = next((c for c in normalize_arr_connections(cfg, service='radarr') if c['id'] == conn_id), None)
+    if conn is None:
+        return None, _triage_refusal('unknown_connection', 'That Radarr connection is no longer configured.', 404)
+
+    got, refusal = _replace_torrent(cfg, data)
+    if refusal:
+        return None, refusal
+    row, reg, listing = got
+
+    try:
+        file_id = read_arr_file_id(cfg, 'radarr', conn_id, arr_id)
+        index, errors = fetch_arr_media_index_result(cfg)
+    except Exception as e:
+        log.warning("Triage force import: %s did not answer: %s", conn_id, e)
+        return None, _triage_refusal('radarr_unavailable', f"{conn['name']} did not answer.", 502)
+    if any(e.get('connection_id') == conn_id for e in errors):
+        return None, _triage_refusal('radarr_unavailable', f"{conn['name']} did not answer in full.", 502)
+    held = [r for r in index if r.get('connection_id') == conn_id and r.get('service') == 'radarr'
+            and r.get('arr_id') == arr_id]
+    lib = next((r for r in held if file_id and r.get('file_id') == file_id), None)
+
+    videos = [p for p in listing
+              if posixpath.splitext(p)[1].lower() in _VIDEO_EXTS and not _is_sample_path(p)]
+    if not videos:
+        return None, _triage_refusal('no_video', 'This torrent holds no video to import.', 409)
+    files = {str(f) for f in (data.get('files') or [])}
+    candidates = [p for p in videos if posixpath.basename(p.replace('\\', '/')) in files] if files else videos
+    if not candidates:
+        return None, _triage_refusal('not_matched',
+                                     "None of this torrent's videos is the one Triage matched to this movie.", 409)
+    stats = _trump_stat_paths(cfg, candidates)
+    known = len(candidates) == 1 or (files and all(stats.get(p) for p in candidates))
+    main = max(candidates, key=lambda p: (stats[p].st_size if stats.get(p) else -1, p)) if known else None
+
+    release = row.get('name') or ''
+    named = next((r for r in held if r.get('title')), None)
+    parsed_release = parse_release_info_for_path(release) if release else {}
+    title = (named or {}).get('title') or parsed_release.get('title') or ''
+    year = (named or {}).get('year') or parsed_release.get('year')
+    label = f'{title} ({year})' if title and year else title or 'the movie'
+
+    entries = []
+    for path in sorted(videos):
+        base = posixpath.basename(path.replace('\\', '/'))
+        parsed = parse_release_info_for_path(f"{release}/{base}" if release else base)
+        entry = {'path': path, 'file': base, 'episodes': [], 'episode_ids': [], 'replaces': None,
+                 'label': label if path == main else base, 'quality': parsed['quality_label']}
+        entries.append(entry)
+        if path not in candidates:
+            entry.update(action='skip', reason='extra')
+        elif main is None:
+            entry.update(action='skip', reason='unchecked')
+        elif path != main:
+            entry.update(action='skip', reason='extra')
+        elif not file_id:
+            entry.update(action='add')
+        else:
+            _judge_replace(entry, lib, stats.get(path), parsed, file_id, [])
+
+    return {
+        'service': 'radarr', 'reg': reg, 'hash': str(data.get('hash')).strip(), 'instance_id': row.get('instance_id'),
+        'connection_id': conn_id, 'connection_name': conn['name'], 'arr_id': arr_id, 'title': label,
+        'release': release, 'folder': _replace_lookup_folder(row, listing), 'entries': entries,
+        **_plan_summary(entries),
+    }, None
+
+
 def _triage_replace_plan(cfg, data):
     """What replacing a season's library files with one pack would do, read live (T22).
+
+    A body with `service: 'radarr'` is a movie's force import instead
+    (`_movie_replace_plan`, T26); without one it's Sonarr, as every caller
+    before T26 posts it.
 
     Returns `(plan, None)` or `(None, refusal)`. Every input is asked for now,
     not read off the audit: the pack's registration and completeness from the
@@ -4243,19 +4446,12 @@ def _triage_replace_plan(cfg, data):
       different split of files, and replacing one file recycles every episode
       of it, amendment 1), `not_in_series`, `unparsed`.
 
-    **The torrent is the live listing's row**, and the row is what the file
-    listing is asked for (T23): qui roots each file at the save path it's
-    handed, and a bare `{hash, instance_id}` rooted every file at `/`. A hash
-    posted with no instance (the season-pack watch knows only the download's
-    hash) resolves to its one registration, or refuses as ambiguous (S05).
-
-    Refusals: an unknown connection, the torrent gone from the client or an
-    instance that didn't answer, a torrent not known to be complete (hardlinking
-    a file still being written puts a partial file in the library, DEDUPE F6's
-    hazard), a file list that didn't load, or a Sonarr read that failed.
+    The torrent is read by `_replace_torrent`, which says what it refuses.
+    Here, besides: an unknown connection, or a Sonarr read that failed.
     """
+    if data.get('service') == 'radarr':
+        return _movie_replace_plan(cfg, data)
     h = str(data.get('hash') or '').strip()
-    iid = data.get('instance_id')
     conn_id = str(data.get('connection_id') or '')
     try:
         arr_id, season = int(data.get('arr_id')), int(data.get('season'))
@@ -4268,27 +4464,11 @@ def _triage_replace_plan(cfg, data):
     if conn is None:
         return None, _triage_refusal('unknown_connection', 'That Sonarr connection is no longer configured.', 404)
 
-    try:
-        rows, report = sources.list_torrents_detailed(cfg)
-    except Exception as e:
-        log.warning("Triage replace: torrent listing failed: %s", e)
-        return None, _triage_refusal('client_unavailable', 'The torrent client did not answer.', 502)
-    regs, ambiguous, _absent = _resolve_registrations(rows, [sources.registration_key(iid, h)])
-    if ambiguous:
-        return None, _ambiguous_registration_refusal(ambiguous)
-    row = next((r for r in rows if regs and _reg(r) == regs[0]), None)
-    if row is None:
-        if report.get('instances_failed'):
-            return None, _triage_refusal('client_unavailable',
-                                         'A torrent client instance did not answer, so auditorr cannot check this torrent.', 502)
-        return None, _triage_refusal('not_in_client', 'This torrent is no longer in your client.', 409)
-    reg, iid = regs[0], row.get('instance_id')
-    if sources.torrent_complete(row.get('progress'), row.get('completion_on')) is not True:
-        return None, _triage_refusal('incomplete',
-                                     'This torrent is not known to be complete, and a file still being written must not go into the library.', 409)
-    listing = sources.fetch_torrent_file_paths(cfg, [row]).get(reg)
-    if not listing:
-        return None, _triage_refusal('listing_unavailable', "The client didn't return this torrent's file list.", 502)
+    got, refusal = _replace_torrent(cfg, data)
+    if refusal:
+        return None, refusal
+    row, reg, listing = got
+    iid = row.get('instance_id')
 
     episodes = sonarr_series_episodes(cfg, conn_id, arr_id)
     try:
@@ -4339,55 +4519,16 @@ def _triage_replace_plan(cfg, data):
         if file_ids or held_by_file.get(fid) != {(season, n) for n in numbers}:
             entry.update(action='skip', reason='split')
             continue
-        lib = library.get(fid)
-        st_pack = stats.get(path)
-        try:
-            st_lib = os.stat(lib['path']) if lib else None
-        except (OSError, ValueError):
-            st_lib = None
-        if lib is None or st_pack is None or st_lib is None or not st_lib.st_ino:
-            entry.update(action='skip', reason='unchecked')
-            continue
-        cmp = compare_release_quality(parsed, lib.get('file_quality_name') or '')
-        lib_file = posixpath.basename(str(lib.get('path') or '').replace('\\', '/'))
-        entry['replaces'] = {
-            'file_id':  fid,
-            'file':     lib_file,
-            # Who still holds a linked file's other copy, as the dialog names it.
-            'group':    _display_group(lib_file),
-            'quality':  lib.get('file_quality_name') or '',
-            'linked':   st_lib.st_nlink > 1,
-            'episode_ids': [e['id'] for e in episodes if e['file_id'] == fid],
-        }
-        entry['cmp'] = cmp
-        if (st_lib.st_dev, st_lib.st_ino) == (st_pack.st_dev, st_pack.st_ino):
-            entry.update(action='already')
-        elif cmp in ('higher', 'same') or st_lib.st_nlink > 1:
-            entry.update(action='replace')
-        else:
-            entry.update(action='unseeded')
+        _judge_replace(entry, library.get(fid), stats.get(path), parsed, fid,
+                       [e['id'] for e in episodes if e['file_id'] == fid])
 
     if not entries:
         return None, _triage_refusal('no_episodes', f'This torrent holds no episode of season {season}.', 409)
-    counts = {}
-    for e in entries:
-        counts[e['action']] = counts.get(e['action'], 0) + 1
-    # Where Sonarr looks the files up. A multi-file torrent's content path is its
-    # own folder unless it was added without one (then it's the save path, a
-    # category folder, whose listing identifies nothing). `_scan_target`'s rule,
-    # the second segment below LOCAL_PATH, assumes a category folder, so on a
-    # flat layout it names one episode's file and the rest of the pack is
-    # never listed.
-    content = row.get('content_path') or ''
-    folder = content if (len(listing) > 1 and content
-                         and _norm_abs(content) != _norm_abs(row.get('save_path') or '')) else ''
     return {
-        'reg': reg, 'hash': h, 'instance_id': iid,
+        'service': 'sonarr', 'reg': reg, 'hash': h, 'instance_id': iid,
         'connection_id': conn_id, 'connection_name': conn['name'], 'arr_id': arr_id, 'season': season,
-        'release': release, 'folder': folder, 'entries': entries, 'counts': counts,
-        # Replacing a lower-or-unknown release, lossless only because the
-        # library file has another link. The dialog names each one.
-        'downgrades': sum(1 for e in entries if e['action'] == 'replace' and e.get('cmp') not in ('higher', 'same')),
+        'release': release, 'folder': _replace_lookup_folder(row, listing), 'entries': entries,
+        **_plan_summary(entries),
     }, None
 
 
@@ -4821,6 +4962,14 @@ def workflows_triage():
         library = _library_payload(chosen)
         if library is not None and chosen['match']:
             _fold_row_quality(library, [(f['path'], c) for f, c in zip(voters, judged) if c['match']])
+            if library['service'] == 'radarr':
+                # T26 — the videos matched to this movie, by file name, for the
+                # force import's plan. A collection's other films match their own
+                # movies, and must never be forced over this one.
+                movie = (chosen['match'].get('connection_id'), chosen['match'].get('arr_id'))
+                library['match_files'] = sorted({
+                    posixpath.basename(f['path'].replace('\\', '/')) for f, c in zip(voters, judged)
+                    if c['match'] and (c['match'].get('connection_id'), c['match'].get('arr_id')) == movie})
 
         items.append({
             # The row's registration (S05) — what /triage/verify keys its

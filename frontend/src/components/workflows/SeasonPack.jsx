@@ -23,33 +23,38 @@ import { Button, Spinner, SortPicker, Checkbox, SectionLabel, MONO_TITLE, tint }
 //
 // Lives here, not in Triage, because three places open it: a Triage row, the
 // season-pack dialog below, and a finished download in the Import Jobs panel.
+//
+// T26 — `ForceImportModal`, below it, is the same plan for one release over
+// one library file: a Radarr movie, or a single Sonarr episode.
 
 const SKIP_REASON = {
   unchecked:     "couldn't check the current file for another hardlink",
   split:         'Sonarr holds these episodes in a different split of files',
   not_in_series: 'Sonarr lists no such episode',
   unparsed:      'no episode number in the file name',
+  extra:         "not this movie's file, so it isn't imported",
 }
 
 function lowerWord(cmp) {
   return cmp === 'lower' ? 'Lower quality' : "Quality couldn't be compared"
 }
 
-function replaceNote(e, includeUnseeded) {
-  if (e.action === 'add') return 'Sonarr holds no file for this episode.'
+// `arr` names the arr in the sentence, `unit` what it holds a file for.
+function replaceNote(e, includeUnseeded, arr = 'Sonarr', unit = 'episode') {
+  if (e.action === 'add') return `${arr} holds no file for this ${unit}.`
   if (e.action === 'skip') return `${SKIP_REASON[e.reason] || e.reason}.`.replace(/^./, c => c.toUpperCase())
   const holder = e.replaces?.group ? ` (${e.replaces.group})` : ''
   if (e.action === 'unseeded') {
     return `${lowerWord(e.cmp)}, and nothing seeds the current file${holder}: it's the only copy. `
-      + (includeUnseeded ? 'Replacing deletes it, and the episode gains a seed.'
-                         : 'Kept, because replacing unseeded episodes is off below.')
+      + (includeUnseeded ? `Replacing deletes it, and the ${unit} gains a seed.`
+                         : `Kept, because replacing unseeded ${unit}s is off below.`)
   }
   if (e.action !== 'replace') return null
   if (e.cmp === 'lower' || e.cmp === 'unknown') {
     return `${lowerWord(e.cmp)}. The current file${holder} has another hardlink, so it stays on disk.`
   }
   return e.replaces && !e.replaces.linked
-    ? `The current file${holder} has no other copy. Sonarr deletes it, or moves it to its recycle bin.`
+    ? `The current file${holder} has no other copy. ${arr} deletes it, or moves it to its recycle bin.`
     : null
 }
 
@@ -61,10 +66,10 @@ function replaceDetail(e) {
 }
 
 // Consecutive episodes that say the same thing read as one line: E03–E06.
-function replaceLines(entries, includeUnseeded) {
+function replaceLines(entries, includeUnseeded, arr, unit) {
   const lines = []
   for (const e of entries) {
-    const line = { ...e, detail: replaceDetail(e), note: replaceNote(e, includeUnseeded), labels: [e.label] }
+    const line = { ...e, detail: replaceDetail(e), note: replaceNote(e, includeUnseeded, arr, unit), labels: [e.label] }
     const last = lines[lines.length - 1]
     if (last && last.action === line.action && last.detail === line.detail && last.note === line.note) {
       last.labels.push(e.label)
@@ -286,6 +291,149 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
             : !plan ? 'Replace'
             : doable.length ? `Replace ${episodes} episode${episodes !== 1 ? 's' : ''}`
             : 'Nothing to replace'}
+        </Button>
+      </div>
+    </ModalFrame>
+  )
+}
+
+// ── T26: Force import over the library file ──────────────────────────────────
+// One release over the one library file it's lower than, or can't be compared
+// with: a Radarr movie, or a single Sonarr episode. The arrs refuse these on
+// their own because they aren't upgrades, and an upgrade is all Retry import
+// can ask for. The plan is T22's, from the same route and under the same
+// rules: a lower release goes over a file with another hardlink losslessly,
+// and over an unseeded one (T24) only with the switch on, which it starts.
+export function ForceImportModal({ title, params, clientName = 'your client', onCancel, onDone }) {
+  const [plan, setPlan] = useState(null)
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [includeUnseeded, setIncludeUnseeded] = useState(true)
+
+  useEffect(() => {
+    let live = true
+    api.triageReplacePlan(params)
+      .then(r => { if (live) setPlan(r) })
+      .catch(e => { if (live) setError(e.message) })
+    return () => { live = false }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const movie = params.service === 'radarr'
+  const arr = plan?.connection_name || (movie ? 'Radarr' : 'Sonarr')
+  const unit = movie ? 'movie' : 'episode'
+  const unseeded = plan ? plan.entries.filter(e => e.action === 'unseeded') : []
+  const doable = plan
+    ? plan.entries.filter(e => e.action === 'replace' || e.action === 'add' || (includeUnseeded && e.action === 'unseeded'))
+    : []
+  // The torrents keeping a replaced file's other link, which the next scan lists.
+  const holders = [...new Set(doable.filter(e => e.replaces?.linked).map(e => e.replaces.group).filter(Boolean))]
+  const keptLinked = doable.some(e => e.replaces?.linked)
+  const lowered = doable.some(e => e.cmp === 'lower' || e.cmp === 'unknown')
+
+  const confirm = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      onDone(await api.triageReplace({
+        ...params, paths: doable.map(e => e.path), include_unseeded: includeUnseeded || undefined,
+      }))
+    } catch (e) {
+      setError(e.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <ModalFrame onCancel={onCancel}>
+      <div style={{ padding: '18px 20px 0' }}>
+        <div style={TITLE}>Force import · {title}</div>
+        <p style={{ ...PROSE, color: 'var(--text)' }}>
+          Imports this release over the file {arr} holds now, as a hardlink, so a torrent you seed supplies
+          your library. {arr} won’t take it on its own, because it isn’t an upgrade. Below is what happens
+          to your current file.
+        </p>
+      </div>
+
+      <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
+        {!plan && !error && (
+          <div style={{ ...MONO, display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', color: 'var(--text-dim)' }}>
+            <Spinner /> Checking {clientName} and {arr}…
+          </div>
+        )}
+        {plan && (
+          <>
+            <div title={plan.release} style={{ ...MONO, padding: '8px 12px', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {plan.release}
+            </div>
+            {replaceLines(plan.entries, includeUnseeded, arr, unit).map(e => {
+              const look = e.action === 'unseeded'
+                ? (includeUnseeded ? ACTION_LOOK.replace : ACTION_LOOK.skip)
+                : (ACTION_LOOK[e.action] || ACTION_LOOK.skip)
+              const unsure = e.action === 'skip' && e.reason === 'unchecked'
+              return (
+                <div key={e.path} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 12px', borderBottom: '1px solid var(--border)' }}>
+                  {/* A movie's one file needs no label; an episode keeps its E05. */}
+                  {!movie && <span style={{ ...MONO, width: 76, flexShrink: 0, color: 'var(--text)' }}>{e.label}</span>}
+                  <span style={{ ...MONO, width: 56, flexShrink: 0, color: unsure ? 'var(--yellow)' : look.color, fontWeight: look.weight }}>
+                    {look.word}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div title={e.replaces ? `${e.replaces.file} → ${e.file}` : e.file}
+                      style={{ ...MONO, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {e.detail}
+                    </div>
+                    {e.note && (
+                      <div style={{ fontSize: 'var(--font-base)', color: unsure ? 'var(--yellow)' : 'var(--text-dim)', marginTop: 2 }}>
+                        {e.note}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </>
+        )}
+        {error && (
+          <p style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', lineHeight: 1.5, margin: 0, padding: '12px 14px' }}>
+            {error}
+          </p>
+        )}
+      </div>
+
+      {plan && unseeded.length > 0 && (
+        <div onClick={() => { if (!busy) setIncludeUnseeded(v => !v) }}
+          style={{ display: 'flex', alignItems: 'flex-start', gap: 10, margin: '12px 20px 0', cursor: busy ? 'default' : 'pointer' }}>
+          <span style={{ paddingTop: 2 }}>
+            <Checkbox checked={includeUnseeded} onChange={() => { if (!busy) setIncludeUnseeded(v => !v) }} />
+          </span>
+          <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.5 }}>
+            Replace the unseeded file too.
+            <span style={{ color: 'var(--text-dim)' }}>
+              {' '}It’s the only copy, so {arr} deletes it (or moves it to its recycle bin), and the {unit} gains
+              a seed at this release’s quality.
+            </span>
+          </span>
+        </div>
+      )}
+
+      {plan && doable.length > 0 && (
+        <p style={{ ...PROSE, margin: '12px 20px 0' }}>
+          Nothing leaves {clientName}.
+          {keptLinked && ` After the next scan, Triage lists the torrent still holding the old file${holders.length ? ` (${holders.join(', ')})` : ''}: keep seeding it, or remove it to free the space.`}
+          {lowered && ` If your ${arr} profile still wants the higher quality, ${arr} may upgrade this ${unit} again.`}
+        </p>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
+        {busy && (
+          <span style={{ ...MONO, fontSize: 'var(--font-base)', display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--text-dim)' }}>
+            <Spinner /> Importing in {arr}…
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
+        <Button onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</Button>
+        <Button variant="primary" onClick={confirm} disabled={busy || !plan || doable.length === 0}>
+          {busy ? 'Importing…' : !plan || doable.length ? 'Force import' : 'Nothing to import'}
         </Button>
       </div>
     </ModalFrame>

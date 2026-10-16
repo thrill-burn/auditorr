@@ -10,7 +10,7 @@ PM rather than from an audit finding.
 | --- | --- | --- |
 | [Backfill](#backfill) | Media with no torrent behind it | A grab in Sonarr/Radarr |
 | [Cleanup](#cleanup) | Torrent files with no torrent | A delete script you review |
-| [Triage](#triage) | Torrents that are in some kind of trouble | A rescan, an exclusion, or a client delete |
+| [Triage](#triage) | Torrents that are in some kind of trouble | An import, an exclusion, or a client delete |
 | [Dedupe](#dedupe) | The same bytes stored twice | A script that replaces copies with hardlinks |
 | [Trumped](#trumped) | A trumped release and its cross-seeds | The old group gone, the replacement grabbed |
 
@@ -413,8 +413,8 @@ they need six different responses.
 | **Dead seed — imported** | The tracker has dropped the torrent, but the file was imported and your library hardlink still holds the data. | Delete via the client. Lossless — the library keeps the file. A single episode at the end of a season? [Find the season pack](#find-the-season-pack). |
 | **Dead registration** | This particular registration is dead, but the payload is alive via a working cross-seed or the library copy. | Delete this registration; the data stays. |
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
-| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). A season spread over several torrents? [Replace with this pack](#replace-with-this-pack). |
-| **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Trigger a rescan. |
+| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#retry-import-vs-force-import). Lower, but you'd rather seed it? [Force import over …](#force-import-over-a-better-file). A season spread over several torrents? [Replace with this pack](#replace-with-this-pack). |
+| **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Retry import. |
 | **Could not check** | A Sonarr/Radarr instance didn't answer, so whether your library holds these is unknown. Only appears while something is unreachable. | Fix the connection and reload. Don't act on these meanwhile. |
 | **Not in library** | Neither arr knows about it, under its own title or any alternate title they hold. | Import it, exclude it, or remove it — but note these files are the only copy. |
 
@@ -473,8 +473,8 @@ it removes everything. Where the two differ the row says
 selection bar) is the torrent's.
 
 **Two instances holding the same title.** If a 1080p and a 4K Sonarr both have
-the episode, the row names both — `on TV · also TV 4K` — and says which one a
-rescan or a force import goes to: the instance whose file is the same quality as
+the episode, the row names both — `on TV · also TV 4K` — and says which one an
+import or a force import goes to: the instance whose file is the same quality as
 the torrent, when there is one. A row like that never pre-selects a whole
 cross-seed group for removal.
 
@@ -501,51 +501,78 @@ is left as it was, never treated as gone.
 The page lists the largest torrents first, up to a limit; past it, a banner says
 how many are shown out of how many.
 
-### Rescan vs force import
+### Retry import vs force import
 
-Two actions get a file into your library, and they reach different things.
+Three actions get a file into your library, and they differ in who decides.
 
-**Trigger Rescan** asks Sonarr/Radarr to look at the release folder and import
-what they find. That works when the arr has no file for the title yet — the
-*Import pending* case. It imports by hardlink, so your torrent keeps seeding.
+**Retry import** (it was called *Trigger Rescan*) asks Sonarr/Radarr to look at
+the release folder and import what they find, under their own rules. That works
+when the arr has no file for the title yet (the *Import pending* case) or when
+the torrent is better than the file it holds. It imports by hardlink, so your
+torrent keeps seeding.
 
-It does **not** work when the arr already has a file. Sonarr and Radarr compare
-every candidate against what they hold and refuse anything that isn't strictly
-better — including a release of *identical* quality, and including a normal
-release offered against an existing REPACK. Rescanning cannot get past that; the
-answer is the same every time.
-
-That refusal used to be invisible, because the arrs report a scan as "completed"
-whether they imported everything or nothing. auditorr now asks what the arr
-decided and tells you in plain words:
+It can't work when the arr already has a file at least as good. Sonarr and
+Radarr compare every candidate against what they hold and refuse anything that
+isn't strictly better, including a release of *identical* quality, and a normal
+release offered against an existing REPACK. Retrying can't get past that, so
+Retry import isn't offered on a row Triage knows is the same quality or lower,
+or on a torrent that's already imported or that no arr knows. Where it's
+offered and the arr still refuses, the toast gives the arr's reason in plain
+words:
 
 > Nothing will import — Not a quality revision upgrade for existing movie file(s)
 
-After a rescan the row watches Sonarr/Radarr for the file to land, and clears
+After a retry the row watches Sonarr/Radarr for the file to land, and clears
 the moment it does. A TV row watches the episodes it is for, not the whole series
 — Sonarr importing some other episode of a busy show doesn't count — and a check
 that can't reach the arr never counts as the file landing.
 
-**Force import** is the way past it. It uses the arr's own *Import Anyway*,
-replacing the library file with this release. It appears on superseded items
-that are the **same quality** as the file you already have — typically after a
-trump, where the tracker made you swap one release for an equivalent one. On a
-pack, it imports only the episodes at the same quality, and an episode your
-library holds better stays as it is.
+**Force import · same quality** is the way past that refusal for an equivalent
+release. It uses the arr's own *Import Anyway*, replacing the library file with
+this release. It appears on superseded items that are the **same quality** as
+the file you already have, typically after a trump, where the tracker made you
+swap one release for an equivalent one. On a pack, it imports only the episodes
+at the same quality, and an episode your library holds better stays as it is. It
+acts on every selected row at once, so it never imports a lower release.
 
-If the torrent is genuinely worse than what you have — 1080p against a 2160p
-library file, a WEB-DL against a Bluray — Force import isn't offered at all.
-Those torrents are fine as cross-seeds, and your library is right to keep the
-better copy. If you meant to have the lower quality (you lowered a show's
-profile to save space, say), see [Replace with this pack](#replace-with-this-pack),
-which does it where nothing is lost, and over an unseeded file only if you
-switch that on. For anything else, such as a 1080p
-Remux auditorr ranks below a 2160p WEB-DL because resolution decides first, use
-Sonarr/Radarr's own Manual Import.
+**Force import over …** is for a lower release you'd rather seed, one row at a
+time. See [below](#force-import-over-a-better-file). For a whole season, use
+[Replace with this pack](#replace-with-this-pack).
+
+For anything else, such as a 1080p Remux auditorr ranks below a 2160p WEB-DL
+because resolution decides first, use Sonarr/Radarr's own Manual Import.
 
 > Force import and Replace with this pack replace files you already have. They're
 > the Triage actions that change your library rather than your torrent client,
-> so they're deliberately narrow.
+> so each one shows you what it will do first.
+
+### Force import over a better file
+
+A torrent can be lower quality than your library's copy and still be the one
+you want there: it seeds on more trackers, or it's half the size, or you've
+lowered the profile. Sonarr and Radarr won't import it, because it isn't an
+upgrade.
+
+A superseded movie, or a single episode, that's lower than your library's file
+(or whose quality couldn't be compared) has a **Force import over WEBDL-2160p…**
+button on its row, naming the file it would go over. It opens a dialog that
+checks your client and Sonarr/Radarr live and says what happens to your current
+file:
+
+- **It has another hardlink**, usually the torrent it came from: it stays on
+  disk, and nothing is lost. After the next scan, Triage lists that torrent, so
+  you can keep seeding it or remove it to free the space.
+- **Nothing else seeds it**, so it's the only copy: Sonarr/Radarr deletes it, or
+  moves it to its recycle bin, and the release seeds in its place. The dialog
+  says so, and *Replace the unseeded file too* is on when it opens. Turn it off
+  to keep your file.
+- **It couldn't be checked**: nothing is imported.
+
+The import is a hardlink, so the torrent keeps seeding, and nothing leaves your
+client. If your quality profile still wants the better quality, Sonarr/Radarr may
+upgrade it again, so lower the profile first if you want the change to stick. A
+movie torrent's other videos (featurettes, or a collection's other films) aren't
+imported, only the one Triage matched to the movie.
 
 ### Replace with this pack
 
@@ -563,7 +590,9 @@ singles but no pack is in your client yet, with **Find season pack…** (see
 because that's a season that has ended, and the first season's button is the
 page's main one. After four seasons the rest fold away.
 
-The same replace is offered on the superseded TV rows themselves. When two or more packs of the same season are
+The same replace is offered on the superseded season packs' own rows. (A single
+episode has [Force import over …](#force-import-over-a-better-file) instead.)
+When two or more packs of the same season are
 in your client, Triage recommends one: the better release, which is also the one
 Sonarr would keep. Failing that, the one already supplying more of your library.
 Its button is green, and the dialog opens on it whichever row you clicked. You
