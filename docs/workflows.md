@@ -581,13 +581,14 @@ pack:
 - **keep**, with the reason: it couldn't be checked, or Sonarr holds those
   episodes split differently across files.
 
-**Unseeded episodes are your call.** An episode where the pack is lower quality
-and your library file has *no* other hardlink (nothing seeds it, usually because
-you removed its torrent) is listed as kept, with a switch under the list: *Also
-replace N unseeded episodes*. Replacing one deletes your current file, since
-it's the only copy, or Sonarr moves it to its recycle bin if you've set one. In
-exchange the episode is seeded again, at the pack's quality. The switch is off
-each time the dialog opens.
+**Unseeded episodes are replaced too, unless you say otherwise.** Take an
+episode where the pack is lower quality and your library file has *no* other
+hardlink, so nothing seeds it (usually because you removed its torrent). The
+pack goes over that one as well, so the whole season ends up seeded and
+hardlinked. Replacing it deletes your current file, since it's the only copy, or
+Sonarr moves it to its recycle bin if you've set one. The dialog says which
+episodes those are. To keep them as they are, turn off *Also replace N unseeded
+episodes* under the list. It's on each time the dialog opens.
 
 Nothing leaves your client. After the next scan, Triage lists what no longer
 supplies your library, such as the other pack and the single-episode torrents

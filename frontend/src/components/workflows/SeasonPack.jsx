@@ -14,10 +14,12 @@ import { Button, Spinner, SortPicker, Checkbox, SectionLabel, MONO_TITLE, tint }
 // on disk in their own torrent). The server reads all of it live and refuses
 // anything it couldn't check; this dialog shows each episode first.
 //
-// T24 — an episode whose library file nothing else links (`unseeded`) is kept
-// unless the switch below the list is on. It's the user's trade: the library
-// seeded at a lower quality over unseeded at a higher one. Off by default,
-// because it's the one replace that deletes a file for good.
+// T24 — an episode whose library file nothing else links (`unseeded`) is
+// replaced too, unless the switch below the list is turned off. It's the user's
+// trade: the library seeded at a lower quality over unseeded at a higher one,
+// because the point is to seed and hardlink as much as possible. On by default
+// (amendment 1, 2026-10-10; it shipped off). It's the one replace that deletes
+// a file for good, so the dialog says so and the switch stays.
 //
 // Lives here, not in Triage, because three places open it: a Triage row, the
 // season-pack dialog below, and a finished download in the Import Jobs panel.
@@ -40,7 +42,7 @@ function replaceNote(e, includeUnseeded) {
   if (e.action === 'unseeded') {
     return `${lowerWord(e.cmp)}, and nothing seeds the current file${holder}: it's the only copy. `
       + (includeUnseeded ? 'Replacing deletes it, and the episode gains a seed.'
-                         : 'Kept unless you replace unseeded episodes below.')
+                         : 'Kept, because replacing unseeded episodes is off below.')
   }
   if (e.action !== 'replace') return null
   if (e.cmp === 'lower' || e.cmp === 'unknown') {
@@ -127,13 +129,13 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
   const [plan, setPlan] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [includeUnseeded, setIncludeUnseeded] = useState(false)
+  const [includeUnseeded, setIncludeUnseeded] = useState(true)
 
   useEffect(() => {
     let live = true
     setPlan(null)
     setError(null)
-    setIncludeUnseeded(false)
+    setIncludeUnseeded(true)
     api.triageReplacePlan(pack.params)
       .then(r => { if (live) setPlan(r) })
       .catch(e => { if (live) setError(e.message) })
@@ -179,8 +181,8 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
         <div style={TITLE}>Replace {title || 'this season'} · S{pad2(season)} in your library</div>
         <p style={{ ...PROSE, color: 'var(--text)' }}>
           Imports a pack’s episodes over the files {plan?.connection_name || 'Sonarr'} holds now, as hardlinks,
-          so one torrent seeds the season. A file is replaced with a lower-quality one <b>only</b> where it
-          has another hardlink, so nothing is lost{unseeded.length > 0 ? ', unless you also replace the unseeded episodes below' : ''}.
+          so one torrent seeds the season. Where your file has another hardlink, a lower-quality episode still
+          goes over it, and nothing is lost.{unseeded.length > 0 ? ' Where nothing seeds your file, the pack’s goes over it too and the episode is seeded again, but your file is deleted. Turn off the switch below to keep those.' : ''}{' '}
           Each episode below says what happens.
         </p>
         {packs.length > 1 && (
