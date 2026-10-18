@@ -143,10 +143,11 @@ release, and those are left off an episode row. Where Sonarr hasn't numbered
 every file of a show, auditorr can't show that a season is fully unseeded, so
 it searches episode by episode.
 
-When you *do* want the whole season on one pack, a single-episode row has a
-**Season pack…** button. It opens [Find the season pack](#find-the-season-pack),
-which checks your client for a pack first and shows which episodes are still
-seeded before anything moves.
+When you *do* want the whole season on one pack, *Switch seasons over to a
+pack*, above the results, lists each season with single-episode rows in the run,
+with a **Find season pack…** button. It opens
+[Find the season pack](#find-the-season-pack), which checks your client for a
+pack first and shows which episodes are still seeded before anything moves.
 
 A release offered on a row has to cover **exactly** what that row's file holds,
 in the **same season**. A file holding two episodes (`S01E01E02`) is only
@@ -535,8 +536,8 @@ swap one release for an equivalent one. On a pack, it imports only the episodes
 at the same quality, and an episode your library holds better stays as it is. It
 acts on every selected row at once, so it never imports a lower release.
 
-**Force import over …** is for a lower release you'd rather seed, one row at a
-time. See [below](#force-import-over-a-better-file). For a whole season, use
+**Force import over …** is for a lower release you'd rather seed, with one
+confirmation per row. See [below](#force-import-over-a-better-file). For a whole season, use
 [Replace with this pack](#replace-with-this-pack).
 
 For anything else, such as a 1080p Remux auditorr ranks below a 2160p WEB-DL
@@ -553,11 +554,13 @@ you want there: it seeds on more trackers, or it's half the size, or you've
 lowered the profile. Sonarr and Radarr won't import it, because it isn't an
 upgrade.
 
-A superseded movie, or a single episode, that's lower than your library's file
-(or whose quality couldn't be compared) has a **Force import over WEBDL-2160p…**
-button on its row, naming the file it would go over. It opens a dialog that
-checks your client and Sonarr/Radarr live and says what happens to your current
-file:
+Select a superseded movie, or a single episode, that's lower than your
+library's file (or whose quality couldn't be compared), and the bar at the
+bottom offers **Force import over WEBDL-2160p…**, naming the file it would go
+over. With several selected it reads **Force import over library (3)…** and
+opens one dialog per row (*1 of 3*, with *Skip*), never all at once. Each
+dialog checks your client and Sonarr/Radarr live and says what happens to your
+current file:
 
 - **It has another hardlink**, usually the torrent it came from: it stays on
   disk, and nothing is lost. After the next scan, Triage lists that torrent, so
@@ -590,13 +593,14 @@ singles but no pack is in your client yet, with **Find season pack…** (see
 because that's a season that has ended, and the first season's button is the
 page's main one. After four seasons the rest fold away.
 
-The same replace is offered on the superseded season packs' own rows. (A single
-episode has [Force import over …](#force-import-over-a-better-file) instead.)
-When two or more packs of the same season are
-in your client, Triage recommends one: the better release, which is also the one
-Sonarr would keep. Failing that, the one already supplying more of your library.
-Its button is green, and the dialog opens on it whichever row you clicked. You
-can switch to the other pack there.
+Select a superseded season pack's row and the bar at the bottom offers the same
+replace. With packs of several seasons selected, it opens one dialog per season
+(*1 of 3*, with *Skip*). (A single episode has
+[Force import over …](#force-import-over-a-better-file) instead.) When two or
+more packs of the same season are in your client, Triage recommends one: the
+better release, which is also the one Sonarr would keep. Failing that, the one
+already supplying more of your library. The dialog opens on it whichever of the
+season's rows you selected, and you can switch to the other pack there.
 
 The dialog checks your client and Sonarr live and lists every episode of the
 pack:
@@ -634,8 +638,9 @@ At the end of a season, a good tracker often removes its single episodes and
 posts one season pack in their place. Triage then lists those singles as dead
 seeds. Once two or more of a season's singles are dead, the season is listed
 under *Switch seasons over to a pack* at the top of Triage, with **Find season
-pack…**. The same button is on each dead single's row, and the same dialog opens
-from **Season pack…** on a Backfill episode row.
+pack…**. Select dead singles and the bar at the bottom offers the same button,
+one dialog per season. Backfill has its own *Switch seasons over to a pack*
+above a run's results, for the seasons of its single-episode rows.
 
 1. **Your library and your client first.** The dialog lists the season as
    Sonarr holds it, each run of episodes marked seeded or unseeded, then any pack

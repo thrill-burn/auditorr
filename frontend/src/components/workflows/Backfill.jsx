@@ -4,7 +4,7 @@ import { formatBytes } from '../../utils'
 import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker, SearchInput,
-  SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, WorkflowWarning, ArrErrorsWarning,
+  SectionLabel, SectionHeading, Disclosure, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, WorkflowWarning, ArrErrorsWarning,
   Button, MatchChips, MATCH_COLOR, ITEM_TITLE, MONO_TITLE, tint,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
@@ -197,11 +197,66 @@ function seasonPackTarget(item) {
            title: item.arr_title, trackers: [] }
 }
 
+const SEASONS_SHOWN = 4
+
+// T25 — the seasons of this run's episode rows, one line each with its own
+// *Find season pack…*. It was a chip on every episode row, and the design
+// system has no row chip for an action, so it's a section of md buttons, as
+// Triage's *Switch seasons over to a pack* is.
+function SeasonPackSeasons({ rows, onFind }) {
+  const [open, setOpen] = useState(false)
+  const seasons = useMemo(() => {
+    const bySeason = new Map()
+    for (const r of rows) {
+      const target = seasonPackTarget(r)
+      if (!target) continue
+      const key = `${target.connection_id}|${target.arr_id}|${target.season}`
+      const s = bySeason.get(key) || { key, target, episodes: 0 }
+      s.episodes += 1
+      bySeason.set(key, s)
+    }
+    return [...bySeason.values()].sort((a, b) =>
+      b.episodes - a.episodes || (a.target.title || '').localeCompare(b.target.title || ''))
+  }, [rows])
+  if (seasons.length === 0) return null
+  const shown = open ? seasons : seasons.slice(0, SEASONS_SHOWN)
+  const more = seasons.length - SEASONS_SHOWN
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <SectionHeading check={null} dot="var(--blue)" title="Switch seasons over to a pack"
+        meta={`${seasons.length} season${seasons.length !== 1 ? 's' : ''}`}
+        desc="These episodes are searched one at a time, because other torrents still seed part of their season. A season pack would seed the whole season from one torrent. The dialog looks in your client first, then searches Sonarr, and your library changes only in the replace, after you've seen each episode."
+      />
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+        {shown.map(s => (
+          <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {s.target.title} · S{pad2(s.target.season)}
+              </div>
+              <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+                {s.episodes} episode{s.episodes !== 1 ? 's' : ''} in this run
+              </div>
+            </div>
+            <Button onClick={() => onFind(s.target)}
+              title="Look for this season's pack in your client, else search Sonarr's indexers for one, then replace the season's library files with it">
+              Find season pack…
+            </Button>
+          </div>
+        ))}
+      </div>
+      {more > 0 && (
+        <div style={{ marginLeft: 16 }}>
+          <Disclosure open={open} onClick={() => setOpen(o => !o)}>
+            {open ? 'Show fewer' : `${more} more season${more !== 1 ? 's' : ''}`}
+          </Disclosure>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ResultItem({ item }) {
-  // T25 — the season-pack dialog, when this row's chip opened it. The target is
-  // memoised: the dialog looks the season up again whenever it changes.
-  const [packOpen, setPackOpen] = useState(false)
-  const packTarget = useMemo(() => seasonPackTarget(item), [item])
   // grabStates: { [guid]: 'idle' | 'grabbing' | 'refreshing' | 'grabbed' | 'queued' | 'error' }
   const [grabStates,    setGrabStates]    = useState({})
   const [grabErrors,    setGrabErrors]    = useState({})
@@ -467,14 +522,6 @@ function ResultItem({ item }) {
           )}
         </div>
 
-        {packTarget && (
-          <Button size="chip" variant="subtle" onClick={e => { e.stopPropagation(); setPackOpen(true) }}
-            title="Look for a pack of this whole season in your client or in Sonarr, then replace the season's library files with it. Episodes still seeded by their own torrents are listed first, so you see what moves">
-            Season pack…
-          </Button>
-        )}
-        {packOpen && packTarget && <SeasonPackModal target={packTarget} onCancel={() => setPackOpen(false)} />}
-
         {/* Service link — the same chip Triage's rows carry. With no link
             address it is only a label, and says so by not being a button. */}
         {item.arr_service && (item.arr_url ? (
@@ -646,6 +693,8 @@ function saveJobId(id) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Backfill({ onNavigate }) {
   const [phase, setPhase] = useState(() => (readJobId() ? 'running' : 'config'))  // config | running | done | stopped
+  // T25 — the season whose *Find season pack…* opened the dialog.
+  const [packFor, setPackFor] = useState(null)
 
   // Data loaded on mount
   const [indexers,      setIndexers]      = useState([])
@@ -1109,6 +1158,9 @@ export default function Backfill({ onNavigate }) {
         errors={arrErrors}
         extra="Candidates from those instances are missing from this run."
       />
+
+      <SeasonPackSeasons rows={results} onFind={setPackFor} />
+      {packFor && <SeasonPackModal target={packFor} onCancel={() => setPackFor(null)} />}
 
       {/* Results list */}
       {rows.length > 0 && (

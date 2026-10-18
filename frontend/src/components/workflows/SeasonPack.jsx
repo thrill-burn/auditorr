@@ -127,8 +127,9 @@ const TITLE = { fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)
 // `packs`: [{ reg, params: { hash, instance_id, connection_id, arr_id, season }, name, group,
 // quality, recommended }]. `initial` is the reg the dialog opens on; `pickNote` says why the
 // recommended one is. `watchId` is set when a season-pack watch opened it, so the server
-// can close that watch once the replace lands.
-export function ReplaceModal({ title, season, packs, initial, pickNote, clientName = 'your client', watchId, onCancel, onDone }) {
+// can close that watch once the replace lands. `step` ("2 of 3") and `onSkip` are set
+// when Triage's bar steps through several seasons.
+export function ReplaceModal({ title, season, packs, initial, pickNote, clientName = 'your client', watchId, step, onSkip, onCancel, onDone }) {
   const [chosen, setChosen] = useState(initial || packs[0]?.reg)
   const pack = packs.find(s => s.reg === chosen) || packs[0]
   const [plan, setPlan] = useState(null)
@@ -183,7 +184,10 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
   return (
     <ModalFrame onCancel={onCancel}>
       <div style={{ padding: '18px 20px 0' }}>
-        <div style={TITLE}>Replace {title || 'this season'} · S{pad2(season)} in your library</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <div style={TITLE}>Replace {title || 'this season'} · S{pad2(season)} in your library</div>
+          {step && <span style={{ ...MONO, color: 'var(--text-dim)', flexShrink: 0 }}>{step}</span>}
+        </div>
         <p style={{ ...PROSE, color: 'var(--text)' }}>
           Imports a pack’s episodes over the files {plan?.connection_name || 'Sonarr'} holds now, as hardlinks,
           so one torrent seeds the season. Where your file has another hardlink, a lower-quality episode still
@@ -286,6 +290,7 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
         )}
         <span style={{ flex: 1 }} />
         <Button onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</Button>
+        {onSkip && !busy && <Button variant="ghost" onClick={onSkip}>Skip</Button>}
         <Button variant="primary" onClick={confirm} disabled={busy || !plan || doable.length === 0}>
           {busy ? 'Replacing…'
             : !plan ? 'Replace'
@@ -304,7 +309,9 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
 // can ask for. The plan is T22's, from the same route and under the same
 // rules: a lower release goes over a file with another hardlink losslessly,
 // and over an unseeded one (T24) only with the switch on, which it starts.
-export function ForceImportModal({ title, params, clientName = 'your client', onCancel, onDone }) {
+// Several rows go through one dialog each: `step` reads "2 of 3", and `onSkip`
+// moves on without importing, which a row with nothing to import needs.
+export function ForceImportModal({ title, params, clientName = 'your client', step, onSkip, onCancel, onDone }) {
   const [plan, setPlan] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -346,7 +353,10 @@ export function ForceImportModal({ title, params, clientName = 'your client', on
   return (
     <ModalFrame onCancel={onCancel}>
       <div style={{ padding: '18px 20px 0' }}>
-        <div style={TITLE}>Force import · {title}</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <div style={TITLE}>Force import · {title}</div>
+          {step && <span style={{ ...MONO, color: 'var(--text-dim)', flexShrink: 0 }}>{step}</span>}
+        </div>
         <p style={{ ...PROSE, color: 'var(--text)' }}>
           Imports this release over the file {arr} holds now, as a hardlink, so a torrent you seed supplies
           your library. {arr} won’t take it on its own, because it isn’t an upgrade. Below is what happens
@@ -432,6 +442,7 @@ export function ForceImportModal({ title, params, clientName = 'your client', on
         )}
         <span style={{ flex: 1 }} />
         <Button onClick={onCancel}>{busy ? 'Continue in background' : 'Cancel'}</Button>
+        {onSkip && !busy && <Button variant="ghost" onClick={onSkip}>Skip</Button>}
         <Button variant="primary" onClick={confirm} disabled={busy || !plan || doable.length === 0}>
           {busy ? 'Importing…' : !plan || doable.length ? 'Force import' : 'Nothing to import'}
         </Button>
@@ -487,7 +498,9 @@ function vsLibrary(v) {
 
 const RELEASE_GRID = 'minmax(0,1fr) 110px 64px 44px'
 
-export function SeasonPackModal({ target, onCancel }) {
+// `step` ("2 of 3") and `onNext` are set when Triage's bar steps through several
+// seasons: Next moves on whether or not this season grabbed or replaced anything.
+export function SeasonPackModal({ target, step, onNext, onCancel }) {
   const params = useMemo(() => ({
     connection_id: target.connection_id, arr_id: target.arr_id, season: target.season,
   }), [target])
@@ -583,7 +596,10 @@ export function SeasonPackModal({ target, onCancel }) {
   return (
     <ModalFrame width={680} onCancel={onCancel}>
       <div style={{ padding: '18px 20px 0' }}>
-        <div style={TITLE}>Season pack · {title} · S{pad2(target.season)}</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <div style={TITLE}>Season pack · {title} · S{pad2(target.season)}</div>
+          {step && <span style={{ ...MONO, color: 'var(--text-dim)', flexShrink: 0 }}>{step}</span>}
+        </div>
         <p style={{ ...PROSE, color: 'var(--text)' }}>
           Puts the season on one torrent. A pack already in {client} goes straight to the replace. Otherwise
           auditorr searches Sonarr for one, you grab it, and once it has downloaded the replace opens from
@@ -715,6 +731,9 @@ export function SeasonPackModal({ target, onCancel }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
         <span style={{ flex: 1 }} />
         <Button onClick={onCancel}>{grabbed || replaced ? 'Close' : 'Cancel'}</Button>
+        {onNext && grab.state !== 'grabbing' && (
+          <Button variant="ghost" onClick={onNext}>{grabbed || replaced ? 'Next season' : 'Skip'}</Button>
+        )}
         {ready.length > 0 && !replaced && (
           <Button variant="primary" onClick={() => setReplacing(true)}>
             Replace with {ready.length === 1 ? 'this pack' : 'a pack'}…

@@ -62,7 +62,7 @@ const QUALITY_BUCKETS = [
   },
   {
     key: 'lower', label: 'Lower quality than library', color: 'var(--yellow)',
-    desc: 'Your library already has better. Safe to delete once the torrent has earned its keep. Or seed this one instead: Force import puts it over the library file, and says first whether the better file stays on disk.',
+    desc: 'Your library already has better. Safe to delete once the torrent has earned its keep. Or seed this one instead: select it and Force import over … puts it over the library file, saying first whether the better file stays on disk.',
   },
   {
     key: 'unknown', label: 'Quality comparison unavailable', color: 'var(--text-dim)',
@@ -354,7 +354,7 @@ function seasonSwitches(items) {
       out.push({ ...s, kind: 'replace', lead })
     } else if (s.dead.length >= 2) {
       const lead = s.dead[0]
-      const target = { ...seasonPackTarget(lead), trackers: [...new Set(s.dead.flatMap(d => d.trackers || []))] }
+      const target = { ...seasonPackTarget(lead), trackers: [...new Set(s.dead.flatMap(d => d.trackers || []))], key: s.key }
       out.push({ ...s, kind: 'find', lead, target })
     }
   }
@@ -453,7 +453,7 @@ function SeasonSwitchRow({ season: s, lead, clientName, onReplace, onFind }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, onReplace, onForceImport, onFindPack, pending, rescanned, unconfirmed }) {
+function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending, rescanned, unconfirmed }) {
   const p = item.parsed || {}
   const seTag = episodeTag(item)
   const filename = (item.rep_path || '').replace(/\\/g, '/').split('/').pop()
@@ -464,13 +464,6 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
   const spread = lib?.quality_spread
     ? ` — episodes compared: ${Object.entries(lib.quality_spread).map(([q, n]) => `${n} ${q}`).join(', ')}`
     : ''
-  const pick = item.season_pick
-  const replaceTitle = !pick
-    ? 'Import this pack over the files Sonarr holds for these episodes, as hardlinks. You see each episode before anything happens.'
-    : pick === item.reg
-      ? 'The recommended pack for this season: import it over the files Sonarr holds, as hardlinks. You see each episode before anything happens.'
-      : 'Another pack of this season is the recommended one. The dialog shows both.'
-  const arrName = lib?.connection_name || (lib?.service === 'radarr' ? 'Radarr' : 'Sonarr')
 
   return (
     <div
@@ -549,27 +542,6 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               ))}
             </>
           )}
-          {/* Green unless another pack of the season is the pick. A season's
-              only pack has no pick, and read grey beside its own chips. */}
-          {canReplace(item) && isPack(item) && onReplace && (
-            <Button size="chip" variant={!pick || pick === item.reg ? undefined : 'subtle'}
-              tone={!pick || pick === item.reg ? 'var(--green)' : undefined}
-              onClick={e => { e.stopPropagation(); onReplace(item) }}
-              title={replaceTitle}
-            >
-              Replace with this pack…
-            </Button>
-          )}
-          {/* T26 — the label names the file it goes over: the clarifier that
-              this is a downgrade the arr refused, not an import it missed. */}
-          {canForceOver(item) && onForceImport && (
-            <Button size="chip" tone="var(--green)"
-              onClick={e => { e.stopPropagation(); onForceImport(item) }}
-              title={`Import this release over the file ${arrName} holds, as a hardlink, so a torrent you seed supplies your library. ${arrName} refuses it on its own because it isn't an upgrade. The dialog says whether your current file stays on disk before anything happens.`}
-            >
-              Force import over {lib.quality_name || 'library file'}…
-            </Button>
-          )}
           {/* T2 — more than one instance holds this title. The row names them and
               says which one an import goes to, rather than picking silently. */}
           {lib?.others?.length > 0 && (
@@ -623,14 +595,6 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               title="A byte-identical copy exists on disk — open the Dedupe workflow to hardlink it and reclaim the space (lossless)"
             >
               Dedupe ↗
-            </Button>
-          )}
-          {seasonPackTarget(item) && onFindPack && (
-            <Button size="chip" variant="subtle"
-              onClick={e => { e.stopPropagation(); onFindPack(seasonPackTarget(item)) }}
-              title="The tracker dropped this episode. At the end of a season that usually means a pack replaced it: look for the pack in your client or in Sonarr, then replace the season's library files with it"
-            >
-              Find season pack…
             </Button>
           )}
           {/* The reactive counterpart to a trump PM: a tracker dropping an
@@ -743,12 +707,18 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const [rescanned, setRescanned] = useState(() => new Set())
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmExclude, setConfirmExclude] = useState(false)
-  // T22 — the row whose Replace chip opened the dialog.
-  const [replaceFor, setReplaceFor] = useState(null)
-  // T26 — the row whose Force import chip opened the dialog.
-  const [forceFor, setForceFor] = useState(null)
-  // T25 — the season a dead seed's Find season pack chip opened.
-  const [packFor, setPackFor] = useState(null)
+  // The dialogs a bar button or the season card steps through, one at a time,
+  // each with how many it started with (for "2 of 3"). Actions live in the bar,
+  // never as row chips, which the design system doesn't have.
+  // T22 — one pack row per season to replace.
+  const [replaceQueue, setReplaceQueue] = useState([])
+  const [replaceTotal, setReplaceTotal] = useState(0)
+  // T26 — the rows Force import over … is stepping through.
+  const [forceQueue, setForceQueue] = useState([])
+  const [forceTotal, setForceTotal] = useState(0)
+  // T25 — one season-pack target per season to find a pack for.
+  const [packQueue, setPackQueue] = useState([])
+  const [packTotal, setPackTotal] = useState(0)
   // Cross-seed groups resolved live when the delete modal opens, keyed by the
   // item's registration → [{reg, hash, instance_id, name, tracker, seeding_time…}].
   const [groups,    setGroups]    = useState({})
@@ -970,6 +940,48 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // Absent, like the two above, when nothing selected is a row the arr's own
   // import could take.
   const retryItems = selectedItems.filter(canRetryImport)
+
+  // T26 — never in bulk: the button steps through these one dialog at a time,
+  // each reading its own files live before its own confirm.
+  const forceOverItems = selectedItems.filter(canForceOver)
+  const startForceOver = () => {
+    setForceQueue(forceOverItems)
+    setForceTotal(forceOverItems.length)
+  }
+  const leaveForceQueue = item => setForceQueue(q => q.filter(i => itemKey(i) !== itemKey(item)))
+
+  // T22 — one dialog per season among the selected pack rows, opened on the
+  // season's pick where it's selected, as the season card opens it.
+  const replaceSeasons = useMemo(() => {
+    const bySeason = new Map()
+    for (const i of selectedItems) {
+      if (!canReplace(i) || !isPack(i)) continue
+      if (!bySeason.has(i.season_key) || i.reg === i.season_pick) bySeason.set(i.season_key, i)
+    }
+    return [...bySeason.values()]
+  }, [selectedItems])
+  const openReplace = rows => { setReplaceQueue(rows); setReplaceTotal(rows.length) }
+  const leaveReplaceQueue = key => setReplaceQueue(q => q.filter(i => i.season_key !== key))
+
+  // T25 — one dialog per season among the selected dead seeds, with the
+  // singles' trackers merged, as the season card merges them. A season whose
+  // pack is selected too goes to the replace instead.
+  const findSeasons = useMemo(() => {
+    const replacing = new Set(replaceSeasons.map(i => i.season_key))
+    const bySeason = new Map()
+    for (const i of selectedItems) {
+      const target = seasonPackTarget(i)
+      const key = seasonKeyOf(i)
+      if (!target || replacing.has(key)) continue
+      const seen = bySeason.get(key)
+      bySeason.set(key, seen
+        ? { ...seen, trackers: [...new Set([...seen.trackers, ...target.trackers])] }
+        : { ...target, key })
+    }
+    return [...bySeason.values()]
+  }, [selectedItems, replaceSeasons])
+  const openFind = targets => { setPackQueue(targets); setPackTotal(targets.length) }
+  const leavePackQueue = key => setPackQueue(q => q.filter(t => t.key !== key))
 
   // Same shape as forceImportItems: the action applies to the rows it makes
   // sense for, and is absent when the selection holds none of them.
@@ -1267,7 +1279,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // the torrents behind the old files stay, because nothing left the client;
   // the scan the server nudged lists them under what they now are.
   const handleReplaced = (resp, pack) => {
-    setReplaceFor(null)
+    leaveReplaceQueue(pack.season_key)
     const { replaced = [], pending = [], dropped = [] } = resp
     const skipped = dropped.length ? ` ${dropped.join(', ')} skipped: no longer safe to replace.` : ''
     if (replaced.length && !pending.length) {
@@ -1282,10 +1294,11 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     }
   }
 
-  // T26 — the same answer for one release forced over one file. No season is
-  // switched: a single episode says nothing about the rest of its season.
+  // T26 — the same answer for one release forced over one file, then the next
+  // row's dialog. No season is switched: a single episode says nothing about
+  // the rest of its season.
   const handleForced = (resp, item) => {
-    setForceFor(null)
+    leaveForceQueue(item)
     const arr = item.library?.connection_name || (item.library?.service === 'radarr' ? 'Radarr' : 'Sonarr')
     const { replaced = [], pending = [] } = resp
     if (replaced.length) {
@@ -1438,7 +1451,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
           />
 
           <SeasonSwitches seasons={switches} clientName={client?.name || 'your client'}
-            onReplace={setReplaceFor} onFind={setPackFor} />
+            onReplace={item => openReplace([item])} onFind={target => openFind([target])} />
 
           {report?.suggestions?.length > 0 && (
             <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1484,9 +1497,6 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     client={client}
                     onOpenClient={openInClient}
                     onNavigate={onNavigate}
-                    onReplace={setReplaceFor}
-                    onForceImport={setForceFor}
-                    onFindPack={setPackFor}
                     pending={!!verify?.running && !!item.hash && !item.verified}
                     rescanned={rescanned.has(itemKey(item))}
                     unconfirmed={unconfirmed[itemKey(item)]}
@@ -1544,6 +1554,30 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                   {busy === 'force' ? 'Importing…' : `Force import · same quality (${forceImportItems.length})`}
                 </Button>
               )}
+              {/* T26 — the label names the file it goes over: the clarifier that
+                  this is a downgrade the arr refused, not an import it missed. */}
+              {forceOverItems.length > 0 && (
+                <Button onClick={startForceOver} disabled={busy != null}
+                  title="Import this release over the better file Sonarr/Radarr holds, as a hardlink, so a torrent you seed supplies your library. They refuse it on their own because it isn't an upgrade. One dialog per row says whether your current file stays on disk before anything happens.">
+                  {forceOverItems.length === 1
+                    ? `Force import over ${forceOverItems[0].library.quality_name || 'library file'}…`
+                    : `Force import over library (${forceOverItems.length})…`}
+                </Button>
+              )}
+              {replaceSeasons.length > 0 && (
+                <Button onClick={() => openReplace(replaceSeasons)} disabled={busy != null}
+                  title="Import a pack over the files Sonarr holds for its season, as hardlinks, so one torrent seeds the season. One dialog per season shows each episode before anything happens.">
+                  {replaceSeasons.length === 1
+                    ? `Replace S${String(replaceSeasons[0].parsed?.season).padStart(2, '0')} with this pack…`
+                    : `Replace seasons with packs (${replaceSeasons.length})…`}
+                </Button>
+              )}
+              {findSeasons.length > 0 && (
+                <Button onClick={() => openFind(findSeasons)} disabled={busy != null}
+                  title="The tracker dropped these episodes, which at the end of a season usually means it posted a pack. Look for it in your client, else search Sonarr, then replace the season with it. One dialog per season.">
+                  {findSeasons.length === 1 ? 'Find season pack…' : `Find season packs (${findSeasons.length})…`}
+                </Button>
+              )}
               {excludableItems.length > 0 && (
                 <Button onClick={() => setConfirmExclude(true)} disabled={busy != null} title="Add exclusion rules so auditorr stops flagging these">
                   {busy === 'exclude' ? 'Excluding…' : 'Exclude'}
@@ -1585,7 +1619,8 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             />
           )}
 
-          {replaceFor && (() => {
+          {replaceQueue.length > 0 && (() => {
+            const replaceFor = replaceQueue[0]
             // The pick leads; without one, the row the dialog was opened from.
             const siblings = items.filter(i => canReplace(i) && i.season_key === replaceFor.season_key)
             const rows = (siblings.some(s => s.reg === replaceFor.reg) ? siblings : [replaceFor, ...siblings])
@@ -1593,6 +1628,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             const pick = rows.find(s => s.reg === replaceFor.season_pick)
             return (
               <ReplaceModal
+                key={replaceFor.season_key}
+                step={replaceTotal > 1 ? `${replaceTotal - replaceQueue.length + 1} of ${replaceTotal}` : null}
+                onSkip={replaceQueue.length > 1 ? () => leaveReplaceQueue(replaceFor.season_key) : null}
                 title={replaceFor.parsed?.title}
                 season={replaceFor.parsed?.season}
                 packs={rows.map(s => ({
@@ -1602,27 +1640,39 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                 initial={(pick || replaceFor).reg}
                 pickNote={pick ? `${packName(pick)} is recommended: ${PICK_REASON[pick.season_pick_reason] || 'it fits the season best'}.` : null}
                 clientName={client?.name || 'your client'}
-                onCancel={() => setReplaceFor(null)}
+                onCancel={() => setReplaceQueue([])}
                 onDone={(resp, pack) => handleReplaced(resp, rows.find(s => s.reg === pack.reg) || replaceFor)}
               />
             )
           })()}
 
-          {packFor && (
-            <SeasonPackModal target={packFor} onCancel={() => setPackFor(null)} />
-          )}
-
-          {forceFor && (
-            <ForceImportModal
-              title={forceFor.library?.service === 'radarr'
-                ? `${forceFor.library.title || forceFor.parsed?.title}${forceFor.library.year ? ` (${forceFor.library.year})` : ''}`
-                : `${forceFor.library?.title || forceFor.parsed?.title}${episodeTag(forceFor)}`}
-              params={forceParams(forceFor)}
-              clientName={client?.name || 'your client'}
-              onCancel={() => setForceFor(null)}
-              onDone={resp => handleForced(resp, forceFor)}
+          {packQueue.length > 0 && (
+            <SeasonPackModal
+              key={packQueue[0].key}
+              target={packQueue[0]}
+              step={packTotal > 1 ? `${packTotal - packQueue.length + 1} of ${packTotal}` : null}
+              onNext={packQueue.length > 1 ? () => leavePackQueue(packQueue[0].key) : null}
+              onCancel={() => setPackQueue([])}
             />
           )}
+
+          {forceQueue.length > 0 && (() => {
+            const item = forceQueue[0]
+            return (
+              <ForceImportModal
+                key={itemKey(item)}
+                title={item.library?.service === 'radarr'
+                  ? `${item.library.title || item.parsed?.title}${item.library.year ? ` (${item.library.year})` : ''}`
+                  : `${item.library?.title || item.parsed?.title}${episodeTag(item)}`}
+                params={forceParams(item)}
+                clientName={client?.name || 'your client'}
+                step={forceTotal > 1 ? `${forceTotal - forceQueue.length + 1} of ${forceTotal}` : null}
+                onSkip={forceQueue.length > 1 ? () => leaveForceQueue(item) : null}
+                onCancel={() => setForceQueue([])}
+                onDone={resp => handleForced(resp, item)}
+              />
+            )
+          })()}
 
           {confirmOpen && (
             <ConfirmDeleteModal
