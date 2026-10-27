@@ -1,7 +1,7 @@
 """Trumped: the code that decides what gets deleted (TRUMPED TR18).
 
 `test_trump.py` covers the string matching, and covers it well. Nothing covered
-`_cross_seed_group`, `_trump_prefer_pm_tracker`, `_trump_find_arr_item` at its
+`_cross_seed_group`, `_trump_prefer_pm_tracker` (gone since TR20), `_trump_find_arr_item` at its
 endpoint, either `resolve_group` phase, or `execute` — every line between a
 pasted PM and a `remove_torrents(delete_files=True)` with no script, no `cmp` and
 no undo.
@@ -119,12 +119,6 @@ class TestAlreadyRight:
         assert plain['picks'][0]['auto'] == app.sources.registration_key(1, 'aaa')
         assert pm['picks'][0]['auto'] == app.sources.registration_key(1, 'bbb')
         assert len(pm['picks'][0]['candidates']) == 2, 'a tie-break drops nothing'
-
-    def test_the_pm_tracker_never_outranks_a_better_title_match(self):
-        ranked = [dict(_row('aaa', tracker='blutopia.cc'), match_score=1.0),
-                  dict(_row('bbb', tracker='aither.cc'), match_score=0.94)]
-        assert app._trump_prefer_pm_tracker(
-            ranked, app._reg(ranked[0]), 'Aither (API) (Prowlarr)') == app._reg(ranked[0])
 
     def test_the_service_gate_holds_at_the_endpoint(self):
         """A same-titled film never answers for an episode — searched on Sonarr."""
@@ -297,14 +291,24 @@ class _Thread:
 
 
 def _execute(body, rows=ROWS3, paths=SHARED3, cfg=None, queue=None, thread=_Thread, list_error=None,
-             grab=None, remove_error=None, listings=None):
+             grab=None, remove_error=None, listings=None, sticky=()):
     """`listings`, when given, answers successive client listings in turn (the
-    last one repeats) — what the group looks like before the grab, then after."""
+    last one repeats) — what the group looks like before the grab, then after.
+    `sticky`: registration keys the client still lists after it was asked to
+    remove them."""
     cfg = {'ALLOW_CLIENT_DELETE': True, **(cfg or {})}
     _Thread.started = []
-    remove = MagicMock(side_effect=remove_error if remove_error
-                       else (lambda _c, items, delete_files=True: len(items)))
+    # The client after a removal lists what was not removed: the removal stage
+    # reports what left, by registration (S09), not what was submitted (CR2).
+    gone = set()
+
+    def _remove(_c, items, delete_files=True):
+        gone.update(app._reg(i) for i in items if app._reg(i) not in sticky)
+        return len(items)
+
+    remove = MagicMock(side_effect=remove_error if remove_error else _remove)
     grab = grab or MagicMock(return_value={})
+    queue_mock = MagicMock(return_value=[] if queue is None else queue)
     # Keyed by registration, as `sources.fetch_torrent_file_paths` answers
     # since S05 — a listing mock answers only what the real one does.
     fetch = MagicMock(side_effect=lambda _c, items: {app._reg(i): paths.get(i['hash'])
@@ -315,19 +319,27 @@ def _execute(body, rows=ROWS3, paths=SHARED3, cfg=None, queue=None, thread=_Thre
     else:
         listing = (MagicMock(side_effect=list_error) if list_error
                    else MagicMock(return_value=list(rows)))
+    after = listings[-1] if listings else rows
+
+    def _detailed(_c):
+        return ([r for r in after if app._reg(r) not in gone],
+                app.sources.new_source_report('qui'))
+
     with patch.object(app, 'db_load_config', return_value=cfg), \
          patch.object(app.sources, 'list_torrents', listing), \
+         patch.object(app.sources, 'list_torrents_detailed', side_effect=_detailed), \
+         patch.object(app, '_REMOVAL_RECHECK_SECS', 0), \
          patch.object(app.sources, 'fetch_torrent_file_paths', fetch), \
          patch.object(app.sources, 'fetch_torrent_details', return_value={}), \
          patch.object(app.sources, 'remove_torrents', remove), \
          patch.object(app, 'grab_release', grab), \
-         patch.object(app, 'queue_records_for_item', return_value=[] if queue is None else queue), \
+         patch.object(app, 'queue_records_for_item', queue_mock), \
          patch.object(app, 'db_update_meta') as meta, \
          patch.object(app, 'try_start_scanning', return_value=True) as scan, \
          patch.object(app, 'nudge_watchdog') as nudge, \
          patch.object(app.threading, 'Thread', thread):
         resp = app.app.test_client().post('/api/workflows/trump/execute', json=body)
-    return resp, SimpleNamespace(remove=remove, grab=grab, meta=meta, scan=scan,
+    return resp, SimpleNamespace(remove=remove, grab=grab, meta=meta, scan=scan, queue=queue_mock,
                                  nudge=nudge, threads=list(_Thread.started))
 
 
@@ -432,6 +444,28 @@ class TestGrabWithoutDeleting:
         resp, m = _execute(dict(RELEASE, force=True), queue=[{'title': 'Rel.2020.2160p-NEW'}])
         assert resp.status_code == 200
         m.grab.assert_called_once()
+
+    def test_a_sonarr_queue_check_asks_about_the_replaced_episodes_only(self):
+        """CODE_REVIEW_2026-09-27 CR8 (TRUMPED TR23). The page sends neither a
+        season nor episode ids, so the check fell back to any entry on the
+        series, and an unrelated episode downloading refused the swap."""
+        sonarr = dict(RELEASE, service='sonarr', library_file_ids=[501])
+        with patch.object(app, '_watch_episode_sets', return_value=[[11, 12]]) as sets:
+            resp, m = _execute(sonarr)
+        assert resp.status_code == 200
+        sets.assert_called_once_with({'ALLOW_CLIENT_DELETE': True}, 'r1', 7, [501])
+        _args, kw = m.queue.call_args
+        assert kw['episode_ids'] == [11, 12]
+
+    def test_a_sonarr_queue_check_with_no_scope_is_skipped_not_series_wide(self):
+        sonarr = dict(RELEASE, service='sonarr')
+        with patch.object(app, '_watch_episode_sets', return_value=None):
+            resp, m = _execute(sonarr, queue=[{'title': 'Other.Show.S02E05'}])
+        assert resp.status_code == 200, "an unrelated download refused the swap"
+        m.queue.assert_not_called()
+        stage = _stages(resp)['queue_check']
+        assert stage['status'] == 'skipped'
+        assert 'which episodes' in stage['message']
 
     def test_the_queue_is_checked_before_anything_is_deleted(self):
         resp, m = _execute(dict(RELEASE, hashes=_items('aaa', 'bbb', 'ccc'), seed_hashes=['aaa']),
@@ -576,6 +610,31 @@ class TestGrabFirst:
         assert {k: v['status'] for k, v in _stages(resp).items()} == {
             'reverify': 'done', 'queue_check': 'done', 'grab': 'done',
             'remove': 'done', 'watch': 'done'}
+
+    def test_a_torrent_still_in_the_client_is_not_reported_removed(self):
+        """CODE_REVIEW_2026-09-27 CR2 (TRUMPED TR22). The stage read "Removed N"
+        off the submitted count, so a registration the client kept (the same
+        release on a second qui instance, before `remove_torrents` posted to
+        each) read as removed while it sat on deleted files."""
+        sticky = app.sources.registration_key(1, 'ccc')
+        resp, m = _execute(dict(SWAP), sticky={sticky})
+        body, remove = resp.get_json(), _stages(resp)['remove']
+        assert remove['status'] == 'failed'
+        assert remove['code'] == 'removal_unconfirmed'
+        assert remove['message'].startswith('Removed 2 of 3 torrent(s). 1 could not be confirmed')
+        assert body['removed'] == 2
+        assert body['status'] == 'partial'
+        # Rounds pays for what left, not for what was asked.
+        (_key, fn), _kw = next(c for c in m.meta.call_args_list if c[0][0] == 'ns_progress')
+        assert fn({})['trump_torrents'] == 2
+
+    def test_a_removal_that_failed_part_way_says_how_many_left(self):
+        def _partial(_c, items, delete_files=True):
+            raise app.sources.SourceConnectionError('qui HTTP error: 500')
+        resp, _m = _execute(dict(SWAP), remove_error=_partial)
+        remove = _stages(resp)['remove']
+        assert remove['status'] == 'failed'
+        assert 'still in your client' in remove['message']
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -748,6 +807,47 @@ class TestArrItemFromPaths:
         assert body['arr_item_ambiguous'] is False
         assert body.get('arr_item_others', []) == []
 
+    def test_every_release_ships_and_the_old_names_mark_the_trumped_one(self, tree):
+        """TR19: the page browses everything the arr returned, so nothing is cut
+        to the eight best scores, and the old names travel with the request."""
+        releases = [{'guid': f'g{i}', 'title': f'Rel.2020.1080p.WEB.x264-G{i}', 'indexer': 'Other',
+                     'seeders': i} for i in range(20)]
+        releases.append({'guid': 'old', 'title': 'Rel.2020.2160p.UHD.BluRay-OLD', 'indexer': 'Aither', 'seeders': 9})
+        matrix = MagicMock(return_value=releases)
+        with patch.object(app, 'db_load_config', return_value=dict(tree.cfg)), \
+             patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
+             patch.object(app, 'fetch_arr_media_index_result', return_value=([_index_row(tree.library)], [])), \
+             patch.object(app, 'normalize_arr_connections', return_value=[]), \
+             patch.object(app, 'fetch_release_matrix', matrix):
+            body = app.app.test_client().post('/api/workflows/trump/search_release', json={
+                'new_title': 'Rel.2020.2160p.UHD.BluRay-NEW', 'group_paths': [tree.linked],
+                'indexer': 'Aither', 'old_titles': ['Rel 2020 2160p UHD BluRay-OLD', 7, '']}).get_json()
+        assert body['candidate_count'] == len(body['candidates']) == 21
+        assert body['release'] is None
+        assert body['candidates'][-1]['guid'] == 'old' and body['candidates'][-1]['trumped'] is True
+
+    def test_the_exact_name_on_usenet_is_never_offered(self, tree):
+        """B14 (issue #25). A scene release carries the same name on Usenet. With
+        no indexer named, the exact name anywhere is pre-selected, and execute
+        grabs it and then removes the trumped torrent, leaving nothing seeding on
+        the tracker. Driven through the real `fetch_release_matrix`, which is
+        where Usenet rows are dropped."""
+        new = 'Rel.2020.2160p.UHD.BluRay-NEW'
+        raw = [{'guid': 'nzb', 'title': new, 'indexer': 'NZBgeek', 'indexerId': 1,
+                'protocol': 'usenet', 'seeders': None, 'size': 1000},
+               {'guid': 'tor', 'title': 'Rel 2020 2160p UHD BluRay NEW', 'indexer': 'Aither',
+                'indexerId': 2, 'protocol': 'torrent', 'seeders': 9, 'size': 1000}]
+        cfg = {**tree.cfg, 'ARR_CONNECTIONS': [
+            {'id': 'r1', 'service': 'radarr', 'name': 'r1', 'base_url': 'http://r1', 'api_key': 'k'}]}
+        with patch.object(app, 'db_load_config', return_value=cfg), \
+             patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
+             patch.object(app, 'fetch_arr_media_index_result', return_value=([_index_row(tree.library)], [])), \
+             patch('arr._arr_get', return_value=raw):
+            body = app.app.test_client().post('/api/workflows/trump/search_release', json={
+                'new_title': new, 'group_paths': [tree.linked]}).get_json()
+        assert [c['guid'] for c in body['candidates']] == ['tor']
+        assert (body['release'] or {}).get('guid') != 'nzb'
+
 
 def test_the_episode_anchor_reads_media_index_rows():
     """Phase 6's note: index rows carry `season_number`, which skipped the
@@ -763,3 +863,64 @@ def test_the_episode_anchor_reads_media_index_rows():
     ]
     parsed = parse_release_info_for_path('Show.S01E02.1080p.WEB-DL-GRP')
     assert rank_arr_candidates(rows, parsed, service='sonarr')[0]['arr_id'] == 6
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TR20 — phase 1 leads with the PM's tracker, and never offers the replacement
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestPhaseOnePmTrackerFirst:
+    """All three fail on the code before TR20: the list was cut to eight, and
+    the equal-score swap to the PM's tracker pre-selected for deletion a REPACK
+    and another group's release. The score saturates, so "equal" was loose."""
+
+    def test_phase_one_leads_with_the_pm_tracker_whatever_another_scored(self):
+        """TR20, the user's rule (2026-09-28): "PMs tracker should always lead".
+        This replaced `test_the_pm_tracker_never_outranks_a_better_title_match`,
+        which held the opposite — the PM's tracker a tie-break among equal
+        scores — and a list cut to eight."""
+        rows = [_row(f'x{i}', name=f'Rel.2020.1080p.WEB-DL-G{i}', tracker='blutopia.cc') for i in range(10)]
+        rows.append(_row('pm', name='Rel 2020 720p HDTV x264-OTHER', tracker='aither.cc'))
+        with patch.object(app, 'db_load_config', return_value={}), \
+             patch.object(app.sources, 'list_torrents', return_value=rows):
+            body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
+                'old_titles': [NAME], 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+        cands = body['picks'][0]['candidates']
+        assert len(cands) == 11, 'nothing that clears the title gate is cut'
+        assert cands[0]['hash'] == 'pm' and cands[0]['pm_tracker'] is True
+        assert cands[0]['match_score'] < cands[1]['match_score']
+
+    def test_phase_one_never_preselects_the_replacement_for_deletion(self):
+        """TR20. The replacement already in the client — a REPACK, grabbed on the
+        PM's tracker and listed first — scores exactly what the original does,
+        and the old equal-score swap to the PM's tracker picked it."""
+        old = 'Rel.2020.1080p.WEB-DL.DDP5.1.H.264-GRP'
+        new = 'Rel.2020.REPACK.1080p.WEB-DL.DDP5.1.H.264-GRP'
+        rows = [_row('rep', name=new, tracker='aither.cc'),
+                _row('orig', name=old, tracker='blutopia.cc'),
+                _row('pmorig', name=old, tracker='aither.cc')]
+        with patch.object(app, 'db_load_config', return_value={}), \
+             patch.object(app.sources, 'list_torrents', return_value=rows):
+            body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
+                'old_titles': [old], 'new_title': new, 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+        pick = body['picks'][0]
+        assert pick['auto'] == app.sources.registration_key(1, 'pmorig'), \
+            'the replacement was pre-selected for deletion'
+        assert [c['hash'] for c in pick['candidates']] == ['pmorig', 'orig', 'rep']
+        assert pick['candidates'][-1]['replacement'] is True
+
+    def test_phase_one_never_preselects_another_groups_release_on_the_pm_tracker(self):
+        """TR20. A different group's release of the same film scores 1.0 as well
+        — title, year, resolution and source outweigh the group — so the old
+        equal-score swap moved the seed off the exact name onto it."""
+        old = 'Rel.2020.1080p.BluRay.DTS.x264-TiZU'
+        rows = [_row('exact', name=old, tracker='seedpool.org'),
+                _row('other', name='Rel.2020.1080p.BluRay.x264-HANDJOB', tracker='aither.cc')]
+        with patch.object(app, 'db_load_config', return_value={}), \
+             patch.object(app.sources, 'list_torrents', return_value=rows):
+            body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
+                'old_titles': [old], 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+        pick = body['picks'][0]
+        assert {c['hash']: c['match_score'] for c in pick['candidates']} == {'exact': 1.0, 'other': 1.0}
+        assert pick['auto'] == app.sources.registration_key(1, 'exact'), \
+            "another group's release was pre-selected for deletion"

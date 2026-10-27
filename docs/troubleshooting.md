@@ -126,12 +126,12 @@ you which check failed:
 
 | The message says | What it means | What to do |
 |---|---|---|
-| …instance(s) did not answer, or listed only part of their torrents | a qui instance failed, or its listing stopped short of the total it advertised | get every instance connected and answering, then scan again |
+| …instance(s) did not answer, or listed only part of their torrents | a qui instance failed, qui shows it as disconnected, or its listing stopped short of the total it advertised | get every instance connected and answering, then scan again. An instance you no longer use can be disabled in qui, and auditorr leaves it out |
 | …would not report their files, and their payload could not be found on disk | more than a quarter of your torrents' file listings failed | check [Path Mappings](configuration.md#path-mappings), and that the client is answering |
 | The torrent client reported N torrent(s), down from… | far fewer torrents than lately — a real removal, or a client that lost its session | if the drop is real, run a **manual scan** to accept it |
 | The torrent client accounted for no files at all… | the client answered with nothing while your torrent folder is full | as above |
 | The torrent/media folder is not there | the folder isn't mounted into the container | fix the mount, then scan again |
-| …folder(s) at a category or release level could not be listed | a permissions problem | give the user auditorr runs as read access to it |
+| …folder(s) at a category or release level could not be listed | a permissions problem | give the user auditorr runs as read access to it. Recycle bins, snapshots and `lost+found` are [always left out](configuration.md#always-ignored), so they never cause this. Any other folder that's meant to stay unreadable can go in [Excluded Files & Folders](configuration.md#excluded-files--folders) instead |
 | The torrent/media folder holds N file(s), down from… | far fewer files than lately — a real deletion, or a mount that came back empty | if it's real, run a **manual scan** to accept it |
 
 **A manual scan accepts a change; it never accepts a failed read.** A library
@@ -176,6 +176,40 @@ spike that never happened.
 free space, then start a scan. The failed run doesn't count towards the
 crash-loop breaker — auditorr declined to save, it didn't crash — so automatic
 scanning carries on.
+
+---
+
+## One day's upload is far higher than your trackers show
+
+**Symptom:** a day on the upload chart shows terabytes, where your usual day is
+gigabytes, and the trackers' own stats show nothing like it.
+
+Upload per day is the difference between scans: each one records how much every
+tracker's torrents have uploaded in total. When a scan couldn't get the tracker
+list for some torrents, it filed their upload under no tracker. Their trackers
+seemed to drop for one scan, and when the next scan put the upload back, the
+chart counted it as new. This happened most often when auditorr started while
+your client was still starting.
+
+Since this fix, a scan like that is left out of the upload stats and the day is
+measured from the scan before it to the scan after it. Days recorded before the
+fix keep their wrong figure until you remove the scan that caused it:
+
+1. Open `http://<your-host>:8677/api/upload_snapshots?days=30`. Find the entry
+   on that day with an `Unknown` tracker where your trackers' `uploaded` figures
+   are lower than in the entries before and after it. Copy its `taken_at`.
+2. Remove that one entry, using its `taken_at` as both ends of the range:
+
+   ```bash
+   curl -X POST http://<your-host>:8677/api/upload_snapshots/delete \
+     -H 'Content-Type: application/json' \
+     -d '{"from": "2026-10-11T12:58:22.679645", "to": "2026-10-11T12:58:22.679645"}'
+   ```
+
+   If you set `AUDITORR_SECRET`, add `-H 'X-Auditorr-Secret: <your key>'`.
+
+The answer should say `"deleted": 1`. The scan stays in Audit History. Only its
+upload figures are removed.
 
 ---
 
@@ -352,22 +386,26 @@ torrent's files are the only copy you have.
 Other rows are unaffected — a title that *did* match still reports *Superseded*
 or *Import Pending* normally. One thing to know while a banner is showing:
 *Import Pending* can be over-reported, because a file that really did import
-looks unimported when the library list couldn't be read. Rescanning it is
+looks unimported when the library list couldn't be read. Retrying its import is
 harmless either way.
 
 ---
 
-## Trigger Rescan doesn't import anything
+## Retry import doesn't import anything
 
-Read the toast — it now carries Sonarr/Radarr's actual answer rather than a
-blanket "rescan triggered". Two answers are common:
+*Retry import* was called *Trigger Rescan* before. Read the toast: it carries
+Sonarr/Radarr's actual answer rather than a blanket "rescan triggered". Two
+answers are common:
 
 **"Not an upgrade for existing movie file"** or **"Not a quality revision
-upgrade"** — the arr already has a file for this title and won't replace it with
-something equal or worse. Rescanning again will never change that. If the
-release really is equivalent (a trump replacement, typically), use
-[Force import](workflows.md#rescan-vs-force-import) instead. If it's genuinely
-lower quality, the arr is right and there's nothing to fix.
+upgrade"**: the arr already has a file for this title and won't replace it with
+something equal or worse. Retrying will never change that. Triage no longer
+offers Retry import on a row it knows is the same quality or lower, so you'll
+mostly see this where it couldn't compare the two. If the release really is
+equivalent (a trump replacement, typically), use
+[Force import](workflows.md#retry-import-vs-force-import) instead. If it's lower
+and you want it in your library anyway, to seed it, use the row's
+[Force import over …](workflows.md#force-import-over-a-better-file).
 
 **"No matching title — the file could not be identified"** — the arr couldn't
 tell what the release is from its name. Import it by hand from the arr's own
@@ -376,7 +414,7 @@ Manual Import, or fix the naming.
 If nothing happens at all and no reason is given, auditorr couldn't reach the
 arr to ask; check **Test Connection** in Config.
 
-> A rescan imports by hardlink and leaves the torrent seeding. It will never
+> Retry import imports by hardlink and leaves the torrent seeding. It will never
 > move your file out from under the client.
 
 ---
@@ -460,13 +498,14 @@ Set **Remote path** for that integration to the path *as Sonarr/Radarr sees it*
 
 ## Links open an internal IP I can't reach
 
-You access your apps through a reverse proxy or Tailscale, but the `↗` buttons
-send you to `http://192.168.x.x:8989` — the address auditorr itself connects on.
+You access Sonarr or Radarr through a reverse proxy or Tailscale, but the `↗`
+links send you to `http://192.168.x.x:8989` — the address auditorr itself
+connects on.
 
 Set an **External URL** for that service. It's the bottom section of Config →
-Torrent Source and Integrations, collapsed by default:
+Integrations, collapsed by default:
 
-- **Host / URL** stays internal — that's what auditorr connects to, and routing
+- **URL** stays internal — that's what auditorr connects to, and routing
   it through the proxy would push every scan through it too (and break entirely
   if the proxy enforces SSO).
 - **External URL** is your public address, and is used only to build links.

@@ -6,7 +6,8 @@ import logging
 from datetime import datetime
 
 from exclusions import compile_exclusions
-from media_server_exclusions import expand_exclusion_patterns, is_tombstone_path
+from media_server_exclusions import expand_exclusion_patterns, is_always_excluded_path
+from sources import norm_abs
 
 log = logging.getLogger(__name__)
 
@@ -81,17 +82,10 @@ def dup_group_inputs(torrent_files, media_files, local_path, media_path):
                for f in media_files if is_dedupe_relevant(f)])
 
 
-def _abs(path):
-    """An absolute path spelled for comparison: `/` separators, no `//` or `.`.
-
-    The audit joins paths with `os.path.join`, which is `\\` on a Windows dev
-    machine, so every path on both sides of a comparison goes through this —
-    unconditionally, so the checked-in tests take the branch the container
-    takes. A Linux file name that really contains a backslash is misspelled by
-    it and then reads as missing: the `stale` state, which cannot be selected.
-    """
-    p = str(path or '').replace('\\', '/')
-    return posixpath.normpath(p) if p else ''
+# Every path on both sides of a comparison goes through this. A Linux file name
+# that really contains a backslash is misspelled by it and then reads as
+# missing: the `stale` state, which cannot be selected. One spelling (CR14).
+_abs = norm_abs
 
 
 def _join(root, rel):
@@ -155,10 +149,11 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
       paths it lists), so that costs a reclaim, never topology.
     * **Excluded paths and tombstones are never a member's paths** (#14) — from
       the records' own flags and, for a path with no record of its own, the
-      current exclusion rules through `matcher`. Tombstones are filtered here as
-      well as at the walk on purpose: these records are the *last* scan's, and
-      the walk's exclusion only lands on the next. A member left with no path is
-      no member.
+      current exclusion rules through `matcher`. Tombstones, and since CLEANUP
+      C24 OS/NAS clutter (a snapshot's read-only copy is identical to the live
+      file), are filtered here as well as at the walk on purpose: these records
+      are the *last* scan's, and the walk's exclusion only lands on the next. A
+      member left with no path is no member.
     * **Group id = the smallest path** (F10), which survives a re-audit.
     * **`frees_up_to` = size × (files − 1)** (F2/F3) — a maximum, true only if
       every copy shares a disk and every link to each is known.
@@ -185,7 +180,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
         return _join(f.get('_file_root', local_path), f.get('path'))
 
     def hidden(path, tree):
-        if is_tombstone_path(path):
+        if is_always_excluded_path(path):
             return True
         if matcher is None:
             return False
@@ -196,7 +191,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
 
     excluded_abs, excluded_count = set(), 0
     for f in all_files:
-        tomb = is_tombstone_path(f.get('path'))
+        tomb = is_always_excluded_path(f.get('path'))
         if tomb or f.get('excluded'):
             excluded_abs.add(own_path(f))
             if not tomb and f.get('duplicate_paths'):
@@ -204,7 +199,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
 
     known, sizes, edges = {}, {}, []
     for f in all_files:
-        if not f.get('duplicate_paths') or f.get('excluded') or is_tombstone_path(f.get('path')):
+        if not f.get('duplicate_paths') or f.get('excluded') or is_always_excluded_path(f.get('path')):
             continue
         fid = str(f.get('file_id') or f.get('inode'))
         tree = tree_of(f)
@@ -234,7 +229,7 @@ def _build_dup_groups(all_files, local_path, media_path='', matcher=None, log_co
     for fid, p in edges:
         target = owner.get(p)
         if target is None:
-            if p not in excluded_abs and not is_tombstone_path(p):
+            if p not in excluded_abs and not is_always_excluded_path(p):
                 unresolved.add(p)
             continue
         if target == fid:
@@ -444,10 +439,50 @@ def scriptable_members(group):
 _STATE_NOTE = {
     'library_copy':     'your library keeps a copy',
     'linked_elsewhere': 'another link keeps the data',
+    'torrent_copy':     'a leftover link: a torrent keeps the data at another path',
     'last_copy':        'the only copy',
 }
 
 _CONTROL_CHARS = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _script_args(flags, options_help):
+    """The option loop both scripts share, and the folder to run in.
+
+    Every path in a script is relative to the folder it runs in, and that is a
+    folder on the host, which auditorr in its container can't name. The scripts
+    used to say `cd` there and run them, which read as "put the script there",
+    and a copy left behind in the torrent folder is itself a stray file. So the
+    one argument that isn't an option names the folder, and the script `cd`s
+    into it before doing anything else. Nothing after that changes: the
+    working-directory guard checks it exactly as it checks a folder you `cd`'d
+    into. `CDPATH` is cleared, or a relative name could land somewhere else.
+    """
+    return [
+        'TARGET=""; HAVE_TARGET=0',
+        'for arg in "$@"; do',
+        '  case "$arg" in',
+        *[f'    {pattern}) {action} ;;' for pattern, action in flags],
+        f'    -*) echo "Unknown option: $arg ({options_help})"; exit 2 ;;',
+        '    *)',
+        '      if [ "$HAVE_TARGET" -eq 1 ]; then',
+        '        echo "ERROR: give one folder, not two. Nothing was changed."',
+        '        exit 2',
+        '      fi',
+        '      TARGET="$arg"; HAVE_TARGET=1 ;;',
+        '  esac',
+        'done',
+        '',
+        "# Given a folder, run from it, as if you had cd'd there first.",
+        'if [ "$HAVE_TARGET" -eq 1 ]; then',
+        '  if [ -z "$TARGET" ] || [ ! -d "$TARGET" ]; then',
+        '    printf \'ERROR: there is no folder at: %s\\n\' "$TARGET"',
+        '    echo "  Nothing was changed."',
+        '    exit 2',
+        '  fi',
+        '  CDPATH= cd -- "$TARGET" || { echo "ERROR: could not open that folder. Nothing was changed."; exit 2; }',
+        'fi',
+    ]
 
 
 def _comment_safe(text):
@@ -540,6 +575,43 @@ prune_dirs() {
       PRUNED=$((PRUNED+1))
     fi
   done
+}
+
+# remove_empty_folder DIR — a folder the scan found with no file at any depth
+# (CLEANUP C27). Only `rmdir`, deepest first, which refuses a folder with
+# anything in it: one that gained a file, a link or a socket since the scan is
+# left with it, and said so. Not a failure — the folder simply isn't empty.
+remove_empty_folder() {
+  local d="$1" label="${1#./}"
+  FN=$((FN+1))
+  if [ ! -e "$d" ] && [ ! -L "$d" ]; then
+    printf '[folder %s/%s] Already gone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_MISSING=$((F_MISSING+1))
+    return 0
+  fi
+  if [ -L "$d" ] || [ ! -d "$d" ]; then
+    printf '[folder %s/%s] Not a folder any more, left alone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_KEPT=$((F_KEPT+1))
+    return 0
+  fi
+  if [ -n "$(find "$d" ! -type d 2>/dev/null | head -n 1)" ]; then
+    printf '[folder %s/%s] No longer empty, left alone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_KEPT=$((F_KEPT+1))
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '[folder %s/%s] Would remove empty folder: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_WOULD=$((F_WOULD+1))
+    return 0
+  fi
+  find "$d" -depth -type d -exec rmdir {} \\; 2>/dev/null
+  if [ -e "$d" ]; then
+    printf '[folder %s/%s] No longer empty, left alone: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_KEPT=$((F_KEPT+1))
+  else
+    printf '[folder %s/%s] Removed empty folder: %s\\n' "$FN" "$FTOTAL" "$label"
+    F_REMOVED=$((F_REMOVED+1))
+  fi
 }"""
 
 _SUMMARY = """\
@@ -547,17 +619,26 @@ echo ""
 echo "================================================"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "Dry run complete — nothing was deleted or removed."
-  echo "  Would delete:   $WOULD / $TOTAL files"
-  echo "  Already gone:   $MISSING"
+  if [ "$TOTAL" -gt 0 ]; then
+    echo "  Would delete:   $WOULD / $TOTAL files"
+    echo "  Already gone:   $MISSING"
+  fi
   if [ "$FAILED" -gt 0 ]; then
     echo "  Not a file:     $FAILED (would be left alone)"
+  fi
+  if [ "$FTOTAL" -gt 0 ]; then
+    echo "  Would remove:   $F_WOULD / $FTOTAL empty folders"
+    [ "$F_KEPT" -gt 0 ] && echo "  No longer empty: $F_KEPT (would be left alone)"
+    [ "$F_MISSING" -gt 0 ] && echo "  Already gone:   $F_MISSING folder(s)"
   fi
   echo "================================================"
   exit 0
 fi
 echo "Cleanup complete."
-echo "  Deleted:        $DELETED / $TOTAL files"
-echo "  Already gone:   $MISSING"
+if [ "$TOTAL" -gt 0 ]; then
+  echo "  Deleted:        $DELETED / $TOTAL files"
+  echo "  Already gone:   $MISSING"
+fi
 if [ "$FAILED" -gt 0 ]; then
   echo "  FAILED:         $FAILED file(s) could not be deleted and are still there."
   echo "                  Check permissions, a read-only mount, or an immutable flag."
@@ -571,7 +652,12 @@ fi
 if [ "$PRUNED" -gt 0 ]; then
   echo "  Removed $PRUNED empty release folder(s)."
 fi
-if [ "$DELETED" -eq 0 ] && [ "$FAILED" -eq 0 ]; then
+if [ "$FTOTAL" -gt 0 ]; then
+  echo "  Removed:        $F_REMOVED / $FTOTAL empty folders"
+  [ "$F_KEPT" -gt 0 ] && echo "  No longer empty: $F_KEPT folder(s), left alone"
+  [ "$F_MISSING" -gt 0 ] && echo "  Already gone:   $F_MISSING folder(s)"
+fi
+if [ "$DELETED" -eq 0 ] && [ "$FAILED" -eq 0 ] && [ "$F_REMOVED" -eq 0 ] && [ "$F_KEPT" -eq 0 ]; then
   echo "  Everything was already gone. If you expected deletions, check this ran in your torrent folder."
 fi
 
@@ -611,15 +697,18 @@ exit 0"""
 
 
 def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
-                         excluded_count=None, safe_folders=()):
+                         excluded_count=None, safe_folders=(), landmarks=(),
+                         empty_folders=(), folders_dropped=0, torrent_root=None):
     """The Cleanup delete script, for a selection the client was just asked about.
 
     `units` is one entry per inode: `{'paths': [rel, ...], 'size', 'state',
     'frees'}` — every selected path of that inode, its size once, its
     `_cleanup_state`, and whether deleting these paths frees the bytes (a last
     copy with every path selected). `verified_at` is the epoch of the live
-    re-verify, `dropped` the selected paths a torrent claims now, and
-    `safe_folders` the release folders the audit stamped as `excl_folder`.
+    re-verify, `dropped` the selected paths a torrent claims now,
+    `safe_folders` the release folders the audit stamped as `excl_folder`, and
+    `landmarks` top-level entries of the torrent folder that live torrents hold
+    (`app._cleanup_landmarks`), which a finished run leaves in place.
 
     The contract (CLEANUP §5.5), each part of which `backend_tests/test_cleanup.py`
     checks by **running** the script:
@@ -632,19 +721,33 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
       never counted as space freed (C11). Exits 1 if anything failed.
     * **Idempotent.** The working-directory guard checks for folders a completed
       run leaves in place (the parent of each safe release folder, or the folder
-      itself where the script removes nothing), not for the first file it
-      deletes — which made every finished run fail its own re-run. A directory
-      holding none of them is still an error.
+      itself where the script removes nothing, and the landmarks), not for the
+      first file it deletes — which made every finished run fail its own re-run.
+      A directory holding none of them is still an error. **The landmarks are
+      what make that true with no category folder** (CLEANUP C20): a one-segment
+      release folder anchors on the torrent folder itself, which names nothing,
+      so on that layout no guard was emitted at all. With nothing to name, the
+      script says so and asks before deleting, where it can ask.
     * After a group's files, empty folders are removed **no higher than the
       group's `excl_folder`**, and not at all for a group without one — a
       category dir, a folder shared with a live torrent, or the root (C13).
     * `--dry-run` prints what it would do and touches nothing.
+    * The torrent folder can be passed as an argument (`_script_args`), so the
+      script can be kept anywhere. `torrent_root` is `LOCAL_PATH`, named in the
+      usage so the reader knows which host folder that is.
     * `VERIFIED_AT` and a warning past a day, never a refusal: the host clock
       belongs to another machine.
     * The nlink accounting is kept as it was — it was already the one honest
       part of the script, and under C5 it is what counts an inode's bytes once.
+    * **Empty folders** (C27, `empty_folders`, relative) are removed after every
+      file, by `remove_empty_folder`: `rmdir` only, deepest first, so a folder
+      that gained anything since the scan keeps it and is counted "no longer
+      empty", which isn't a failure. Each one's parent anchors the guard,
+      unless it's the root or is itself being removed.
     """
     safe = {str(f).replace('\\', '/').strip('/') for f in (safe_folders or ()) if f}
+    torrent_note = (f', the folder auditorr sees as {_comment_safe(torrent_root)}'
+                    if torrent_root else '')
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     verified_str = datetime.fromtimestamp(int(verified_at)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -659,8 +762,18 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
     total_files = sum(len(v) for v in by_folder.values())
     freeable = sum(int(u.get('size') or 0) for u in units if u.get('frees'))
     # What a completed run leaves behind: the category above each safe release
-    # folder, and every folder the script does not prune.
+    # folder, every folder the script does not prune, and what live torrents hold.
     anchors = sorted({(posixpath.dirname(f) if f in safe else f) for f in by_folder} - {''})
+    deleted = {p for v in by_folder.values() for p, *_ in v}
+    folders = sorted({str(f).replace('\\', '/').strip('/') for f in empty_folders or ()} - {''})
+
+    def _removed(path):
+        return any(path == f or path.startswith(f + '/') for f in folders)
+
+    anchors += sorted({posixpath.dirname(f) for f in folders}
+                      - set(anchors) - {''} - {a for a in map(posixpath.dirname, folders) if _removed(a)})
+    anchors += sorted({str(m).replace('\\', '/').strip('/') for m in landmarks or ()}
+                      - set(anchors) - safe - deleted - {'', '.', '..'})
 
     lines = [
         '#!/bin/bash',
@@ -671,6 +784,11 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         '# WARNING: Review carefully before running. This permanently deletes files.',
         f'# {total_files} file(s) — up to {_human_size(freeable)} freed (the script reports what it actually frees)',
     ]
+    if folders:
+        lines.append(f'# {len(folders)} empty folder(s), removed only while still empty')
+    if folders_dropped:
+        lines.append(f'# {folders_dropped} selected folder(s) are where a torrent in your client saves '
+                     f'now, and were left out.')
     if dropped:
         lines.append(f'# {dropped} file(s) are no longer orphaned and were removed from this script.')
     if not_in_report:
@@ -686,26 +804,23 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         "#   3. Check each file's link count (hardlinked = still referenced elsewhere), then delete it",
         '#   4. Count every file as deleted, already gone, or FAILED — a failed delete is never reported as done',
         '#   5. Remove release folders it emptied — never a category folder, never one with anything left in it',
+        '#      and the empty folders you selected, each only while it is still empty',
         '#   6. Compare the space actually freed with what was expected',
         '#',
-        '# USAGE:',
-        '#   cd /path/to/your/torrent/directory',
-        '#   bash orphaned_torrents_delete.sh             # delete',
-        '#   bash orphaned_torrents_delete.sh --dry-run   # show what it would do; change nothing',
+        '# USAGE: keep this file anywhere. It does not need to be in your torrent folder.',
+        f'# Give it your torrent folder as your host sees it{torrent_note}:',
+        '#   bash orphaned_torrents_delete.sh --dry-run /path/to/torrents   # show what it would do; change nothing',
+        '#   bash orphaned_torrents_delete.sh /path/to/torrents             # delete',
+        '# Or cd into your torrent folder and leave the folder off.',
         '#',
-        '# All file paths are relative to your torrent directory.',
+        '# All file paths are relative to your torrent folder.',
         '# Safe to run again: anything already deleted is reported as already gone.',
         '',
         'set -uo pipefail',
         '',
         f'VERIFIED_AT={int(verified_at)}',
         'DRY_RUN=0',
-        'for arg in "$@"; do',
-        '  case "$arg" in',
-        '    --dry-run|-n) DRY_RUN=1 ;;',
-        '    *) echo "Unknown option: $arg (the only option is --dry-run)"; exit 2 ;;',
-        '  esac',
-        'done',
+        *_script_args([('--dry-run|-n', 'DRY_RUN=1')], 'the only option is --dry-run'),
         '',
         _FMT_BYTES,
         '',
@@ -714,23 +829,40 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
     ]
     if anchors:
         lines += [
-            '# Working-directory guard. It looks for folders a completed run leaves in place,',
-            '# so a second run of a finished script still passes it.',
+            '# Working-directory guard. It looks for folders and files a completed run leaves',
+            '# in place, so a second run of a finished script still passes it.',
             '_found=0',
             'for _d in ' + ' '.join(f'./{shlex.quote(a)}' for a in anchors) + '; do',
-            '  if [ -d "$_d" ]; then _found=1; break; fi',
+            '  if [ -e "$_d" ]; then _found=1; break; fi',
             'done',
             'if [ "$_found" -eq 0 ]; then',
             '  echo "ERROR: This does not look like your torrent directory."',
-            f'  printf \'  Expected to find the folder: %s\\n\' {shlex.quote(anchors[0])}',
-            '  echo "  cd into your torrent folder and try again."',
+            '  printf \'  Looked in: %s\\n\' "$(pwd)"',
+            f'  printf \'  Expected to find: %s\\n\' {shlex.quote(anchors[0])}',
+            '  echo "  Give the script your torrent folder (bash <script> /path/to/torrents),"',
+            '  echo "  or cd into it, and try again. Nothing was deleted."',
             '  exit 1',
+            'fi',
+            '',
+        ]
+    else:
+        lines += [
+            '# Nothing is known to be in your torrent folder after this run, so there is',
+            '# nothing to check the working directory against. Asked instead, where it can ask.',
+            'echo "⚠ This script cannot check that it is running in your torrent directory."',
+            'printf \'  It deletes paths relative to: %s\\n\' "$(pwd)"',
+            'if [ "$DRY_RUN" -eq 0 ] && [ -t 0 ]; then',
+            '  printf \'  Is this your torrent folder? [y/N] \'',
+            '  read -r _ok || _ok=""',
+            '  case "$_ok" in y|Y|yes|YES) ;; *) echo "Stopped. Nothing was deleted."; exit 1 ;; esac',
             'fi',
             '',
         ]
     lines += [
         f'TOTAL={total_files}',
+        f'FTOTAL={len(folders)}',
         'N=0; DELETED=0; MISSING=0; FAILED=0; WOULD=0; PRUNED=0',
+        'FN=0; F_REMOVED=0; F_KEPT=0; F_MISSING=0; F_WOULD=0',
         'HARDLINKED_COUNT=0; HARDLINKED_BYTES=0; STANDALONE_COUNT=0; STANDALONE_BYTES=0',
         '',
         'NOW=$(date +%s 2>/dev/null || true)',
@@ -750,9 +882,11 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         '',
         'echo "================================================"',
         'echo "auditorr Orphaned Torrent Cleanup"',
+        'printf \'Folder: %s\\n\' "$(pwd)"',
         f'echo "Checked against your torrent client: {verified_str}"',
         '[ "$DRY_RUN" -eq 1 ] && echo "DRY RUN — nothing will be deleted."',
         f'echo "Files: {total_files} — up to {_human_size(freeable)} freed"',
+    ] + ([f'echo "Empty folders: {len(folders)}"'] if folders else []) + [
         'echo "================================================"',
         'echo ""',
         '',
@@ -762,7 +896,9 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
         files = sorted(by_folder[folder])
         lines.append(f'# ── {_comment_safe(folder) if folder else "top of the torrent folder"}')
         for p, size, state, n_paths in files:
-            if n_paths > 1:
+            # A leftover's bytes stay with the torrent whatever is deleted, so
+            # "freed when every path goes" would be untrue of it.
+            if n_paths > 1 and state != 'torrent_copy':
                 lines.append(f'# one file at {n_paths} paths here — its space is freed only when '
                              f'every one of them is deleted')
             note = _STATE_NOTE.get(state)
@@ -778,6 +914,11 @@ def build_cleanup_script(units, *, verified_at, dropped=0, not_in_report=0,
             if dirs:
                 ordered = sorted(dirs, key=lambda d: (-d.count('/'), d))
                 lines.append('prune_dirs ' + ' '.join(f'./{shlex.quote(d)}' for d in ordered))
+        lines.append('')
+
+    if folders:
+        lines.append('# ── Empty folders')
+        lines += [f'remove_empty_folder ./{shlex.quote(f)}' for f in folders]
         lines.append('')
 
     lines.append(_SUMMARY)
@@ -1204,7 +1345,8 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
     * Inherited from Cleanup's (CLEANUP §5.5): `set -uo pipefail` with no `-e`;
       every path `./`-prefixed with `--` before it; outcome buckets (linked,
       already linked, left alone with a reason, **FAILED**), with FAILED exiting
-      1; `--dry-run`; a generated-at stamp that warns past a day; `awk` bytes;
+      1; `--dry-run`; the folder as an optional argument (`_script_args`);
+      a generated-at stamp that warns past a day; `awk` bytes;
       nothing path- or config-derived in a comment except through
       `_comment_safe` — `script_root` included (S10).
     * Refuses to start without GNU `stat -c`, and says up front how much `cmp`
@@ -1268,11 +1410,12 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
         '#      missing',
         '#   7. Count space as freed only when every link to a copy has been replaced',
         '#',
-        '# USAGE:',
-        f'#   cd <the folder on your host that auditorr sees as {root_note}>',
-        '#   bash dedupe.sh                  # link',
-        '#   bash dedupe.sh --dry-run        # check and compare everything; change nothing',
-        '#   bash dedupe.sh --allow-sparse   # also link files that look unfinished (compressed filesystems)',
+        '# USAGE: keep this file anywhere. It does not need to be in your data folder.',
+        f'# Give it the folder on your host that auditorr sees as {root_note}:',
+        '#   bash dedupe.sh --dry-run /path/to/data        # check and compare everything; change nothing',
+        '#   bash dedupe.sh /path/to/data                  # link',
+        '#   bash dedupe.sh --allow-sparse /path/to/data   # also link files that look unfinished (compressed filesystems)',
+        '# Or cd into that folder and leave the folder off.',
         '#',
         '# Needs GNU stat (any Linux; not macOS). Install "pv" for a progress bar while large',
         '# files are compared; without it you get a heartbeat.',
@@ -1285,13 +1428,8 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
         f'GENERATED_AT={int(generated_at)}',
         'DRY_RUN=0',
         'ALLOW_SPARSE=0',
-        'for arg in "$@"; do',
-        '  case "$arg" in',
-        '    --dry-run|-n) DRY_RUN=1 ;;',
-        '    --allow-sparse) ALLOW_SPARSE=1 ;;',
-        '    *) echo "Unknown option: $arg (options: --dry-run, --allow-sparse)"; exit 2 ;;',
-        '  esac',
-        'done',
+        *_script_args([('--dry-run|-n', 'DRY_RUN=1'), ('--allow-sparse', 'ALLOW_SPARSE=1')],
+                      'options: --dry-run, --allow-sparse'),
         '',
         '# BSD and macOS stat have no -c, and every check below reads it.',
         'if ! stat -c %i . >/dev/null 2>&1; then',
@@ -1319,8 +1457,10 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
             'done',
             'if [ "$_found" -eq 0 ]; then',
             '  echo "ERROR: This does not look like the folder this script was built for."',
+            '  printf \'  Looked in: %s\\n\' "$(pwd)"',
             f'  printf \'  Expected to find: %s\\n\' {shlex.quote(guard[0])}',
-            '  echo "  cd into the folder described at the top of this script and try again."',
+            '  echo "  Give the script the folder described at the top of it (bash <script> /path/to/data),"',
+            '  echo "  or cd into that folder, and try again. Nothing was changed."',
             '  exit 1',
             'fi',
             '',
@@ -1340,6 +1480,7 @@ def build_dedupe_script(groups, *, script_root, generated_at, excluded_count=0, 
         '',
         'echo "================================================"',
         'echo "auditorr Dedupe"',
+        'printf \'Folder: %s\\n\' "$(pwd)"',
         '[ "$DRY_RUN" -eq 1 ] && echo "DRY RUN — nothing will be changed."',
         f'echo "{n_groups} group(s) · {n_files} files · up to {_human_size(frees)} freed"',
         f'echo "Comparing reads up to {_human_size(reads)} from disk."',

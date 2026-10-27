@@ -78,7 +78,7 @@ def _ordered_walk(top, **kw):
     Sorting makes every test in this file see one order. It does not paper over
     the underlying behaviour — that an inode with one excluded path is a
     duplicate candidate or not depending on which path was seen first is real,
-    predates F18, and is recorded in `prompts/DEDUPE.md` §0 as the open half of
+    predates F18, and is recorded in `prompts/record/DEDUPE.md` §0 as the open half of
     PR #24. A test must not be the thing that decides it.
     """
     for root, dirs, files in _REAL_WALK(top, **kw):
@@ -461,6 +461,36 @@ class TestAlreadyRight:
         before = [lib.ino(p) for p in paths]
         code, out = _run(text, wrong)
         assert code != 0 and 'ERROR' in out, out
+        assert [lib.ino(p) for p in paths] == before
+
+    def test_it_links_in_the_folder_it_is_given_from_anywhere(self, tmp_path):
+        """The folder can be an argument, so the script needn't sit in the data
+        folder. Options go either side of it."""
+        lib = Lib(tmp_path)
+        paths = _pack(lib, 2, 'two', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        assert 'Give it the folder on your host that auditorr sees as' in text
+        home = tmp_path / 'home'
+        home.mkdir()
+        code, out = _run(text, home, _posix(lib.root), '--dry-run')
+        assert code == 0, out
+        assert lib.ino(paths[0]) != lib.ino(paths[1])
+        code, out = _run(text, home, _posix(lib.root))
+        assert code == 0, out
+        assert lib.ino(paths[0]) == lib.ino(paths[1])
+        assert list(home.iterdir()) == []
+
+    def test_a_folder_that_is_not_there_changes_nothing(self, tmp_path):
+        lib = Lib(tmp_path)
+        paths = _pack(lib, 2, 'two', size=3000)
+        t, m = lib.audit()
+        text = _text(_script(t, m, lib.cfg(), tmp_path,
+                             groups=_ids(_report(t, m, lib.cfg(), tmp_path))))
+        before = [lib.ino(p) for p in paths]
+        code, out = _run(text, lib.root, _posix(tmp_path / 'missing'))
+        assert code == 2 and 'no folder' in out, out
         assert [lib.ino(p) for p in paths] == before
 
     def test_the_health_scores_duplicate_count_is_untouched(self, tmp_path):

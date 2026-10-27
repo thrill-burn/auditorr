@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { FixedSizeList } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
-import { formatBytes, copyText, parseReleaseTitle, tint } from '../utils'
+import { formatBytes, copyText, tint } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
 import { Button, Segmented, FlagToggle, CloseButton, IconButton, SearchInput, Dot } from './workflows/shared'
@@ -31,35 +31,6 @@ function detectMediaType(filePath) {
     if (/tv|television|show|series|sonarr/.test(part)) return 'tv'
   }
   return 'unknown'
-}
-
-// Open a torrent in the client. qui deep-links straight to the torrent by
-// hash (/instances/{id}?torrent={hash} selects it with the details pane);
-// qBittorrent's WebUI reads no URL params, so copy a searchable title for a
-// one-paste search instead. The release folder (second path segment in TRaSH
-// layouts) names the torrent better than a nested file's basename.
-function openTorrentInClient(node, torrentSource, qbHost, quiHost, toast) {
-  if (torrentSource === 'qui') {
-    const base = (quiHost || '').replace(/\/+$/, '')
-    const url = node.hash && node.instance_id != null
-      ? `${base}/instances/${node.instance_id}?torrent=${node.hash}`
-      : (node.instance_id != null ? `${base}/instances/${node.instance_id}` : base)
-    window.open(url, '_blank', 'noopener')
-    return
-  }
-  const segs = (node.path || '').replace(/\\/g, '/').split('/')
-  const nameSource = segs.length >= 3 ? segs[1] : segs[segs.length - 1]
-  const term = parseReleaseTitle(nameSource) || nameSource
-  copyText(term)
-  window.open(qbHost, '_blank', 'noopener')
-  toast(`“${term}” copied — paste it into the qBittorrent search box to find this torrent`, 'info')
-}
-
-function clientLinkTitle(node, torrentSource) {
-  if (torrentSource === 'qui') {
-    return node.hash && node.instance_id != null ? 'Open this torrent in qui' : 'Open in qui'
-  }
-  return 'Copy the title and open qBittorrent — paste into its search box to find this torrent'
 }
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
@@ -103,12 +74,20 @@ function CopyPathButton({ path, toast }) {
   )
 }
 
+// The toast after "Open in Sonarr/Radarr". The link is on every library file,
+// seeding or not; only an orphan has a reason to go searching.
+function arrOpenedNote(title, service, isOrphan) {
+  return isOrphan
+    ? `Opened ${title} in ${service} — run Interactive Search to find a seeding version`
+    : `Opened ${title} in ${service}`
+}
+
 // "Open in Sonarr/Radarr". Same story as Tag, and it was a hand-copy in both
 // row renderers. Hover underlines, because the wash it used to set never drew.
 function ArrSearchButton({ service, color, state, onClick }) {
   return (
     <button
-      title={`Search in ${service}`}
+      title={`Open this title in ${service}`}
       onClick={onClick}
       style={{
         background: 'none', border: 'none', padding: '1px 2px',
@@ -437,17 +416,15 @@ function FolderRow({ name, node, depth, openRef, onToggle, path }) {
   )
 }
 
-function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, onOpenPopup }) {
+function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, onOpenPopup }) {
   const indent      = (depth * 20) + 14
   const isDupe      = node.duplicate_paths?.length > 0
   const isOrphan    = node.status === 'Orphaned'
-  const notImported = !node.excluded && !node.imported && node.status !== 'Orphaned' && tab === 'torrents'
-  const showSearchButtons = tab === 'media' && isOrphan
+  const notImported = !node.excluded && !node.imported && node.status !== 'Orphaned' && !node.sidecar && tab === 'torrents'
+  const showSearchButtons = tab === 'media'
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
   const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
-  const sourceHost = torrentSource === 'qui' ? quiHost : qbHost
-  const showSourceLink = tab === 'torrents' && !!sourceHost
   const hasPaths   = node.linked_paths?.length > 0 || node.duplicate_paths?.length > 0
 
   const toast = useToast()
@@ -461,7 +438,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
       const data = await api.sonarrSearch(node.path)
       window.open(data.url, '_blank', 'noopener')
       setSonarrState('success')
-      toast(`Opened ${data.title} in Sonarr — run Interactive Search to find a seeding version`, 'success')
+      toast(arrOpenedNote(data.title, 'Sonarr', isOrphan), 'success')
       setTimeout(() => setSonarrState('idle'), 3000)
     } catch (err) {
       setSonarrState('error')
@@ -477,7 +454,7 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
       const data = await api.radarrSearch(node.path)
       window.open(data.url, '_blank', 'noopener')
       setRadarrState('success')
-      toast(`Opened ${data.title} in Radarr — run Interactive Search to find a seeding version`, 'success')
+      toast(arrOpenedNote(data.title, 'Radarr', isOrphan), 'success')
       setTimeout(() => setRadarrState('idle'), 3000)
     } catch (err) {
       setRadarrState('error')
@@ -517,30 +494,22 @@ function FileRow({ name, node, depth, tab, sonarrConfigured, radarrConfigured, t
         <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
           {(node.trackers||[]).join(' · ')}
         </span>
-        {showSourceLink && (
-          <Button size="chip" variant="subtle" title={clientLinkTitle(node, torrentSource)}
-            onClick={e => { e.stopPropagation(); openTorrentInClient(node, torrentSource, qbHost, quiHost, toast) }}>
-            {torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}
-          </Button>
-        )}
         <CopyPathButton path={node.path} toast={toast} />
       </div>
     </div>
   )
 }
 
-function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, isRevealed, onOpenPopup }) {
+function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, isRevealed, onOpenPopup }) {
   const basename    = node.path.replace(/\\/g, '/').split('/').pop()
   const dirname     = node.path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
   const isDupe      = node.duplicate_paths?.length > 0
   const isOrphan    = node.status === 'Orphaned'
-  const notImported = !node.excluded && !node.imported && node.status !== 'Orphaned' && tab === 'torrents'
-  const showSearchButtons = tab === 'media' && isOrphan
+  const notImported = !node.excluded && !node.imported && node.status !== 'Orphaned' && !node.sidecar && tab === 'torrents'
+  const showSearchButtons = tab === 'media'
   const mediaType  = detectMediaType(node.path)
   const showSonarr = sonarrConfigured && (mediaType === 'tv'    || mediaType === 'unknown')
   const showRadarr = radarrConfigured && (mediaType === 'movie' || mediaType === 'unknown')
-  const sourceHost = torrentSource === 'qui' ? quiHost : qbHost
-  const showSourceLink = tab === 'torrents' && !!sourceHost
   const hasPaths   = node.linked_paths?.length > 0 || node.duplicate_paths?.length > 0
 
   const toast = useToast()
@@ -554,7 +523,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
       const data = await api.sonarrSearch(node.path)
       window.open(data.url, '_blank', 'noopener')
       setSonarrState('success')
-      toast(`Opened ${data.title} in Sonarr — run Interactive Search to find a seeding version`, 'success')
+      toast(arrOpenedNote(data.title, 'Sonarr', isOrphan), 'success')
       setTimeout(() => setSonarrState('idle'), 3000)
     } catch (err) {
       setSonarrState('error')
@@ -570,7 +539,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
       const data = await api.radarrSearch(node.path)
       window.open(data.url, '_blank', 'noopener')
       setRadarrState('success')
-      toast(`Opened ${data.title} in Radarr — run Interactive Search to find a seeding version`, 'success')
+      toast(arrOpenedNote(data.title, 'Radarr', isOrphan), 'success')
       setTimeout(() => setRadarrState('idle'), 3000)
     } catch (err) {
       setRadarrState('error')
@@ -613,12 +582,6 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
           <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', width: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}>
             {(node.trackers||[]).join(' · ')}
           </span>
-          {showSourceLink && (
-            <Button size="chip" variant="subtle" title={clientLinkTitle(node, torrentSource)}
-              onClick={e => { e.stopPropagation(); openTorrentInClient(node, torrentSource, qbHost, quiHost, toast) }}>
-              {torrentSource === 'qui' ? 'qui ↗' : 'qBit ↗'}
-            </Button>
-          )}
           <CopyPathButton path={node.path} toast={toast} />
         </div>
       </div>
@@ -639,7 +602,7 @@ function FlatFileRow({ node, tab, sonarrConfigured, radarrConfigured, torrentSou
 // (e.g. after a filter change that shifts items in the list), resetting hook state.
 
 const FlatRowRenderer = ({ index, style, data }) => {
-  const { nodes, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath, onOpenPopup } = data
+  const { nodes, tab, sonarrConfigured, radarrConfigured, revealPath, onOpenPopup } = data
   const node = nodes[index]
   return (
     <div style={style}>
@@ -649,9 +612,6 @@ const FlatRowRenderer = ({ index, style, data }) => {
         tab={tab}
         sonarrConfigured={sonarrConfigured}
         radarrConfigured={radarrConfigured}
-        torrentSource={torrentSource}
-        qbHost={qbHost}
-        quiHost={quiHost}
         isRevealed={!!revealPath && node.path === revealPath}
         onOpenPopup={onOpenPopup}
       />
@@ -660,7 +620,7 @@ const FlatRowRenderer = ({ index, style, data }) => {
 }
 
 const TreeRowRenderer = ({ index, style, data }) => {
-  const { rows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, onOpenPopup } = data
+  const { rows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, onOpenPopup } = data
   const row = rows[index]
   return (
     <div style={style}>
@@ -674,7 +634,6 @@ const TreeRowRenderer = ({ index, style, data }) => {
             key={row.path || row.name}
             name={row.name} node={row.node} depth={row.depth} tab={tab}
             sonarrConfigured={sonarrConfigured} radarrConfigured={radarrConfigured}
-            torrentSource={torrentSource} qbHost={qbHost} quiHost={quiHost}
             onOpenPopup={onOpenPopup}
           />
       }
@@ -737,9 +696,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   const [sonarrConfigured,      setSonarrConfigured]      = useState(false)
   const [radarrConfigured,      setRadarrConfigured]      = useState(false)
-  const [torrentSource,         setTorrentSource]         = useState('qbit')
-  const [qbHost,                setQbHost]                = useState('')
-  const [quiHost,               setQuiHost]               = useState('')
   const [hideExcluded,          setHideExcluded]          = useState(false)
 
   useEffect(() => {
@@ -747,12 +703,6 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       const arrConnections = Array.isArray(c.ARR_CONNECTIONS) ? c.ARR_CONNECTIONS : []
       setSonarrConfigured(!!c.SONARR_URL || arrConnections.some(conn => String(conn.service || '').toLowerCase() === 'sonarr'))
       setRadarrConfigured(!!c.RADARR_URL || arrConnections.some(conn => String(conn.service || '').toLowerCase() === 'radarr'))
-      setTorrentSource(c.TORRENT_SOURCE || 'qbit')
-      // These two are only ever used to build links the browser opens, so they
-      // resolve to the external address when one is set. The API address stays
-      // server-side — nothing here should ever fetch from these.
-      setQbHost(c.QB_EXTERNAL_URL || c.QB_HOST || '')
-      setQuiHost(c.QUI_EXTERNAL_URL || c.QUI_HOST || '')
       setHideExcluded(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
     }).catch(() => {})
   }, [])
@@ -822,7 +772,9 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     const isExcl = f.excluded === true
     const eMatch = exclFilter === 'any' || (exclFilter === 'only' ? isExcl : !isExcl)
 
-    const iMatch = importFilter === 'all' || (importFilter === 'notImported' && !f.excluded && !f.imported && f.status !== 'Orphaned')
+    // A sidecar (`sidecar`, TRIAGE T19) is an .nfo or sample of a torrent the
+    // library holds: no arr imports one, so it isn't "not imported".
+    const iMatch = importFilter === 'all' || (importFilter === 'notImported' && !f.excluded && !f.imported && f.status !== 'Orphaned' && !f.sidecar)
 
     const tMatch =
       (trackerInc.length === 0 || trackerInc.some(t => (f.trackers||[]).includes(t))) &&
@@ -867,12 +819,12 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
 
   // Stable itemData objects for react-window (avoids forcing re-renders of all visible rows)
   const flatItemData = useMemo(() => ({
-    nodes: sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath, onOpenPopup: openPopup,
-  }), [sortedFiltered, tab, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, revealPath, openPopup])
+    nodes: sortedFiltered, tab, sonarrConfigured, radarrConfigured, revealPath, onOpenPopup: openPopup,
+  }), [sortedFiltered, tab, sonarrConfigured, radarrConfigured, revealPath, openPopup])
 
   const treeItemData = useMemo(() => ({
-    rows: treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, onOpenPopup: openPopup,
-  }), [treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, torrentSource, qbHost, quiHost, openPopup])
+    rows: treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, onOpenPopup: openPopup,
+  }), [treeRows, tab, openRef, onToggle, sonarrConfigured, radarrConfigured, openPopup])
 
   const [copied, setCopied] = useState(false)
 

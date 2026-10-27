@@ -10,7 +10,7 @@ PM rather than from an audit finding.
 | --- | --- | --- |
 | [Backfill](#backfill) | Media with no torrent behind it | A grab in Sonarr/Radarr |
 | [Cleanup](#cleanup) | Torrent files with no torrent | A delete script you review |
-| [Triage](#triage) | Torrents that are in some kind of trouble | A rescan, an exclusion, or a client delete |
+| [Triage](#triage) | Torrents that are in some kind of trouble | An import, an exclusion, or a client delete |
 | [Dedupe](#dedupe) | The same bytes stored twice | A script that replaces copies with hardlinks |
 | [Trumped](#trumped) | A trumped release and its cross-seeds | The old group gone, the replacement grabbed |
 
@@ -122,7 +122,9 @@ seeding torrent — a trumped release, a dead tracker, a rip you made yourself.
 They cost you disk space and return nothing.
 
 Backfill matches those files against your Sonarr/Radarr library, then searches
-your indexers for a version that is actually seeding.
+your indexers for a version that is actually seeding. Only torrent releases are
+offered, because a Usenet download can't seed. Usenet indexers aren't listed in
+the indexer pickers either.
 
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
@@ -140,6 +142,12 @@ once. An episode search can still turn up a season pack or a multi-episode
 release, and those are left off an episode row. Where Sonarr hasn't numbered
 every file of a show, auditorr can't show that a season is fully unseeded, so
 it searches episode by episode.
+
+When you *do* want the whole season on one pack, *Switch seasons over to a
+pack*, above the results, lists each season with single-episode rows in the run,
+with a **Find season pack…** button. It opens
+[Find the season pack](#find-the-season-pack), which checks your client for a
+pack first and shows which episodes are still seeded before anything moves.
 
 A release offered on a row has to cover **exactly** what that row's file holds,
 in the **same season**. A file holding two episodes (`S01E01E02`) is only
@@ -178,7 +186,8 @@ the download is, or auditorr can't tell which episodes the row covered, it stops
 and asks you to finish the import in Sonarr/Radarr rather than guessing.
 
 auditorr follows the download in the **Import Jobs** panel at the bottom right,
-and says **Imported** only when the arr's file for that movie — or for those
+with how far it has got (from the arr's queue — a spinner when the arr doesn't
+report a size), and says **Imported** only when the arr's file for that movie — or for those
 episodes — actually changed. Everything else gets its own answer rather than a
 green tick: *Download failed* (the arr says so, with its reason), *Never queued*,
 *No new file* (it left the queue without one — removed or blocklisted in the
@@ -246,14 +255,26 @@ still hold this data?**
   on disk — normally your media library's copy — so deleting the torrent-folder
   path loses nothing, and frees nothing either. Clearing this pile is what tidies
   a torrent folder.
-- **This is the only copy** comes second. Deleting these is permanent.
+- **A torrent keeps a copy** comes next: leftover hardlinks. No torrent uses
+  these paths, but a torrent in your client uses the same file at another path.
+  The usual cause is a cross-seed removed with its files kept, which leaves its
+  folder behind. Deleting them frees nothing, since the torrent still holds the
+  data. Clearing them still helps: a tool that decides whether something was
+  imported by counting hardlinks, like a qui automation, reads a leftover as a
+  library copy and keeps a torrent your arr never imported. The torrent's own
+  path is never listed here, so it can't be selected.
+- **This is the only copy** comes after those. Deleting these is permanent.
 - **Could not check** appears only when your client didn't fully answer on the
   last scan. Those files might belong to a live torrent, so they're shown but
   can't be selected until a scan reads every torrent's file list.
 
-Every file carries its state — **library copy**, **linked elsewhere** (a
-hardlink outside your torrent and media folders, such as a snapshot), **only
-copy** or **could not check** — and its age. Within each pile the oldest comes
+Every file carries its state as a coloured dot — **library copy**, **linked
+elsewhere** (a hardlink outside your torrent and media folders, such as a
+snapshot), **torrent copy** (a leftover hardlink), **only copy** or **could not
+check** — and its age. The state is
+spelled out only where a file differs from its pile's heading: a release lands
+in the pile of its most alarming file, so a folder under *This is the only copy*
+can still hold a library copy, and that file says so. Within each pile the oldest comes
 first: a file that has sat there for years is likelier junk than one from this
 week. A file hardlinked at two places in your torrent folder — a cross-seed
 whose torrents are both gone — is one row listing both paths, because its space
@@ -261,7 +282,31 @@ is freed only when both are deleted. **Frees up to** is a maximum; the
 script reports what it actually frees.
 
 Files are grouped by release folder so you review whole releases rather than
-individual files, and nothing is ever selected for you.
+individual files, and nothing is ever selected for you. A release folder
+holding a single file is one line naming the folder and the file.
+
+**Empty folders** are listed last, apart from the files: folders in your torrent
+folder with nothing in them at any depth, usually left behind when a torrent's
+files were deleted or moved. Removing them frees nothing, so they don't count
+toward the sidebar badge or the health score. These are never listed, following
+the rules of [qui's Orphan Scan](https://getqui.com/docs/features/orphan-scan/):
+
+- your torrent folder itself;
+- a folder your client saves into, or one above it: a live torrent's save
+  folder, every category's folder, the default save folder and the incomplete
+  downloads folder. An empty category folder is about to be filled again;
+- a folder an exclusion rule covers, or one holding anything at all, a hidden
+  file or a link included;
+- a folder changed in the last ten minutes, which may be a download starting.
+
+If your client's categories didn't load on the last scan, no empty folders are
+offered, and the page says so rather than showing none.
+
+**If a torrent's file list didn't load**, auditorr counts everything in that
+torrent's folder as the torrent's, so nothing in it is offered for deletion by
+mistake. The cost is that a stray file in that folder can't show up here until a
+scan reads the list. The page says when this happened and which folders it
+couldn't look inside, even when there's nothing else to clean up.
 
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
 
@@ -276,7 +321,10 @@ client, or any qui instance, doesn't answer, no script is built.
 
 The script:
 
-- checks that it's running in your torrent folder;
+- checks that it's running in your torrent folder, by looking for folders that
+  will still be there after it runs: your category folders, or the folders of
+  torrents you're still seeding. In the rare case it has none to look for, it
+  says so and, run from a terminal, asks before deleting;
 - warns if it was generated more than a day ago (it doesn't refuse — the clock on
   the machine running it isn't auditorr's);
 - counts every file as **deleted**, **already gone** or **FAILED**. A delete that
@@ -284,16 +332,30 @@ The script:
   never as done, and the script exits non-zero;
 - removes release folders it emptied — never a category folder, and never one
   that still holds anything;
+- removes the empty folders you selected, each only while it's still empty. One
+  that gained a file since the scan is left alone and reported as no longer
+  empty. A folder a torrent saves into by the time you build the script is left
+  out of it;
 - is safe to run again: a second run reports everything as already gone.
 
-Run it with `--dry-run` first to see what it would do without touching anything:
-`bash orphaned_torrents_delete.sh --dry-run`.
+Save the script anywhere: it doesn't need to be in your torrent folder. Give it
+your torrent folder as your host sees it (the script's header names the folder
+auditorr sees, your **Local torrent path**), and run it with `--dry-run` first to
+see what it would do without touching anything:
+
+```bash
+bash orphaned_torrents_delete.sh --dry-run /mnt/user/data/torrents
+bash orphaned_torrents_delete.sh /mnt/user/data/torrents
+```
+
+Or `cd` into your torrent folder first and leave the folder off.
 
 ### Excluding a group
 
 If a group is something you put there deliberately, **Exclude** it instead and
 it stops being counted against you. You're shown the exact rules first; they
-land in [Config → Excluded Files](configuration.md#excluded-files--folders).
+land in [Config → Excluded Files](configuration.md#excluded-files--folders). An
+empty folder you want to keep is excluded the same way, as a folder rule.
 
 A fully selected release folder becomes one folder rule, but only where auditorr
 has checked that's safe. Otherwise the group's header says why, and excluding
@@ -327,6 +389,16 @@ client's own answer for where a torrent's data currently lives. Neither setting
 is part of the [TRaSH](https://trash-guides.info/) layout, so a by-the-guide
 install was never affected.
 
+**A torrent's part file isn't an orphan either.** When you set some of a
+torrent's files to *Do not download*, qBittorrent keeps the parts of them that
+share pieces with the files you do download in a hidden file named
+`.<torrent hash>.parts`, next to the torrent's folder. No torrent lists it, so it
+used to show up here as an only copy. Deleting it leaves the torrent unable to
+seed those pieces until a recheck downloads them again. auditorr now treats it as
+part of its torrent: File Explorer shows it as excluded, and no workflow lists
+it. A part file left behind by a torrent you've removed is still an orphan, and
+still shows here.
+
 ---
 
 ## Triage
@@ -339,11 +411,11 @@ they need six different responses.
 
 | Verdict | What it means | Usual response |
 | --- | --- | --- |
-| **Dead seed — imported** | The tracker has dropped the torrent, but the file was imported and your library hardlink still holds the data. | Delete via the client. Lossless — the library keeps the file. |
+| **Dead seed — imported** | The tracker has dropped the torrent, but the file was imported and your library hardlink still holds the data. | Delete via the client. Lossless — the library keeps the file. A single episode at the end of a season? [Find the season pack](#find-the-season-pack). |
 | **Dead registration** | This particular registration is dead, but the payload is alive via a working cross-seed or the library copy. | Delete this registration; the data stays. |
 | **Unregistered** | The tracker says unregistered, and it was never imported. | Delete, or investigate why it never imported. |
-| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#rescan-vs-force-import). |
-| **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Trigger a rescan. |
+| **Superseded** | Your library already has this title. Sub-grouped by whether the torrent is higher, same, or lower quality than the library file. | Keep the higher one; remove the loser. Same quality? [Force import](#retry-import-vs-force-import). Lower, but you'd rather seed it? [Force import over …](#force-import-over-a-better-file). A season spread over several torrents? [Replace with this pack](#replace-with-this-pack). |
+| **Import pending** | Sonarr/Radarr manage the title but no library file exists yet. | Retry import. |
 | **Could not check** | A Sonarr/Radarr instance didn't answer, so whether your library holds these is unknown. Only appears while something is unreachable. | Fix the connection and reload. Don't act on these meanwhile. |
 | **Not in library** | Neither arr knows about it, under its own title or any alternate title they hold. | Import it, exclude it, or remove it — but note these files are the only copy. |
 
@@ -372,12 +444,28 @@ released as `No.tengo.miedo.S01…` resolves to the series Sonarr calls *I'm Not
 Afraid*, and reads as *Import pending* rather than *Not in library*. An exact
 title match always takes priority.
 
+**A torrent's extra files don't count once its video is in your library.**
+Sonarr and Radarr import a release's video and leave its `.nfo`, `.txt`,
+artwork, subtitles and sample clip in the torrent folder. Those are part of an
+imported torrent, not files waiting to import, so they never make a torrent a
+Triage row, and they don't count toward Not Imported anywhere else either. A
+torrent with nothing in your library still lists all its files, and one with no
+video at all (music, books) is listed as before.
+
 **One verdict per torrent, earned by all of its files.** A season pack is one
 decision, but its episodes don't always agree — one may already be in your
 library while another is still waiting to import. Every video file is judged,
 and the row takes the verdict whose action deletes least (*Could not check*,
 then *Import pending*, then *Superseded*, then *Not in library*). A row whose
 files disagree says so: `18 files · 3 verdicts`.
+
+**A pack is compared episode by episode.** Each episode is compared with your
+library's own file for it, so a season Sonarr upgraded as it aired (some
+episodes at 2160p, the rest at 1080p) shows every library quality beside the
+row. The row sits under *Higher* if any episode is an upgrade, under *Same* if
+any episode matches and none is better, and under *Lower* only when every
+episode is lower. Its title names the episodes it holds, like
+*Show · S01E01–E02*.
 
 **A row shows the whole torrent.** A row can list only part of its torrent — a
 partly imported season shows the episodes that didn't import — while removing
@@ -386,8 +474,8 @@ it removes everything. Where the two differ the row says
 selection bar) is the torrent's.
 
 **Two instances holding the same title.** If a 1080p and a 4K Sonarr both have
-the episode, the row names both — `on TV · also TV 4K` — and says which one a
-rescan or a force import goes to: the instance whose file is the same quality as
+the episode, the row names both — `on TV · also TV 4K` — and says which one an
+import or a force import goes to: the instance whose file is the same quality as
 the torrent, when there is one. A row like that never pre-selects a whole
 cross-seed group for removal.
 
@@ -414,47 +502,167 @@ is left as it was, never treated as gone.
 The page lists the largest torrents first, up to a limit; past it, a banner says
 how many are shown out of how many.
 
-### Rescan vs force import
+### Retry import vs force import
 
-Two actions get a file into your library, and they reach different things.
+Three actions get a file into your library, and they differ in who decides.
 
-**Trigger Rescan** asks Sonarr/Radarr to look at the release folder and import
-what they find. That works when the arr has no file for the title yet — the
-*Import pending* case. It imports by hardlink, so your torrent keeps seeding.
+**Retry import** (it was called *Trigger Rescan*) asks Sonarr/Radarr to look at
+the release folder and import what they find, under their own rules. That works
+when the arr has no file for the title yet (the *Import pending* case) or when
+the torrent is better than the file it holds. It imports by hardlink, so your
+torrent keeps seeding.
 
-It does **not** work when the arr already has a file. Sonarr and Radarr compare
-every candidate against what they hold and refuse anything that isn't strictly
-better — including a release of *identical* quality, and including a normal
-release offered against an existing REPACK. Rescanning cannot get past that; the
-answer is the same every time.
-
-That refusal used to be invisible, because the arrs report a scan as "completed"
-whether they imported everything or nothing. auditorr now asks what the arr
-decided and tells you in plain words:
+It can't work when the arr already has a file at least as good. Sonarr and
+Radarr compare every candidate against what they hold and refuse anything that
+isn't strictly better, including a release of *identical* quality, and a normal
+release offered against an existing REPACK. Retrying can't get past that, so
+Retry import isn't offered on a row Triage knows is the same quality or lower,
+or on a torrent that's already imported or that no arr knows. Where it's
+offered and the arr still refuses, the toast gives the arr's reason in plain
+words:
 
 > Nothing will import — Not a quality revision upgrade for existing movie file(s)
 
-After a rescan the row watches Sonarr/Radarr for the file to land, and clears
+After a retry the row watches Sonarr/Radarr for the file to land, and clears
 the moment it does. A TV row watches the episodes it is for, not the whole series
 — Sonarr importing some other episode of a busy show doesn't count — and a check
 that can't reach the arr never counts as the file landing.
 
-**Force import** is the way past it. It uses the arr's own *Import Anyway*,
-replacing the library file with this release. It appears on superseded items
-that are the **same quality** as the file you already have — typically after a
-trump, where the tracker made you swap one release for an equivalent one.
+**Force import · same quality** is the way past that refusal for an equivalent
+release. It uses the arr's own *Import Anyway*, replacing the library file with
+this release. It appears on superseded items that are the **same quality** as
+the file you already have, typically after a trump, where the tracker made you
+swap one release for an equivalent one. On a pack, it imports only the episodes
+at the same quality, and an episode your library holds better stays as it is. It
+acts on every selected row at once, so it never imports a lower release.
 
-If the torrent is genuinely worse than what you have — 1080p against a 2160p
-library file, a WEB-DL against a Bluray — the action isn't offered at all. That
-refusal isn't a bug to work around; those torrents are fine as cross-seeds, and
-your library is right to keep the better copy. If you do want one of them anyway
-— a corrupt library file, or a 1080p Remux auditorr ranks below a 2160p WEB-DL
-because resolution decides first — use Sonarr/Radarr's own Manual Import, which
-handles one deliberate file at a time.
+**Force import over …** is for a lower release you'd rather seed, with one
+confirmation per row. See [below](#force-import-over-a-better-file). For a whole season, use
+[Replace with this pack](#replace-with-this-pack).
 
-> Force import replaces a file you already have. It's the one Triage action that
-> changes your library rather than your torrent client, so it's deliberately
-> narrow.
+For anything else, such as a 1080p Remux auditorr ranks below a 2160p WEB-DL
+because resolution decides first, use Sonarr/Radarr's own Manual Import.
+
+> Force import and Replace with this pack replace files you already have. They're
+> the Triage actions that change your library rather than your torrent client,
+> so each one shows you what it will do first.
+
+### Force import over a better file
+
+A torrent can be lower quality than your library's copy and still be the one
+you want there: it seeds on more trackers, or it's half the size, or you've
+lowered the profile. Sonarr and Radarr won't import it, because it isn't an
+upgrade.
+
+Select a superseded movie, or a single episode, that's lower than your
+library's file (or whose quality couldn't be compared), and the bar at the
+bottom offers **Force import over WEBDL-2160p…**, naming the file it would go
+over. With several selected it reads **Force import over library (3)…** and
+opens one dialog per row (*1 of 3*, with *Skip*), never all at once. Each
+dialog checks your client and Sonarr/Radarr live and says what happens to your
+current file:
+
+- **It has another hardlink**, usually the torrent it came from: it stays on
+  disk, and nothing is lost. After the next scan, Triage lists that torrent, so
+  you can keep seeding it or remove it to free the space.
+- **Nothing else seeds it**, so it's the only copy: Sonarr/Radarr deletes it, or
+  moves it to its recycle bin, and the release seeds in its place. The dialog
+  says so, and *Replace the unseeded file too* is on when it opens. Turn it off
+  to keep your file.
+- **It couldn't be checked**: nothing is imported.
+
+The import is a hardlink, so the torrent keeps seeding, and nothing leaves your
+client. If your quality profile still wants the better quality, Sonarr/Radarr may
+upgrade it again, so lower the profile first if you want the change to stick. A
+movie torrent's other videos (featurettes, or a collection's other films) aren't
+imported, only the one Triage matched to the movie.
+
+### Replace with this pack
+
+Sonarr fills a season as it airs, taking each episode from whichever group or
+tracker has it, and upgrades episodes one at a time. By the end, a season can be
+spread over several torrents, and a season pack hardlinked over the lot puts it
+back on one. Sonarr won't do that itself when the pack is the same quality or
+lower than some of what you hold. *Replace with this pack* does.
+
+**Switch seasons over to a pack**, at the top of Triage, is where to start. It
+lists each season with a pack in your client, with a **Replace S01 with this
+pack…** button, and each season where the tracker dropped two or more of your
+singles but no pack is in your client yet, with **Find season pack…** (see
+[below](#find-the-season-pack)). Seasons whose singles were dropped come first,
+because that's a season that has ended, and the first season's button is the
+page's main one. After four seasons the rest fold away.
+
+Select a superseded season pack's row and the bar at the bottom offers the same
+replace. With packs of several seasons selected, it opens one dialog per season
+(*1 of 3*, with *Skip*). (A single episode has
+[Force import over …](#force-import-over-a-better-file) instead.) When two or
+more packs of the same season are in your client, Triage recommends one: the
+better release, which is also the one Sonarr would keep. Failing that, the one
+already supplying more of your library. The dialog opens on it whichever of the
+season's rows you selected, and you can switch to the other pack there.
+
+The dialog checks your client and Sonarr live and lists every episode of the
+pack:
+
+- **replace**: the pack's file goes over Sonarr's, as a hardlink. A lower-quality
+  file replaces yours **only when your library file has another hardlink**,
+  usually the torrent you downloaded it from. Your better copy then stays on
+  disk, and the dialog names the torrent holding it.
+- **already**: your library file already is this pack's.
+- **add**: Sonarr has no file for that episode.
+- **keep**, with the reason: it couldn't be checked, or Sonarr holds those
+  episodes split differently across files.
+
+**Unseeded episodes are replaced too, unless you say otherwise.** Take an
+episode where the pack is lower quality and your library file has *no* other
+hardlink, so nothing seeds it (usually because you removed its torrent). The
+pack goes over that one as well, so the whole season ends up seeded and
+hardlinked. Replacing it deletes your current file, since it's the only copy, or
+Sonarr moves it to its recycle bin if you've set one. The dialog says which
+episodes those are. To keep them as they are, turn off *Also replace N unseeded
+episodes* under the list. It's on each time the dialog opens.
+
+Nothing leaves your client. After the next scan, Triage lists what no longer
+supplies your library, such as the other pack and the single-episode torrents
+behind the old files, for you to remove when they've seeded enough. If your
+Sonarr profile still wants the higher quality, Sonarr may upgrade those
+episodes again.
+
+A torrent that hasn't finished downloading can't be used, and nothing happens if
+your client or Sonarr doesn't answer in full.
+
+### Find the season pack
+
+At the end of a season, a good tracker often removes its single episodes and
+posts one season pack in their place. Triage then lists those singles as dead
+seeds. Once two or more of a season's singles are dead, the season is listed
+under *Switch seasons over to a pack* at the top of Triage, with **Find season
+pack…**. Select dead singles and the bar at the bottom offers the same button,
+one dialog per season. Backfill has its own *Switch seasons over to a pack*
+above a run's results, for the seasons of its single-episode rows.
+
+1. **Your library and your client first.** The dialog lists the season as
+   Sonarr holds it, each run of episodes marked seeded or unseeded, then any pack
+   of that season already in your client. If one is complete, **Replace with
+   this pack…** goes straight to [the replace](#replace-with-this-pack). No
+   indexer is searched unless you ask.
+2. **Otherwise, Sonarr's search.** Only full-season releases of this season are
+   listed. Releases on the tracker your dropped episodes came from are listed
+   first, and the first of those is picked for you, because that's usually where
+   the pack is. Each release says how it compares with your library (for
+   example *same as 4 · lower than 2*).
+3. **Grab it.** The grab is refused if Sonarr already has this season in its
+   queue, with a *Grab anyway* to override. auditorr then follows the download in
+   **Import Jobs**. If Sonarr imports the pack itself because it's an upgrade,
+   the job ends there. If Sonarr holds it back, the job says *Downloaded*, the
+   panel opens on its own, and **Replace in library…** opens the replace for that
+   pack. The job stays for an hour. After that, or after a restart, the next scan
+   lists the pack in Triage with its own *Replace with this pack…*.
+
+Nothing goes into your library until you confirm the replace. Removing the dead
+singles is Triage's usual removal, which loses nothing because your library holds
+their files. Do it before or after.
 
 ### Exclude
 
@@ -476,12 +684,17 @@ registration, and the registration is what needs removing.
 
 ### Exclusion suggestions
 
-When torrents linger only because of files Sonarr/Radarr will never import,
-Triage offers one-click filters built from your actual files: non-video
-sidecars (`.sfv`, checksums), scene sample clips, and full-disc rip structures.
-Clicking one writes a real exclusion into
+When torrents hold nothing Sonarr/Radarr will import, Triage offers one-click
+filters built from your actual files: a file type (for a torrent with no video
+in it), scene sample clips, and full-disc rip structures. Clicking one writes a
+real exclusion into
 [Config → Excluded Files](configuration.md#excluded-files--folders), where you
 can see and undo it. Subtitles and Extras are deliberately never suggested.
+
+An exclusion applies everywhere, Cleanup included. A rule like `ext:txt` also
+hides a stray `.txt` that no torrent holds, which is exactly what Cleanup is
+there to find. You don't need one for a torrent's `.nfo` or sample: once its
+video is in your library, those no longer reach Triage.
 
 ---
 
@@ -573,8 +786,10 @@ Every file gets an outcome — linked, already linked, left alone (with the
 reason), or **FAILED** — and space counts as freed only once every link to a copy
 has been replaced. It is safe to run twice: the second run reports everything as
 already linked. If a run is interrupted, or a rename fails part-way, nothing is
-missing; run it again and it finishes. `bash dedupe.sh --dry-run` checks and
-compares everything and changes nothing. The script needs GNU `stat` (any Linux,
+missing; run it again and it finishes. Like the Cleanup script, it can be kept
+anywhere: give it the folder its header names, as your host sees it
+(`bash dedupe.sh --dry-run /mnt/user/data`), or `cd` there first.
+`--dry-run` checks and compares everything and changes nothing. The script needs GNU `stat` (any Linux,
 not macOS), and says up front how much it will read — `cmp` reads both copies of
 every file, which on a spinning array can take hours. When it finishes, auditorr
 notices the changes and scans again shortly.
@@ -618,8 +833,11 @@ through it:
 1. **Pick the tracker that sent the PM** (optional). Its torrents and its copy
    of the replacement come first.
 2. **Confirm the group.** auditorr queries your client live for torrents
-   matching the old release, and shows you a ranked list of candidates. You
-   confirm which are really yours before anything is touched.
+   matching the old release and lists every one that shares its title, the PM's
+   tracker's first. The closest match is pre-selected, on the PM's tracker
+   unless another tracker holds a clearly closer name. A torrent named like the
+   replacement — a REPACK you've already grabbed, say — is listed last and never
+   pre-selected. You confirm which are really yours before anything is touched.
 3. **Expand to cross-seeds.** Each confirmed torrent is expanded into every
    torrent sharing its files, followed all the way through — a torrent sharing
    files with a cross-seed is in the group too. That is the whole set that has
@@ -627,7 +845,13 @@ through it:
 4. **Pick the replacement.** auditorr finds the Sonarr/Radarr entry from the
    files the group is hardlinked to, falling back to the new release's name,
    and searches it. The exact replacement on the PM's tracker is shown as
-   **Grab this one**; the rest are folded under *Other releases*. If a second
+   **Grab this one**, and every other release it found is folded under it.
+   Without an exact match nothing is picked for you. Every torrent release is
+   listed, the PM's tracker's first, because trackers often spell a name their
+   own way (`[Group] Title (BD 1080p…)`). Usenet releases are left out: a scene
+   release often has the exact same name there, and grabbing it would remove
+   your torrent without putting a seed back. Long lists get a filter box, and a release
+   named like the one you're removing is listed last. If a second
    Sonarr/Radarr instance also holds the group's files (a 4K Radarr beside your
    main one, say), step 4 says so — `on Radarr · also Radarr 4K` — naming the
    instance the search and the grab go to.

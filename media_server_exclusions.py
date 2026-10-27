@@ -1,4 +1,4 @@
-import fnmatch
+from exclusions import compile_exclusions
 
 _IMAGE_EXTENSIONS = ("jpg", "jpeg", "png", "webp", "tbn")
 
@@ -136,15 +136,60 @@ def _normalize_presets(values, allowed):
 TOMBSTONE_PATTERNS = [".fuse_hidden*", ".nfs*"]
 
 
-def is_tombstone_path(path):
-    """True for a path whose filename is a filesystem tombstone.
+# Operating-system and NAS clutter — always excluded too, for the same two
+# reasons (CLEANUP C24). None of it is anybody's media or any torrent's, and
+# each kind belongs to something that manages it: a desktop's folder settings
+# and thumbnail caches, a NAS's thumbnail folders and recycle bin, a
+# filesystem's snapshots, `fsck`'s lost+found. A Mac browsing a share writes
+# `.DS_Store` into every folder it opens, which made each one an orphan in
+# Cleanup and blocked that torrent's one-rule folder exclusion in Triage (T6).
+# A snapshot folder's files are read-only copies a delete script can't remove.
+#
+# The list is qui's Orphan Scan default ignores (autobrr/qui,
+# documentation/docs/_partials/_orphan-scan-default-ignores.mdx), with three
+# differences, each deliberate:
+#
+#   * qui's `..*` folder prefix is left out. It's for Kubernetes volume
+#     internals (`..data`), which never sit in a torrent folder, and it would
+#     also hide a real release such as the album `...And Justice for All`.
+#   * qui's `*.parts` and `*.!qB` are left out. auditorr claims both for a torrent
+#     still in the client (C18, C4a), and with the torrent gone they're junk
+#     worth listing.
+#   * QNAP's `@Recycle` and `.@__thumb` and Synology's `#snapshot` are added.
+#
+# `name:` is an exact file or folder name anywhere in the path, case-insensitive,
+# so everything under `@eaDir/` is excluded. `#recycle` has to be written with
+# it: a rule starting with `#` is a comment.
+SYSTEM_CLUTTER_PATTERNS = [
+    # Files, by exact name.
+    "name:.DS_Store", "name:.directory", "name:desktop.ini", "name:Thumbs.db",
+    # Files, by prefix: AppleDouble, GNOME's half-written saves, editor and
+    # Office lock files.
+    "._*", ".goutputstream-*", ".#*", "~$*",
+    # Folders, by exact name: trash and recycle bins, snapshots, thumbnail
+    # caches, filesystem bookkeeping.
+    "name:.AppleDB", "name:.AppleDouble", "name:.TemporaryItems", "name:.Trashes",
+    "name:.Recycle.Bin", "name:.recycle", "name:#recycle", "name:@Recycle",
+    "name:$RECYCLE.BIN", "name:.snapshot", "name:.snapshots", "name:#snapshot",
+    "name:.zfs", "name:@eaDir", "name:.@__thumb", "name:lost+found",
+    "name:System Volume Information",
+    # Folders, by prefix: a desktop's per-user trash on a removable disk.
+    ".Trash-*",
+]
 
-    Shares TOMBSTONE_PATTERNS with the exclusion list so there is one definition
-    of what a tombstone is. Used where a stored record may predate the exclusion
-    (a scan has not run since the upgrade) and the next step is destructive.
+ALWAYS_EXCLUDED_PATTERNS = TOMBSTONE_PATTERNS + SYSTEM_CLUTTER_PATTERNS
+
+_ALWAYS_MATCHER = compile_exclusions(ALWAYS_EXCLUDED_PATTERNS)
+
+
+def is_always_excluded_path(path):
+    """True for a path an always-on rule excludes: a tombstone, or OS/NAS clutter.
+
+    Shares ALWAYS_EXCLUDED_PATTERNS with the exclusion list so there is one
+    definition of each. Used where a stored record may predate the exclusion (a
+    scan has not run since the upgrade) and the next step is destructive.
     """
-    name = str(path or "").replace("\\", "/").rsplit("/", 1)[-1]
-    return any(fnmatch.fnmatch(name, p) for p in TOMBSTONE_PATTERNS)
+    return _ALWAYS_MATCHER.match_names(path)
 
 
 def expand_exclusion_patterns(cfg):
@@ -153,7 +198,7 @@ def expand_exclusion_patterns(cfg):
         for pattern in cfg.get("EXCLUSION_PATTERNS", [])
         if isinstance(pattern, str) and pattern.strip()
     ]
-    patterns.extend(TOMBSTONE_PATTERNS)
+    patterns.extend(ALWAYS_EXCLUDED_PATTERNS)
     for preset in normalize_disc_rip_presets(cfg.get("DISC_RIP_EXCLUSION_PRESETS", [])):
         patterns.extend(DISC_RIP_EXCLUSION_PRESETS[preset])
     for preset in normalize_media_server_presets(cfg.get("MEDIA_SERVER_EXCLUSION_PRESETS", [])):

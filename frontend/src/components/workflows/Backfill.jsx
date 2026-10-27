@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from '../../api'
 import { formatBytes } from '../../utils'
-import { WATCH_ACTIVE, watchColor } from '../ImportProgress'
+import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker, SearchInput,
-  SectionLabel, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, ArrErrorsWarning,
+  SectionLabel, SectionHeading, Disclosure, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, WorkflowWarning, ArrErrorsWarning,
   Button, MatchChips, MATCH_COLOR, ITEM_TITLE, MONO_TITLE, tint,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
 } from './shared'
+import { SeasonPackModal } from './SeasonPack'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // Candidates arrive grouped, scoped and labelled with their root folder by the
@@ -185,12 +186,83 @@ function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
 // ── Result item ───────────────────────────────────────────────────────────────
 const RELEASE_GRID = 'minmax(0,1fr) 100px 62px 72px 40px 90px 40px 44px 84px 72px'
 
+// T25 — an episode row exists because part of its season is still seeded, so
+// Backfill won't search the season as a pack (B1). The season-pack dialog is
+// the deliberate version of that: it looks for a pack in the client first, and
+// whatever it grabs only reaches the library through the replace's own confirm.
+function seasonPackTarget(item) {
+  if (item.arr_service !== 'sonarr' || item.scope !== 'episode' || item.season_number == null
+      || item.arr_id == null || !item.arr_connection_id) return null
+  return { connection_id: item.arr_connection_id, arr_id: item.arr_id, season: item.season_number,
+           title: item.arr_title, trackers: [] }
+}
+
+const SEASONS_SHOWN = 4
+
+// T25 — the seasons of this run's episode rows, one line each with its own
+// *Find season pack…*. It was a chip on every episode row, and the design
+// system has no row chip for an action, so it's a section of md buttons, as
+// Triage's *Switch seasons over to a pack* is.
+function SeasonPackSeasons({ rows, onFind }) {
+  const [open, setOpen] = useState(false)
+  const seasons = useMemo(() => {
+    const bySeason = new Map()
+    for (const r of rows) {
+      const target = seasonPackTarget(r)
+      if (!target) continue
+      const key = `${target.connection_id}|${target.arr_id}|${target.season}`
+      const s = bySeason.get(key) || { key, target, episodes: 0 }
+      s.episodes += 1
+      bySeason.set(key, s)
+    }
+    return [...bySeason.values()].sort((a, b) =>
+      b.episodes - a.episodes || (a.target.title || '').localeCompare(b.target.title || ''))
+  }, [rows])
+  if (seasons.length === 0) return null
+  const shown = open ? seasons : seasons.slice(0, SEASONS_SHOWN)
+  const more = seasons.length - SEASONS_SHOWN
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <SectionHeading check={null} dot="var(--blue)" title="Switch seasons over to a pack"
+        meta={`${seasons.length} season${seasons.length !== 1 ? 's' : ''}`}
+        desc="These episodes are searched one at a time, because other torrents still seed part of their season. A season pack would seed the whole season from one torrent. The dialog looks in your client first, then searches Sonarr, and your library changes only in the replace, after you've seen each episode."
+      />
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+        {shown.map(s => (
+          <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {s.target.title} · S{pad2(s.target.season)}
+              </div>
+              <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+                {s.episodes} episode{s.episodes !== 1 ? 's' : ''} in this run
+              </div>
+            </div>
+            <Button onClick={() => onFind(s.target)}
+              title="Look for this season's pack in your client, else search Sonarr's indexers for one, then replace the season's library files with it">
+              Find season pack…
+            </Button>
+          </div>
+        ))}
+      </div>
+      {more > 0 && (
+        <div style={{ marginLeft: 16 }}>
+          <Disclosure open={open} onClick={() => setOpen(o => !o)}>
+            {open ? 'Show fewer' : `${more} more season${more !== 1 ? 's' : ''}`}
+          </Disclosure>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ResultItem({ item }) {
   // grabStates: { [guid]: 'idle' | 'grabbing' | 'refreshing' | 'grabbed' | 'queued' | 'error' }
   const [grabStates,    setGrabStates]    = useState({})
   const [grabErrors,    setGrabErrors]    = useState({})
   const [importStatus,  setImportStatus]  = useState(null)   // null | watching | importing | done | error
   const [importMessage, setImportMessage] = useState(null)
+  const [importProgress, setImportProgress] = useState(null) // 0–1 while downloading, when the arr says
   const importPollRef    = useRef(null)
   const importStartedRef = useRef(false)
   const mountedRef       = useRef(true)
@@ -238,6 +310,7 @@ function ResultItem({ item }) {
           if (!mountedRef.current) return
           setImportStatus(data.status)
           setImportMessage(data.message)
+          setImportProgress(data.progress ?? null)
           if (WATCH_ACTIVE.includes(data.status)) {
             importPollRef.current = setTimeout(poll, 3000)
           }
@@ -465,14 +538,17 @@ function ResultItem({ item }) {
         ))}
 
         {/* Import status (auto-starts after any grab) */}
-        {importStatus && (
-          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-            {WATCH_ACTIVE.includes(importStatus) && <Spinner size={8} weight={1.5} />}
-            <span style={{ color: watchColor(importStatus) }} title={importMessage}>
-              {IMPORT_LABEL[importStatus] || importStatus}
+        {importStatus && (() => {
+          const pct = watchPercent(importStatus, importProgress)
+          return (
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+              {WATCH_ACTIVE.includes(importStatus) && pct == null && <Spinner size={8} weight={1.5} />}
+              <span style={{ color: watchColor(importStatus) }} title={importMessage}>
+                {pct != null ? `Downloading ${pct}%` : (IMPORT_LABEL[importStatus] || importStatus)}
+              </span>
             </span>
-          </span>
-        )}
+          )
+        })()}
 
         {/* Single-release grab button */}
         {found && !multi && item.best_release && (
@@ -617,10 +693,13 @@ function saveJobId(id) {
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Backfill({ onNavigate }) {
   const [phase, setPhase] = useState(() => (readJobId() ? 'running' : 'config'))  // config | running | done | stopped
+  // T25 — the season whose *Find season pack…* opened the dialog.
+  const [packFor, setPackFor] = useState(null)
 
   // Data loaded on mount
   const [indexers,      setIndexers]      = useState([])
-  const [allGroups,     setAllGroups]     = useState([])   // candidates as the server grouped them
+  const [usenetCount,   setUsenetCount]   = useState(0)    // B14: Usenet indexers left out of `indexers`
+  const [allGroups,    setAllGroups]     = useState([])   // candidates as the server grouped them
   // Both file counts, not candidate counts. The candidate figure below is
   // groups (a season pack is one candidate, however many episodes), so the
   // two can only be reported as separate claims — see the Search Depth copy.
@@ -687,8 +766,22 @@ export default function Backfill({ onNavigate }) {
         setUnmatchedExample(cdata.unmatched_example || null)
         setArrErrors(cdata.arr_errors || [])
         setIndexers(idata.indexers || [])
-        setDownloadFrom(cfg.ACQUIRE_DOWNLOAD_FROM || [])
-        setSeedingOn(cfg.ACQUIRE_SEEDING_ON || [])
+        // B14: Usenet indexers are no longer offered and their releases are
+        // never searched, so one stored from before would filter every search
+        // down to nothing, with no option on the page to show why. Only names
+        // the server knows to be Usenet are cleared: a name that is merely
+        // missing may belong to an arr that did not answer this time.
+        const usenet = new Set(idata.usenet || [])
+        setUsenetCount(usenet.size)
+        const storedFrom = cfg.ACQUIRE_DOWNLOAD_FROM || []
+        const storedOn   = cfg.ACQUIRE_SEEDING_ON || []
+        const df = storedFrom.filter(n => !usenet.has(n))
+        const so = storedOn.filter(n => !usenet.has(n))
+        setDownloadFrom(df)
+        setSeedingOn(so)
+        if (df.length !== storedFrom.length || so.length !== storedOn.length) {
+          api.saveAcquirePrefs({ ACQUIRE_DOWNLOAD_FROM: df, ACQUIRE_SEEDING_ON: so }).catch(() => {})
+        }
       })
       .catch(e => setLoadError(e.message))
       .finally(() => setLoading(false))
@@ -895,6 +988,12 @@ export default function Backfill({ onNavigate }) {
           <LoadingRow label="Loading candidates…" />
         ) : (
           <>
+            {indexers.length === 0 && usenetCount > 0 && (
+              <WorkflowWarning>
+                Every indexer in Sonarr/Radarr is a Usenet indexer. Backfill only grabs torrents, because only a torrent can seed, so every search will come back empty until you add a torrent indexer.
+              </WorkflowWarning>
+            )}
+
             {indexers.length > 0 && (
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
@@ -904,7 +1003,7 @@ export default function Backfill({ onNavigate }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   <div>
                     <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Download from</div>
-                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = no restriction.</div>
+                    <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 8, lineHeight: 1.5 }}>Restrict to these indexers. <em>All</em> = every torrent indexer.</div>
                     <IndexerFilter options={indexers} value={downloadFrom} onChange={handleDownloadFromChange} />
                   </div>
                   <div>
@@ -1059,6 +1158,9 @@ export default function Backfill({ onNavigate }) {
         errors={arrErrors}
         extra="Candidates from those instances are missing from this run."
       />
+
+      <SeasonPackSeasons rows={results} onFind={setPackFor} />
+      {packFor && <SeasonPackModal target={packFor} onCancel={() => setPackFor(null)} />}
 
       {/* Results list */}
       {rows.length > 0 && (

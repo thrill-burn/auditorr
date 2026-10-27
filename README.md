@@ -1,6 +1,6 @@
 # auditorr
 
-**An audit tool for hardlinked media libraries using qBittorrent / qui + Sonarr / Radarr.**
+**An audit tool for hardlinked media libraries using qBittorrent / qui + Sonarr / Radarr, following the [TRaSH Guides folder structure](https://trash-guides.info/File-and-Folder-Structure/).**
 A dashboard with health score, per-tracker analytics, and cross-seed effectiveness 
 tells you what's wrong with your library. Five automated workflows fix it.
 Built to stay light on memory, it runs on **500+ TB** libraries.
@@ -19,12 +19,12 @@ Built to stay light on memory, it runs on **500+ TB** libraries.
 
 ---
 
-## What's new in 1.8.0
+## What's new in 1.8.1
 
-- **Safer workflows** - all five were reviewed end to end. A torrent client or Sonarr / Radarr that doesn't answer can no longer make files look orphaned, unimported or safe to delete; auditorr says "could not check" instead of guessing. [Full list](CHANGELOG.md).
-- **Bad scans aren't saved** - if your client stops answering, a drive isn't mounted yet, or torrents vanish overnight, your last good results stay put and auditorr tells you what to fix.
-- **Deletes and hardlinks check again before acting** - Cleanup asks your client again before building a delete script, Triage and Trumped keep any file something still uses, and Trumped grabs the replacement before removing anything. Both scripts now have `--dry-run` and are safe to run twice.
-- **One consistent UI** - every button, filter and heading comes from one set, and warning boxes that had silently lost their borders are back.
+- **Switch a finished season over to one pack** - Triage now opens with the seasons you can move onto a single pack. Replace from a pack already in your client, or find one through Sonarr when the tracker has dropped the single episodes. Each episode is hardlinked into your library, and a better library file stays on disk wherever another torrent still holds it. [Full list](CHANGELOG.md).
+- **Force import a lower release** - over a movie or a single episode, when you'd rather seed that release. *Trigger Rescan* is now *Retry import*, and it's offered only where Sonarr / Radarr can accept the file.
+- **Fewer false rows** - an imported torrent's `.nfo`, artwork and samples no longer put it in Triage. Cleanup now also lists leftover hardlinks and empty folders, names any folder it couldn't check, and ignores `.DS_Store` and NAS clutter.
+- **Safety fixes** - a qBittorrent that qui can't reach no longer makes its torrents look deleted, removals reach every qui instance, Backfill and Trumped no longer offer Usenet releases, and a scan that couldn't reach your trackers no longer shows terabytes of upload. The debug report no longer includes your server addresses.
 
 Upgrading needs no configuration changes. From 1.7.0 or earlier? 1.7.1 [closed off-LAN API access by default](docs/remote-access.md) - LAN is unaffected.
 
@@ -92,7 +92,8 @@ in via Sonarr / Radarr.
 ### Cleanup
 
 Targets *orphaned torrent files*: files in your torrent folder the client has
-no torrent for. Review them grouped by release folder, then generate a reviewed
+no torrent for, leftover hardlinks a removed cross-seed left behind, and empty
+folders. Review them grouped by release folder, then generate a reviewed
 delete script — or exclude the ones you put there on purpose.
 
 <p>
@@ -103,8 +104,8 @@ delete script — or exclude the ones you put there on purpose.
 
 Explains every problem torrent and what to do about it: dead seeds, dead
 registrations, unregistered, superseded quality, pending imports, and not in
-library. Trigger a Sonarr/Radarr rescan, exclude, or delete torrents and their
-files directly through qBittorrent / qui.
+library. Retry or force an import, switch a finished season over to one pack,
+exclude, or delete torrents and their files directly through qBittorrent / qui.
 
 <p>
   <a href="docs/workflow-triage.png"><img src="docs/workflow-triage.png" alt="Triage workflow" width="100%" /></a>

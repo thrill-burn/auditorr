@@ -12,21 +12,21 @@ loud that none of it does anything. That contrast — faux-epic titles bolted to
 sysadmin drudgery, rendered on a calm instrument surface — is the joke.
 
 Phase 1 is derivable entirely from config + audit history — there is no event
-ledger yet, so nothing here invents a number it cannot justify. Ladders measure
-*state* (library size, health peak, streaks, cross-seed) rather than deltas;
-the reclaimed-bytes ladders arrive with Tier A awards in phase 2.
+ledger, so nothing here invents a number it cannot justify. Ladders measure
+*state* (library size, health peak, streaks, cross-seed) rather than deltas.
+The design's phases 2–3 (per-GB outcome awards, intent points, a digest) were
+closed unbuilt on 2026-09-27: the latched counters below already credit
+outcomes, and no workflow's prize may be measured in bytes.
 
 Row priority is driven by **health-score points actually recoverable** in each
 category, which the audit already computes (`hl_score`/`hl_max` and friends in
 `process_health_metrics`). That is honest, already on screen elsewhere, and it
 doubles as the prize: "you are losing 6.4 of 10 points here."
 
-See prompts/NEXT_STEPS.md for the full design record.
+See prompts/record/NEXT_STEPS.md for the full design record.
 """
 
 import os
-import json
-import hashlib
 import logging
 from datetime import datetime, timedelta
 
@@ -210,7 +210,6 @@ EMPTY_PROGRESS = {
     # orphans alone; this is the one a library in genuinely good shape can run.
     'immaculate_since': None,
     'last_ni_count': None,
-    'last_excl_fp': None,
     # Last scan's dead cross-seed registrations, by hash. The shovel counter
     # diffs against this: several dead registrations can ride one healthy
     # carrier record, so a path-based signature diff cannot see one of three go.
@@ -409,26 +408,6 @@ def _setup_steps(cfg, has_audit):
 # The spine — one row per workflow, state + recoverable score points.
 # ---------------------------------------------------------------------------
 
-def exclusion_fingerprint(cfg):
-    """Stable hash of every exclusion input.
-
-    Exclusions raise the health score by *hiding* problems, and Triage actively
-    suggests them, so anything inferred from a drop in a *count* has to know
-    whether the exclusion set moved under it.
-
-    The shovel counter no longer needs this — it counts per-file transitions
-    (`audit.count_pile_resolved`), which exclusions cannot fake. Kept because
-    it is still recorded on every audit and phase 2's outcome-verified awards
-    are specced to need it (`prompts/NEXT_STEPS.md`).
-    """
-    blob = json.dumps([
-        sorted(cfg.get('EXCLUSION_PATTERNS') or []),
-        sorted(cfg.get('DISC_RIP_EXCLUSION_PRESETS') or []),
-        sorted(cfg.get('MEDIA_SERVER_EXCLUSION_PRESETS') or []),
-    ], sort_keys=True)
-    return hashlib.sha1(blob.encode()).hexdigest()[:16]
-
-
 def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
                     dead_regs=None, runs=None):
     """Advance the reward counters by one audit. Pure — returns a new dict.
@@ -468,10 +447,11 @@ def update_progress(progress, cfg, det, state=None, now=None, resolved=None,
     first_run = p['last_ni_count'] is None
 
     p['shoveled'] += max(0, int(resolved or 0))
-    # Still recorded: `last_ni_count` marks the first observed audit (above),
-    # and both feed phase 2's outcome verification.
+    # `last_ni_count` marks the first observed audit (above). The exclusion
+    # fingerprint once stored beside it was kept only for the design's phase 2,
+    # closed unbuilt on 2026-09-27; an install that stored one drops it here.
     p['last_ni_count'] = det.get('not_imported_count', 0) or 0
-    p['last_excl_fp']  = exclusion_fingerprint(cfg)
+    p.pop('last_excl_fp', None)
     if dead_regs is not None:
         # Bounded so a pathological library cannot grow this app_meta row without
         # limit. Past the cap the shovel counter under-credits dead registrations

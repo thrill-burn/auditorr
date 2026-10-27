@@ -47,8 +47,9 @@ import requests
 
 from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
-    new_source_report, report_instance_failure, report_note,
+    new_source_report, report_instance_failure, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key,
+    is_part_file_name, content_root, client_save_dirs,
 )
 
 log = logging.getLogger(__name__)
@@ -72,16 +73,60 @@ def _connection_error_message(base):
 
 
 def _eligible(instance):
-    return (
+    return bool(
         instance.get('connected')
         and instance.get('hasLocalFilesystemAccess')
     )
 
 
+def _disabled(instance):
+    """Switched off in qui. A qui without the field (before it had the toggle)
+    has no disabled instances."""
+    return instance.get('isActive', True) is False
+
+
+def _unreachable(instance):
+    """An instance auditorr reads that qui cannot reach right now (CR1, CLEANUP
+    C23). That is "could not ask", not "not there".
+
+    It used to be filtered out with the configuration cases, so nothing recorded
+    an instance failure. A qBittorrent behind qui that was down made every torrent
+    of its own read as gone. Its payload became orphans and Cleanup scripted it
+    for deletion, and only the 50% collapse rule stood in the way. qui's
+    `connected` is its cached health (`buildInstanceResponse`, checked against
+    `autobrr/qui`), so an instance qui has not reached since it started reads the
+    same, and refusing is right for both.
+
+    Configuration stays out: no local filesystem access (auditorr cannot see its
+    files), or disabled in qui (`isActive: false`, which also reads `connected:
+    false`). Turning an abandoned instance off is how a user gets their scans back.
+    """
+    return bool(instance.get('hasLocalFilesystemAccess')
+                and not _disabled(instance)
+                and not instance.get('connected'))
+
+
+_UNREACHABLE_REASON = ("disconnected: qui cannot reach this qBittorrent. If you no longer "
+                       "use it, disable it in qui and auditorr will leave it out")
+
+
 def _skip_reason(instance):
+    if _disabled(instance):
+        return 'disabled in qui'
     if not instance.get('connected'):
         return 'disconnected'
     return 'no local filesystem access'
+
+
+def _list_instances(sess, base):
+    """`(eligible, unreachable)` instances from qui's own list."""
+    resp = sess.get(f'{base}/api/instances', timeout=15)
+    resp.raise_for_status()
+    all_instances = resp.json()
+    if not isinstance(all_instances, list):
+        all_instances = _unwrap(all_instances)
+    return ([i for i in all_instances if _eligible(i)],
+            [i for i in all_instances if _unreachable(i)])
 
 
 def _pick(t, *keys):
@@ -128,6 +173,8 @@ def _norm_file(f):
     return {
         'name': f.get('name') or f.get('path') or '',
         'size': f.get('size') or 0,
+        # Not `or 0`: 0 is *Do not download*, and absent must stay absent.
+        'priority': f.get('priority'),
     }
 
 
@@ -289,7 +336,9 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
     Returns (hosts, (health, msg), files, files_ok) — the tracker entries are
     classified here (dead-seed detection) since status/msg ride along with the
     same call. `files_ok` is False when the file listing could not be fetched,
-    which is a different thing from a torrent that reports no files.
+    which is a different thing from a torrent that reports no files. `hosts` is
+    None when the tracker list could not be fetched, which is a different thing
+    from a torrent with no tracker URL (`['Unknown']`); see `_qbit.py`.
     """
     try:
         tr_resp = session.get(
@@ -308,7 +357,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
             for t in raw_trackers
         ])
     except Exception:
-        hosts  = ['Unknown']
+        hosts  = None
         health = ('unknown', '')
 
     try:
@@ -331,7 +380,8 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                      seen, seed_totals=None, report=None, unresolved_roots=None):
+                      seen, seed_totals=None, report=None, unresolved_roots=None,
+                      fallback_roots=None, save_scope=None):
     """One instance's torrents, folded into the shared maps.
 
     `seen` is the cross-instance bookkeeping, and it is **three sets, not one**
@@ -382,7 +432,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     th, hosts, health, files, files_ok = future.result()
                 except Exception:
                     th    = _norm_torrent(futures[future])['hash']
-                    hosts, health, files, files_ok = ['Unknown'], ('unknown', ''), [], False
+                    hosts, health, files, files_ok = None, ('unknown', ''), [], False
                 if th:
                     tracker_map[th] = hosts
                     health_map[th]  = health
@@ -401,7 +451,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 if not f.done():
                     th = _norm_torrent(t)['hash']
                     if th:
-                        tracker_map.setdefault(th, ['Unknown'])
+                        tracker_map.setdefault(th, None)
                         health_map.setdefault(th, ('unknown', ''))
                         files_map.setdefault(th, [])
                         failed_listings.add(th)
@@ -470,7 +520,11 @@ def _process_instance(session, base, inst, remote_path, local_path,
         th = nt['hash']
         if not th:
             continue
-        hosts  = tracker_map.get(th, ['Unknown'])
+        hosts  = tracker_map.get(th)
+        if hosts is None:
+            if report is not None:
+                report['tracker_failures'] += 1
+            hosts = ['Unknown']
         status = _torrent_status(nt['state'])
         # Completion is its own question: `_torrent_status` reads the state
         # string, where a paused incomplete and a paused complete are the same
@@ -482,6 +536,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
 
         raw_save_path = nt['save_path']
         save_path     = remap_path(raw_save_path, remote_path, local_path)
+        if save_scope is not None and save_path:
+            save_scope['dirs'].add(save_path)     # a few distinct strings, not one per torrent
 
         # How many distinct torrents this client holds, and how many of them are
         # registered more than once. Counts only — reported, never acted on here.
@@ -543,8 +599,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
         # content_path while it is still downloading, at save_path/name once it
         # has finished — rather than left to default to 'Orphaned'.
         file_names = [f['name'] for f in torrent_files] if torrent_files else None
+        priorities = [f.get('priority') for f in torrent_files] if torrent_files else None
         full_paths = torrent_claimed_paths(
-            save_path, nt['name'], content_path, file_names, complete)
+            save_path, nt['name'], content_path, file_names, complete,
+            torrent_hash=th, priorities=priorities)
 
         if file_names is not None:
             nonempty_file_count += 1
@@ -552,8 +610,11 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 if len(sample_paths) < 3:
                     sample_paths.append({
                         # Anything past the file list is a claim on where an
-                        # unfinished payload may actually be sitting.
-                        'source': 'api' if i < len(file_names) else 'in_flight',
+                        # unfinished payload may actually be sitting, or the
+                        # torrent's part file.
+                        'source': ('api' if i < len(file_names) else
+                                   'part_file' if is_part_file_name(os.path.basename(full_path))
+                                   else 'in_flight'),
                         'raw_save_path': raw_save_path,
                         'mapped_save_path': save_path,
                         'file_name': file_names[i] if i < len(file_names) else '',
@@ -563,6 +624,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
         else:
             empty_file_count += 1
             recovered = full_paths
+            # A failed listing and an empty one both claim the folder whole, so
+            # a stray file inside it can't be seen (CLEANUP C26). Local, remapped.
+            if recovered and fallback_roots is not None:
+                fallback_roots.append(content_root(save_path, nt['name'], content_path))
             for full_path in recovered:
                 disk_fallback_count += 1
                 if len(sample_paths) < 3:
@@ -619,10 +684,34 @@ def _process_instance(session, base, inst, remote_path, local_path,
 # fetch_file_map
 # ---------------------------------------------------------------------------
 
-def fetch_file_map(cfg, unresolved_roots=None):
+def _read_save_scope(sess, base, inst, remote_path, local_path, save_scope):
+    """One instance's default, category and incomplete folders into `save_scope` (C27).
+
+    qui serves qBittorrent's own answers at `/preferences` and `/categories`.
+    Either failing, or not being a dict, makes the scope `unknown`: the scan
+    then offers no empty folder rather than one qBittorrent may save into (R1).
+    The instance itself still counts as answered; its torrents did.
+    """
+    try:
+        prefs = sess.get(f"{base}/api/instances/{inst['id']}/preferences", timeout=15)
+        prefs.raise_for_status()
+        cats = sess.get(f"{base}/api/instances/{inst['id']}/categories", timeout=15)
+        cats.raise_for_status()
+        dirs = client_save_dirs(prefs.json(), cats.json())
+    except Exception as e:
+        log.info("qui[%s]: preferences or categories did not load (%s) — no empty folders "
+                 "this scan", inst.get('name', '?'), type(e).__name__)
+        dirs = None
+    if dirs is None:
+        save_scope['unknown'] = True
+        return
+    save_scope['dirs'].update(remap_path(d, remote_path, local_path) for d in dirs)
+
+
+def fetch_file_map(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
     socket.setdefaulttimeout(30)
     try:
-        return _fetch_inner(cfg, unresolved_roots)
+        return _fetch_inner(cfg, unresolved_roots, fallback_roots, save_scope)
     except SourceConnectionError:
         raise
     except requests.exceptions.ConnectionError as e:
@@ -636,7 +725,10 @@ def fetch_file_map(cfg, unresolved_roots=None):
         socket.setdefaulttimeout(None)
 
 
-def _fetch_inner(cfg, unresolved_roots=None):
+def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
+    if save_scope is not None:
+        save_scope.setdefault('dirs', set())
+        save_scope.setdefault('unknown', False)
     base    = cfg.get('QUI_HOST', '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
     remote_path = cfg.get('REMOTE_PATH', '')
@@ -653,8 +745,9 @@ def _fetch_inner(cfg, unresolved_roots=None):
     if not isinstance(all_instances, list):
         all_instances = _unwrap(all_instances)
 
-    eligible = [i for i in all_instances if _eligible(i)]
-    skipped  = [i for i in all_instances if not _eligible(i)]
+    eligible    = [i for i in all_instances if _eligible(i)]
+    skipped     = [i for i in all_instances if not _eligible(i)]
+    unreachable = [i for i in all_instances if _unreachable(i)]
 
     if not eligible:
         reasons = '; '.join(f"{i.get('name','?')}: {_skip_reason(i)}" for i in skipped[:5])
@@ -663,7 +756,8 @@ def _fetch_inner(cfg, unresolved_roots=None):
             f"Skipped: {reasons or 'none'}"
         )
 
-    log.info(f"qui: {len(eligible)} eligible instance(s), {len(skipped)} skipped")
+    log.info(f"qui: {len(eligible)} eligible instance(s), {len(skipped)} skipped"
+             + (f", {len(unreachable)} of them disconnected" if unreachable else ""))
 
     file_map             = {}
     trackers_set         = set()
@@ -674,15 +768,20 @@ def _fetch_inner(cfg, unresolved_roots=None):
                             'hashes': set(), 'multi': set()}
     seed_totals          = {'byte_secs': 0, 'max_secs': 0}
     report               = new_source_report('qui')
-    report['instances_total'] = len(eligible)
+    report['instances_total'] = len(eligible) + len(unreachable)
+    for inst in unreachable:
+        report_instance_failure(report, inst.get('name', '?'), _UNREACHABLE_REASON)
 
     for inst in eligible:
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
                                seen, seed_totals, report=report,
-                               unresolved_roots=unresolved_roots)
+                               unresolved_roots=unresolved_roots,
+                               fallback_roots=fallback_roots, save_scope=save_scope)
             report['instances_ok'] += 1
+            if save_scope is not None:
+                _read_save_scope(sess, base, inst, remote_path, local_path, save_scope)
         except Exception as e:
             # Skipping an instance is still the right call — the others have
             # real answers and one unreachable box should not fail the scan —
@@ -704,6 +803,7 @@ def _fetch_inner(cfg, unresolved_roots=None):
     # '_'-prefixed: every per-tracker loop already skips these.
     tracker_snapshot['_seed_byte_secs'] = seed_totals['byte_secs']
     tracker_snapshot['_max_seed_secs']  = seed_totals['max_secs']
+    mark_trackers_unanswered(tracker_snapshot, report, report['torrent_count'], 'qui')
 
     report['file_map_size'] = len(file_map)
     if report['listing_failures']:
@@ -802,7 +902,10 @@ def fetch_torrent_details(cfg, items):
 
     **`{'found': False}` only where the listing that would hold the hash
     answered** (T10) — its own instance, or with no instance id every eligible
-    instance. This backend logs and carries on when an instance's listing fails
+    instance while none is disconnected. A registration on a disconnected
+    instance gets no entry: other instances answering used to count as proof,
+    and Triage dropped the row as gone from the client (CR1a).
+    This backend logs and carries on when an instance's listing fails
     and swallows a total failure, so a registration with no entry is "could not
     ask", never "gone". A hash missing from a *cached* listing is listed again
     before it is called gone: the torrent may simply be newer than the listing.
@@ -824,20 +927,18 @@ def fetch_torrent_details(cfg, items):
     details = {}
     try:
         sess = _session(api_key)
-        resp = sess.get(f'{base}/api/instances', timeout=15)
-        resp.raise_for_status()
-        all_instances = resp.json()
-        if not isinstance(all_instances, list):
-            all_instances = _unwrap(all_instances)
-        eligible = {i['id']: i for i in all_instances if _eligible(i)}
+        eligible_list, unreachable = _list_instances(sess, base)
+        eligible = {i['id']: i for i in eligible_list}
         if not eligible:
             return {}
 
         # Upload stats come from the per-instance torrent lists (no single-hash
-        # endpoint is documented) — each involved instance's list, once.
+        # endpoint is documented) — each involved instance's list, once. A
+        # registration that names an instance qui cannot reach is asked of no
+        # other (CR1a): that one alone could answer for it.
         involved_ids = {inst_id for _h, inst_id in wanted.values() if inst_id in eligible}
-        if any(inst_id not in eligible for _h, inst_id in wanted.values()):
-            involved_ids = set(eligible)  # unknown instance — search everywhere
+        if any(inst_id is None for _h, inst_id in wanted.values()):
+            involved_ids = set(eligible)  # no instance named — search everywhere
         reg_to_instance, listed_ok, listed_now = {}, set(), set()
 
         def _list(inst_id, fresh):
@@ -867,8 +968,14 @@ def fetch_torrent_details(cfg, items):
                 _list(inst_id, fresh=True)
         for key, (_th, inst_id) in wanted.items():
             if key not in details:
-                asked = [inst_id] if inst_id in eligible else list(eligible)
-                if all(i in listed_ok for i in asked):
+                # Gone only where every instance that could hold it answered:
+                # its own, or with none named every one auditorr reads. Another
+                # instance answering is no evidence about one that did not (CR1a).
+                if inst_id is None:
+                    asked = [] if unreachable else list(eligible)
+                else:
+                    asked = [inst_id] if inst_id in eligible else []
+                if asked and all(i in listed_ok for i in asked):
                     details[key] = {'found': False}
 
         def _fetch_health(key, torrent_hash, inst_id):
@@ -909,12 +1016,8 @@ def fetch_torrent_details(cfg, items):
 # ---------------------------------------------------------------------------
 
 def _eligible_instances(sess, base):
-    resp = sess.get(f'{base}/api/instances', timeout=15)
-    resp.raise_for_status()
-    all_instances = resp.json()
-    if not isinstance(all_instances, list):
-        all_instances = _unwrap(all_instances)
-    return [i for i in all_instances if _eligible(i)]
+    """The eligible half of `_list_instances` (`.internal`'s box probe calls it)."""
+    return _list_instances(sess, base)[0]
 
 
 def list_torrents(cfg):
@@ -953,11 +1056,16 @@ def list_torrents(cfg):
     socket.setdefaulttimeout(30)
     try:
         sess = _session(api_key)
-        eligible = _eligible_instances(sess, base)
+        eligible, unreachable = _list_instances(sess, base)
         if not eligible:
             raise SourceConnectionError("No eligible qui instances")
         report = new_source_report('qui')
-        report['instances_total'] = len(eligible)
+        # A disconnected instance is a failed one (CR1), so the wrapper refuses
+        # and every destructive route answers 502 rather than acting on a
+        # listing with an instance's torrents missing.
+        report['instances_total'] = len(eligible) + len(unreachable)
+        for inst in unreachable:
+            report_instance_failure(report, inst.get('name', '?'), _UNREACHABLE_REASON)
         rows = []
         seen_hashes, multi = set(), set()
         for inst in eligible:
@@ -1031,6 +1139,13 @@ def fetch_torrent_file_paths(cfg, items):
     not in control flow. A total failure (unreachable host, no eligible
     instances) leaves every requested registration at `None` rather than
     returning a map of empty lists.
+
+    **An item with no `save_path` answers `None` too** (TRIAGE T23). qui's file
+    listing names each file relative to the torrent, and this joins it to the
+    caller's save path; with none, every path came back as `/<name>`, which no
+    filesystem holds. T22's plan passed a bare `{hash, instance_id}`, so every
+    episode read as unchecked on qui while qbit, which looks the save path up
+    itself, worked. A path that can't exist is a wrong answer, not an unknown.
     """
     base    = (cfg.get('QUI_HOST') or '').rstrip('/')
     api_key = cfg.get('QUI_API_KEY', '')
@@ -1046,14 +1161,24 @@ def fetch_torrent_file_paths(cfg, items):
     result = {key: None for key, _ in wanted}
     try:
         sess = _session(api_key)
-        eligible_ids = [i['id'] for i in _eligible_instances(sess, base)]
-        ambiguous = 0
+        eligible, unreachable = _list_instances(sess, base)
+        eligible_ids = [i['id'] for i in eligible]
+        ambiguous = unasked = rootless = 0
         for key, i in wanted:
             h  = i.get('hash')
-            sp = (i.get('save_path') or '').rstrip('/')
+            if not i.get('save_path'):
+                rootless += 1
+                continue
+            sp = i['save_path'].rstrip('/')
             inst = i.get('instance_id')
             if inst in eligible_ids:
                 try_ids = [inst]
+            elif inst is not None or unreachable:
+                # Its own instance is out of reach, or with none named one that
+                # could hold it is. Another instance's listing is not this
+                # registration's (CR1): "could not ask".
+                unasked += 1
+                continue
             elif len(eligible_ids) == 1:
                 try_ids = list(eligible_ids)
             else:
@@ -1084,6 +1209,12 @@ def fetch_torrent_file_paths(cfg, items):
             # Counts only — a registration key carries a full infohash.
             log.warning('qui: %d torrent(s) name no instance and could be on more than one; '
                         'their file listings are unknown rather than guessed', ambiguous)
+        if unasked:
+            log.warning('qui: %d torrent(s) are on, or could be on, an instance qui cannot reach; '
+                        'their file listings are unknown', unasked)
+        if rootless:
+            log.warning('qui: %d file listing(s) were asked for without a save path; '
+                        'they are unknown rather than rooted at /', rootless)
     except Exception as e:
         log.warning('qui: fetch_torrent_file_paths failed: %s', e)
     return result
@@ -1124,12 +1255,22 @@ def remove_torrents(cfg, items, delete_files=True):
     'deleteWithFiles' / 'delete' — both confirmed in the action enum of a
     live instance's /api/openapi.json (2026-06-12).
 
+    **Each registration goes to its own instance** (CR2, TRUMPED TR22). This
+    used to key the request by hash, so `[{H, 1}, {H, 2}]` posted to instance 1
+    alone and left instance 2 registered on the files it had just deleted, which
+    is a normal Trumped group and Triage's "All cross-seeds".
+
     A hash with **no** instance named is located by listing every eligible
-    instance, as before — but where more than one holds it, it is **skipped
-    rather than removed from whichever answered first**. Guessing an instance
-    for a destructive action is the one thing this must not do; the caller sees
-    it in the per-registration outcome (`app._removal_outcomes`), which reports
-    the registration as still listed rather than as removed.
+    instance — but where more than one holds it, it is **skipped rather than
+    removed from whichever answered first**, and so is one that an instance
+    could not be asked about: a listing that failed, or an instance qui cannot
+    reach, may hold it too. A registration that **names** an instance qui cannot
+    reach is skipped, never looked up elsewhere (CR1b): it used to be resolved by
+    hash on the other instances and removed from one nobody asked about.
+    Guessing an instance for a destructive action is the one thing this must not
+    do; the caller sees it in the per-registration outcome
+    (`app._removal_outcomes`), which reports the registration as still listed or
+    unknown rather than as removed.
 
     Returns the number of torrents submitted for deletion.
     """
@@ -1138,35 +1279,41 @@ def remove_torrents(cfg, items, delete_files=True):
     if not base:
         raise SourceConnectionError("QUI_HOST is not configured")
 
-    wanted = {}  # hash -> instance_id|None
+    wanted = []  # (hash, instance_id|None), one per registration
     for i in items:
         h = i.get('hash')
-        if h:
-            wanted.setdefault(h, i.get('instance_id'))
+        if h and (h, i.get('instance_id')) not in wanted:
+            wanted.append((h, i.get('instance_id')))
     if not wanted:
         return 0
 
     socket.setdefaulttimeout(30)
     try:
         sess = _session(api_key)
-        resp = sess.get(f'{base}/api/instances', timeout=15)
-        resp.raise_for_status()
-        all_instances = resp.json()
-        if not isinstance(all_instances, list):
-            all_instances = _unwrap(all_instances)
-        eligible = {i['id'] for i in all_instances if _eligible(i)}
+        eligible_list, unreachable = _list_instances(sess, base)
+        eligible = {i['id'] for i in eligible_list}
         if not eligible:
             raise SourceConnectionError("No eligible qui instances")
 
         by_instance = {}  # instance_id -> [hashes]
-        unresolved  = []
-        for h, inst_id in wanted.items():
-            if inst_id in eligible:
-                by_instance.setdefault(inst_id, []).append(h)
-            else:
-                unresolved.append(h)
 
-        if unresolved:
+        def _add(inst_id, h):
+            hashes = by_instance.setdefault(inst_id, [])
+            if h not in hashes:
+                hashes.append(h)
+
+        unresolved, unasked = [], 0
+        for h, inst_id in wanted:
+            if inst_id is None:
+                unresolved.append(h)
+            elif inst_id in eligible:
+                _add(inst_id, h)
+            else:
+                unasked += 1
+
+        if unresolved and unreachable:
+            unasked += len(unresolved)
+        elif unresolved:
             # Where a hash turns up on several instances the caller did not say
             # which registration it meant, so nothing is removed for it.
             holders = {h: [] for h in unresolved}
@@ -1175,15 +1322,19 @@ def remove_torrents(cfg, items, delete_files=True):
                     listed = {_norm_torrent(t)['hash']
                               for t in _fetch_all_torrents(sess, base, inst_id)}
                 except Exception as e:
+                    # Every unnamed hash is now unknown, as `_instances_holding`
+                    # answers None: the instance that failed may hold any of them.
                     log.warning('qui: torrent list failed for instance %s: %s', inst_id, e)
-                    continue
+                    holders = {}
+                    unasked += len(unresolved)
+                    break
                 for h in unresolved:
                     if h in listed:
                         holders[h].append(inst_id)
             ambiguous = 0
             for h, found in holders.items():
                 if len(found) == 1:
-                    by_instance.setdefault(found[0], []).append(h)
+                    _add(found[0], h)
                 elif len(found) > 1:
                     ambiguous += 1
             if ambiguous:
@@ -1191,6 +1342,9 @@ def remove_torrents(cfg, items, delete_files=True):
                 # report's log ring.
                 log.warning('qui: %d torrent(s) named no instance and are registered on more '
                             'than one, so nothing was removed for them', ambiguous)
+        if unasked:
+            log.warning('qui: %d torrent(s) are on, or could be on, an instance that could not be '
+                        'asked, so nothing was removed for them', unasked)
 
         removed = 0
         for inst_id, hashes in by_instance.items():

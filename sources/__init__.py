@@ -35,7 +35,13 @@ cannot name an instance for a hash registered more than once **refuses rather
 than guessing** — the same rule as "could not ask", one layer up.
 """
 
+import logging
 import os
+import re
+import posixpath
+import unicodedata
+
+log = logging.getLogger(__name__)
 
 
 class SourceConnectionError(Exception):
@@ -86,6 +92,16 @@ def new_source_report(source):
 
       distinct_torrents   distinct infohashes across every instance
       multi_registered    hashes registered on more than one instance
+
+    And one for the other per-torrent call:
+
+      tracker_failures    torrents whose tracker list could not be fetched.
+                          Their upload is filed under `Unknown`, which is also
+                          the real answer for a torrent with no tracker URL, so
+                          the upload snapshot carries the count as
+                          `_trackers_unanswered` and `compute_upload_stats`
+                          leaves that snapshot out. It does not set `partial`:
+                          the file claims don't depend on it.
     """
     return {
         'source':              source,
@@ -93,6 +109,7 @@ def new_source_report(source):
         'distinct_torrents':   0,
         'multi_registered':    0,
         'file_map_size':       0,
+        'tracker_failures':    0,
         'listing_failures':    0,
         'listing_recovered':   0,
         'listing_unresolved':  0,
@@ -136,6 +153,29 @@ def report_note(report, message):
         notes.append(message)
 
 
+def mark_trackers_unanswered(snapshot, report, torrent_total, label):
+    """Mark an upload snapshot whose tracker attribution is incomplete.
+
+    A torrent whose tracker list could not be fetched has its cumulative upload
+    filed under `Unknown`, so its tracker's total dips for this scan and comes
+    back on the next. `compute_upload_stats` skips a negative delta as a counter
+    reset and then counts the return in full: on 2026-10-11 a startup scan with
+    776 files' worth of failed tracker calls read as 3.9 TB uploaded in one
+    afternoon, where 94 GB was real. The key tells it to leave the snapshot out.
+
+    Sparse: written only when something failed, so a healthy scan's snapshot is
+    unchanged. A count, never a hash (the report reaches /api/debug/report).
+    """
+    failed = report.get('tracker_failures', 0)
+    if not failed:
+        return
+    snapshot['_trackers_unanswered'] = failed
+    log.warning('%s: tracker list failed for %d of %d torrent(s); this scan is left out '
+                'of the upload stats', label, failed, torrent_total)
+    report_note(report, f"tracker list failed for {failed} of {torrent_total} torrents; "
+                        f"this scan is left out of the upload stats")
+
+
 def report_instance_failure(report, name, reason):
     """Record an instance that could not be listed, and mark the scan partial."""
     if report is None:
@@ -157,8 +197,120 @@ def report_instance_failure(report, name, reason):
 INCOMPLETE_SUFFIX = '.!qB'
 
 
+# ---------------------------------------------------------------------------
+# libtorrent's part file — the skipped files' share of a boundary piece
+# ---------------------------------------------------------------------------
+
+PART_FILE_SUFFIX = '.parts'
+# `.` + a 40-hex torrent id + `.parts`. libtorrent's storage hash is a 20-byte
+# `sha1_hash` on both 1.2 and 2.0 (2.0 truncates a v2 hash to it), so 40 always.
+_PART_FILE_RE = re.compile(r'^\.[0-9a-fA-F]{40}\.parts$')
+
+
+def part_file_path(save_path, torrent_hash):
+    """Where libtorrent keeps this torrent's part file, or '' (CLEANUP C18).
+
+    A piece can straddle a file you download and one set to *Do not download*.
+    libtorrent still writes the whole piece, so the skipped file's share goes
+    into a **part file** named `.<infohash>.parts`, directly in the torrent's
+    save path: beside its folder, not inside it. Read from libtorrent's own
+    storage (RC_2_0: `m_part_file_name("." + to_hex(info_hash) + ".parts")`,
+    opened at `combine_path(m_save_path, m_part_file_name)`), where the hash is
+    `info_hashes().get_best()`. That is exactly what qBittorrent reports as a
+    torrent's `hash` (`InfoHash::toTorrentID` returns `get_best()`), so the name
+    follows from the listing alone.
+
+    No torrent's file listing names it, so it read as an orphan and Cleanup
+    offered it for `rm` with "the only copy" beside it. Deleting it loses those
+    boundary pieces, and the torrent cannot serve them until a recheck fetches
+    them again.
+
+    Joined with `os.path.join`, as the listing's own claims are, so it equals the
+    key the walk builds for the same file.
+    """
+    h = str(torrent_hash or '').strip().lower()
+    if not save_path or not h:
+        return ''
+    return os.path.join(save_path, f'.{h}{PART_FILE_SUFFIX}')
+
+
+def is_part_file_name(name):
+    """True for a file name spelled like a libtorrent part file."""
+    return bool(_PART_FILE_RE.match(str(name or '')))
+
+
+def _skips_files(priorities):
+    """True / False / None — does this torrent set any file to *Do not download*?
+
+    Priority 0 is qBittorrent's *Do not download*. `None` is "could not
+    determine" (no listing, or a listing whose entries carry no priority), which
+    `part_file_claims` answers by looking on disk.
+    """
+    if priorities is None:
+        return None
+    unknown = False
+    for p in priorities:
+        try:
+            if int(p) == 0:
+                return True
+        except (TypeError, ValueError):
+            unknown = True
+    return None if unknown else False
+
+
+def part_file_claims(save_path, torrent_hash, priorities=None):
+    """`[part file path]` when this torrent has one on disk, else `[]`.
+
+    Stat'ed only where one can exist: a torrent that skips a file, or one whose
+    priorities could not be read. A library that skips nothing pays no stat and
+    its `file_map` is byte-identical to before, which keeps `file_map_size`, the
+    plausibility guard's baseline, unmoved. Claimed only when the file is there,
+    so the map never counts a path that does not exist.
+    """
+    path = part_file_path(save_path, torrent_hash)
+    if not path or _skips_files(priorities) is False:
+        return []
+    return [path] if os.path.isfile(path) else []
+
+
 def _posix(path):
     return (path or '').replace('\\', '/')
+
+
+def norm_abs(path):
+    """A path spelled for comparison: `/` separators, no `//`, `.` or `..`.
+
+    The one spelling every path comparison in the app shares. It was three
+    copies, `app._norm_abs`, `audit._norm_abs` and `scripts._abs`, each
+    documented as the one (CODE_REVIEW_2026-09-27 CR14); those names are now
+    this. Unconditional, so the checked-in tests take the branch the container
+    takes: the audit joins with `os.path.join`, which is `\\` on a Windows dev
+    machine. Normalising can only make more paths compare equal. In Cleanup's
+    re-verify a match drops a file from the script, and in Dedupe a Linux name
+    holding a real backslash reads as missing, `stale`, which cannot be
+    selected: the fail-safe direction in both.
+    """
+    p = str(path or '').replace('\\', '/')
+    return posixpath.normpath(p) if p else ''
+
+
+def nfc(path):
+    """`path` in Unicode NFC, for matching a name on disk against a client's (CLEANUP C25).
+
+    One name can be stored in two Unicode forms: `é` as one code point (NFC) or
+    as `e` plus a combining accent (NFD). A Mac writes NFD over SMB, and some
+    filesystems normalise names on the way in, so the disk and the client can
+    spell the same file two ways. Compared as raw strings, the file read as an
+    orphan and the torrent as missing it. qui's Orphan Scan matches in NFC for
+    the same reason.
+
+    **A key for comparing, never a path to act on**: on a filesystem that keeps
+    names byte for byte, the NFC spelling of an NFD file doesn't exist, so
+    nothing that opens, stats or writes a script line may use it. ASCII, which
+    is nearly every path, comes back unchanged after `str.isascii()`, which is
+    constant time.
+    """
+    return path if path.isascii() else unicodedata.normalize('NFC', path)
 
 
 def torrent_complete(progress, completion_on):
@@ -193,9 +345,12 @@ def torrent_complete(progress, completion_on):
         except (TypeError, ValueError):
             p = None
         if p is not None:
-            # A value above 1.0 can only be a 0-100 scale. Measured 0-1 on both
-            # backends, but reading 42.5 as "complete" is the corrupting
-            # direction, so the scale is inferred rather than assumed.
+            # Measured 0-1 on both backends. A value above 1.0 is read as a
+            # 0-100 scale, because reading 42.5 as "complete" is the corrupting
+            # direction. That guard is partial, not an inferred scale (CR13): on
+            # a 0-100 scale exactly 1.0 means 1% and still reads complete, which
+            # no single value can tell apart. A backend that ever answers 0-100
+            # must say so where it calls this.
             return p >= 100.0 if p > 1.0 else p >= 1.0
     if completion_on is not None:
         try:
@@ -356,7 +511,75 @@ def disk_fallback_paths(save_path, torrent_name, content_path=''):
     return found
 
 
-def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, complete):
+# Characters qBittorrent replaces with a space when it makes a folder name out
+# of a category name (`Utils::Fs::toValidPath`). `/` isn't one: it separates a
+# subcategory from its parent.
+_QBT_INVALID_PATH_CHARS = re.compile(r'[:?"*<>|]+')
+
+
+def _is_abs(path):
+    return path.startswith('/') or bool(re.match(r'^[A-Za-z]:/', path))
+
+
+def _category_dir(name, categories, default_save_path, use_subcategories):
+    """One category's folder, the way qBittorrent's `categorySavePath` works it out.
+
+    Its own save path if it has one (relative is under the default save path).
+    With none, a subcategory nests under its parent's folder when subcategories
+    are on, and anything else is the default save path plus the name. `''` when
+    the answer needs a default save path the client didn't give.
+    """
+    opts = categories.get(name) if isinstance(categories, dict) else None
+    own = (opts.get('savePath') or opts.get('save_path')) if isinstance(opts, dict) else ''
+    own = _posix(str(own or ''))
+    if own:
+        if _is_abs(own):
+            return posixpath.normpath(own)
+        return posixpath.normpath(posixpath.join(default_save_path, own)) if default_save_path else ''
+    if use_subcategories and '/' in name.strip('/'):
+        parent, _, last = name.strip('/').rpartition('/')
+        base = _category_dir(parent, categories, default_save_path, use_subcategories)
+    else:
+        base, last = default_save_path, name
+    if not base:
+        return ''
+    return posixpath.normpath(posixpath.join(base, _QBT_INVALID_PATH_CHARS.sub(' ', last)))
+
+
+def client_save_dirs(preferences, categories):
+    """The folders qBittorrent saves into besides a torrent's own save path (CLEANUP C27).
+
+    The default save path, every category's folder (`_category_dir`) and the
+    incomplete-downloads folder when it's on: an empty one of these is about to
+    be saved into again, so it's never an empty folder for Cleanup to offer.
+    Client-side spelling; the caller remaps. **None when either answer isn't a
+    dict**: could not ask, so the scan offers no empty folder at all (R1).
+    """
+    if not isinstance(preferences, dict) or not isinstance(categories, dict):
+        return None
+    default = _posix(str(preferences.get('save_path') or '')).rstrip('/') or ''
+    nest = bool(preferences.get('use_subcategories'))
+    dirs = [_category_dir(str(name), categories, default, nest) for name in categories]
+    if default:
+        dirs.append(default)
+    if preferences.get('temp_path_enabled') and preferences.get('temp_path'):
+        dirs.append(_posix(str(preferences['temp_path'])))
+    return [d for d in dirs if d]
+
+
+def content_root(save_path, torrent_name, content_path=''):
+    """Where a torrent's payload sits, for naming it: `save_path/name`, else `content_path`.
+
+    `save_path/name` first, because it's the folder `disk_fallback_paths` walks
+    that holds the sidecars as well, so it's what a stray file sits in. Posix.
+    """
+    if save_path and torrent_name:
+        return posixpath.join(_posix(save_path), _posix(torrent_name))
+    return _posix(content_path or save_path or '')
+
+
+def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, complete,
+                          torrent_hash='', priorities=None):
     """Every on-disk path one torrent claims — **the** claim rule, in one place.
 
     "Orphaned" is the absence of a claim, so what counts as a claim decides what
@@ -386,10 +609,20 @@ def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, com
     * or, with no usable listing, `disk_fallback_paths(save_path, name,
       content_path)` — which over-claims, the fail-safe direction, and returns
       `[]` when nothing is on disk at either root. The caller counts that as
-      `listing_unresolved`; it is never "this torrent has no files".
+      `listing_unresolved`; it is never "this torrent has no files";
+    * and in both cases its libtorrent part file, when it has one on disk
+      (`part_file_claims`, C18). `torrent_hash` names it and `priorities` (one
+      per listed file, or `None`) says whether to look. The fallback adds it only
+      beside a payload it found: where it found nothing, the save path is an
+      unresolved root, and everything under it is already `unverified`.
     """
     if file_names is None:
-        return disk_fallback_paths(save_path, torrent_name, content_path)
+        found = disk_fallback_paths(save_path, torrent_name, content_path)
+        if not found:
+            return found
+        # The part file sits beside the payload, so the fallback's walk of
+        # `save_path/name` never reaches it.
+        return found + part_file_claims(save_path, torrent_hash)
     full_paths = [os.path.join(save_path, n) for n in file_names]
     if complete is not True:
         # An unfinished payload may not be where the listing says it will end
@@ -397,7 +630,7 @@ def torrent_claimed_paths(save_path, torrent_name, content_path, file_names, com
         # `.!qB` suffix enabled.
         full_paths = full_paths + incomplete_claims(
             content_path, torrent_name, file_names, full_paths)
-    return full_paths
+    return full_paths + part_file_claims(save_path, torrent_hash, priorities)
 
 
 # Substrings (lowercased) of tracker status messages that mean the torrent is
@@ -481,7 +714,7 @@ def _source(cfg):
     return cfg.get('TORRENT_SOURCE', 'qbit')
 
 
-def fetch_file_map(cfg, unresolved_roots=None):
+def fetch_file_map(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
     """(file_map, sorted_trackers, tracker_snapshot, report).
 
     `report` is a `new_source_report` dict describing how completely the client
@@ -495,10 +728,25 @@ def fetch_file_map(cfg, unresolved_roots=None):
     orphans there `unverified` (CLEANUP §5.3). **An out-parameter, in memory
     only, on purpose:** the report is persisted and reaches
     `/api/debug/report`, which must stay free of paths.
+
+    `fallback_roots`, when a list, receives the remapped content root
+    (`content_root`) of every torrent whose files came from the disk fallback
+    and were found: a failed listing on either backend, and an empty one on
+    qui. Everything under it was claimed for that torrent, so a stray file
+    there can't be seen, and the Cleanup page says so (CLEANUP C26). In memory
+    only, for the same reason.
+
+    `save_scope`, when a dict, receives `dirs`, a set of the local folders the
+    client saves into (every live torrent's save path, and `client_save_dirs`),
+    and `unknown`, true when an instance's preferences or categories didn't
+    load. Empty-folder detection (C27) never offers one of those, and offers
+    nothing when it's unknown.
     """
     if _source(cfg) == 'qui':
-        return _qui_fetch_file_map(cfg, unresolved_roots=unresolved_roots)
-    return _qbit_fetch_file_map(cfg, unresolved_roots=unresolved_roots)
+        return _qui_fetch_file_map(cfg, unresolved_roots=unresolved_roots,
+                                   fallback_roots=fallback_roots, save_scope=save_scope)
+    return _qbit_fetch_file_map(cfg, unresolved_roots=unresolved_roots,
+                                fallback_roots=fallback_roots, save_scope=save_scope)
 
 
 def test_connection(payload):

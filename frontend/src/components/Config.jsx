@@ -702,11 +702,6 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           )}
           <Button onClick={handleTest}>Test Connection</Button>
         </div>
-        <ExternalUrlSection fields={isQui
-          ? [{ key: 'QUI_EXTERNAL_URL', label: 'qui External URL', placeholder: 'https://qui.example.com',
-               value: conf.QUI_EXTERNAL_URL, onChange: set('QUI_EXTERNAL_URL') }]
-          : [{ key: 'QB_EXTERNAL_URL', label: 'qBittorrent External URL', placeholder: 'https://qbit.example.com',
-               value: conf.QB_EXTERNAL_URL, onChange: set('QB_EXTERNAL_URL') }]} />
         {sourceInfo && testStatus?.ok && (
           <div style={{ marginTop: 8 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--green)' }}>

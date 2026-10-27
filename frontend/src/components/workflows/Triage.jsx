@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../../api'
-import { formatBytes, copyText } from '../../utils'
+import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
 import {
   WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
   ArrErrorsWarning, ActionBar, Button, Spinner, SpinKeyframes, SectionHeading, QualityChip, Checkbox,
-  ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning, Segmented,
+  ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning, Segmented, Disclosure,
 } from './shared'
+import { ReplaceModal, SeasonPackModal, ForceImportModal } from './SeasonPack'
 
 const VERDICTS = [
   {
@@ -28,7 +29,7 @@ const VERDICTS = [
   },
   {
     key: 'import_pending', label: 'Import Pending', color: 'var(--blue)',
-    desc: 'Managed by Sonarr/Radarr but missing from the library — the import likely failed or was skipped. Trigger a rescan to retry.',
+    desc: 'Managed by Sonarr/Radarr but missing from the library — the import likely failed or was skipped. Retry import asks them to try again.',
   },
   {
     key: 'library_unknown', label: 'Could Not Check', color: 'var(--yellow)',
@@ -53,15 +54,15 @@ const QUALITY_BUCKETS = [
   },
   {
     key: 'higher', label: 'Higher quality than library', color: 'var(--green)',
-    desc: 'Better than what you imported — consider a manual import in Sonarr/Radarr to upgrade your library copy before doing anything else.',
+    desc: 'Better than what your library holds. Retry import lets Sonarr/Radarr upgrade the library copy, unless you chose the lower quality on purpose (a smaller profile, or a pack you replaced the season with). Then this torrent is yours to keep seeding or remove.',
   },
   {
     key: 'same', label: 'Same quality as library', color: 'var(--blue)',
-    desc: 'A separate release at the same quality (not a byte-identical copy) — pure ratio padding. Keep seeding or delete, nothing to upgrade.',
+    desc: 'A separate release at the same quality (not a byte-identical copy) — pure ratio padding. Keep seeding or delete, nothing to upgrade. For a pack, at least one episode matches and none is better, and Force import swaps in only the matching ones.',
   },
   {
     key: 'lower', label: 'Lower quality than library', color: 'var(--yellow)',
-    desc: 'Your library already has better. Safe to delete once the torrent has earned its keep.',
+    desc: 'Your library already has better. Safe to delete once the torrent has earned its keep. Or seed this one instead: select it and Force import over … puts it over the library file, saying first whether the better file stays on disk.',
   },
   {
     key: 'unknown', label: 'Quality comparison unavailable', color: 'var(--text-dim)',
@@ -168,10 +169,8 @@ function formatDuration(secs) {
   return `${Math.max(1, Math.round(secs / 60))}m`
 }
 
-// Search term for prescreening the qBittorrent/qui search box: the parsed
-// title ("The Show") — qBit filters per word, so it matches dotted release
-// names AND surfaces every torrent of that title, not just this release.
-// Falls back to the release folder / file name when parsing found nothing.
+// A torrent's name for a person to read: the parsed title ("The Show"), else
+// the release folder / file name when parsing found nothing.
 function torrentSearchName(item) {
   if (item.parsed?.title) return item.parsed.title
   const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
@@ -189,18 +188,50 @@ function torrentSearchName(item) {
   return common.length > 0 ? common[common.length - 1] : fileBase()
 }
 
-// qui can jump straight to a torrent by hash; qBittorrent cannot
-function canDeepLink(client, item) {
-  return client?.name === 'qui' && item.hash && item.instance_id != null
-}
-
-// Force import replaces the file the arr already holds, so it is only offered
-// where auditorr scored this release as the *same* quality as that file. A
-// downgrade stays blocked — Sonarr/Radarr are right to refuse those, and the
-// rescan action now reports their reason rather than a blank success.
+// The bulk Force import replaces the file the arr already holds, so it is only
+// offered where auditorr scored this release as the *same* quality as that
+// file. A downgrade is never forced in bulk: it goes one row at a time through
+// `canForceOver`'s dialog, which reads both files live first.
 function canForceImport(item) {
   const lib = item.library
   return !!lib && lib.quality_cmp === 'same' && !!lib.arr_id && !!lib.connection_id
+}
+
+// Retry import asks the arr to import under its own rules, which take a new
+// file or an upgrade and nothing else. So it's offered only where that can
+// succeed: not on a torrent that's already imported (a dead seed or
+// registration), not on a title no arr knows, and not over a library file at
+// least as good as this release. It used to be offered on every row, and on a
+// lower one it could only fail Radarr's "not an upgrade" check.
+function canRetryImport(item) {
+  if (['dead_seed', 'dead_registration', 'not_in_library'].includes(item.verdict)) return false
+  const lib = item.library
+  return !(lib?.quality_name && (item.is_duplicate || lib.quality_cmp === 'same' || lib.quality_cmp === 'lower'))
+}
+
+// T26 — one release forced over the library file it's lower than (or can't be
+// compared with), for a Radarr movie or a single Sonarr episode. The arrs
+// refuse these themselves, because they aren't upgrades. The dialog reads both
+// files live and says whether the better one stays on disk (another hardlink)
+// or is deleted (T24's unseeded case, behind its switch). A Sonarr pack
+// switches its season over instead (`canReplace`).
+function canForceOver(item) {
+  const lib = item.library
+  if (item.verdict !== 'superseded' || !item.hash || item.is_duplicate) return false
+  if (lib?.quality_cmp !== 'lower' && lib?.quality_cmp !== 'unknown') return false
+  if (lib.service === 'radarr') return lib.arr_id != null && !!lib.connection_id
+  return canReplace(item) && !isPack(item)
+}
+
+// What the force-import dialog posts: a movie, with the videos the audit
+// matched to it (a collection's other films are never imported over it), or
+// the episode's season.
+function forceParams(item) {
+  const lib = item.library
+  return lib.service === 'radarr'
+    ? { service: 'radarr', hash: item.hash, instance_id: item.instance_id,
+        connection_id: lib.connection_id, arr_id: lib.arr_id, files: lib.match_files || [] }
+    : replaceParams(item)
 }
 
 // The arr reports every scan command as completed even when its import
@@ -227,13 +258,205 @@ function rejectionSummary(rejected) {
 // rather than disabled, because the row already carries its reason.
 const canExclude = item => (item.exclusion_patterns || []).length > 0
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending, rescanned, unconfirmed }) {
+// " · S01E01–E02" — the season and every episode the row's videos hold
+// (`item.episodes`, the server's). It used to be the representative file's
+// episode alone, so a season pack read as one episode beside "2 of 6 files". A
+// multi-file row with no episode list (an extra with no number, a pack spanning
+// seasons) names none rather than one file's.
+function episodeTag(item) {
   const p = item.parsed || {}
-  const seTag = p.season != null
-    ? ` · S${String(p.season).padStart(2, '0')}${p.episode != null ? 'E' + String(p.episode).padStart(2, '0') : ' pack'}`
-    : ''
+  if (p.season == null) return ''
+  const pad = n => String(n).padStart(2, '0')
+  const season = `S${pad(p.season)}`
+  const eps = item.episodes || []
+  if (eps.length > 1) {
+    const runs = []
+    for (const e of eps) {
+      const last = runs[runs.length - 1]
+      if (last && e === last[1] + 1) last[1] = e
+      else runs.push([e, e])
+    }
+    if (runs.length > 3) return ` · ${season} · ${eps.length} episodes`
+    return ` · ${season}${runs.map(([a, b]) => a === b ? `E${pad(a)}` : `E${pad(a)}–E${pad(b)}`).join(', ')}`
+  }
+  if (eps.length === 0 && item.file_count > 1) return ''
+  return ` · ${season}${p.episode != null ? 'E' + pad(p.episode) : ' pack'}`
+}
+
+// T22 — a superseded Sonarr row whose torrent can replace its season's library
+// files. The verdict is the live one: a pack verify finds unregistered is no
+// pack to consolidate on.
+function canReplace(item) {
+  return !!item.season_key && item.verdict === 'superseded' && !!item.hash
+}
+
+function isPack(item) {
+  return item.file_count > 1 || (item.episodes || []).length > 1 || item.torrent_files > 1
+}
+
+// "SbR · 1080p Bluray" — how the replace dialog and its chip name a pack.
+function packName(item) {
+  const q = item.parsed?.quality_label
+  return [item.release_group, q].filter(Boolean).join(' · ') || torrentSearchName(item)
+}
+
+// T25 — a dead seed of a Sonarr season: the tracker killed it, and at the end of
+// a season that usually means it posted a pack. Where to look for it.
+function seasonPackTarget(item) {
+  const lib = item.library
+  const season = item.parsed?.season
+  if (item.verdict !== 'dead_seed' || lib?.service !== 'sonarr' || lib.arr_id == null
+      || !lib.connection_id || season == null) return null
+  return { connection_id: lib.connection_id, arr_id: lib.arr_id, season,
+           title: lib.title || item.parsed?.title, trackers: item.trackers || [] }
+}
+
+// The server's `season_key`, for any row of a Sonarr season.
+function seasonKeyOf(item) {
+  const lib = item.library
+  const season = item.parsed?.season
+  if (lib?.service !== 'sonarr' || lib.arr_id == null || !lib.connection_id || season == null) return null
+  return `${lib.connection_id}|${lib.arr_id}|${season}`
+}
+
+// Seasons switched over this session, so a replaced season's line doesn't come
+// back as a Find line built from its dead singles. Cleared with DISMISSED.
+const SWITCHED = new Set()
+
+// Switching a finished season over to its pack, as one list with the season as
+// the unit: a pack in the client that can replace the library (T22), else a
+// season whose singles the tracker dropped (T25). A lone dead single is left to
+// its row's chip: one dead episode is a trump or a nuke more often than a
+// season's end. A season whose singles died leads, since that's the season
+// being over; then seasons with a pack; then the ones still to find a pack for.
+function seasonSwitches(items) {
+  const seasons = new Map()
+  for (const i of items) {
+    const key = seasonKeyOf(i)
+    if (!key || SWITCHED.has(key)) continue
+    const s = seasons.get(key) || { key, packs: [], dead: [] }
+    if (canReplace(i) && isPack(i)) s.packs.push(i)
+    else if (seasonPackTarget(i)) s.dead.push(i)
+    seasons.set(key, s)
+  }
+  const size = i => i.torrent_size ?? i.total_size ?? 0
+  const out = []
+  for (const s of seasons.values()) {
+    if (s.packs.length) {
+      const lead = s.packs.find(p => p.reg === p.season_pick) || [...s.packs].sort((a, b) => size(b) - size(a))[0]
+      out.push({ ...s, kind: 'replace', lead })
+    } else if (s.dead.length >= 2) {
+      const lead = s.dead[0]
+      const target = { ...seasonPackTarget(lead), trackers: [...new Set(s.dead.flatMap(d => d.trackers || []))], key: s.key }
+      out.push({ ...s, kind: 'find', lead, target })
+    }
+  }
+  const order = s => (s.kind === 'replace' ? 0 : 2) + (s.dead.length ? 0 : 1)
+  const name = s => `${s.lead.library?.title || s.lead.parsed?.title || ''} ${String(s.lead.parsed?.season).padStart(3, '0')}`
+  return out.sort((a, b) => order(a) - order(b) || b.dead.length - a.dead.length || name(a).localeCompare(name(b)))
+}
+
+const SWITCHES_SHOWN = 4
+
+// The season-pack step, at the top of the page because it's the normal end of
+// a season rather than an exception: the singles' tracker posts a pack, and the
+// library moves onto it. The first season's button is the page's one primary.
+function SeasonSwitches({ seasons, clientName, onReplace, onFind }) {
+  const [open, setOpen] = useState(false)
+  if (seasons.length === 0) return null
+  const shown = open ? seasons : seasons.slice(0, SWITCHES_SHOWN)
+  const ready = seasons.filter(s => s.kind === 'replace').length
+  const meta = [ready && `${ready} ready`, seasons.length - ready && `${seasons.length - ready} to find`]
+    .filter(Boolean).join(' · ')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <SectionHeading check={null} dot="var(--green)" title="Switch seasons over to a pack" meta={meta}
+        desc={`When a season ends, a good tracker drops its single episodes and posts a pack. Move your library onto the pack, as hardlinks, and one torrent seeds the whole season. You see every episode before anything changes, and nothing leaves ${clientName}.`}
+      />
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
+        {shown.map((s, n) => (
+          <SeasonSwitchRow key={s.key} season={s} lead={n === 0} clientName={clientName}
+            onReplace={onReplace} onFind={onFind} />
+        ))}
+      </div>
+      {seasons.length > SWITCHES_SHOWN && (
+        <div style={{ marginLeft: 42 }}>
+          <Disclosure open={open} onClick={() => setOpen(o => !o)}>
+            {open ? 'Show fewer' : `${seasons.length - SWITCHES_SHOWN} more season${seasons.length - SWITCHES_SHOWN !== 1 ? 's' : ''}`}
+          </Disclosure>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SeasonSwitchRow({ season: s, lead, clientName, onReplace, onFind }) {
+  const item = s.lead
+  const lib = item.library || {}
+  const sNum = `S${String(item.parsed?.season).padStart(2, '0')}`
+  const libQualities = lib.qualities || (lib.quality_name ? [lib.quality_name] : [])
+  const dead = s.dead.length
+  const others = s.packs.length - 1
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 14px', borderBottom: '1px solid var(--border)' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {lib.title || item.parsed?.title}{lib.year ? ` (${lib.year})` : ''} · {sNum}
+        </div>
+        {s.kind === 'replace' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, flexWrap: 'wrap' }}>
+            <span title={item.name || item.rep_path} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)' }}>
+              {packName(item)}
+            </span>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+              {formatBytes(item.torrent_size ?? item.total_size)} · in {clientName}
+              {others > 0 ? ` · ${others} other pack${others !== 1 ? 's' : ''}` : ''}
+              {libQualities.length > 0 ? ' ·' : ''}
+            </span>
+            {libQualities.length > 0 && (
+              <>
+                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>vs library</span>
+                {libQualities.map(q => <QualityChip key={q} label={q} dim unknown />)}
+              </>
+            )}
+          </div>
+        )}
+        {dead > 0 && (
+          <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 4 }}>
+            {s.kind === 'replace'
+              ? `The tracker dropped ${dead === 1 ? 'one' : dead} of this season’s singles.`
+              : `The tracker dropped ${dead} of this season’s singles, which usually means it posted a pack. auditorr looks in ${clientName} first, then searches Sonarr.`}
+          </div>
+        )}
+      </div>
+      {s.kind === 'replace' ? (
+        <Button variant={lead ? 'primary' : 'secondary'} onClick={() => onReplace(item)}
+          title="Import the pack over the files Sonarr holds for this season, as hardlinks. The dialog shows each episode before anything happens."
+        >
+          Replace {sNum} with this pack…
+        </Button>
+      ) : (
+        <Button variant={lead ? 'primary' : 'secondary'} onClick={() => onFind(s.target)}
+          title="Look for this season's pack in your client, else search Sonarr's indexers for one, then replace the season with it"
+        >
+          Find season pack…
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending, rescanned, unconfirmed }) {
+  const p = item.parsed || {}
+  const seTag = episodeTag(item)
   const filename = (item.rep_path || '').replace(/\\/g, '/').split('/').pop()
   const lib = item.library
+  // T21 — a pack's episodes can sit against library files of different
+  // qualities (Sonarr upgraded the season as it aired); each one is named.
+  const libQualities = lib ? (lib.qualities || (lib.quality_name ? [lib.quality_name] : [])) : []
+  const spread = lib?.quality_spread
+    ? ` — episodes compared: ${Object.entries(lib.quality_spread).map(([q, n]) => `${n} ${q}`).join(', ')}`
+    : ''
 
   return (
     <div
@@ -278,10 +501,7 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
               title={unconfirmed === 'unknown'
                 ? `The ${client?.name || 'client'} instance holding this torrent did not answer after the removal, so auditorr cannot say whether it left. It stays here until the next scan.`
                 : `auditorr asked ${client?.name || 'the client'} to remove this torrent and it was still listed a moment later. It stays here until the next scan shows what happened.`}
-              style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0,
-                border: '1px solid var(--yellow)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
-              }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0 }}
             >
               removal unconfirmed
             </span>
@@ -289,12 +509,9 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           {rescanned && (
             <span
               title="Handed to Sonarr/Radarr. The arr imports on its own schedule, and this row is built from the last audit — it clears once a scan has seen the result."
-              style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0,
-                border: '1px solid var(--blue)', borderRadius: 'var(--r-pill)', padding: '1px 7px',
-              }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0 }}
             >
-              rescan sent
+              import requested
             </span>
           )}
         </div>
@@ -305,23 +522,24 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
         {/* Evidence line */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5, flexWrap: 'wrap' }}>
           <QualityChip label={p.quality_label} hdr={p.hdr} unknown />
-          {lib && lib.quality_name && (
+          {libQualities.length > 0 && (
             <>
               <span
-                title={`${lib.title}${lib.year ? ` (${lib.year})` : ''}${lib.filename ? ' — ' + lib.filename : ''}`}
+                title={`${lib.title}${lib.year ? ` (${lib.year})` : ''}${lib.filename ? ' — ' + lib.filename : ''}${spread}`}
                 style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}
               >
                 vs library{lib.year ? ` (${lib.year})` : ''}
               </span>
-              <QualityChip label={lib.quality_name} hdr={lib.hdr} dim unknown />
+              {libQualities.map(q => (
+                <QualityChip key={q} label={q} hdr={libQualities.length === 1 ? lib.hdr : ''} dim unknown />
+              ))}
             </>
           )}
           {/* T2 — more than one instance holds this title. The row names them and
-              says which one a rescan or force import goes to, rather than
-              picking silently. */}
+              says which one an import goes to, rather than picking silently. */}
           {lib?.others?.length > 0 && (
             <span
-              title={`${lib.others.length + 1} ${lib.service} instances hold this title. Rescan and force import go to ${lib.connection_name || 'the best match'}${lib.quality_name ? ` (${lib.quality_name})` : ''}. ${lib.others.map(o => `${o.name || o.connection_id} ${o.quality_name ? `holds ${o.quality_name}` : 'holds it too'}`).join('; ')}.`}
+              title={`${lib.others.length + 1} ${lib.service} instances hold this title. Retry import and force import go to ${lib.connection_name || 'the best match'}${lib.quality_name ? ` (${lib.quality_name})` : ''}. ${lib.others.map(o => `${o.name || o.connection_id} ${o.quality_name ? `holds ${o.quality_name}` : 'holds it too'}`).join('; ')}.`}
               style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
             >
               on {lib.connection_name || lib.service} · also {lib.others.map(o => o.name || o.connection_id).join(', ')}
@@ -441,21 +659,6 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           </Button>
         )}
       </span>
-
-      {/* Jump to the client to inspect/delete — qui deep-links to the exact
-          torrent; qBittorrent copies the title for a one-paste search. Red
-          for unregistered (the verdict that begs for deletion). */}
-      {client && (
-        <Button size="chip" variant="subtle" tone={item.verdict === 'unregistered' ? 'var(--red)' : undefined}
-          onClick={e => onOpenClient(item, e)}
-          title={canDeepLink(client, item)
-            ? 'Open this torrent in qui'
-            : `Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find this torrent`}
-          style={{ marginTop: 2 }}
-        >
-          {client.name} {canDeepLink(client, item) ? '↗' : '⧉↗'}
-        </Button>
-      )}
     </div>
   )
 }
@@ -474,14 +677,26 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState(null)
   const [selected, setSelected] = useState(() => new Set())
-  const [busy,     setBusy]     = useState(null)   // 'rescan' | 'exclude' | 'delete' | null
+  const [busy,     setBusy]     = useState(null)   // 'rescan' | 'force' | 'exclude' | 'delete' | null
   // Items handed to Sonarr/Radarr this session. Deleting or excluding drops the
-  // row immediately, but a rescan cannot: the arr imports on its own schedule
+  // row immediately, but a retried import cannot: the arr imports on its own schedule
   // and tells us nothing, and the row is built from audit-time data anyway. So
   // the row stays and says so, rather than looking like the click did nothing.
   const [rescanned, setRescanned] = useState(() => new Set())
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmExclude, setConfirmExclude] = useState(false)
+  // The dialogs a bar button or the season card steps through, one at a time,
+  // each with how many it started with (for "2 of 3"). Actions live in the bar,
+  // never as row chips, which the design system doesn't have.
+  // T22 — one pack row per season to replace.
+  const [replaceQueue, setReplaceQueue] = useState([])
+  const [replaceTotal, setReplaceTotal] = useState(0)
+  // T26 — the rows Force import over … is stepping through.
+  const [forceQueue, setForceQueue] = useState([])
+  const [forceTotal, setForceTotal] = useState(0)
+  // T25 — one season-pack target per season to find a pack for.
+  const [packQueue, setPackQueue] = useState([])
+  const [packTotal, setPackTotal] = useState(0)
   // Cross-seed groups resolved live when the delete modal opens, keyed by the
   // item's registration → [{reg, hash, instance_id, name, tracker, seeding_time…}].
   const [groups,    setGroups]    = useState({})
@@ -498,7 +713,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // 'still_listed' | 'unknown' (S09). They stay, and say so, until the audit.
   const [unconfirmed, setUnconfirmed] = useState({})
 
-  const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui', url }
+  const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui' }
   const [clientDeleteAllowed, setClientDeleteAllowed] = useState(false)
 
   // Phase 2 — live tracker verification. The report renders instantly from
@@ -617,30 +832,11 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       .finally(() => setLoading(false))
     api.getConfig().then(cfg => {
       const isQui = cfg.TORRENT_SOURCE === 'qui'
-      // Link address, not the API address — prefer the external URL when the
-      // client is reached through a reverse proxy. Nothing here fetches it.
-      const url = (isQui ? (cfg.QUI_EXTERNAL_URL || cfg.QUI_HOST)
-                         : (cfg.QB_EXTERNAL_URL  || cfg.QB_HOST)) || ''
-      setClient(url ? { name: isQui ? 'qui' : 'qBittorrent', url } : null)
+      const host = isQui ? cfg.QUI_HOST : cfg.QB_HOST
+      setClient(host ? { name: isQui ? 'qui' : 'qBittorrent' } : null)
       setClientDeleteAllowed(!!cfg.ALLOW_CLIENT_DELETE)
     }).catch(() => {})
   }, [runVerify])
-
-  const openInClient = useCallback((item, e) => {
-    e.stopPropagation()
-    if (!client) return
-    // qui deep-links straight to the torrent: /instances/{id}?torrent={hash}
-    // selects it and opens the details pane. Stock qBittorrent's WebUI reads
-    // no URL params, so it gets the copy-title-and-paste flow instead.
-    if (canDeepLink(client, item)) {
-      window.open(`${client.url.replace(/\/+$/, '')}/instances/${item.instance_id}?torrent=${item.hash}`, '_blank', 'noopener')
-      return
-    }
-    const term = torrentSearchName(item)
-    copyText(term)
-    window.open(client.url, '_blank', 'noopener')
-    toast(`“${term}” copied — paste it into the ${client.name} search box to find this torrent`, 'info')
-  }, [client, toast])
 
   useEffect(() => {
     load()
@@ -652,7 +848,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // scan has run. Hooking the audit-complete event is therefore the only thing
   // that actually clears those rows; the actions themselves nudge the watchdog
   // so that scan comes within a cooldown rather than at the next scheduled one.
-  useAuditComplete(useCallback(() => { DISMISSED.clear(); load() }, [load]))
+  useAuditComplete(useCallback(() => { DISMISSED.clear(); SWITCHED.clear(); load() }, [load]))
 
   const items = report?.items || []
   const byVerdict = useMemo(() => {
@@ -664,6 +860,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     for (const k of Object.keys(m)) m[k].sort((a, b) => b.total_size - a.total_size)
     return m
   }, [items])
+  const switches = useMemo(() => seasonSwitches(items), [items])
 
   const selectedItems = useMemo(() => items.filter(i => selected.has(itemKey(i))), [items, selected])
   // What an action on the selection touches: each torrent in full where the row
@@ -698,6 +895,52 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // the action is absent rather than disabled for the others, because the rows
   // already sit under a "lower than library" heading that says why.
   const forceImportItems = selectedItems.filter(i => i.verdict === 'superseded' && canForceImport(i))
+
+  // Absent, like the two above, when nothing selected is a row the arr's own
+  // import could take.
+  const retryItems = selectedItems.filter(canRetryImport)
+
+  // T26 — never in bulk: the button steps through these one dialog at a time,
+  // each reading its own files live before its own confirm.
+  const forceOverItems = selectedItems.filter(canForceOver)
+  const startForceOver = () => {
+    setForceQueue(forceOverItems)
+    setForceTotal(forceOverItems.length)
+  }
+  const leaveForceQueue = item => setForceQueue(q => q.filter(i => itemKey(i) !== itemKey(item)))
+
+  // T22 — one dialog per season among the selected pack rows, opened on the
+  // season's pick where it's selected, as the season card opens it.
+  const replaceSeasons = useMemo(() => {
+    const bySeason = new Map()
+    for (const i of selectedItems) {
+      if (!canReplace(i) || !isPack(i)) continue
+      if (!bySeason.has(i.season_key) || i.reg === i.season_pick) bySeason.set(i.season_key, i)
+    }
+    return [...bySeason.values()]
+  }, [selectedItems])
+  const openReplace = rows => { setReplaceQueue(rows); setReplaceTotal(rows.length) }
+  const leaveReplaceQueue = key => setReplaceQueue(q => q.filter(i => i.season_key !== key))
+
+  // T25 — one dialog per season among the selected dead seeds, with the
+  // singles' trackers merged, as the season card merges them. A season whose
+  // pack is selected too goes to the replace instead.
+  const findSeasons = useMemo(() => {
+    const replacing = new Set(replaceSeasons.map(i => i.season_key))
+    const bySeason = new Map()
+    for (const i of selectedItems) {
+      const target = seasonPackTarget(i)
+      const key = seasonKeyOf(i)
+      if (!target || replacing.has(key)) continue
+      const seen = bySeason.get(key)
+      bySeason.set(key, seen
+        ? { ...seen, trackers: [...new Set([...seen.trackers, ...target.trackers])] }
+        : { ...target, key })
+    }
+    return [...bySeason.values()]
+  }, [selectedItems, replaceSeasons])
+  const openFind = targets => { setPackQueue(targets); setPackTotal(targets.length) }
+  const leavePackQueue = key => setPackQueue(q => q.filter(t => t.key !== key))
 
   // Same shape as forceImportItems: the action applies to the rows it makes
   // sense for, and is absent when the selection holds none of them.
@@ -924,7 +1167,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     setBusy('rescan')
     const sonarrPaths = []
     const radarrPaths = []
-    for (const item of selectedItems) {
+    for (const item of retryItems) {
       const svc = item.library?.service
       if (svc === 'radarr') radarrPaths.push(item.rep_path)
       else if (svc === 'sonarr') sonarrPaths.push(item.rep_path)
@@ -933,7 +1176,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
     // Snapshot the arr's file ids *before* the scan command, so the watcher
     // below has something to compare against. Only items matched to a library
     // entry can be watched; the rest fall back to clearing on the next audit.
-    const watchable = selectedItems.filter(
+    const watchable = retryItems.filter(
       i => i.library?.arr_id != null && i.library?.connection_id && i.library?.service)
     const baseline = watchable.length ? await snapshotFileIds(watchable) : null
     let ok = 0
@@ -947,9 +1190,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
         // Mark the whole submitted batch rather than matching results back to
         // rows: the arr reports per *scan target*, which is the release folder
         // or the file itself, not the rep_path that was sent.
-        const keys = selectedItems.map(itemKey)
+        const keys = retryItems.map(itemKey)
         setRescanned(prev => new Set([...prev, ...keys]))
-        toast('Rescan sent to Sonarr/Radarr — watching for the import', 'success')
+        toast('Import requested from Sonarr/Radarr — watching for it to land', 'success')
         if (baseline) watchForImport(watchable, baseline)
       } else if (rejected.length === results.length) {
         toast(`Nothing will import — ${rejectionSummary(rejected)}`, 'error')
@@ -971,7 +1214,9 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
         service:       i.library.service,
         connection_id: i.library.connection_id,
         arr_id:        i.library.arr_id,
-        paths:         i.paths,
+        // T21 — only the episodes that are the library's quality. A pack's
+        // other episodes may be lower, and forcing those writes a downgrade.
+        paths:         i.library.force_paths || i.paths,
       })))
       const done   = new Set((resp.results || []).filter(r => r.imported).map(r => r.key))
       const failed = (resp.results || []).filter(r => !r.imported)
@@ -986,6 +1231,43 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       toast(e.message, 'error')
     }
     setBusy(null)
+  }
+
+  // T22 — what a replace did, said once. Its row goes only when every confirmed
+  // file landed: that's when the next scan finds it imported. The other pack and
+  // the torrents behind the old files stay, because nothing left the client;
+  // the scan the server nudged lists them under what they now are.
+  const handleReplaced = (resp, pack) => {
+    leaveReplaceQueue(pack.season_key)
+    const { replaced = [], pending = [], dropped = [] } = resp
+    const skipped = dropped.length ? ` ${dropped.join(', ')} skipped: no longer safe to replace.` : ''
+    if (replaced.length && !pending.length) {
+      toast(`Replaced ${replaced.join(', ')} with ${packName(pack)}. The next scan lists what no longer supplies your library.${skipped}`, 'success')
+      DISMISSED.add(itemKey(pack))
+      if (seasonKeyOf(pack)) SWITCHED.add(seasonKeyOf(pack))
+      setReport(r => ({ ...r, items: (r?.items || []).filter(i => itemKey(i) !== itemKey(pack)) }))
+    } else if (replaced.length) {
+      toast(`Replaced ${replaced.join(', ')}. ${pending.join(', ')} not confirmed yet — check Activity in Sonarr.${skipped}`, 'warning')
+    } else {
+      toast(`Sonarr accepted the import, but ${pending.join(', ')} hasn't changed yet — check Activity → Queue there.${skipped}`, 'warning')
+    }
+  }
+
+  // T26 — the same answer for one release forced over one file, then the next
+  // row's dialog. No season is switched: a single episode says nothing about
+  // the rest of its season.
+  const handleForced = (resp, item) => {
+    leaveForceQueue(item)
+    const arr = item.library?.connection_name || (item.library?.service === 'radarr' ? 'Radarr' : 'Sonarr')
+    const { replaced = [], pending = [] } = resp
+    if (replaced.length) {
+      toast(`Force imported ${packName(item)} into ${replaced.join(', ')}. The next scan lists the torrent still holding the old file.`, 'success')
+      DISMISSED.add(itemKey(item))
+      setReport(r => ({ ...r, items: (r?.items || []).filter(i => itemKey(i) !== itemKey(item)) }))
+      setSelected(prev => new Set([...prev].filter(k => k !== itemKey(item))))
+    } else {
+      toast(`${arr} accepted the import, but its file for ${pending.join(', ')} hasn't changed yet — check Activity → Queue there.`, 'warning')
+    }
   }
 
   const handleExclude = async () => {
@@ -1127,11 +1409,14 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                  + 'and some rows below may read “Import Pending” for files that are in fact imported.'}
           />
 
+          <SeasonSwitches seasons={switches} clientName={client?.name || 'your client'}
+            onReplace={item => openReplace([item])} onFind={target => openFind([target])} />
+
           {report?.suggestions?.length > 0 && (
             <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px dashed var(--border2)', borderRadius: 'var(--r)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>
                 <span style={{ fontWeight: 600 }}>Tidy up Triage</span>
-                <span style={{ color: 'var(--text-dim)' }}> — some torrents only linger here because of files Sonarr/Radarr never import. Exclude them in one click (saved to Config → Excluded Files, editable there):</span>
+                <span style={{ color: 'var(--text-dim)' }}> — some torrents here hold nothing Sonarr/Radarr will import. Exclude them in one click. The rule applies everywhere, Cleanup included (saved to Config → Excluded Files, editable there):</span>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {report.suggestions.map(s => (
@@ -1169,7 +1454,6 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     checked={selected.has(itemKey(item))}
                     onToggle={() => toggle(itemKey(item))}
                     client={client}
-                    onOpenClient={openInClient}
                     onNavigate={onNavigate}
                     pending={!!verify?.running && !!item.hash && !item.verified}
                     rescanned={rescanned.has(itemKey(item))}
@@ -1216,13 +1500,40 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
 
           {selectedItems.length > 0 && (
             <ActionBar summary={`${selectedItems.length} torrent${selectedItems.length !== 1 ? 's' : ''} selected · ${selectedFiles} file${selectedFiles !== 1 ? 's' : ''} · ${formatBytes(selectedSize)}`}>
-              <Button onClick={handleRescan} disabled={busy != null} title="Tell Sonarr/Radarr to rescan these folders and retry the import">
-                {busy === 'rescan' ? 'Rescanning…' : 'Trigger Rescan'}
-              </Button>
+              {retryItems.length > 0 && (
+                <Button onClick={handleRescan} disabled={busy != null}
+                  title="Ask Sonarr/Radarr to scan these and import them. They decide, and they take only a new file or an upgrade, so anything refused comes back with their reason.">
+                  {busy === 'rescan' ? 'Asking…' : `Retry import (${retryItems.length})`}
+                </Button>
+              )}
               {forceImportItems.length > 0 && (
                 <Button onClick={handleForceImport} disabled={busy != null}
-                  title={`Replace the library file with this release via Sonarr/Radarr's "Import Anyway" — the only way past the upgrade check a same-quality swap can never pass`}>
-                  {busy === 'force' ? 'Importing…' : `Force import (${forceImportItems.length})`}
+                  title={`Replace the library file with this release, which is the same quality, via Sonarr/Radarr's "Import Anyway". They refuse a same-quality swap on their own, because it isn't an upgrade.`}>
+                  {busy === 'force' ? 'Importing…' : `Force import · same quality (${forceImportItems.length})`}
+                </Button>
+              )}
+              {/* T26 — the label names the file it goes over: the clarifier that
+                  this is a downgrade the arr refused, not an import it missed. */}
+              {forceOverItems.length > 0 && (
+                <Button onClick={startForceOver} disabled={busy != null}
+                  title="Import this release over the better file Sonarr/Radarr holds, as a hardlink, so a torrent you seed supplies your library. They refuse it on their own because it isn't an upgrade. One dialog per row says whether your current file stays on disk before anything happens.">
+                  {forceOverItems.length === 1
+                    ? `Force import over ${forceOverItems[0].library.quality_name || 'library file'}…`
+                    : `Force import over library (${forceOverItems.length})…`}
+                </Button>
+              )}
+              {replaceSeasons.length > 0 && (
+                <Button onClick={() => openReplace(replaceSeasons)} disabled={busy != null}
+                  title="Import a pack over the files Sonarr holds for its season, as hardlinks, so one torrent seeds the season. One dialog per season shows each episode before anything happens.">
+                  {replaceSeasons.length === 1
+                    ? `Replace S${String(replaceSeasons[0].parsed?.season).padStart(2, '0')} with this pack…`
+                    : `Replace seasons with packs (${replaceSeasons.length})…`}
+                </Button>
+              )}
+              {findSeasons.length > 0 && (
+                <Button onClick={() => openFind(findSeasons)} disabled={busy != null}
+                  title="The tracker dropped these episodes, which at the end of a season usually means it posted a pack. Look for it in your client, else search Sonarr, then replace the season with it. One dialog per season.">
+                  {findSeasons.length === 1 ? 'Find season pack…' : `Find season packs (${findSeasons.length})…`}
                 </Button>
               )}
               {excludableItems.length > 0 && (
@@ -1266,6 +1577,61 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             />
           )}
 
+          {replaceQueue.length > 0 && (() => {
+            const replaceFor = replaceQueue[0]
+            // The pick leads; without one, the row the dialog was opened from.
+            const siblings = items.filter(i => canReplace(i) && i.season_key === replaceFor.season_key)
+            const rows = (siblings.some(s => s.reg === replaceFor.reg) ? siblings : [replaceFor, ...siblings])
+              .sort((a, b) => (b.reg === replaceFor.season_pick) - (a.reg === replaceFor.season_pick))
+            const pick = rows.find(s => s.reg === replaceFor.season_pick)
+            return (
+              <ReplaceModal
+                key={replaceFor.season_key}
+                step={replaceTotal > 1 ? `${replaceTotal - replaceQueue.length + 1} of ${replaceTotal}` : null}
+                onSkip={replaceQueue.length > 1 ? () => leaveReplaceQueue(replaceFor.season_key) : null}
+                title={replaceFor.parsed?.title}
+                season={replaceFor.parsed?.season}
+                packs={rows.map(s => ({
+                  reg: s.reg, params: replaceParams(s), name: packName(s), group: s.release_group,
+                  quality: s.parsed?.quality_label, recommended: s.reg === replaceFor.season_pick,
+                }))}
+                initial={(pick || replaceFor).reg}
+                pickNote={pick ? `${packName(pick)} is recommended: ${PICK_REASON[pick.season_pick_reason] || 'it fits the season best'}.` : null}
+                clientName={client?.name || 'your client'}
+                onCancel={() => setReplaceQueue([])}
+                onDone={(resp, pack) => handleReplaced(resp, rows.find(s => s.reg === pack.reg) || replaceFor)}
+              />
+            )
+          })()}
+
+          {packQueue.length > 0 && (
+            <SeasonPackModal
+              key={packQueue[0].key}
+              target={packQueue[0]}
+              step={packTotal > 1 ? `${packTotal - packQueue.length + 1} of ${packTotal}` : null}
+              onNext={packQueue.length > 1 ? () => leavePackQueue(packQueue[0].key) : null}
+              onCancel={() => setPackQueue([])}
+            />
+          )}
+
+          {forceQueue.length > 0 && (() => {
+            const item = forceQueue[0]
+            return (
+              <ForceImportModal
+                key={itemKey(item)}
+                title={item.library?.service === 'radarr'
+                  ? `${item.library.title || item.parsed?.title}${item.library.year ? ` (${item.library.year})` : ''}`
+                  : `${item.library?.title || item.parsed?.title}${episodeTag(item)}`}
+                params={forceParams(item)}
+                clientName={client?.name || 'your client'}
+                step={forceTotal > 1 ? `${forceTotal - forceQueue.length + 1} of ${forceTotal}` : null}
+                onSkip={forceQueue.length > 1 ? () => leaveForceQueue(item) : null}
+                onCancel={() => setForceQueue([])}
+                onDone={resp => handleForced(resp, item)}
+              />
+            )
+          })()}
+
           {confirmOpen && (
             <ConfirmDeleteModal
               items={deletableItems}
@@ -1304,6 +1670,24 @@ function ScopeSwitch({ scope, groupSize, onChange }) {
     ]} />
   )
 }
+
+// ── T22: Replace with this pack ──────────────────────────────────────────────
+// The dialog lives in SeasonPack.jsx, which Triage, the season-pack dialog and
+// the Import Jobs panel all open it from. What Triage hands it is its rows.
+
+const PICK_REASON = {
+  quality:  'the better release, and the one Sonarr would keep',
+  library:  'it already supplies more of your library',
+  episodes: 'it holds more of the season',
+}
+
+function replaceParams(pack) {
+  return {
+    hash: pack.hash, instance_id: pack.instance_id,
+    connection_id: pack.library?.connection_id, arr_id: pack.library?.arr_id, season: pack.parsed?.season,
+  }
+}
+
 
 function ConfirmDeleteModal({
   items, groups, plan, meta, scopes, resolving, resolveError, ambiguity,

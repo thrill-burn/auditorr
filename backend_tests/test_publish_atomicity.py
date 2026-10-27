@@ -538,11 +538,64 @@ def test_the_publish_never_holds_two_inventories(tmp_path):
 
     # Phase 14 added the compact `dedupe` row, staged beside the other two and
     # held to the same rule — this list gained a name, the assertion did not
-    # change meaning.
-    assert [tab for tab, _ in handed] == ['media', 'torrents', 'triage', 'cleanup', 'dedupe']
+    # change meaning. CLEANUP C26 added `cleanup_folders` the same way.
+    assert [tab for tab, _ in handed] == ['media', 'torrents', 'triage', 'cleanup',
+                                          'cleanup_folders', 'dedupe']
     for tab, files in handed:
         assert isinstance(files, db.PreparedFileResults), f"{tab} was handed a record list"
         assert isinstance(files.blob, bytes)
+
+
+def _folders_row(path):
+    import zlib
+    conn = sqlite3.connect(str(path))
+    try:
+        row = conn.execute("SELECT files_json FROM file_results WHERE tab = 'cleanup_folders'"
+                           ).fetchone()
+    finally:
+        conn.close()
+    return None if row is None else json.loads(zlib.decompress(row[0]).decode())
+
+
+def test_folders_whose_list_did_not_load_ride_beside_the_cleanup_row(tmp_path):
+    """CLEANUP C26. The folder names go in their own row, which only Cleanup
+    reads; the count goes in the details, which reach the debug report. A
+    folder outside the torrent root isn't Cleanup's to mention, and the next
+    clean scan replaces the list rather than leaving it standing."""
+    with real_db(tmp_path) as path:
+        local, lib = _roots(tmp_path, 2)
+        answer = _answer(local, 2)
+        # An empty folder past the grace period (C27), and a category folder
+        # the client saves into, which is never one.
+        empty, category = os.path.join(local, 'Old.Release'), os.path.join(local, 'books')
+        old = time.time() - 3600
+        for d in (empty, category):
+            os.makedirs(d)
+            os.utime(d, (old, old))
+
+        def fetch(cfg, unresolved_roots=None, fallback_roots=None, save_scope=None):
+            fallback_roots.extend([os.path.join(local, 'movies', 'Rel'),
+                                   os.path.join(local, 'movies', 'Rel'),   # two registrations
+                                   '/elsewhere/Outside'])
+            save_scope.update(unknown=False, dirs={category})
+            return answer
+
+        with patch('audit.db_load_config', return_value=_cfg(local, lib)), \
+             patch('audit.sources.fetch_file_map', side_effect=fetch):
+            audit.run_audit_process('manual')
+        first, details = _folders_row(path), stored(path)['results']['dashboard']['current']['details']
+        # A source answer that never touched the scope: could not ask.
+        run_scan(tmp_path, torrents=2)
+        second = _folders_row(path)
+        second_details = stored(path)['results']['dashboard']['current']['details']
+
+    assert first == [{'kind': 'unchecked', 'path': 'movies/Rel'},
+                     {'kind': 'empty', 'path': 'Old.Release', 'mtime': int(old)}]
+    assert details['cleanup_unchecked_count'] == 1
+    assert (details['empty_folder_count'], details['empty_folders_unknown']) == (1, False)
+    assert 'movies/Rel' not in json.dumps(details) and 'Old.Release' not in json.dumps(details)
+    assert second == [] and second_details['cleanup_unchecked_count'] == 0
+    assert (second_details['empty_folder_count'], second_details['empty_folders_unknown']) == (0, True)
 
 
 def test_a_publish_holds_the_write_lock_only_for_the_writes(tmp_path):

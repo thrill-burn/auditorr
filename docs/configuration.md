@@ -20,7 +20,6 @@ auditorr reads your torrents from one of two backends.
 | **Username / Password** | qBittorrent only. |
 | **API key** | qui only. |
 | **Workflow torrent deletion** | Opt-in. Off by default — see below. |
-| **External URL** | Optional. Only for reverse-proxy setups — see below. |
 
 Use **Test Connection** after filling these in. On success auditorr reports the
 client version, torrent count, and total seeding size, which is the quickest
@@ -31,24 +30,24 @@ Stored credentials are never returned by the API — they read back as
 
 ### External URLs (reverse proxy)
 
-**If the "open in qui ↗" and Sonarr/Radarr links already take you to the right
-place, skip this section and leave these fields blank.** Blank means "same as
-the host above", which is what auditorr has always done.
+**If the Sonarr/Radarr links already take you to the right place, skip this
+section and leave these fields blank.** Blank means "same as the URL above",
+which is what auditorr has always done.
 
-The **Host** field above is the address auditorr *connects to*. It's also, by
+A Sonarr or Radarr **URL** is the address auditorr *connects to*. It's also, by
 default, the address your browser is sent to when you click one of the `↗`
-buttons. Those are usually the same. They aren't if you reach your apps through
-a reverse proxy or a Tailscale domain, and there's no single value that works
-for both: the internal address gives you links your browser can't open, and the
-public one routes every scan through the proxy — or fails entirely if there's an
-SSO layer in front of it.
+links or *Open in Sonarr/Radarr*. Those are usually the same. They aren't if you
+reach your apps through a reverse proxy or a Tailscale domain, and there's no
+single value that works for both: the internal address gives you links your
+browser can't open, and the public one routes every scan through the proxy — or
+fails entirely if there's an SSO layer in front of it.
 
 So they're two separate settings. Find **External URLs (reverse proxy)** at the
-bottom of Torrent Source and Integrations:
+bottom of Integrations:
 
 | Field | What it's for |
 | --- | --- |
-| **Host / URL** | The address **auditorr** connects to. Keep this internal. |
+| **URL** | The address **auditorr** connects to. Keep this internal. |
 | **External URL** | The address **your browser** uses. Only what `↗` links point at. |
 
 Notes:
@@ -187,7 +186,7 @@ The score is out of 100, split across four components:
 | --- | --- | --- |
 | **Hardlinked Media** | 70 | Directly proportional: the share of your library size that is hardlinked to a torrent. |
 | **Orphaned Torrents** | 10 | Full marks at zero; falls to zero when orphaned size reaches the threshold below. |
-| **Not Imported** | 10 | Same shape, on torrent data with no library file. |
+| **Not Imported** | 10 | Same shape, on torrent data with no library file. A torrent's `.nfo`, artwork and sample don't count once its video is in your library. |
 | **Duplicate Files** | 10 | Same shape, on bit-identical files that don't share an inode. |
 
 ### Weighting
@@ -295,18 +294,42 @@ matches whether you write the path relative (`movies/…`) or absolute
 
 ### Always ignored
 
-Two patterns apply on every install and are not configurable: `.fuse_hidden*`
-and `.nfs*`. These are **filesystem tombstones** — when a file is deleted while
-a process still has it open, the filesystem can't free it, so it renames it out
-of the way and drops that name when the last handle closes. FUSE (Unraid user
-shares) and NFS both do this.
+Two kinds of file are excluded on every install, and aren't configurable.
+They still appear in File Explorer marked as excluded, and count in Cleanup's
+Excluded box, so nothing is hidden from you; auditorr just never offers to act
+on them.
 
-The file has already been deleted; what's left is bookkeeping for a delete that
-hasn't finished, and it disappears on its own. Treating one as media meant
-offering to deduplicate a file against itself, or to delete something already
-deleted. They still appear in File Explorer marked as excluded, so you can see
-them if one is sticking around — which usually means a process is holding a
-handle open and needs restarting.
+**Filesystem tombstones**, `.fuse_hidden*` and `.nfs*`. When a file is deleted
+while a process still has it open, the filesystem can't free it, so it renames
+it out of the way and drops that name when the last handle closes. FUSE (Unraid
+user shares) and NFS both do this. The file has already been deleted; what's
+left is bookkeeping for a delete that hasn't finished, and it disappears on its
+own. Treating one as media meant offering to deduplicate a file against itself,
+or to delete something already deleted. If one is sticking around, a process is
+usually holding a handle open and needs restarting.
+
+**Operating-system and NAS clutter**, which belongs to whatever made it rather
+than to any torrent. A Mac browsing a share leaves `.DS_Store` in every folder
+it opens, and each one used to show up in Cleanup:
+
+| Kind | Names |
+| --- | --- |
+| Desktop files | `.DS_Store`, `._*`, `.directory`, `desktop.ini`, `Thumbs.db`, `.goutputstream-*`, `.#*`, `~$*` |
+| Trash and recycle bins (folders) | `.Trashes`, `.Trash-*`, `.Recycle.Bin`, `.recycle`, `#recycle`, `@Recycle`, `$RECYCLE.BIN` |
+| Snapshots (folders) | `.snapshot`, `.snapshots`, `#snapshot`, `.zfs` |
+| Thumbnails and metadata (folders) | `@eaDir`, `.@__thumb`, `.AppleDB`, `.AppleDouble`, `.TemporaryItems` |
+| Filesystem (folders) | `lost+found`, `System Volume Information` |
+
+Names match in any case, and a folder's rule covers everything inside it. The
+list is [qui's Orphan Scan](https://getqui.com/docs/features/orphan-scan)
+default ignores, plus QNAP's and Synology's own folders. Two of qui's are left
+out on purpose. Its `..*` rule would also hide a real release whose name starts
+with two dots, such as `...And Justice for All`. And `*.parts` / `*.!qB` files
+are already handled: they count as part of their torrent while it's in your
+client, and show up in Cleanup once it's gone.
+
+Because these folders are excluded, an unreadable recycle bin or `lost+found`
+never stops a scan.
 
 ### Presets
 

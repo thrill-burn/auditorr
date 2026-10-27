@@ -46,6 +46,10 @@ function scriptMeta(headers) {
     dropped:    num('X-Auditorr-Dropped'),
     files:      num('X-Auditorr-Files'),
     freeable:   num('X-Auditorr-Freeable'),
+    // Empty folders (CLEANUP C27): in the script, and left out because a
+    // torrent saves into them now.
+    folders:        num('X-Auditorr-Folders'),
+    foldersDropped: num('X-Auditorr-Folders-Dropped'),
   }
 }
 
@@ -77,7 +81,8 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
   const shownSubtitle = !meta ? subtitle
     : meta.kind === 'dedupe'
       ? `${plural(meta.groups, 'group')} · ${plural(meta.files, 'file')} · frees up to ${formatBytes(meta.freesUpTo)}`
-      : `${plural(meta.files, 'file')} · up to ${formatBytes(meta.freeable)} freed`
+      : [meta.files > 0 || !meta.folders ? `${plural(meta.files, 'file')} · up to ${formatBytes(meta.freeable)} freed` : '',
+         meta.folders > 0 ? plural(meta.folders, 'empty folder') : ''].filter(Boolean).join(' · ')
 
   const handleCopy = () => {
     const ta = document.createElement('textarea')
@@ -145,12 +150,20 @@ function ScriptModal({ scriptType, title, subtitle, body, onClose }) {
         {!error && (
           <div style={{ padding: '10px 16px', background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 'var(--r)', margin: '12px 16px 0', fontSize: 'var(--font-base)', color: 'var(--text-dim)', flexShrink: 0 }}>
             ⚠ Review this script carefully before running. auditorr does not execute scripts — you run this manually in your terminal.
+            <div style={{ marginTop: 6 }}>
+              Save it anywhere; it doesn’t need to be in your data folder. Give it the folder to work in when you run it, as the top of the script shows.
+            </div>
             {meta && (
               <div style={{ marginTop: 6 }}>
                 Checked against your torrent client at {new Date(meta.verifiedAt * 1000).toLocaleTimeString()} — run it soon; it warns if it is more than a day old.
                 {meta.dropped > 0 && (
                   <span style={{ color: 'var(--yellow)' }}>
                     {' '}{meta.dropped} selected file{meta.dropped !== 1 ? 's are' : ' is'} in use by a torrent now and {meta.dropped !== 1 ? 'were' : 'was'} left out.
+                  </span>
+                )}
+                {meta.foldersDropped > 0 && (
+                  <span style={{ color: 'var(--yellow)' }}>
+                    {' '}{meta.foldersDropped} selected folder{meta.foldersDropped !== 1 ? 's are' : ' is'} where a torrent saves now and {meta.foldersDropped !== 1 ? 'were' : 'was'} left out.
                   </span>
                 )}
               </div>
@@ -205,6 +218,15 @@ function triageRowCount(details) {
   if (!details) return 0
   if (details.triage_counts) return details.triage_counts.total
   return (details.not_imported_count || 0) + (details.dead_seed_count || 0)
+}
+
+// How many rows the Cleanup page will list: orphans, plus leftover links to a
+// live torrent's files (CLEANUP C17). The sidebar badge and Triage's cross-link
+// both show it. `leftover_count` is absent from details written before it, which
+// is zero leftovers, as those scans found none.
+function cleanupRowCount(details) {
+  if (!details) return 0
+  return (details.orphaned_torrent_count || 0) + (details.leftover_count || 0)
 }
 
 // Triage's dead seeds, per torrent — the rows a missed trump PM ends up as.
@@ -360,10 +382,17 @@ function AppInner() {
   }, [fetchResults, pollOnce])
 
   useEffect(() => {
+    // T25 — a season pack that has downloaded waits on the user's replace, so
+    // the panel opens the first time each one is seen ready.
+    const seenReady = new Set()
     const pollImports = async () => {
       try {
         const data = await api.watchImportActive()
-        setActiveImports(data.jobs || [])
+        const jobs = data.jobs || []
+        setActiveImports(jobs)
+        const fresh = jobs.filter(j => j.status === 'ready' && !seenReady.has(j.job_id))
+        fresh.forEach(j => seenReady.add(j.job_id))
+        if (fresh.length) setImportPanelOpen(true)
       } catch (_) {}
     }
     importIntervalRef.current = setInterval(pollImports, 5000)
@@ -497,7 +526,7 @@ function AppInner() {
           if (!det) return null
           return {
             triage:  triageRowCount(det),
-            cleanup: det.orphaned_torrent_count || 0,
+            cleanup: cleanupRowCount(det),
             // Groups, as the page lists them (Phase 14). `duplicate_count` counts
             // files and is only the fallback, for details a scan wrote before
             // the group count existed.
@@ -584,7 +613,7 @@ function AppInner() {
             )}
             {tab === 'triage' && (
               <Triage onNavigate={handleNavigate}
-                cleanupCount={results?.dashboard?.current?.details?.orphaned_torrent_count || 0}
+                cleanupCount={cleanupRowCount(results?.dashboard?.current?.details)}
                 trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
             )}
             {tab === 'cleanup' && (

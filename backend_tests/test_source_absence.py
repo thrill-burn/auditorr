@@ -23,6 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import sources
 from sources import _qbit, _qui
+from exclusions import compile_exclusions
+from media_server_exclusions import expand_exclusion_patterns
 import audit
 from audit import (
     source_plausibility, _guard_scan, _SourceAnomaly,
@@ -106,7 +108,8 @@ class QbitListingFailureTests(unittest.TestCase):
     for a torrent that is live and seeding.
     """
 
-    def _run(self, *, fail_files=(), fail_trackers=(), isfile=(), isdir=(), walk=None):
+    def _run(self, *, fail_files=(), fail_trackers=(), isfile=(), isdir=(), walk=None,
+             fallback_roots=None):
         client = _FakeQbtClient(
             torrents=[_torrent('aaa', 'Alpha'), _torrent('bbb', 'Bravo')],
             files={'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']},
@@ -115,7 +118,23 @@ class QbitListingFailureTests(unittest.TestCase):
              patch.object(sources.os.path, 'isfile', lambda p: p in isfile), \
              patch.object(sources.os.path, 'isdir', lambda p: p in isdir), \
              patch.object(sources.os, 'walk', lambda root: (walk or {}).get(root, [])):
-            return _qbit.fetch_file_map(_qbit_cfg())
+            return _qbit.fetch_file_map(_qbit_cfg(), fallback_roots=fallback_roots)
+
+    def test_a_folder_claimed_whole_is_named_for_cleanup(self):
+        """CLEANUP C26: a stray file in a recovered torrent's folder is claimed
+        with it, so Cleanup has to say which folders it couldn't look inside."""
+        root = os.path.join('/data/torrents/movies', 'Bravo')
+        roots = []
+        self._run(fail_files={'bbb'}, isdir={root},
+                  walk={root: [(root, [], ['b.mkv', 'stray.txt'])]}, fallback_roots=roots)
+        self.assertEqual(roots, ['/data/torrents/movies/Bravo'])
+
+    def test_a_healthy_or_unresolved_listing_names_no_folder(self):
+        """Unresolved is C1's `unverified`, already on the page; healthy hides nothing."""
+        for fail in ((), {'bbb'}):
+            roots = []
+            self._run(fail_files=fail, fallback_roots=roots)
+            self.assertEqual(roots, [], fail)
 
     def test_a_healthy_scan_reports_no_failures(self):
         file_map, _, _, report = self._run()
@@ -171,6 +190,123 @@ class QbitListingFailureTests(unittest.TestCase):
         self.assertEqual(
             file_map[os.path.join('/data/torrents/movies', 'Bravo/b.mkv')]['tracker_health'],
             'unknown')
+
+
+# ---------------------------------------------------------------------------
+# A failed tracker call is not a torrent with no tracker
+# ---------------------------------------------------------------------------
+
+class _NoTrackerQbtClient(_FakeQbtClient):
+    """'bbb' has no http/udp tracker URL (DHT only): `Unknown` is the real answer."""
+
+    def torrents_trackers(self, torrent_hash=None):
+        if torrent_hash == 'bbb':
+            return [_Obj(url='** [DHT] **', status=2, msg='')]
+        return super().torrents_trackers(torrent_hash)
+
+
+class QbitTrackerFailureTests(unittest.TestCase):
+    """Both were `['Unknown']`, so a scan where some tracker calls failed moved
+    those torrents' cumulative upload out of their trackers for one scan. The
+    next scan moved it back, and the upload chart read the return as new upload
+    (3.9 TB on a 94 GB day, the reference box, 2026-10-11)."""
+
+    def _run(self, client_cls=_FakeQbtClient, fail_trackers=()):
+        client = client_cls(
+            torrents=[_torrent('aaa', 'Alpha'), _torrent('bbb', 'Bravo')],
+            files={'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']},
+            fail_trackers=fail_trackers)
+        with patch.object(_qbit.qbittorrentapi, 'Client', return_value=client):
+            return _qbit.fetch_file_map(_qbit_cfg())
+
+    def test_a_healthy_scan_leaves_the_snapshot_unmarked(self):
+        _, _, snapshot, report = self._run()
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
+
+    def test_a_failed_tracker_call_is_counted_and_marks_the_snapshot(self):
+        _, _, snapshot, report = self._run(fail_trackers={'bbb'})
+        self.assertEqual(report['tracker_failures'], 1)
+        self.assertEqual(snapshot['_trackers_unanswered'], 1)
+        self.assertTrue(any('tracker list failed' in n for n in report['notes']))
+        # Still filed under Unknown: the file records need a tracker set.
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+
+    def test_a_torrent_with_no_tracker_url_is_an_answer(self):
+        _, _, snapshot, report = self._run(client_cls=_NoTrackerQbtClient)
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
+
+    def test_a_tracker_failure_does_not_mark_the_scan_partial(self):
+        """`partial` describes the file claims, which a tracker list never touches."""
+        _, _, _, report = self._run(fail_trackers={'bbb'})
+        self.assertFalse(report['partial'])
+
+
+class QuiTrackerFailureTests(unittest.TestCase):
+    def _run(self, fail_trackers=(), no_trackers=()):
+        torrents = [
+            {'hash': h, 'name': n, 'save_path': '/data/torrents/movies', 'size': 100,
+             'state': 'uploading', 'uploaded': 10, 'progress': 1.0,
+             'completion_on': 1789000000, 'content_path': f'/data/torrents/movies/{n}'}
+            for h, n in (('aaa', 'Alpha'), ('bbb', 'Bravo'))
+        ]
+        files = {'aaa': ['Alpha/a.mkv'], 'bbb': ['Bravo/b.mkv']}
+
+        class _Resp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        class _Sess:
+            headers = {}
+
+            def get(_self, url, **kw):
+                if url.endswith('/api/instances'):
+                    return _Resp([{'id': 1, 'name': 'main', 'connected': True,
+                                   'hasLocalFilesystemAccess': True}])
+                if url.endswith('/torrents'):
+                    page = (kw.get('params') or {}).get('page', 0)
+                    return _Resp({'torrents': torrents if page == 0 else [],
+                                  'total': len(torrents)})
+                h = url.split('/torrents/')[1].split('/')[0]
+                if url.endswith('/trackers'):
+                    if h in fail_trackers:
+                        raise RuntimeError('tracker call timed out')
+                    if h in no_trackers:
+                        return _Resp([{'url': '** [DHT] **', 'status': 2, 'msg': ''}])
+                    return _Resp([{'url': 'http://tracker.example/announce',
+                                   'status': 2, 'msg': ''}])
+                return _Resp([{'name': n} for n in files.get(h, [])])
+
+        with patch.object(_qui, '_session', return_value=_Sess()):
+            return _qui.fetch_file_map(
+                {'QUI_HOST': 'http://qui:7476', 'QUI_API_KEY': 'k',
+                 'LOCAL_PATH': '/data/torrents', 'REMOTE_PATH': '/data/torrents'})
+
+    def test_a_healthy_scan_leaves_the_snapshot_unmarked(self):
+        _, _, snapshot, report = self._run()
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
+
+    def test_a_failed_tracker_call_is_counted_and_marks_the_snapshot(self):
+        _, _, snapshot, report = self._run(fail_trackers={'bbb'})
+        self.assertEqual(report['tracker_failures'], 1)
+        self.assertEqual(snapshot['_trackers_unanswered'], 1)
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+        self.assertEqual(snapshot['tracker.example']['uploaded'], 10)
+
+    def test_a_torrent_with_no_tracker_url_is_an_answer(self):
+        _, _, snapshot, report = self._run(no_trackers={'bbb'})
+        self.assertEqual(snapshot['Unknown']['uploaded'], 10)
+        self.assertEqual(report['tracker_failures'], 0)
+        self.assertNotIn('_trackers_unanswered', snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +380,13 @@ class QuiFilePathsTests(unittest.TestCase):
         self.assertEqual(out['1:aaa'], ['/d/a.mkv'])
         self.assertIsNone(out['1:bbb'])
 
+    def test_an_item_with_no_save_path_is_unknown_not_rooted_at_slash(self):
+        """TRIAGE T23 — qui names files relative to the save path, so without one
+        every path came back as `/<name>`, which no filesystem holds."""
+        with patch.object(_qui, '_session', return_value=self._session({'aaa': ['a.mkv']})):
+            out = _qui.fetch_torrent_file_paths(self.CFG, [{'hash': 'aaa', 'instance_id': 1}])
+        self.assertIsNone(out['1:aaa'])
+
     def test_an_instance_that_answers_with_no_files_answers_an_empty_list(self):
         with patch.object(_qui, '_session', return_value=self._session({'aaa': []})):
             out = _qui.fetch_torrent_file_paths(
@@ -315,6 +458,21 @@ class QuiShortListingTests(unittest.TestCase):
         with patch.object(_qui, '_session', return_value=sess), \
                 self.assertRaises(sources.SourceConnectionError):
             sources.list_torrents(self.CFG)
+
+    def test_an_empty_listing_claimed_from_disk_names_its_folder(self):
+        """CLEANUP C26 on qui, where an empty listing takes the disk fallback too
+        (qui may not expose per-torrent file lists), and hides a stray the same way."""
+        root = os.path.join('/data/torrents/movies', 'aaa')
+        sess = self._session([[self._torrent('aaa')]], total=1)
+        roots = []
+        with patch.object(_qui, '_session', return_value=sess), \
+             patch.object(sources.os.path, 'isfile', lambda p: False), \
+             patch.object(sources.os.path, 'isdir', lambda p: p == root), \
+             patch.object(sources.os, 'walk',
+                          lambda r: [(root, [], ['a.mkv', 'stray.txt'])] if r == root else []):
+            file_map, _t, _s, _report = _qui.fetch_file_map(self.CFG, fallback_roots=roots)
+        self.assertIn(os.path.join(root, 'stray.txt'), file_map)
+        self.assertEqual(roots, ['/data/torrents/movies/aaa'])
 
     def test_a_listing_that_reaches_its_total_is_complete(self):
         sess = self._session([[self._torrent(h) for h in ('aaa', 'bbb', 'ccc')]], total=3)
@@ -447,6 +605,37 @@ class PlausibilityGuardTests(unittest.TestCase):
                     file_map_size=3000),
             {'torrent_count': 100, 'file_map_size': 5000}, disk_file_count=5000)
         self.assertEqual(anomaly['code'], 'listings_unavailable')
+
+    def test_a_collapse_never_masks_a_failed_read(self):
+        """CODE_REVIEW_2026-09-27 CR4 (CLEANUP C19).
+
+        The rules returned the first anomaly, and the collapses, which a manual
+        scan may accept, ran before `listings_unavailable`, which it never may.
+        A client mid-restart listing 40% of its torrents with half their file
+        lists unreadable read as a collapse, and a manual scan accepted it and
+        restarted the reference window from it.
+        """
+        report = _report(torrent_count=400, listing_failures=200, listing_unresolved=200,
+                         file_map_size=2000)
+        baseline = {'torrent_count': 1000, 'file_map_size': 5000}
+        self.assertEqual(source_plausibility(report, baseline)['code'], 'listings_unavailable')
+        with self.assertRaises(_SourceAnomaly) as refused:
+            _guard_scan(report, baseline, 'manual')
+        self.assertEqual(refused.exception.anomaly['code'], 'listings_unavailable')
+
+    def test_every_rule_a_manual_scan_refuses_runs_before_every_rule_it_accepts(self):
+        """The order, held whole: a report tripping every source rule at once
+        answers with the first rule outside `_ACCEPTABLE_BY_HAND`."""
+        report = _report(torrent_count=10, listing_failures=9, listing_unresolved=9,
+                         file_map_size=0, instances_total=2)
+        sources.report_instance_failure(report, 'second', 'timed out')
+        baseline = {'torrent_count': 1000, 'file_map_size': 5000}
+        self.assertEqual(source_plausibility(report, baseline, disk_file_count=5000)['code'],
+                         'instances_unavailable')
+        report['instances_failed'] = []
+        anomaly = source_plausibility(report, baseline, disk_file_count=5000)
+        self.assertEqual(anomaly['code'], 'listings_unavailable')
+        self.assertNotIn(anomaly['code'], audit._ACCEPTABLE_BY_HAND)
 
     def test_a_few_unresolved_listings_do_not_refuse_the_whole_scan(self):
         """Per-file `unverified` is Cleanup's job (roadmap Phase 8). The guard is
@@ -1002,6 +1191,84 @@ class WalkReportsWhatItCouldNotSeeTests(unittest.TestCase):
         self.assertEqual(walk['unlistable_shallow'], 1)
         self.assertTrue(walk['exists'])
 
+    def _walk_refusing(self, refused, error, patterns=(), extra=()):
+        """Walk `_tree`, plus the files in `extra`, with each folder in `refused`
+        (relative) raising `error`."""
+        with tempfile.TemporaryDirectory() as base:
+            self._tree(base)
+            for rel in extra:
+                path = os.path.join(base, *rel.split('/'))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                open(path, 'wb').close()
+            refused = {os.path.normcase(os.path.join(base, *r.split('/'))) for r in refused}
+            real_scandir = os.scandir
+
+            def scandir(path='.'):
+                if os.path.normcase(os.path.normpath(os.fspath(path))) in refused:
+                    raise error(os.fspath(path))
+                return real_scandir(path)
+
+            walk = {}
+            compiled = compile_exclusions(list(patterns)) if patterns else None
+            with patch('os.scandir', scandir):
+                _walk_directory(base, 'Torrent', {}, {}, 0, 0, exclusion_patterns=list(patterns),
+                                total_ref=[0], walk_report=walk, compiled_exclusions=compiled)
+        return walk
+
+    def test_a_folder_that_vanished_mid_walk_hides_nothing(self):
+        """CODE_REVIEW_2026-09-27 CR6 (CLEANUP C22).
+
+        A release folder moved or pruned between its parent's listing and its
+        own (qBittorrent moving a finished download, an arr renaming a folder, a
+        Cleanup script running) raised `FileNotFoundError`, which counted as
+        unlistable, and the scan refused with "check permissions"."""
+        walk = self._walk_refusing({'movies/Rel'},
+                                   lambda p: FileNotFoundError(2, 'No such file', p))
+        self.assertEqual((walk['unlistable'], walk['unlistable_shallow']), (0, 0))
+        self.assertEqual(walk['vanished'], 1)
+        self.assertIsNone(audit.filesystem_plausibility('torrents', walk, None))
+
+    def test_an_unreadable_folder_an_exclusion_covers_does_not_refuse_the_scan(self):
+        """The way out for a permanently unreadable folder near a root — a
+        Synology `#recycle`, `lost+found` on a mount point — which used to block
+        every scan with no override."""
+        denied = lambda p: PermissionError(13, 'Permission denied', p)     # noqa: E731
+        walk = self._walk_refusing({'tv/Show'}, denied)
+        self.assertEqual(walk['unlistable_shallow'], 1)
+
+        for rule in ('literal:tv/Show/', 'name:Show', 'tv/Show/'):
+            with self.subTest(rule=rule):
+                walk = self._walk_refusing({'tv/Show'}, denied, patterns=[rule])
+                self.assertEqual((walk['unlistable'], walk['unlistable_shallow']), (1, 0))
+                self.assertIsNone(audit.filesystem_plausibility('torrents', walk, None))
+
+    def test_an_unreadable_recycle_bin_needs_no_rule_at_all(self):
+        """CLEANUP C24: the always-on clutter list covers the folders C22's
+        hint named, so a NAS recycle bin or lost+found at the root never
+        refuses a scan, on an install with no exclusions configured."""
+        denied = lambda p: PermissionError(13, 'Permission denied', p)     # noqa: E731
+        always = expand_exclusion_patterns({'EXCLUSION_PATTERNS': []})
+        for folder in ('#recycle', 'lost+found', '@eaDir', '.Trash-99'):
+            with self.subTest(folder=folder):
+                walk = self._walk_refusing({folder}, denied, patterns=always,
+                                           extra=(f'{folder}/x.mkv',))
+                self.assertEqual((walk['unlistable'], walk['unlistable_shallow']), (1, 0))
+                self.assertIsNone(audit.filesystem_plausibility('torrents', walk, None))
+
+    def test_the_root_itself_vanishing_still_counts(self):
+        """Depth 0 is the mount going away, not a folder being moved."""
+        with tempfile.TemporaryDirectory() as base:
+            self._tree(base)
+            walk = {}
+
+            def scandir(path='.'):
+                raise FileNotFoundError(2, 'No such file', os.fspath(path))
+
+            with patch('os.scandir', scandir):
+                _walk_directory(base, 'Torrent', {}, {}, 0, 0, exclusion_patterns=[],
+                                total_ref=[0], walk_report=walk)
+        self.assertEqual(walk['unlistable_shallow'], 1)
+
     def test_a_root_that_is_not_there_says_so(self):
         walk = {}
         with tempfile.TemporaryDirectory() as base:
@@ -1048,6 +1315,100 @@ class TriageCompletionTests(unittest.TestCase):
         self.assertEqual(counts['not_imported'], 1)
         self.assertEqual(counts['total'], 1)
         self.assertEqual(len([f for f in records if _is_triage_relevant(f)]), 1)
+
+
+# ---------------------------------------------------------------------------
+# CLEANUP C18 — libtorrent's part file is the torrent's, not an orphan
+# ---------------------------------------------------------------------------
+
+class _PriorityQbtClient(_FakeQbtClient):
+    """File listings as `(name, priority)` pairs, the way qBittorrent reports them."""
+
+    def torrents_files(self, torrent_hash=None):
+        if torrent_hash in self._fail_files:
+            raise RuntimeError('file listing timed out')
+        return [_Obj(name=n, priority=p) for n, p in self._files.get(torrent_hash, [])]
+
+
+class PartFileClaimTests(unittest.TestCase):
+    """A piece can straddle a wanted file and a skipped one, and libtorrent keeps
+    the skipped file's share in `.<infohash>.parts`, in the save path beside the
+    payload. No listing names it, so it read as an orphan and Cleanup offered it
+    for `rm` as "the only copy"."""
+
+    H    = 'ab' * 20
+    SAVE = '/data/torrents/movies'
+    PART = os.path.join('/data/torrents/movies', f".{'ab' * 20}.parts")
+
+    def _run(self, files, *, isfile=(), fail_files=(), isdir=(), walk=None):
+        client = _PriorityQbtClient(torrents=[_torrent(self.H, 'Alpha')],
+                                    files={self.H: files}, fail_files=fail_files)
+        stats = []
+
+        def _isfile(p):
+            stats.append(p)
+            return p in isfile
+        with patch.object(_qbit.qbittorrentapi, 'Client', return_value=client), \
+             patch.object(sources.os.path, 'isfile', _isfile), \
+             patch.object(sources.os.path, 'isdir', lambda p: p in isdir), \
+             patch.object(sources.os, 'walk', lambda root: (walk or {}).get(root, [])):
+            return _qbit.fetch_file_map(_qbit_cfg()), stats
+
+    def test_the_name_is_libtorrents(self):
+        self.assertEqual(sources.part_file_path(self.SAVE, self.H.upper()), self.PART)
+        self.assertTrue(sources.is_part_file_name(os.path.basename(self.PART)))
+        for name in ('.abc.parts', f'{self.H}.parts', f'.{self.H}.part', f'.{self.H}.parts.bak'):
+            self.assertFalse(sources.is_part_file_name(name), name)
+        self.assertEqual(sources.part_file_path('', self.H), '')
+        self.assertEqual(sources.part_file_path(self.SAVE, ''), '')
+
+    def test_a_torrent_that_skips_a_file_claims_its_part_file(self):
+        (file_map, _, _, report), _ = self._run(
+            [('Alpha/a.mkv', 1), ('Alpha/extras.mkv', 0)], isfile={self.PART})
+        self.assertIn(self.PART, file_map)
+        self.assertEqual(file_map[self.PART]['hash'], self.H)
+        self.assertEqual(report['file_map_size'], 3)
+
+    def test_a_part_file_that_is_not_there_is_not_claimed(self):
+        """The map never counts a path that does not exist: `file_map_size` is
+        the plausibility guard's baseline."""
+        (file_map, _, _, report), _ = self._run([('Alpha/a.mkv', 1), ('Alpha/x.mkv', 0)])
+        self.assertNotIn(self.PART, file_map)
+        self.assertEqual(report['file_map_size'], 2)
+
+    def test_a_torrent_that_skips_nothing_pays_no_stat(self):
+        (file_map, _, _, _), stats = self._run([('Alpha/a.mkv', 1), ('Alpha/b.mkv', 7)],
+                                               isfile={self.PART})
+        self.assertEqual(stats, [])
+        self.assertNotIn(self.PART, file_map)
+
+    def test_a_listing_with_no_priorities_looks_on_disk(self):
+        (file_map, _, _, _), stats = self._run([('Alpha/a.mkv', None)], isfile={self.PART})
+        self.assertIn(self.PART, file_map)
+        self.assertEqual(stats, [self.PART])
+
+    def test_a_failed_listing_claims_the_part_file_beside_the_payload_it_found(self):
+        """The disk fallback walks `save_path/name`, which never reaches a file
+        that sits beside it."""
+        root = os.path.join(self.SAVE, 'Alpha')
+        (file_map, _, _, report), _ = self._run(
+            [], fail_files={self.H}, isdir={root}, isfile={self.PART},
+            walk={root: [(root, [], ['a.mkv'])]})
+        self.assertIn(self.PART, file_map)
+        self.assertEqual(report['listing_recovered'], 1)
+
+    def test_a_failed_listing_that_found_nothing_stays_unresolved(self):
+        """A part file alone is not a recovered payload. The save path is an
+        unresolved root, which already makes the part file `unverified`."""
+        (file_map, _, _, report), _ = self._run([], fail_files={self.H}, isfile={self.PART})
+        self.assertNotIn(self.PART, file_map)
+        self.assertEqual(report['listing_unresolved'], 1)
+
+    def test_qui_keeps_a_priority_of_zero(self):
+        """`or 0`, or a dropped field, would read every listing as skipping a file
+        or as unknown — a stat per torrent per scan."""
+        self.assertEqual(_qui._norm_file({'name': 'a.mkv', 'priority': 0})['priority'], 0)
+        self.assertIsNone(_qui._norm_file({'name': 'a.mkv'})['priority'])
 
 
 if __name__ == '__main__':

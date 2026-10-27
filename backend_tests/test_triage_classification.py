@@ -174,6 +174,25 @@ class TriageInstanceRankingTests(unittest.TestCase):
         self.assertEqual(item['verdict'], 'not_in_library')
         self.assertIsNone(item['library'])
 
+    def test_a_key_holding_only_the_wrong_service_does_not_end_the_search(self):
+        """CODE_REVIEW_2026-09-27 CR10 (TRIAGE T17). The library rows were taken
+        from the first title key with any rows, then gated to the service, so a
+        film under the release's own title emptied them and the alias that leads
+        to the series was never tried. `title_rows` already gated inside the
+        loop. It failed toward `import_pending`, the safe direction."""
+        ep = 'tv/Kyojin.S01E02.1080p.WEB-DL/Kyojin.S01E02.1080p.WEB-DL.mkv'
+        film = {'connection_id': 'r1', 'connection_name': 'Films', 'service': 'radarr',
+                'title': 'Kyojin', 'year': 2015, 'arr_id': 42, 'file_id': 1,
+                'path': '/m/Kyojin (2015)/Kyojin.mkv', 'relative_path': 'Kyojin.mkv',
+                'title_slug': 'kyojin', 'file_quality_name': 'WEBDL-1080p', 'file_hdr': ''}
+        titles = [{'service': 'sonarr', 'connection_id': 'tv', 'arr_id': 12, 'title': 'Show',
+                   'title_slug': 'show', 'year': 2019, 'has_file': True,
+                   'alt_titles': ['Kyojin']}]
+        media = [film, _episode_row('tv', 'TV', 'WEBDL-1080p', '1080p', 12)]
+        item = _triage([_rec(hash='EP', path=ep)], media=media, titles=titles)['items'][0]
+        self.assertEqual(item['verdict'], 'superseded')
+        self.assertEqual((item['library']['service'], item['library']['arr_id']), ('sonarr', 12))
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # T5 — a row is honest about its spread, and about its size
@@ -252,6 +271,41 @@ class TriageVerdictSpreadTests(unittest.TestCase):
         item = _triage([r for r in records if audit._is_triage_relevant(r)])['items'][0]
         self.assertEqual((item['file_count'], item['total_size']), (1, 40))
         self.assertEqual(item['torrent_files'], 2)
+
+
+class TriageRowEpisodesTests(unittest.TestCase):
+    """A row's `episodes` is every episode its videos hold, and the title reads
+    it. The title named the representative's episode, so a season pack with
+    two episodes left read "Small Prophets · S01E01" beside "2 of 6 files", and
+    an imported dead seed's list was its representative's alone."""
+
+    def _files(self, *episodes, **over):
+        return [_rec(hash='PACK', size=100 + n, path=f'{PACK}/Show.S01E{n:02d}.1080p.WEB-DL.mkv', **over)
+                for n in episodes]
+
+    def test_a_not_imported_pack_lists_every_episode(self):
+        item = _triage(self._files(1, 2))['items'][0]
+        self.assertEqual(item['episodes'], [1, 2])
+
+    def test_an_imported_dead_seed_lists_every_episode(self):
+        """Judged on its representative alone, which is right for the verdict,
+        but its row still holds every video."""
+        item = _triage(self._files(1, 2, 3, imported=True, tracker_health='unregistered'))['items'][0]
+        self.assertEqual(item['verdict'], 'dead_seed')
+        self.assertEqual(item['episodes'], [1, 2, 3])
+
+    def test_a_dead_registration_lists_its_carriers_episodes(self):
+        files = self._files(4, 5, imported=True, tracker_health='working',
+                            dead_siblings=[{'hash': 'DEAD', 'instance_id': 1}])
+        item = _triage(files)['items'][0]
+        self.assertEqual(item['verdict'], 'dead_registration')
+        self.assertEqual(item['episodes'], [4, 5])
+
+    def test_an_extra_with_no_episode_number_leaves_no_list(self):
+        """The row's title then names no episode rather than one file's."""
+        files = self._files(1, 2) + [_rec(hash='PACK', size=1, path='tv/Featurette.1080p.WEB-DL.mkv')]
+        item = _triage(files)['items'][0]
+        self.assertIsNone(item['episodes'])
 
 
 # ═════════════════════════════════════════════════════════════════════════════

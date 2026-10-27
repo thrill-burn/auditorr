@@ -9,19 +9,19 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/thrill-burn/auditorr/issues</Support>
   <Project>https://github.com/thrill-burn/auditorr</Project>
-  <Overview>An audit tool for hardlinked media libraries using qBittorrent / qui + Sonarr / Radarr.&#xD;
+  <Overview>An audit tool for hardlinked media libraries using qBittorrent / qui + Sonarr / Radarr, following the TRaSH Guides folder structure.&#xD;
 &#xD;
 A dashboard with health score, per-tracker analytics, and cross-seed effectiveness tells you what's wrong with your library. Five automated workflows fix it.&#xD;
 &#xD;
 - Health score (0-100) showing how clean and efficient your library is&#xD;
-- Five workflows: Backfill (re-seed orphaned media via Sonarr/Radarr search), Cleanup (reviewed delete script for orphaned torrent files), Triage (explains every problem torrent — dead seeds, unregistered, superseded, pending imports — with rescan/exclude/delete actions), Dedupe (replace duplicate copies with verified hardlinks), Trumped (paste a tracker trump PM to swap the whole cross-seed group for its replacement)&#xD;
+- Five workflows: Backfill (re-seed orphaned media via Sonarr/Radarr search), Cleanup (reviewed delete script for orphaned torrent files), Triage (explains every problem torrent — dead seeds, unregistered, superseded, pending imports — with import, season-pack, exclude and delete actions), Dedupe (replace duplicate copies with verified hardlinks), Trumped (paste a tracker trump PM to swap the whole cross-seed group for its replacement)&#xD;
 - Upload analytics and library yield: daily upload volume per tracker, yield % over time, multi-tracker comparison charts&#xD;
 - Cross-seeding insights: weighted average seed multiplier, segmented disk bar, per-tracker breakdown&#xD;
 - Powerful file explorer with tree and flat views, filterable by status, tracker, seed count, size, filename&#xD;
 - File-level change log between every audit, kept indefinitely&#xD;
 - Sonarr/Radarr integration and a guided first-run setup wizard&#xD;
 &#xD;
-Follows the TRaSH Guides folder structure. Read-only and non-destructive by default — all delete actions are opt-in, reviewed, and confirmed.</Overview>
+Read-only and non-destructive by default — all delete actions are opt-in, reviewed, and confirmed.</Overview>
   <Category>Tools:Utilities MediaApp:Other Status:Stable</Category>
   <WebUI>http://[IP]:[PORT:8677]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/thrill-burn/auditorr/main/auditorr.xml</TemplateURL>
