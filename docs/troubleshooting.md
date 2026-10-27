@@ -498,13 +498,14 @@ Set **Remote path** for that integration to the path *as Sonarr/Radarr sees it*
 
 ## Links open an internal IP I can't reach
 
-You access your apps through a reverse proxy or Tailscale, but the `↗` buttons
-send you to `http://192.168.x.x:8989` — the address auditorr itself connects on.
+You access Sonarr or Radarr through a reverse proxy or Tailscale, but the `↗`
+links send you to `http://192.168.x.x:8989` — the address auditorr itself
+connects on.
 
 Set an **External URL** for that service. It's the bottom section of Config →
-Torrent Source and Integrations, collapsed by default:
+Integrations, collapsed by default:
 
-- **Host / URL** stays internal — that's what auditorr connects to, and routing
+- **URL** stays internal — that's what auditorr connects to, and routing
   it through the proxy would push every scan through it too (and break entirely
   if the proxy enforces SSO).
 - **External URL** is your public address, and is used only to build links.

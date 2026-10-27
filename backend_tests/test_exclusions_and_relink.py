@@ -524,6 +524,58 @@ class ArrConnectionTests(unittest.TestCase):
         self.assertEqual(result["connection_id"], "radarr-4k")
         self.assertEqual(result["url"], "http://radarr-4k.local:7878/movie/the-matrix")
 
+    def _sonarr_cfg(self, **conn):
+        return {
+            "MEDIA_PATH": "/data/media",
+            "ARR_CONNECTIONS": [dict({
+                "id": "sonarr-main", "service": "sonarr", "name": "Main Sonarr",
+                "base_url": "http://sonarr.local:8989", "api_key": "k",
+            }, **conn)],
+        }
+
+    def test_arr_search_finds_the_series_whose_folder_holds_the_file(self):
+        """A file named for its original-language title has no title to match,
+        and a subtitle beside it has none either. The folder is exact."""
+        series = [
+            {"title": "Lost", "cleanTitle": "lost", "titleSlug": "lost", "path": "/data/media/tv/Lost"},
+            {"title": "Attack on Titan", "cleanTitle": "attackontitan", "titleSlug": "attack-on-titan",
+             "path": "/data/media/tv/Attack on Titan"},
+        ]
+        with patch("arr._arr_get", return_value=series):
+            for name in ("Shingeki.no.Kyojin.S01E01.1080p.WEB-DL.mkv", "Shingeki.no.Kyojin.S01E01.en.srt"):
+                result = arr_search(self._sonarr_cfg(), "sonarr", f"tv/Attack on Titan/Season 1/{name}")
+                self.assertEqual(result["url"], "http://sonarr.local:8989/series/attack-on-titan")
+
+    def test_arr_search_folder_is_a_whole_segment(self):
+        """`/tv/Lost` is not a folder of `/tv/Lost Girl`, whose file the old
+        substring title match could hand to the shorter title."""
+        series = [
+            {"title": "Lost", "cleanTitle": "lost", "titleSlug": "lost", "path": "/data/media/tv/Lost"},
+            {"title": "Lost Girl", "cleanTitle": "lostgirl", "titleSlug": "lost-girl", "path": "/data/media/tv/Lost Girl"},
+        ]
+        with patch("arr._arr_get", return_value=series):
+            result = arr_search(self._sonarr_cfg(), "sonarr", "tv/Lost Girl/Season 1/LG.S01E01.mkv")
+        self.assertEqual(result["url"], "http://sonarr.local:8989/series/lost-girl")
+
+    def test_arr_search_maps_the_arr_folder_to_the_media_path(self):
+        """The arr's folder is in its own container's spelling, mapped the way
+        the media index maps its file paths."""
+        series = [{"title": "Attack on Titan", "cleanTitle": "attackontitan",
+                   "titleSlug": "attack-on-titan", "path": "/tv/Attack on Titan"}]
+        cfg = self._sonarr_cfg(media_path="/tv", local_media_path="/data/media/tv")
+        with patch("arr._arr_get", return_value=series):
+            result = arr_search(cfg, "sonarr", "tv/Attack on Titan/Season 1/Shingeki.no.Kyojin.S01E01.mkv")
+        self.assertEqual(result["url"], "http://sonarr.local:8989/series/attack-on-titan")
+
+    def test_arr_search_falls_back_to_the_title_outside_every_folder(self):
+        series = [{"title": "Attack on Titan", "cleanTitle": "attackontitan",
+                   "titleSlug": "attack-on-titan", "path": "/elsewhere/Attack on Titan"}]
+        with patch("arr._arr_get", return_value=series):
+            result = arr_search(self._sonarr_cfg(), "sonarr", "tv/AoT/Attack.on.Titan.S01E01.mkv")
+            self.assertEqual(result["url"], "http://sonarr.local:8989/series/attack-on-titan")
+            with self.assertRaises(LookupError):
+                arr_search(self._sonarr_cfg(), "sonarr", "tv/AoT/Shingeki.no.Kyojin.S01E01.mkv")
+
     def test_arr_connection_test_reports_api_status_and_managed_paths(self):
         cfg = {
             "ARR_CONNECTIONS": [

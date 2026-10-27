@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import functools
+import posixpath
 import unicodedata
 from types import MappingProxyType
 import urllib.request
@@ -2797,27 +2798,62 @@ def arr_rescan(cfg, service, paths):
     return {'count': command_count, 'results': results}
 
 
-def arr_search(cfg, service, file_path):
-    """Shared search logic for sonarr and radarr.
+def _arr_item_folder(conn, cfg, item):
+    """A series' or movie's own folder, spelled as auditorr sees it, NFC for comparing."""
+    folder = _path_norm(item.get('path')).rstrip('/')
+    if not folder:
+        return ''
+    local_root = conn.get('local_media_path', '') or cfg.get('MEDIA_PATH', '')
+    folder = _replace_path_prefix(folder, conn.get('media_path', ''), local_root).rstrip('/')
+    return folder if folder.isascii() else unicodedata.normalize('NFC', folder)
 
-    Returns {"url": ..., "title": ...} or raises LookupError if not found,
-    ValueError if not configured, or re-raises network errors.
+
+def arr_search(cfg, service, file_path):
+    """The Sonarr series or Radarr movie a media file belongs to, as a link.
+
+    Returns {"url", "title", "connection_id"}, or raises LookupError if not
+    found, ValueError if not configured, ConnectionError if an instance refused.
+
+    **By folder first.** The listing carries each series' and movie's folder,
+    and a library file sits under exactly one, so an episode named for its
+    original-language title, a subtitle or a renamed file resolves exactly. Only
+    a file under no folder falls back to the title parsed from its name, which
+    was the only lookup: a substring match against every title, so it missed
+    those files and a short title ("Lost") could claim another show's.
     """
     svc = _SERVICE_MAP[service]
     connections = normalize_arr_connections(cfg, service=service)
     if not connections:
         raise ValueError(f"{svc['name']} not configured")
+    local_file = posixpath.normpath(_local_to_abs(_path_norm(file_path), cfg.get('MEDIA_PATH', '')))
+    if not local_file.isascii():
+        local_file = unicodedata.normalize('NFC', local_file)
+    listings = []
+    holder = None
+    for conn in connections:
+        try:
+            items = _arr_get(conn['base_url'], conn['api_key'], svc['list_path'], timeout=_ARR_LIST_TIMEOUT)
+        except urllib.error.HTTPError as e:
+            raise ConnectionError(f"{conn['name']} returned HTTP {e.code}: {e.reason}") from e
+        listings.append((conn, items))
+        for item in items:
+            folder = _arr_item_folder(conn, cfg, item)
+            # The deepest folder holding the file, in case one sits inside another.
+            if folder and local_file.startswith(folder + '/') and (holder is None or len(folder) > holder[0]):
+                holder = (len(folder), conn, item)
+    if holder:
+        _, conn, item = holder
+        slug = item.get('titleSlug') or str(item.get('id') or '')
+        return {"url": link_base(conn) + svc['slug_prefix'] + slug,
+                "title": item.get('title', ''), "connection_id": conn['id']}
+
     filename         = os.path.basename(file_path)
     title            = _parse_title_from_filename(filename)
     parsed_normalized = _normalize_title(title)
     best             = None
     best_score       = 0
     best_conn        = None
-    for conn in connections:
-        try:
-            items = _arr_get(conn['base_url'], conn['api_key'], svc['list_path'])
-        except urllib.error.HTTPError as e:
-            raise ConnectionError(f"{conn['name']} returned HTTP {e.code}: {e.reason}") from e
+    for conn, items in listings:
         for item in items:
             candidate = _normalize_title(item.get('title', ''))
             alt       = _normalize_title(item.get('cleanTitle', ''))

@@ -20,7 +20,6 @@ auditorr reads your torrents from one of two backends.
 | **Username / Password** | qBittorrent only. |
 | **API key** | qui only. |
 | **Workflow torrent deletion** | Opt-in. Off by default — see below. |
-| **External URL** | Optional. Only for reverse-proxy setups — see below. |
 
 Use **Test Connection** after filling these in. On success auditorr reports the
 client version, torrent count, and total seeding size, which is the quickest
@@ -31,24 +30,24 @@ Stored credentials are never returned by the API — they read back as
 
 ### External URLs (reverse proxy)
 
-**If the "open in qui ↗" and Sonarr/Radarr links already take you to the right
-place, skip this section and leave these fields blank.** Blank means "same as
-the host above", which is what auditorr has always done.
+**If the Sonarr/Radarr links already take you to the right place, skip this
+section and leave these fields blank.** Blank means "same as the URL above",
+which is what auditorr has always done.
 
-The **Host** field above is the address auditorr *connects to*. It's also, by
+A Sonarr or Radarr **URL** is the address auditorr *connects to*. It's also, by
 default, the address your browser is sent to when you click one of the `↗`
-buttons. Those are usually the same. They aren't if you reach your apps through
-a reverse proxy or a Tailscale domain, and there's no single value that works
-for both: the internal address gives you links your browser can't open, and the
-public one routes every scan through the proxy — or fails entirely if there's an
-SSO layer in front of it.
+links or *Open in Sonarr/Radarr*. Those are usually the same. They aren't if you
+reach your apps through a reverse proxy or a Tailscale domain, and there's no
+single value that works for both: the internal address gives you links your
+browser can't open, and the public one routes every scan through the proxy — or
+fails entirely if there's an SSO layer in front of it.
 
 So they're two separate settings. Find **External URLs (reverse proxy)** at the
-bottom of Torrent Source and Integrations:
+bottom of Integrations:
 
 | Field | What it's for |
 | --- | --- |
-| **Host / URL** | The address **auditorr** connects to. Keep this internal. |
+| **URL** | The address **auditorr** connects to. Keep this internal. |
 | **External URL** | The address **your browser** uses. Only what `↗` links point at. |
 
 Notes:

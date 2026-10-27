@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../../api'
-import { formatBytes, copyText } from '../../utils'
+import { formatBytes } from '../../utils'
 import { useToast } from '../Toast'
 import {
   WorkflowPage, WorkflowHeader, EmptyState, LoadingRow, WorkflowError, WorkflowWarning, WorkflowCrossLink,
@@ -169,10 +169,8 @@ function formatDuration(secs) {
   return `${Math.max(1, Math.round(secs / 60))}m`
 }
 
-// Search term for prescreening the qBittorrent/qui search box: the parsed
-// title ("The Show") — qBit filters per word, so it matches dotted release
-// names AND surfaces every torrent of that title, not just this release.
-// Falls back to the release folder / file name when parsing found nothing.
+// A torrent's name for a person to read: the parsed title ("The Show"), else
+// the release folder / file name when parsing found nothing.
 function torrentSearchName(item) {
   if (item.parsed?.title) return item.parsed.title
   const paths = (item.paths || []).map(p => p.replace(/\\/g, '/'))
@@ -188,11 +186,6 @@ function torrentSearchName(item) {
     common = common.slice(0, i)
   }
   return common.length > 0 ? common[common.length - 1] : fileBase()
-}
-
-// qui can jump straight to a torrent by hash; qBittorrent cannot
-function canDeepLink(client, item) {
-  return client?.name === 'qui' && item.hash && item.instance_id != null
 }
 
 // The bulk Force import replaces the file the arr already holds, so it is only
@@ -453,7 +446,7 @@ function SeasonSwitchRow({ season: s, lead, clientName, onReplace, onFind }) {
   )
 }
 
-function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNavigate, pending, rescanned, unconfirmed }) {
+function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending, rescanned, unconfirmed }) {
   const p = item.parsed || {}
   const seTag = episodeTag(item)
   const filename = (item.rep_path || '').replace(/\\/g, '/').split('/').pop()
@@ -666,21 +659,6 @@ function TriageRow({ item, color, checked, onToggle, client, onOpenClient, onNav
           </Button>
         )}
       </span>
-
-      {/* Jump to the client to inspect/delete — qui deep-links to the exact
-          torrent; qBittorrent copies the title for a one-paste search. Red
-          for unregistered (the verdict that begs for deletion). */}
-      {client && (
-        <Button size="chip" variant="subtle" tone={item.verdict === 'unregistered' ? 'var(--red)' : undefined}
-          onClick={e => onOpenClient(item, e)}
-          title={canDeepLink(client, item)
-            ? 'Open this torrent in qui'
-            : `Copy “${torrentSearchName(item)}” and open ${client.name} — paste into its search box to find this torrent`}
-          style={{ marginTop: 2 }}
-        >
-          {client.name} {canDeepLink(client, item) ? '↗' : '⧉↗'}
-        </Button>
-      )}
     </div>
   )
 }
@@ -735,7 +713,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   // 'still_listed' | 'unknown' (S09). They stay, and say so, until the audit.
   const [unconfirmed, setUnconfirmed] = useState({})
 
-  const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui', url }
+  const [client, setClient] = useState(null)   // { name: 'qBittorrent'|'qui' }
   const [clientDeleteAllowed, setClientDeleteAllowed] = useState(false)
 
   // Phase 2 — live tracker verification. The report renders instantly from
@@ -854,30 +832,11 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       .finally(() => setLoading(false))
     api.getConfig().then(cfg => {
       const isQui = cfg.TORRENT_SOURCE === 'qui'
-      // Link address, not the API address — prefer the external URL when the
-      // client is reached through a reverse proxy. Nothing here fetches it.
-      const url = (isQui ? (cfg.QUI_EXTERNAL_URL || cfg.QUI_HOST)
-                         : (cfg.QB_EXTERNAL_URL  || cfg.QB_HOST)) || ''
-      setClient(url ? { name: isQui ? 'qui' : 'qBittorrent', url } : null)
+      const host = isQui ? cfg.QUI_HOST : cfg.QB_HOST
+      setClient(host ? { name: isQui ? 'qui' : 'qBittorrent' } : null)
       setClientDeleteAllowed(!!cfg.ALLOW_CLIENT_DELETE)
     }).catch(() => {})
   }, [runVerify])
-
-  const openInClient = useCallback((item, e) => {
-    e.stopPropagation()
-    if (!client) return
-    // qui deep-links straight to the torrent: /instances/{id}?torrent={hash}
-    // selects it and opens the details pane. Stock qBittorrent's WebUI reads
-    // no URL params, so it gets the copy-title-and-paste flow instead.
-    if (canDeepLink(client, item)) {
-      window.open(`${client.url.replace(/\/+$/, '')}/instances/${item.instance_id}?torrent=${item.hash}`, '_blank', 'noopener')
-      return
-    }
-    const term = torrentSearchName(item)
-    copyText(term)
-    window.open(client.url, '_blank', 'noopener')
-    toast(`“${term}” copied — paste it into the ${client.name} search box to find this torrent`, 'info')
-  }, [client, toast])
 
   useEffect(() => {
     load()
@@ -1495,7 +1454,6 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                     checked={selected.has(itemKey(item))}
                     onToggle={() => toggle(itemKey(item))}
                     client={client}
-                    onOpenClient={openInClient}
                     onNavigate={onNavigate}
                     pending={!!verify?.running && !!item.hash && !item.verified}
                     rescanned={rescanned.has(itemKey(item))}

@@ -167,6 +167,17 @@ Every workflow that deletes, hardlinks or replaces a file was reviewed end to en
 - **One UI kit** — one `Button`, `Segmented` for every filter row, the type scale and `tint()` each held by a guard test; render errors caught by `ErrorBoundary` and logged server-side
 - **Tested images** — the Docker build `needs` `pytest backend_tests`, so a red suite publishes nothing
 
+### Shipped in v1.8.1
+- **Season packs in Triage** — *Replace with this pack* imports a pack the client holds over a season Sonarr assembled from singles (ManualImport, `Copy`, scoped by episode id, confirmed by the episodes' file ids); a lower release replaces a library file only where `st_nlink > 1`, or an only copy behind an explicit switch. *Find the season pack* searches Sonarr for full-season releases from Triage's dead singles or Backfill's episode rows, and watches the grab without force-importing. *Switch seasons over to a pack* leads the page
+- **Force import over a better file** — the same plan for a Radarr movie or a single Sonarr episode, one dialog per row; *Retry import* (was *Trigger Rescan*) offered only where the arr could accept the file; a pack's quality compared episode by episode, so Force import never writes a downgrade. Dialog-opening actions are action-bar buttons, not row chips
+- **Sidecars aren't "not imported" (#26)** — an imported registration's `.nfo`, artwork and samples leave Triage, the health score and Rounds
+- **Cleanup (#26)** — leftover hardlinks to live inodes get their own pile; libtorrent part files are claimed; empty folders are offered under qui's abandoned-directory rules; folders whose file list failed are named; OS and NAS clutter is always excluded; disk and client names compared in Unicode NFC; exclusion rules matched in one pass (29.4 s → 4.7 s per 200,000 files with the Plex preset)
+- **Code review fixes** — a disconnected qui instance is a failed one; removal posts per registration; a flat layout's delete script gets a working-directory guard; a manual scan never accepts a failed read; the debug report scrubs every configured address
+- **Torrent releases only (#25)** — Backfill and Trumped drop Usenet releases from every search
+- **Trumped** — steps 3 and 4 list every match, the PM's tracker first; the replacement is never pre-selected for removal
+- **Upload stats** — a scan whose tracker calls failed is left out of the per-tracker series instead of reading as terabytes of upload
+- **Import Jobs progress** — read from the arr queue's `size`/`sizeleft`, a download counted once
+
 ---
 
 ## Future Ideas
