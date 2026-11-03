@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { CloseButton } from './workflows/shared'
+import { useCornerStack } from './Toast'
 
 const PULSE_STYLE = `
 @keyframes auditPulse {
@@ -108,6 +109,9 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [visible, dismissed])
 
+  // Above Import Jobs when that's open, rather than over it.
+  const bottom = useCornerStack('scan', panelRef, visible && !dismissed)
+
   if (!visible || dismissed) return null
 
   const torrentsDone = phase === 'disk' || phase === 'post' || phase === 'idle'
@@ -131,7 +135,7 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
     <>
       <style>{PULSE_STYLE}</style>
       <div ref={panelRef} style={{
-        position: 'fixed', bottom: 24, right: 24,
+        position: 'fixed', bottom, right: 24,
         maxWidth: 860, width: 'calc(100vw - 48px)',
         background: 'var(--surface)', border: '1px solid var(--border)',
         borderRadius: 'var(--rl)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',

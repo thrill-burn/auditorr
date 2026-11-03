@@ -519,7 +519,11 @@ function AppInner() {
         statusMessage={scanState.status_message}
         score={results?.dashboard?.score}
         crossSeedMultiplier={crossSeedMultiplier}
-        activeImportCount={activeImports.filter(j => WATCH_ACTIVE.includes(j.status)).length}
+        // Each download is counted on the row of the workflow that started it.
+        importCounts={activeImports.reduce((n, j) => {
+          if (WATCH_ACTIVE.includes(j.status)) n[j.workflow] = (n[j.workflow] || 0) + 1
+          return n
+        }, {})}
         onOpenImportPanel={() => setImportPanelOpen(true)}
         workflowCounts={(() => {
           const det = results?.dashboard?.current?.details

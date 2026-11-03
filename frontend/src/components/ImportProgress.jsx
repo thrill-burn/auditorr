@@ -1,7 +1,7 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import { CloseButton, Button } from './workflows/shared'
 import { ReplaceModal, replaceOutcome } from './workflows/SeasonPack'
-import { useToast } from './Toast'
+import { useToast, useCornerStack } from './Toast'
 
 // An import watch has more ways to end than done and error (Phase 12, S07).
 // `done` is the only success, and the server reaches it only when the arr's file
@@ -75,6 +75,8 @@ export default function ImportProgress({ open, jobs, onClose }) {
   const toast = useToast()
   // The season-pack job whose Replace opened the dialog.
   const [replaceJob, setReplaceJob] = useState(null)
+  const panelRef = useRef(null)
+  const bottom = useCornerStack('imports', panelRef, open)
 
   const dialog = replaceJob && (
     <ReplaceModal
@@ -103,8 +105,8 @@ export default function ImportProgress({ open, jobs, onClose }) {
   })
 
   return (
-    <div style={{
-      position: 'fixed', bottom: 24, right: 24, zIndex: 350,
+    <div ref={panelRef} style={{
+      position: 'fixed', bottom, right: 24, zIndex: 350,
       width: 320, maxHeight: 400,
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.35)',

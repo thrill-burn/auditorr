@@ -1611,6 +1611,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
               step={packTotal > 1 ? `${packTotal - packQueue.length + 1} of ${packTotal}` : null}
               onNext={packQueue.length > 1 ? () => leavePackQueue(packQueue[0].key) : null}
               onCancel={() => setPackQueue([])}
+              workflow="triage"
             />
           )}
 

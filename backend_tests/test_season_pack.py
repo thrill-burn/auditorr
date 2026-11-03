@@ -218,6 +218,13 @@ class TestGrab:
         assert args[5] == [501, 502, 503, 504, 505, 506]
         assert (kw['info_hash'], kw['series_title']) == ('ABCDEF', 'Small Prophets')
 
+    def test_the_download_is_counted_on_the_page_that_opened_the_dialog(self, season):
+        # Triage and Backfill both open it; a bundle that sends nothing is Triage's.
+        for body, row in (({'workflow': 'backfill'}, 'backfill'), ({'workflow': 'triage'}, 'triage'),
+                          ({'workflow': 'trumped'}, 'triage'), ({}, 'triage')):
+            *_, watch = self._grab(season, body=body)
+            assert watch.call_args.kwargs['workflow'] == row
+
     def test_a_season_already_in_the_queue_is_not_grabbed_twice(self, season):
         status, body, _, grab, watch = self._grab(season, queue=[{'title': 'Small.Prophets.S01-X'}])
         assert (status, body['code']) == (409, 'already_queued')
@@ -261,7 +268,7 @@ class _Inline:
         self._target()
 
 
-def _watch(outcome, records=(), info_hash=None, landed=False):
+def _watch(outcome, records=(), info_hash=None, landed=False, **kw):
     res = {'outcome': outcome, 'records': list(records), 'messages': ['blocked']}
     with patch.object(app.threading, 'Thread', _Inline), \
          patch.object(app.time, 'sleep'), \
@@ -271,7 +278,7 @@ def _watch(outcome, records=(), info_hash=None, landed=False):
          patch.object(app, 'force_manual_import_by_id') as forced, \
          patch.dict(app._import_watches, {}, clear=True):
         job = app._start_pack_watch({}, 'tv', 143, 1, 'Small Prophets · S01 pack', [501], info_hash=info_hash,
-                                    series_title='Small Prophets')
+                                    series_title='Small Prophets', **kw)
         watch = dict(app._import_watches[job])
     forced.assert_not_called()
     return watch, poll
@@ -303,6 +310,10 @@ class TestWatch:
         watch, _ = _watch('failed')
         assert watch['status'] == 'failed'
         assert 'blocked' in watch['message']
+
+    def test_the_watch_names_the_sidebar_row_that_counts_it(self, season):
+        assert _watch('failed')[0]['workflow'] == 'triage'
+        assert _watch('failed', workflow='backfill')[0]['workflow'] == 'backfill'
 
     def test_a_ready_watch_stays_in_the_panel_past_a_minute(self):
         now = app.time.time()

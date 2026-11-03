@@ -700,6 +700,12 @@ class TestFollowThrough:
         out.scan.assert_not_called()
         assert out.scans == []
 
+    def test_the_sidebar_counts_a_download_on_the_workflow_that_grabbed_it(self):
+        # The ↓ badge counted every download on Backfill's row, a trump's too.
+        assert _watch_import(dict(self._SHOW, source='trump')).watch['workflow'] == 'trumped'
+        assert _watch_import(dict(self._SHOW, source='backfill')).watch['workflow'] == 'backfill'
+        assert _watch_import(dict(self._SHOW)).watch['workflow'] == 'backfill'
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TR7 — the arr item from the group's paths

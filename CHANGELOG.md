@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **A download started from Trumped was counted under Backfill in the sidebar.** The ↓ badge, which opens Import Jobs, sat on Backfill's row for every download. It now sits on the row of the workflow that started it: Trumped for a trump's replacement, and Triage or Backfill for a season pack, whichever you grabbed it from.
+- **Messages, Import Jobs and the scan progress card covered each other at the bottom right.** All three appeared in the same spot. A Trumped grab opens Import Jobs and reports its result at the same moment, so the message sat on top of the panel for its first few seconds, and the scan that follows the import covered the panel completely. They now stack: Import Jobs at the bottom, the scan card above it, and messages above both. Each one moves down when one below it closes.
+
 ## v1.8.1 — 2026-10-26
 
 Upgrading needs no configuration changes. The Triage and Cleanup changes below take effect from the first scan after upgrading.
