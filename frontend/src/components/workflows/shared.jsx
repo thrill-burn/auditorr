@@ -709,7 +709,7 @@ export function ActionBar({ children, summary }) {
     }}>
       <div title={typeof summary === 'string' ? summary : undefined} style={{
         flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minWidth: 0 }}>{children}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minWidth: 0, marginLeft: 'auto' }}>{children}</div>
     </div>
   )
 }
