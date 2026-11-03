@@ -176,7 +176,7 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
   const applyPreset = (d) => { setDateTo(''); setDateFrom(d === 0 ? '' : initialDateFrom(d)) }
 
   return (
-    <div className="fade-in" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <div className="fade-in page-frame" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 18 }}>
       {/* Date range — quick presets (easy default) + precise From/To for drill-down.
           Both scope the chart and the table's Uploaded/Yield columns. */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
