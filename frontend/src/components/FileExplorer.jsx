@@ -311,9 +311,11 @@ function PathsModal({ name, linkedPaths, duplicatePaths, onClose, anchorRect }) 
 
 // ─── Skeleton ────────────────────────────────────────────────────────────────
 
+// Capped like the loaded page (.page-frame), so the layout doesn't jump in
+// width when the files arrive.
 function ExplorerSkeleton() {
   return (
-    <div style={{ padding: '14px 24px 48px' }}>
+    <div className="page-frame" style={{ padding: '14px 24px 48px' }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 14 }}>
         {[0,1,2].map(i => (
           <div key={i} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r)', boxShadow: 'var(--elev-1)', padding: '12px 14px' }}>
@@ -889,7 +891,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   )
 
   return (
-    <div style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+    <div className="page-frame" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
 
       {/* ── Summary cards ── */}
       <div style={{ padding: '16px 0 14px', display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, flexShrink: 0 }}>
