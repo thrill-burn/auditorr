@@ -157,6 +157,15 @@ const THEME_ICONS = {
   ),
 }
 
+// Page width steps, applied as `--page-max` on the document root. The first is
+// index.css's own default, so the value set here and the stylesheet agree. A
+// stored value that is not one of these falls back to the first.
+export const PAGE_WIDTHS = [
+  { value: 'comfortable', label: 'Comfortable', max: '1280px' },
+  { value: 'wide',        label: 'Wide',        max: '1600px' },
+  { value: 'full',        label: 'Full width',  max: 'none' },
+]
+
 // A Health Score weight: `Field`'s box without its label, since the row it sits
 // in is the label. It was a hand-rolled 28px box among Config's 34px fields,
 // and showed nothing at all when focused.
@@ -335,7 +344,7 @@ function Card({ title, children }) {
   )
 }
 
-export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, onScan }) {
+export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, pageWidth, onPageWidthChange, onScan }) {
   const [conf,        setConf]        = useState(null)
   const [testStatus,        setTestStatus]        = useState(null)
   const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
@@ -1182,6 +1191,19 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               options={[{ value: 'dark', label: 'Dark', icon: THEME_ICONS.dark }, { value: 'light', label: 'Light', icon: THEME_ICONS.light }]}
               value={theme}
               onChange={t => onThemeChange && onThemeChange(t)}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 }}>
+          <div>
+            <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Page width</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>How wide pages run on a large screen.</div>
+          </div>
+          <div style={{ flexShrink: 0, marginLeft: 24 }}>
+            <Segmented size="lg"
+              options={PAGE_WIDTHS.map(({ value, label }) => ({ value, label }))}
+              value={pageWidth}
+              onChange={w => onPageWidthChange && onPageWidthChange(w)}
             />
           </div>
         </div>
