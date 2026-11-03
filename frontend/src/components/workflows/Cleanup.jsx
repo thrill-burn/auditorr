@@ -701,7 +701,9 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
             items={allFiles} shown={visible.length} unknownHidden={unknownHidden} noun="file"
             unknownNote="the last scan could not read their modified time" />
 
-          {visible.length === 0 && (
+          {/* `totalFiles` is the server's count, which an exclude since the
+              audit does not lower, so it can be non-zero with no rows left. */}
+          {allFiles.length > 0 && visible.length === 0 && (
             <EmptyState
               title="No files match these filters"
               sub={`${plural(allFiles.length, 'orphaned file')}, but none pass the filters above. Clear them to see everything.`}
