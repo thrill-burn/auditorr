@@ -310,6 +310,10 @@ couldn't look inside, even when there's nothing else to clean up.
 
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
 
+The same filter bar narrows the list by path, by **Modified** (how long since the
+file changed) and by **Size**. A folder's totals count only the files shown, and
+narrowing the filter drops hidden files from the selection.
+
 ### The delete script
 
 Select what you want gone and generate a delete script — plain bash, using paths
@@ -501,6 +505,21 @@ is left as it was, never treated as gone.
 
 The page lists the largest torrents first, up to a limit; past it, a banner says
 how many are shown out of how many.
+
+### Filtering the list
+
+The filter bar above the sections narrows the list without changing what Triage
+found. Search matches a title or path. **Trackers** opens a panel where each
+tracker can be included (+) or excluded (−). The ranges take a minimum, a
+maximum or both: **Seed time**, **Added** (how long ago), **Ratio** and **Size**.
+
+Seed time, added time and ratio come from your client during live verification,
+so a row has them only once its batch answers. While a range on one of them is
+set, a row without the value is hidden, and the bar says how many rows that is.
+
+Selecting is limited to what the filter shows: narrowing the filter drops hidden
+rows from the selection, so an action never touches a row you can't see. Filters
+stay while you move between pages and reset when you open auditorr again.
 
 ### Retry import vs force import
 

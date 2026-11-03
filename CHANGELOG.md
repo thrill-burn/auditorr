@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Features
+
+- **Triage and Cleanup: filter the list.** Both pages listed everything, with no way to narrow it. A filter bar now sits above the sections. On Triage it filters by title or path, by tracker (include or exclude each one), and by seed time, how long ago the torrent was added, ratio and size. On Cleanup it filters by path, by how long since the file was modified, and by size. Seed time, added time and ratio come from live verification, so while one of those is set, a row without the value is hidden, and the bar says how many. Narrowing the filter drops hidden rows from the selection, so an action only touches rows you can see. See [Filtering the list](docs/workflows.md#filtering-the-list).
+
 ### Fixes
 
 - **A download started from Trumped was counted under Backfill in the sidebar.** The ↓ badge, which opens Import Jobs, sat on Backfill's row for every download. It now sits on the row of the workflow that started it: Trumped for a trump's replacement, and Triage or Backfill for a season pack, whichever you grabbed it from.

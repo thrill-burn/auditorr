@@ -7,6 +7,7 @@ import {
   Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete,
   ConfirmExcludeModal, SectionHeading, StatBox, Dot, MONO_TITLE, tint, Disclosure,
 } from './shared'
+import { ListFilterBar, useListFilters, usePruneSelection, DURATION_UNITS, SIZE_UNITS } from './ListFilters'
 
 // Exclusion rules are built from real paths, so they are written as `literal:`
 // — release names contain `[`, `]`, `*` and `?`, and every other path rule in
@@ -120,6 +121,34 @@ function ageLabel(mtime) {
   if (days < 30) return `${days}d old`
   if (days < 365) return `${Math.floor(days / 30)}mo old`
   return `${Math.floor(days / 365)}y old`
+}
+
+// What the orphan list can be narrowed by: a file's paths, its size, and how
+// long since it was modified — the age the rows already print. A file whose
+// mtime the audit could not read has no age, so an age range hides it, and the
+// bar counts it as such.
+const FILTER_FIELDS = [
+  { key: 'q', kind: 'search', placeholder: 'Search path…', text: f => (f.paths || [f.path]).join(' ') },
+  { key: 'age', kind: 'range', label: 'Modified', suffix: 'ago', defaultUnit: 'd',
+    units: { d: DURATION_UNITS.d, mo: DURATION_UNITS.mo, y: DURATION_UNITS.y },
+    hint: 'How long since the file was last modified',
+    get: (f, now) => (f.mtime != null ? now - f.mtime : null) },
+  { key: 'size', kind: 'range', label: 'Size', defaultUnit: 'GB', units: SIZE_UNITS, get: f => f.size },
+]
+
+// A group cut down to the files a filter shows, its totals recomputed from
+// them, so a folder's header never reads the size of rows it is not showing.
+function narrowGroup(g, keep) {
+  const files = g.files.filter(f => keep.has(f))
+  if (files.length === g.files.length) return g
+  if (files.length === 0) return null
+  const ages = files.map(f => f.mtime).filter(m => m != null)
+  return {
+    ...g, files,
+    total_size:    files.reduce((s, f) => s + f.size, 0),
+    freeable_size: files.filter(f => f.state === 'last_copy').reduce((s, f) => s + f.size, 0),
+    oldest_mtime:  ages.length ? Math.min(...ages) : null,
+  }
 }
 
 const selectable = row => row.state !== 'unverified'
@@ -457,11 +486,23 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
   useAuditComplete(useCallback(() => { DISMISSED.clear(); DISMISSED_FOLDERS.clear(); load() }, [load]))
 
   const groups = report?.groups || []
+  // The piles and the selection work from the files the filter shows; the
+  // exclusion builder below keeps every group, so a folder rule is still written
+  // only when every orphan under it — shown or not — was picked.
+  const allFiles = useMemo(() => groups.flatMap(g => g.files), [groups])
+  const [filters, setFilters, { visible, unknownHidden }] = useListFilters('auditorr_filters_cleanup', FILTER_FIELDS, allFiles)
+  const visibleGroups = useMemo(() => {
+    if (visible === allFiles) return groups
+    const keep = new Set(visible)
+    return groups.map(g => narrowGroup(g, keep)).filter(Boolean)
+  }, [groups, allFiles, visible])
+  const visibleKeys = useMemo(() => visible.map(f => f.path), [visible])
+  usePruneSelection(visibleKeys, setSelected)
   const rowByKey = useMemo(() => {
     const m = {}
-    for (const g of groups) for (const f of g.files) m[f.path] = f
+    for (const f of visible) m[f.path] = f
     return m
-  }, [groups])
+  }, [visible])
 
   const selectedRows  = useMemo(() => [...selected].map(k => rowByKey[k]).filter(Boolean), [selected, rowByKey])
   const selectedPaths = useMemo(() => selectedRows.flatMap(r => r.paths), [selectedRows])
@@ -656,8 +697,19 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
             </WorkflowWarning>
           )}
 
+          <ListFilterBar fields={FILTER_FIELDS} state={filters} onChange={setFilters}
+            items={allFiles} shown={visible.length} unknownHidden={unknownHidden} noun="file"
+            unknownNote="the last scan could not read their modified time" />
+
+          {visible.length === 0 && (
+            <EmptyState
+              title="No files match these filters"
+              sub={`${plural(allFiles.length, 'orphaned file')}, but none pass the filters above. Clear them to see everything.`}
+            />
+          )}
+
           {PILES.map(pile => {
-            const inPile = groups.filter(g => g.pile === pile.id)
+            const inPile = visibleGroups.filter(g => g.pile === pile.id)
             return inPile.length > 0 && (
               <Pile key={pile.id} pile={pile} groups={inPile} selected={selected}
                 onToggleFile={toggleFile} onToggleKeys={toggleKeys} />
