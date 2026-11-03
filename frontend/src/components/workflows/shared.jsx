@@ -695,16 +695,21 @@ export function Checkbox({ checked, indeterminate, onChange }) {
 }
 
 // ── Selection action bar (sticky bottom) ──────────────────────────────────────
+// One line when everything fits. When the buttons outgrow the page width (a big
+// Triage selection offers six or seven), they drop to their own row and wrap
+// there, right-aligned, and the summary keeps its single line above them (cut
+// with an ellipsis only if the window is too narrow for even that).
 export function ActionBar({ children, summary }) {
   return (
     <div style={{
       position: 'sticky', bottom: 16, zIndex: 50,
       background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 'var(--rl)',
-      padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
+      padding: '12px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, rowGap: 10,
       boxShadow: 'var(--shadow-pop)',
     }}>
-      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
-      <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>{children}</div>
+      <div title={typeof summary === 'string' ? summary : undefined} style={{
+        flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minWidth: 0 }}>{children}</div>
     </div>
   )
 }
