@@ -220,7 +220,7 @@ export default function ChangeLog({ onNavigate }) {
   const itemData = useMemo(() => ({ rows, onNavigate }), [rows, onNavigate])
 
   return (
-    <div className="fade-in" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+    <div className="fade-in page-frame" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
 
       {/* Summary cards — mirror the file-browser stat boxes */}
       <div style={{ padding: '16px 0 14px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, flexShrink: 0 }}>

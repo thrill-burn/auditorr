@@ -157,15 +157,6 @@ const THEME_ICONS = {
   ),
 }
 
-// Page width steps, applied as `--page-max` on the document root. The first is
-// index.css's own default, so the value set here and the stylesheet agree. A
-// stored value that is not one of these falls back to the first.
-export const PAGE_WIDTHS = [
-  { value: 'comfortable', label: 'Comfortable', max: '1280px' },
-  { value: 'wide',        label: 'Wide',        max: '1600px' },
-  { value: 'full',        label: 'Full width',  max: 'none' },
-]
-
 // A Health Score weight: `Field`'s box without its label, since the row it sits
 // in is the label. It was a hand-rolled 28px box among Config's 34px fields,
 // and showed nothing at all when focused.
@@ -1197,11 +1188,11 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 }}>
           <div>
             <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Page width</div>
-            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>How wide pages run on a large screen.</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Readable keeps pages to a laptop's width on a large screen. Full width is the default.</div>
           </div>
           <div style={{ flexShrink: 0, marginLeft: 24 }}>
             <Segmented size="lg"
-              options={PAGE_WIDTHS.map(({ value, label }) => ({ value, label }))}
+              options={[{ value: 'full', label: 'Full width' }, { value: 'readable', label: 'Readable' }]}
               value={pageWidth}
               onChange={w => onPageWidthChange && onPageWidthChange(w)}
             />

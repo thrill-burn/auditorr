@@ -970,7 +970,7 @@ export default function Backfill({ onNavigate }) {
     const kinds = kindsLine(selectedGroups)
     const exampleArr = unmatchedExample?.service === 'sonarr' ? 'Sonarr' : 'Radarr'
     return (
-      <WorkflowPage gap={28} fullWidth>
+      <WorkflowPage gap={28}>
         <WorkflowHeader
           title="Backfill"
           accent="var(--blue)"
@@ -1129,7 +1129,7 @@ export default function Backfill({ onNavigate }) {
                                              `Stopped — ${found}`
 
   return (
-    <WorkflowPage gap={14} fullWidth>
+    <WorkflowPage gap={14}>
       {/* The shared header, as the config phase uses. This was a hand copy of
           it whose eyebrow carried `textAlign: 'center'`, so "Workflows" sat in
           the middle of the page above a left-aligned title. */}

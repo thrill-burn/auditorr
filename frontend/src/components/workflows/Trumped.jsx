@@ -698,7 +698,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   const step5 = step3 && search != null
 
   return (
-    <WorkflowPage maxWidth={980}>
+    <WorkflowPage>
       <WorkflowHeader
         title="Trumped"
         accent={ACCENT}

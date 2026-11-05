@@ -503,13 +503,12 @@ export function Disclosure({ open, onClick, children }) {
 
 // ── Workflow page ─────────────────────────────────────────────────────────────
 // The frame every workflow page sits in: the app's page gutter (Rounds' too),
-// and room at the foot for the sticky action bar. By default the page takes
-// the Page width setting's cap. With `maxWidth` it keeps its own narrow column
-// instead, and with `fullWidth` it has no cap at all (Backfill); the setting
-// leaves both alone. All are left-aligned.
-export function WorkflowPage({ gap = 22, maxWidth, fullWidth, children }) {
+// and room at the foot for the sticky action bar. It follows Config's Page
+// width (.page-frame), unless `maxWidth` gives it a narrow column of its own
+// (the error screen), which the setting leaves alone.
+export function WorkflowPage({ gap = 22, maxWidth, children }) {
   return (
-    <div className={maxWidth || fullWidth ? 'fade-in' : 'fade-in page-frame'} style={{
+    <div className={maxWidth ? 'fade-in' : 'fade-in page-frame'} style={{
       padding: 'var(--page-gutter) var(--page-gutter) 48px', display: 'flex', flexDirection: 'column', gap,
       ...(maxWidth ? { maxWidth } : null),
     }}>

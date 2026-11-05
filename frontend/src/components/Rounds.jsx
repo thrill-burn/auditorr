@@ -1051,15 +1051,15 @@ export default function Rounds({ onNavigate }) {
   // sat on pre-scan data for as long as it was left open.
   useAuditComplete(load)
 
-  if (error) return <div className="page-frame" style={{ padding: 'var(--page-gutter)' }}><WorkflowError message={error} /></div>
-  if (!data)  return <div className="page-frame" style={{ padding: 'var(--page-gutter)' }}><LoadingRow label="Working out what you should be doing…" /></div>
+  if (error) return <div style={{ padding: 'var(--page-gutter)' }}><WorkflowError message={error} /></div>
+  if (!data)  return <div style={{ padding: 'var(--page-gutter)' }}><LoadingRow label="Working out what you should be doing…" /></div>
   const { setup, rows, health } = data
   const byId = Object.fromEntries((rows || []).map(r => [r.id, r]))
   const baseline = ['cleanup', 'dedupe'].map(id => byId[id]).filter(Boolean)
   const baselineClear = baseline.length > 0 && baseline.every(r => !['fix', 'optimize'].includes(r.state))
 
   return (
-    <div className="page-frame" style={{ padding: 'var(--page-gutter)', display: 'flex', flexDirection: 'column', gap: 'var(--card-gap)' }}>
+    <div style={{ padding: 'var(--page-gutter)', display: 'flex', flexDirection: 'column', gap: 'var(--card-gap)', maxWidth: 1180 }}>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 240 }}>

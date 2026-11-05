@@ -33,7 +33,7 @@ function Skeleton({ w = '100%', h = 16, style = {} }) {
 }
 function DashboardSkeleton() {
   return (
-    <div style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="page-frame" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <Skeleton w={90} h={10} />
@@ -1061,7 +1061,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     .filter(t => effectiveTrackers.includes(t.tracker))
 
   return (
-    <div className="fade-in" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="fade-in page-frame" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
       {/* Time range presets + tracker filter — inline top row, aligned with the
           panels below and matching the Trackers page's layout. */}

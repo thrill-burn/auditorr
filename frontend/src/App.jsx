@@ -5,7 +5,7 @@ import Sidebar      from './components/Sidebar'
 import Dashboard    from './components/Dashboard'
 import Rounds       from './components/Rounds'
 import FileExplorer from './components/FileExplorer'
-import Config, { PAGE_WIDTHS } from './components/Config'
+import Config       from './components/Config'
 import Trackers     from './components/Trackers'
 import Backfill     from './components/workflows/Backfill'
 import Triage       from './components/workflows/Triage'
@@ -250,10 +250,7 @@ function AppInner() {
   const [pendingNav,         setPendingNav]         = useState(null)
   const [isRefreshing,       setIsRefreshing]       = useState(false)
   const [theme,              setTheme]              = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
-  const [pageWidth,          setPageWidth]          = useState(() => {
-    const stored = localStorage.getItem('auditorr_page_width')
-    return PAGE_WIDTHS.some(w => w.value === stored) ? stored : PAGE_WIDTHS[0].value
-  })
+  const [pageWidth,          setPageWidth]          = useState(() => localStorage.getItem('auditorr_page_width') === 'readable' ? 'readable' : 'full')
   const [scriptModal,        setScriptModal]        = useState(null)
   const [timeRange,          setTimeRange]          = useState(() => {
     const stored = localStorage.getItem('auditorr_chart_days')
@@ -285,14 +282,22 @@ function AppInner() {
     localStorage.setItem('auditorr_theme', theme)
   }, [theme])
 
-  // Page width: every .page-frame reads --page-max. A layout effect, so a
-  // stored "Wide" or "Full width" is in place before the first paint rather
-  // than the page jumping out from 1280px.
+  // Page width: Readable sets `data-page-width` on the root, which gives every
+  // .page-frame index.css's --page-max. A layout effect, so a stored Readable is
+  // in place before the first paint rather than the page jumping in from full
+  // width.
   useLayoutEffect(() => {
-    const step = PAGE_WIDTHS.find(w => w.value === pageWidth) || PAGE_WIDTHS[0]
-    document.documentElement.style.setProperty('--page-max', step.max)
-    localStorage.setItem('auditorr_page_width', step.value)
+    if (pageWidth === 'readable') document.documentElement.setAttribute('data-page-width', 'readable')
+    else document.documentElement.removeAttribute('data-page-width')
   }, [pageWidth])
+
+  // Stored only when chosen, never on load: a stored value would otherwise say
+  // nothing about whether anyone picked it, and a change of default would reach
+  // nobody who had opened the app.
+  const changePageWidth = useCallback(w => {
+    setPageWidth(w)
+    localStorage.setItem('auditorr_page_width', w)
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('auditorr_chart_days', timeRange)
@@ -624,7 +629,7 @@ function AppInner() {
                 theme={theme}
                 onThemeChange={setTheme}
                 pageWidth={pageWidth}
-                onPageWidthChange={setPageWidth}
+                onPageWidthChange={changePageWidth}
               />
             )}
             {tab === 'backfill' && (
