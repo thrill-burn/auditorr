@@ -1,6 +1,11 @@
 // Pure filtering behind `ListFilterBar` (ListFilters.jsx). No React here, so
 // the rules can be read, and run under plain node, apart from the controls.
 //
+// It was `listFilters.js`, beside `ListFilters.jsx`: an import of
+// './ListFilters' tries `.js` before `.jsx`, so on Windows and macOS, whose
+// disks ignore case, it landed here and the build failed. Linux, and so CI,
+// never saw it; `backend_tests/test_module_names.py` does now.
+//
 // A page describes what it can filter on as a list of fields:
 //
 //   { key, kind: 'search',   text: item => string }
@@ -77,6 +82,18 @@ export function rangeBounds(field, r) {
   const lo = num(r.min), hi = num(r.max)
   if (lo == null && hi == null) return null
   return { lo: lo == null ? null : lo * mult, hi: hi == null ? null : hi * mult }
+}
+
+// Why each of a range's boxes isn't doing what it reads as, or null: a value
+// `num` refuses is ignored (a negative typed past the box's `min`), and a min
+// above the max matches nothing. Units cancel, so the raw numbers compare.
+export function rangeErrors(r) {
+  const lo = num(r?.min), hi = num(r?.max)
+  const crossed = lo != null && hi != null && lo > hi && 'Min is above max, so nothing matches'
+  return {
+    min: crossed || (r?.min && lo == null ? 'Not a usable number, so it is ignored' : null),
+    max: crossed || (r?.max && hi == null ? 'Not a usable number, so it is ignored' : null),
+  }
 }
 
 export function activeFilterCount(fields, state) {
