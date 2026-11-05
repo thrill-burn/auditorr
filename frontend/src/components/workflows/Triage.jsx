@@ -881,6 +881,10 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   const [filters, setFilters, { visible, unknownHidden }] = useListFilters('auditorr_filters_triage', FILTER_FIELDS, items)
   const visibleKeys = useMemo(() => visible.map(itemKey), [visible])
   usePruneSelection(visibleKeys, setSelected)
+  // The page holds the largest `_TRIAGE_GROUP_CAP` rows, so a filter searches
+  // those only. "Size under 5 GB" over a cut-off list is the smallest of the
+  // largest, and the count must not read as everything there is.
+  const unloaded = report?.truncated && report.total != null ? Math.max(0, report.total - report.shown) : 0
   const byVerdict = useMemo(() => {
     const m = {}
     for (const v of VERDICTS) m[v.key] = []
@@ -1470,12 +1474,15 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
             items={items} shown={visible.length} unknownHidden={unknownHidden} noun="torrent"
             unknownNote={verify?.running
               ? 'seed time, age and ratio come from live verification, still running'
-              : 'seed time, age and ratio come from live verification, which these rows did not get'} />
+              : 'seed time, age and ratio come from live verification, which these rows did not get'}
+            unloaded={unloaded} />
 
           {visible.length === 0 && (
             <EmptyState
               title="No torrents match these filters"
-              sub={`${items.length} torrent${items.length !== 1 ? 's' : ''} need${items.length === 1 ? 's' : ''} triage, but none pass the filters above. Clear them to see everything.`}
+              sub={unloaded > 0
+                ? `None of the ${items.length.toLocaleString()} largest torrents pass the filters above, and ${unloaded.toLocaleString()} smaller ones aren’t loaded, so no filter can reach them. Resolve some to load the rest.`
+                : `${items.length.toLocaleString()} torrent${items.length !== 1 ? 's' : ''} need${items.length === 1 ? 's' : ''} triage, but none pass the filters above. Clear them to see everything.`}
             />
           )}
 

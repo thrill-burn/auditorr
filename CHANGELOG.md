@@ -4,7 +4,7 @@
 
 ### Features
 
-- **Triage and Cleanup: filter the list.** Both pages listed everything, with no way to narrow it. A filter bar now sits above the sections. On Triage it filters by title or path, by tracker (include or exclude each one), and by seed time, how long ago the torrent was added, ratio and size. On Cleanup it filters by path, by how long since the file was modified, and by size. Seed time, added time and ratio come from live verification, so while one of those is set, a row without the value is hidden, and the bar says how many. Narrowing the filter drops hidden rows from the selection, so an action only touches rows you can see. See [Filtering the list](docs/workflows.md#filtering-the-list).
+- **Triage and Cleanup: filter the list.** Both pages listed everything, with no way to narrow it. A filter bar now sits above the sections. On Triage it filters by title or path, by tracker (include or exclude each one), and by seed time, how long ago the torrent was added, ratio and size. On Cleanup it filters by path, by how long since the file was modified, and by size, and empty folders follow it too. Seed time, added time and ratio come from live verification, so while one of those is set, a row without the value is hidden, and the bar says how many. Triage loads only its largest torrents when there are many, so the bar also says how many it didn't load, which no filter can reach. Narrowing the filter drops hidden rows from the selection, so an action only touches rows you can see. See [Filtering the list](docs/workflows.md#filtering-the-list). Contributed by **OrbitMPGH** in [#28](https://github.com/thrill-burn/auditorr/pull/28).
 
 ### Fixes
 

@@ -310,9 +310,11 @@ couldn't look inside, even when there's nothing else to clean up.
 
 <p><img src="workflow-cleanup.png" alt="Cleanup workflow" width="100%" /></p>
 
-The same filter bar narrows the list by path, by **Modified** (how long since the
-file changed) and by **Size**. A folder's totals count only the files shown, and
-narrowing the filter drops hidden files from the selection.
+A filter bar above the piles narrows the list by path, by **Modified** (how long
+since the file changed) and by **Size**, and works as
+[Triage's does](#filtering-the-list). A folder's totals count only the files
+shown, and a folder the filter cut down says so ("2 of 5 files"). Empty folders
+follow the path and Modified filters too; to a Size range they hold nothing.
 
 ### The delete script
 
@@ -517,9 +519,17 @@ Seed time, added time and ratio come from your client during live verification,
 so a row has them only once its batch answers. While a range on one of them is
 set, a row without the value is hidden, and the bar says how many rows that is.
 
+The filters only reach the torrents the page loaded. When it holds just the
+largest, the bar says how many more weren't loaded: a **Size** maximum there
+finds the smallest of the largest, not your smallest torrents.
+
+A range box turns red when its number isn't used: a minimum above the maximum
+(nothing matches) or a negative number (ignored). Hover it to see which.
+
 Selecting is limited to what the filter shows: narrowing the filter drops hidden
 rows from the selection, so an action never touches a row you can't see. Filters
-stay while you move between pages and reset when you open auditorr again.
+stay while you move between pages, and through a reload, and a new browser tab
+starts without them.
 
 ### Retry import vs force import
 

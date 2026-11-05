@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { Button, Segmented, SearchInput, FlagToggle, Dot, tint } from './shared'
 import {
-  emptyFilterState, normalizeFilterState, activeFilterCount, applyListFilters, trackerCounts, rangeBounds,
-} from './listFilters'
+  emptyFilterState, normalizeFilterState, activeFilterCount, applyListFilters, trackerCounts, rangeBounds, rangeErrors,
+} from './listFilterRules'
 
-export { DURATION_UNITS, SIZE_UNITS } from './listFilters'
+export { DURATION_UNITS, SIZE_UNITS, applyListFilters } from './listFilterRules'
 
 // ── Workflow list filters ─────────────────────────────────────────────────────
 // One filter bar for the workflow pages that list rows: a search, an include /
 // exclude tracker panel (File Explorer's), and min–max ranges such as seed time,
 // age and size (File Explorer's size range, in any unit). The rules are in
-// listFilters.js; this file is only the controls and their state.
+// listFilterRules.js; this file is only the controls and their state.
 //
 // The state lives in sessionStorage per page, so moving to another tab and back
 // keeps it, while a fresh visit starts unfiltered: these pages lead to deletes,
@@ -55,7 +55,9 @@ export function usePruneSelection(visibleKeys, setSelected) {
   }, [visibleKeys, setSelected])
 }
 
-function RangeInput({ value, onChange, placeholder, label }) {
+// `problem` is why the box's value isn't used, said on hover and by a red edge:
+// a range the rules ignore, or one that matches nothing, otherwise looks set.
+function RangeInput({ value, onChange, placeholder, label, problem }) {
   const [focused, setFocused] = useState(false)
   return (
     <input
@@ -64,12 +66,14 @@ function RangeInput({ value, onChange, placeholder, label }) {
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       aria-label={`${label} ${placeholder}`}
+      aria-invalid={!!problem}
+      title={problem || undefined}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={{
         width: 64, height: 'var(--control-h)', padding: '0 8px',
         borderRadius: 'var(--r)', fontSize: 'var(--font-base)',
-        border: `1px solid ${focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
+        border: `1px solid ${problem ? tint('var(--red)', 70) : focused ? 'var(--accent)' : value ? tint('var(--accent)', 40) : 'var(--border2)'}`,
         background: focused || value ? 'var(--surface2)' : 'transparent',
         color: 'var(--text)', fontFamily: 'var(--mono)',
         outline: 'none', transition: 'all 0.12s',
@@ -81,18 +85,21 @@ function RangeInput({ value, onChange, placeholder, label }) {
 function RangeFilter({ field, value, onChange }) {
   const set = patch => onChange({ ...value, ...patch })
   const active = !!rangeBounds(field, value)
+  const errors = rangeErrors(value)
   const units = field.units ? Object.entries(field.units).map(([v, u]) => ({ value: v, label: u.label })) : null
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={field.hint}>
       <span style={{ ...DIM, color: active ? 'var(--accent)' : 'var(--text-dim)' }}>{field.label}:</span>
-      <RangeInput label={field.label} value={value.min} onChange={min => set({ min })} placeholder="min" />
+      <RangeInput label={field.label} value={value.min} onChange={min => set({ min })} placeholder="min" problem={errors.min} />
       <span style={DIM}>–</span>
-      <RangeInput label={field.label} value={value.max} onChange={max => set({ max })} placeholder="max" />
+      <RangeInput label={field.label} value={value.max} onChange={max => set({ max })} placeholder="max" problem={errors.max} />
       {units && (
         <Segmented mono label={`${field.label} unit`} options={units} value={value.unit} onChange={unit => set({ unit })} />
       )}
       {field.suffix && <span style={DIM}>{field.suffix}</span>}
-      {active && (
+      {/* On whatever a box holds, as File Explorer's, so a value the rules
+          ignore can still be cleared in one click. */}
+      {(value.min || value.max) && (
         <Button size="sm" variant="ghost" square onClick={() => set({ min: '', max: '' })}
           title={`Clear ${field.label.toLowerCase()}`} ariaLabel={`Clear ${field.label.toLowerCase()}`}>✕</Button>
       )}
@@ -103,8 +110,10 @@ function RangeFilter({ field, value, onChange }) {
 // `items` is the unfiltered list (the tracker panel counts from it), `shown`
 // how many rows pass, `noun` what a row is ("torrent", "file").
 // `unknownNote` says why a row can lack a ranged value, for the line that
-// counts the rows hidden for that reason.
-export function ListFilterBar({ fields, state, onChange, items, shown, unknownHidden = 0, noun = 'row', unknownNote }) {
+// counts the rows hidden for that reason. `unloaded` is how many rows the page
+// never loaded (Triage's cap): no filter reaches them, so a filtered count
+// says so rather than reading as all there is.
+export function ListFilterBar({ fields, state, onChange, items, shown, unknownHidden = 0, noun = 'row', unknownNote, unloaded = 0 }) {
   const [trackersOpen, setTrackersOpen] = useState(false)
   const search = fields.find(f => f.kind === 'search')
   const trackerField = fields.find(f => f.kind === 'trackers')
@@ -170,6 +179,12 @@ export function ListFilterBar({ fields, state, onChange, items, shown, unknownHi
           {unknownHidden > 0 && (
             <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               · {plural(unknownHidden)} hidden for lacking a filtered value{unknownNote ? ` — ${unknownNote}` : ''}
+            </span>
+          )}
+          {unloaded > 0 && (
+            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+              · {unloaded.toLocaleString()} more {noun}{unloaded !== 1 ? 's aren’t' : ' isn’t'} loaded, so the
+              filters can’t reach {unloaded !== 1 ? 'them' : 'it'}
             </span>
           )}
           <div style={{ flex: 1 }} />

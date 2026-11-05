@@ -7,7 +7,7 @@ import {
   Checkbox, ActionBar, Button, SpinKeyframes, useAuditComplete,
   ConfirmExcludeModal, SectionHeading, StatBox, Dot, MONO_TITLE, tint, Disclosure,
 } from './shared'
-import { ListFilterBar, useListFilters, usePruneSelection, DURATION_UNITS, SIZE_UNITS } from './ListFilters'
+import { ListFilterBar, useListFilters, usePruneSelection, applyListFilters, DURATION_UNITS, SIZE_UNITS } from './ListFilters'
 
 // Exclusion rules are built from real paths, so they are written as `literal:`
 // — release names contain `[`, `]`, `*` and `?`, and every other path rule in
@@ -138,13 +138,14 @@ const FILTER_FIELDS = [
 
 // A group cut down to the files a filter shows, its totals recomputed from
 // them, so a folder's header never reads the size of rows it is not showing.
+// `hidden` counts the rest, so the folder says it holds more than it shows.
 function narrowGroup(g, keep) {
   const files = g.files.filter(f => keep.has(f))
   if (files.length === g.files.length) return g
   if (files.length === 0) return null
   const ages = files.map(f => f.mtime).filter(m => m != null)
   return {
-    ...g, files,
+    ...g, files, hidden: g.files.length - files.length,
     total_size:    files.reduce((s, f) => s + f.size, 0),
     freeable_size: files.filter(f => f.state === 'last_copy').reduce((s, f) => s + f.size, 0),
     oldest_mtime:  ages.length ? Math.min(...ages) : null,
@@ -284,7 +285,9 @@ function FolderGroup({ group, first, pileState, selected, onToggleFile, onToggle
   // checkbox reading as "this whole folder".
   const reasonChip = reason && <span title={reason.title} style={READOUT}>{reason.chip}</span>
 
-  const single = group.files.length === 1 && group.files[0].paths.length === 1
+  // A folder the filter narrowed keeps its header even at one file shown: the
+  // one-line form says the folder holds only that file.
+  const single = !group.hidden && group.files.length === 1 && group.files[0].paths.length === 1
   if (single) {
     const row = group.files[0]
     const canSelect = selectable(row)
@@ -344,7 +347,11 @@ function FolderGroup({ group, first, pileState, selected, onToggleFile, onToggle
         <span style={READOUT}>
           {group.oldest_mtime != null ? `oldest ${ageLabel(group.oldest_mtime)}` : 'age unavailable'}
         </span>
-        <span style={READOUT}>{plural(group.files.length, 'file')}</span>
+        <span style={READOUT}>
+          {group.hidden
+            ? `${group.files.length} of ${plural(group.files.length + group.hidden, 'file')}`
+            : plural(group.files.length, 'file')}
+        </span>
         <span style={{ ...READOUT, minWidth: 64, textAlign: 'right' }}>{formatBytes(group.total_size)}</span>
       </div>
 
@@ -386,9 +393,11 @@ function Pile({ pile, groups, selected, onToggleFile, onToggleKeys }) {
 // organised by what survives deleting a file, and these hold none. Last on the
 // page, since they free nothing; the script removes each only while it's still
 // empty. `unknown` means the client's categories didn't load, so none were
-// offered — said rather than shown as "no empty folders".
-function EmptyFolders({ empty, selected, onToggle, onToggleAll }) {
-  const folders = empty?.folders || []
+// offered — said rather than shown as "no empty folders". `shown` is the ones
+// the page's filter passes; the server's own cap is counted from all of them.
+function EmptyFolders({ empty, shown, selected, onToggle, onToggleAll }) {
+  const all = empty?.folders || []
+  const folders = shown || all
   if (empty?.unknown) {
     return (
       <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
@@ -401,13 +410,14 @@ function EmptyFolders({ empty, selected, onToggle, onToggleAll }) {
   const keys = folders.map(f => f.path)
   const allChecked  = keys.every(k => selected.has(k))
   const someChecked = !allChecked && keys.some(k => selected.has(k))
-  const more = (empty.count || 0) - folders.length
+  const more = (empty.count || 0) - all.length
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <SectionHeading
         check={{ checked: allChecked, indeterminate: someChecked, onChange: () => onToggleAll(keys) }}
         dot="var(--text-dim)" title="Empty folders"
-        meta={more > 0 ? `${folders.length} of ${empty.count} folders` : plural(folders.length, 'folder')}
+        meta={folders.length < all.length ? `${folders.length} of ${plural(all.length, 'folder')}`
+          : more > 0 ? `${folders.length} of ${empty.count} folders` : plural(folders.length, 'folder')}
         desc="Nothing in them at any depth. Removing them frees nothing, and the script removes each only while it’s still empty."
       />
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden' }}>
@@ -504,6 +514,21 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     return m
   }, [visible])
 
+  // Empty folders go through the same filter while its bar is on screen: a path
+  // search or an age range narrows them too, and a size range reads them as the
+  // nothing they free. With no orphans there is no bar, and a filter left in
+  // sessionStorage must not narrow them unseen.
+  const filterOn = (report?.file_count ?? 0) > 0
+  const folderRows = useMemo(() => (report?.empty_folders?.folders || []).map(f => ({ ...f, size: 0 })), [report])
+  const shownFolders = useMemo(
+    () => (filterOn ? applyListFilters(folderRows, FILTER_FIELDS, filters).visible : folderRows),
+    [filterOn, folderRows, filters])
+  const shownFolderKeys = useMemo(() => shownFolders.map(f => f.path), [shownFolders])
+  usePruneSelection(shownFolderKeys, setSelectedFolders)
+  // What a folder action takes: selected and shown, as `rowByKey` is for files.
+  const chosenFolders = useMemo(
+    () => new Set(shownFolderKeys.filter(p => selectedFolders.has(p))), [shownFolderKeys, selectedFolders])
+
   const selectedRows  = useMemo(() => [...selected].map(k => rowByKey[k]).filter(Boolean), [selected, rowByKey])
   const selectedPaths = useMemo(() => selectedRows.flatMap(r => r.paths), [selectedRows])
   const selKeeps = selectedRows.filter(r => LOSSLESS.has(r.state)).length
@@ -548,7 +573,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
     })
   }, [])
 
-  const nFolders = selectedFolders.size
+  const nFolders = chosenFolders.size
   const anySelected = selected.size > 0 || nFolders > 0
   const folderNote = nFolders > 0 ? plural(nFolders, 'empty folder') : ''
 
@@ -560,7 +585,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
       // is built after a fresh check of the client, which can drop files.
       subtitle: [selectedPaths.length > 0 && `${plural(selectedPaths.length, 'file')} · up to ${formatBytes(selFreeable)} freed`, folderNote]
         .filter(Boolean).join(' · '),
-      body: { paths: selectedPaths, folders: [...selectedFolders] },
+      body: { paths: selectedPaths, folders: [...chosenFolders] },
     })
   }
 
@@ -590,9 +615,9 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
       if (!covered.has(p)) patterns.push(literal(p))
     }
     // An empty folder you want to keep: a subtree rule, so it stops being offered.
-    for (const f of selectedFolders) patterns.push(literal(f, true))
+    for (const f of chosenFolders) patterns.push(literal(f, true))
     return patterns
-  }, [groups, selectedPaths, selectedFolders])
+  }, [groups, selectedPaths, chosenFolders])
 
   const handleExclude = async () => {
     setBusy('exclude')
@@ -601,7 +626,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
       toast(resp.message || `Added ${resp.added} exclusion rules`,
             resp.refused ? 'warning' : 'success')
       selected.forEach(k => DISMISSED.add(k))
-      selectedFolders.forEach(f => DISMISSED_FOLDERS.add(f))
+      chosenFolders.forEach(f => DISMISSED_FOLDERS.add(f))
       setReport(r => ({
         ...r,
         groups: (r?.groups || [])
@@ -609,7 +634,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
           .filter(g => g.files.length > 0),
         empty_folders: r?.empty_folders && {
           ...r.empty_folders,
-          folders: (r.empty_folders.folders || []).filter(f => !selectedFolders.has(f.path)),
+          folders: (r.empty_folders.folders || []).filter(f => !chosenFolders.has(f.path)),
         },
       }))
       setSelected(new Set())
@@ -721,7 +746,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
       )}
 
       {!loading && (
-        <EmptyFolders empty={report?.empty_folders} selected={selectedFolders}
+        <EmptyFolders empty={report?.empty_folders} shown={shownFolders} selected={selectedFolders}
           onToggle={toggleFolder} onToggleAll={toggleFolders} />
       )}
 
