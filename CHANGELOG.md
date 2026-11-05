@@ -9,6 +9,7 @@
 ### Fixes
 
 - **A download started from Trumped was counted under Backfill in the sidebar.** The ↓ badge, which opens Import Jobs, sat on Backfill's row for every download. It now sits on the row of the workflow that started it: Trumped for a trump's replacement, and Triage or Backfill for a season pack, whichever you grabbed it from.
+- **Triage's header had a Trumped link that every dead seed already has.** Its count was the number of dead seeds, labelled *Trumped*, and it opened an empty Trumped page. Each dead seed's own *Trumped? ↗* opens it with the release filled in, so the header link is gone. The page description is shorter too: the sections already name the verdicts, so it now says what a removal keeps.
 - **Messages, Import Jobs and the scan progress card covered each other at the bottom right.** All three appeared in the same spot. A Trumped grab opens Import Jobs and reports its result at the same moment, so the message sat on top of the panel for its first few seconds, and the scan that follows the import covered the panel completely. They now stack: Import Jobs at the bottom, the scan card above it, and messages above both. Each one moves down when one below it closes.
 
 ## v1.8.1 — 2026-10-26

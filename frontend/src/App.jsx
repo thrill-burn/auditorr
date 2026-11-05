@@ -617,8 +617,7 @@ function AppInner() {
             )}
             {tab === 'triage' && (
               <Triage onNavigate={handleNavigate}
-                cleanupCount={cleanupRowCount(results?.dashboard?.current?.details)}
-                trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
+                cleanupCount={cleanupRowCount(results?.dashboard?.current?.details)} />
             )}
             {tab === 'cleanup' && (
               <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}

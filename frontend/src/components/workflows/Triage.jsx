@@ -695,7 +695,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
 // own answer becomes correct.
 const DISMISSED = new Set()
 
-export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
+export default function Triage({ onNavigate, cleanupCount }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
@@ -1358,7 +1358,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       <WorkflowHeader
         title="Triage"
         accent="var(--red)"
-        blurb="Torrents that need attention — dead, superseded, not imported or not in your library — and what to do about each."
+        blurb="Torrents your client holds that need a decision. Removing one never deletes a file another torrent still uses."
         /* No Refresh button: the page re-reads itself when an audit lands
            (`useAuditComplete`), which is the only event that can change what it
            shows. A button here would have been a stale page with a button. */
@@ -1372,14 +1372,6 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
           linkLabel="Cleanup"
           count={cleanupCount}
           onClick={() => onNavigate && onNavigate({ tab: 'cleanup' })}
-        />
-      )}
-      {!loading && (
-        <WorkflowCrossLink
-          text="Got a trump PM for a dead seed? Swap the whole cross-seed group for the replacement:"
-          linkLabel="Trumped"
-          count={trumpedCount}
-          onClick={() => onNavigate && onNavigate({ tab: 'trumped' })}
         />
       )}
 
