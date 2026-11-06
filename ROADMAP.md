@@ -178,6 +178,12 @@ Every workflow that deletes, hardlinks or replaces a file was reviewed end to en
 - **Upload stats** — a scan whose tracker calls failed is left out of the per-tracker series instead of reading as terabytes of upload
 - **Import Jobs progress** — read from the arr queue's `size`/`sizeleft`, a download counted once
 
+### Shipped in v1.8.2
+- **List filters (#28, OrbitMPGH)** — Triage and Cleanup filter by search, tracker, seed time, age, ratio and size; every action and select-all reads visible rows only, and narrowing a filter drops hidden rows from the selection
+- **Readable page width (#27, OrbitMPGH)** — opt-in under Config → Appearance, per browser; every page but Config and Rounds follows it, and the workflow action bar wraps
+- **Bottom-right cards stack** — messages, Import Jobs and the scan card no longer cover each other
+- **Download badges** — the sidebar's ↓ count sits on the workflow that started the download
+
 ---
 
 ## Future Ideas

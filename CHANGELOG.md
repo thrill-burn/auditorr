@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v1.8.2 — 2026-11-05
+
+Upgrading needs no configuration changes.
 
 ### Features
 
@@ -13,6 +15,10 @@
 - **Triage's header had a Trumped link that every dead seed already has.** Its count was the number of dead seeds, labelled *Trumped*, and it opened an empty Trumped page. Each dead seed's own *Trumped? ↗* opens it with the release filled in, so the header link is gone. The page description is shorter too: the sections already name the verdicts, so it now says what a removal keeps.
 - **Messages, Import Jobs and the scan progress card covered each other at the bottom right.** All three appeared in the same spot. A Trumped grab opens Import Jobs and reports its result at the same moment, so the message sat on top of the panel for its first few seconds, and the scan that follows the import covered the panel completely. They now stack: Import Jobs at the bottom, the scan card above it, and messages above both. Each one moves down when one below it closes.
 - **A large selection squeezed the bar at the bottom of the workflow pages.** When Triage offered six or seven actions, the selection summary wrapped to one word per line and the last button was pushed out of the bar. The buttons now move to their own row when they don't fit beside the summary. Contributed by **OrbitMPGH** in [#27](https://github.com/thrill-burn/auditorr/pull/27).
+
+### Known issues
+
+- **Rounds can credit a dead torrent you didn't touch.** If a scan runs while a dead torrent's tracker can't be read, because your client just restarted or the tracker is down, the torrent stops reading as dead for that scan. It drops off Triage until the next scan, and Rounds' Shoveler count goes up and stays up. Nothing is deleted, and a later release will fix it.
 
 ## v1.8.1 — 2026-10-26
 

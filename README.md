@@ -19,12 +19,11 @@ Built to stay light on memory, it runs on **500+ TB** libraries.
 
 ---
 
-## What's new in 1.8.1
+## What's new in 1.8.2
 
-- **Switch a finished season over to one pack** - Triage now opens with the seasons you can move onto a single pack. Replace from a pack already in your client, or find one through Sonarr when the tracker has dropped the single episodes. Each episode is hardlinked into your library, and a better library file stays on disk wherever another torrent still holds it. [Full list](CHANGELOG.md).
-- **Force import a lower release** - over a movie or a single episode, when you'd rather seed that release. *Trigger Rescan* is now *Retry import*, and it's offered only where Sonarr / Radarr can accept the file.
-- **Fewer false rows** - an imported torrent's `.nfo`, artwork and samples no longer put it in Triage. Cleanup now also lists leftover hardlinks and empty folders, names any folder it couldn't check, and ignores `.DS_Store` and NAS clutter.
-- **Safety fixes** - a qBittorrent that qui can't reach no longer makes its torrents look deleted, removals reach every qui instance, Backfill and Trumped no longer offer Usenet releases, and a scan that couldn't reach your trackers no longer shows terabytes of upload. The debug report no longer includes your server addresses.
+- **Filter Triage and Cleanup** - narrow either list by search, size and age, and Triage also by tracker, seed time and ratio. An action only touches the rows you can see. Contributed by [OrbitMPGH](https://github.com/OrbitMPGH). [Full list](CHANGELOG.md).
+- **A readable page width** - on a large monitor, Config → Appearance can keep pages to a laptop's width, so a row's title and its details stay together. Also from OrbitMPGH.
+- **Fixes** - messages, Import Jobs and the scan card stack instead of covering each other, a download's badge sits on the workflow that started it, and a crowded action bar wraps instead of pushing its last button out.
 
 Upgrading needs no configuration changes. From 1.7.0 or earlier? 1.7.1 [closed off-LAN API access by default](docs/remote-access.md) - LAN is unaffected.
 
