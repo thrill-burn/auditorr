@@ -9,6 +9,7 @@ import {
   ITEM_TITLE, tint, useAuditComplete, ConfirmExcludeModal, regKey, RegistrationWarning, Segmented, Disclosure,
 } from './shared'
 import { ReplaceModal, SeasonPackModal, ForceImportModal } from './SeasonPack'
+import { ListFilterBar, useListFilters, usePruneSelection, DURATION_UNITS, SIZE_UNITS } from './ListFilters'
 
 const VERDICTS = [
   {
@@ -42,6 +43,29 @@ const VERDICTS = [
 ]
 
 const VERDICT_LABEL = Object.fromEntries(VERDICTS.map(v => [v.key, v.label]))
+
+// What the list can be narrowed by. Trackers and size come with the audit; seed
+// time, age and ratio only with live verification (`applyDetails`), so until a
+// row is verified it has none of them, and an active range on one hides it —
+// counted, and named in the bar, rather than shown as if it matched.
+const FILTER_FIELDS = [
+  { key: 'q', kind: 'search', placeholder: 'Search title or path…',
+    text: i => `${i.parsed?.title || ''} ${i.rep_path || ''}` },
+  { key: 'trackers', kind: 'trackers', get: i => i.trackers },
+  { key: 'seed', kind: 'range', label: 'Seed time', defaultUnit: 'd',
+    units: { h: DURATION_UNITS.h, d: DURATION_UNITS.d, mo: DURATION_UNITS.mo },
+    hint: 'How long the torrent has seeded, from the client (live)',
+    get: i => i.seeding_time },
+  { key: 'added', kind: 'range', label: 'Added', suffix: 'ago', defaultUnit: 'd',
+    units: { d: DURATION_UNITS.d, mo: DURATION_UNITS.mo, y: DURATION_UNITS.y },
+    hint: 'How long ago the client added the torrent (live)',
+    get: (i, now) => (i.added_on ? now - i.added_on : null) },
+  { key: 'ratio', kind: 'range', label: 'Ratio', hint: 'Upload ratio, from the client (live)',
+    get: i => i.ratio },
+  { key: 'size', kind: 'range', label: 'Size', defaultUnit: 'GB', units: SIZE_UNITS,
+    hint: 'The whole torrent where the client reported it, else the files this row lists',
+    get: i => i.torrent_size ?? i.total_size },
+]
 
 // Superseded sub-buckets — what to do depends on how the orphaned torrent's
 // quality compares to the library file it duplicates. The 'duplicate' bucket
@@ -671,7 +695,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
 // own answer becomes correct.
 const DISMISSED = new Set()
 
-export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
+export default function Triage({ onNavigate, cleanupCount }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
@@ -851,18 +875,28 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
   useAuditComplete(useCallback(() => { DISMISSED.clear(); SWITCHED.clear(); load() }, [load]))
 
   const items = report?.items || []
+  // The sections, the select-alls and the action bar all work from the rows the
+  // filter shows. The season card, retry-verify and a replace's siblings keep
+  // using every row: they are about a season or a batch, not what is on screen.
+  const [filters, setFilters, { visible, unknownHidden }] = useListFilters('auditorr_filters_triage', FILTER_FIELDS, items)
+  const visibleKeys = useMemo(() => visible.map(itemKey), [visible])
+  usePruneSelection(visibleKeys, setSelected)
+  // The page holds the largest `_TRIAGE_GROUP_CAP` rows, so a filter searches
+  // those only. "Size under 5 GB" over a cut-off list is the smallest of the
+  // largest, and the count must not read as everything there is.
+  const unloaded = report?.truncated && report.total != null ? Math.max(0, report.total - report.shown) : 0
   const byVerdict = useMemo(() => {
     const m = {}
     for (const v of VERDICTS) m[v.key] = []
-    for (const item of items) (m[item.verdict] || (m[item.verdict] = [])).push(item)
+    for (const item of visible) (m[item.verdict] || (m[item.verdict] = [])).push(item)
     // Largest-first within each verdict — keeps ordering stable when live
     // verification moves an item into a different bucket.
     for (const k of Object.keys(m)) m[k].sort((a, b) => b.total_size - a.total_size)
     return m
-  }, [items])
+  }, [visible])
   const switches = useMemo(() => seasonSwitches(items), [items])
 
-  const selectedItems = useMemo(() => items.filter(i => selected.has(itemKey(i))), [items, selected])
+  const selectedItems = useMemo(() => visible.filter(i => selected.has(itemKey(i))), [visible, selected])
   // What an action on the selection touches: each torrent in full where the row
   // knows it (T5) — `torrent_size` arrives with verify, `torrent_files` with the audit.
   const selectedSize  = selectedItems.reduce((s, i) => s + (i.torrent_size ?? i.total_size), 0)
@@ -1324,7 +1358,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
       <WorkflowHeader
         title="Triage"
         accent="var(--red)"
-        blurb="Torrents that need attention — dead, superseded, not imported or not in your library — and what to do about each."
+        blurb="Torrents your client holds that need a decision. Removing one never deletes a file another torrent still uses."
         /* No Refresh button: the page re-reads itself when an audit lands
            (`useAuditComplete`), which is the only event that can change what it
            shows. A button here would have been a stale page with a button. */
@@ -1338,14 +1372,6 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
           linkLabel="Cleanup"
           count={cleanupCount}
           onClick={() => onNavigate && onNavigate({ tab: 'cleanup' })}
-        />
-      )}
-      {!loading && (
-        <WorkflowCrossLink
-          text="Got a trump PM for a dead seed? Swap the whole cross-seed group for the replacement:"
-          linkLabel="Trumped"
-          count={trumpedCount}
-          onClick={() => onNavigate && onNavigate({ tab: 'trumped' })}
         />
       )}
 
@@ -1434,6 +1460,22 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
                 ))}
               </div>
             </div>
+          )}
+
+          <ListFilterBar fields={FILTER_FIELDS} state={filters} onChange={setFilters}
+            items={items} shown={visible.length} unknownHidden={unknownHidden} noun="torrent"
+            unknownNote={verify?.running
+              ? 'seed time, age and ratio come from live verification, still running'
+              : 'seed time, age and ratio come from live verification, which these rows did not get'}
+            unloaded={unloaded} />
+
+          {visible.length === 0 && (
+            <EmptyState
+              title="No torrents match these filters"
+              sub={unloaded > 0
+                ? `None of the ${items.length.toLocaleString()} largest torrents pass the filters above, and ${unloaded.toLocaleString()} smaller ones aren’t loaded, so no filter can reach them. Resolve some to load the rest.`
+                : `${items.length.toLocaleString()} torrent${items.length !== 1 ? 's' : ''} need${items.length === 1 ? 's' : ''} triage, but none pass the filters above. Clear them to see everything.`}
+            />
           )}
 
           {VERDICTS.map(v => {
@@ -1611,6 +1653,7 @@ export default function Triage({ onNavigate, cleanupCount, trumpedCount }) {
               step={packTotal > 1 ? `${packTotal - packQueue.length + 1} of ${packTotal}` : null}
               onNext={packQueue.length > 1 ? () => leavePackQueue(packQueue[0].key) : null}
               onCancel={() => setPackQueue([])}
+              workflow="triage"
             />
           )}
 

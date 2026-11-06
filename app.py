@@ -58,7 +58,7 @@ from debug import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
 
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()
@@ -2739,9 +2739,12 @@ def workflows_season_pack_grab():
     title = str(data.get('series_title') or '').strip()[:200]
     label = f"{title or 'Season'} · S{season:02d} pack"
     held = [e['id'] for e in library if e['has_file']]
+    # Either page can open the dialog. Anything but Backfill is Triage, which is
+    # what a bundle that predates the field sends from.
+    workflow = 'backfill' if data.get('workflow') == 'backfill' else 'triage'
     job_id = _start_pack_watch(cfg, conn['id'], arr_id, season, label, held or episode_ids,
                                info_hash=_clean_token(data.get('info_hash'), limit=128),
-                               series_title=title)
+                               series_title=title, workflow=workflow)
     return jsonify({'status': 'success', 'job_id': job_id, 'queue_checked': queue_checked})
 
 
@@ -6514,6 +6517,9 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
         'title':        title,
         'service':      service,
         'source':       source,
+        # The sidebar row whose ↓ badge counts this download: the page that
+        # started it, as its tab id.
+        'workflow':     'trumped' if source == 'trump' else 'backfill',
         # 0.0–1.0 while downloading, from the arr's queue (`queue_progress`);
         # None whenever it is not known. Present from the start so the dict never
         # changes size under a request thread reading it.
@@ -6678,7 +6684,7 @@ def _start_import_watch(cfg, service, connection_id, arr_id, title, file_ids, so
 
 
 def _start_pack_watch(cfg, connection_id, arr_id, season, title, episode_ids, info_hash=None,
-                      series_title=''):
+                      series_title='', workflow='triage'):
     """Follow a season-pack grab into the client, on a daemon thread (T25). Returns the job id.
 
     The import watch's queue reading (S07) without its force import. Sonarr
@@ -6692,7 +6698,8 @@ def _start_pack_watch(cfg, connection_id, arr_id, season, title, episode_ids, in
     else by the one download id Sonarr's queue holds for these episodes. Two
     ids is a guess, and the watch says so rather than naming either. Every key
     exists from creation and is only reassigned, because a request thread
-    iterates this dict (`progress`'s rule).
+    iterates this dict (`progress`'s rule). `workflow` is the page the grab
+    came from, Triage or Backfill, whose sidebar row counts the download.
     """
     job_id = secrets.token_hex(8)
     watch = {
@@ -6701,6 +6708,7 @@ def _start_pack_watch(cfg, connection_id, arr_id, season, title, episode_ids, in
         'title':        title,
         'service':      'sonarr',
         'source':       'season_pack',
+        'workflow':     workflow,
         'progress':     None,
         'completed_at': None,
         # `{hash, instance_id, connection_id, arr_id, season, title}` once the

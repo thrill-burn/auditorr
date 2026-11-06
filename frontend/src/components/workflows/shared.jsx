@@ -503,10 +503,12 @@ export function Disclosure({ open, onClick, children }) {
 
 // ── Workflow page ─────────────────────────────────────────────────────────────
 // The frame every workflow page sits in: the app's page gutter (Rounds' too),
-// and room at the foot for the sticky action bar.
+// and room at the foot for the sticky action bar. It follows Config's Page
+// width (.page-frame), unless `maxWidth` gives it a narrow column of its own
+// (the error screen), which the setting leaves alone.
 export function WorkflowPage({ gap = 22, maxWidth, children }) {
   return (
-    <div className="fade-in" style={{
+    <div className={maxWidth ? 'fade-in' : 'fade-in page-frame'} style={{
       padding: 'var(--page-gutter) var(--page-gutter) 48px', display: 'flex', flexDirection: 'column', gap,
       ...(maxWidth ? { maxWidth } : null),
     }}>
@@ -692,16 +694,21 @@ export function Checkbox({ checked, indeterminate, onChange }) {
 }
 
 // ── Selection action bar (sticky bottom) ──────────────────────────────────────
+// One line when everything fits. When the buttons outgrow the page width (a big
+// Triage selection offers six or seven), they drop to their own row and wrap
+// there, right-aligned, and the summary keeps its single line above them (cut
+// with an ellipsis only if the window is too narrow for even that).
 export function ActionBar({ children, summary }) {
   return (
     <div style={{
       position: 'sticky', bottom: 16, zIndex: 50,
       background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 'var(--rl)',
-      padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
+      padding: '12px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, rowGap: 10,
       boxShadow: 'var(--shadow-pop)',
     }}>
-      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
-      <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>{children}</div>
+      <div title={typeof summary === 'string' ? summary : undefined} style={{
+        flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minWidth: 0, marginLeft: 'auto' }}>{children}</div>
     </div>
   )
 }

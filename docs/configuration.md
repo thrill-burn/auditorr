@@ -385,7 +385,11 @@ refused, rather than writing a list this page would then refuse to save.
 
 ## Appearance & Audit History
 
-**Appearance** switches between dark and light themes.
+**Appearance** switches between dark and light themes, and sets the page width.
+**Full width**, the default, runs pages edge to edge. **Readable** keeps them to
+a laptop's width on a large screen, so a row's title and its details stay
+together. Both settings are saved in your browser rather than on the server, so
+each screen you use auditorr on can have its own.
 
 **Audit History** lists recent runs with trigger, duration, resulting score, and
 status. Runs marked `aborted` are scans that were killed mid-flight — usually

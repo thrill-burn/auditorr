@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import SetupWizard  from './components/SetupWizard'
 import ChangeLog    from './components/ChangeLog'
 import Sidebar      from './components/Sidebar'
@@ -250,6 +250,7 @@ function AppInner() {
   const [pendingNav,         setPendingNav]         = useState(null)
   const [isRefreshing,       setIsRefreshing]       = useState(false)
   const [theme,              setTheme]              = useState(() => localStorage.getItem('auditorr_theme') || 'dark')
+  const [pageWidth,          setPageWidth]          = useState(() => localStorage.getItem('auditorr_page_width') === 'readable' ? 'readable' : 'full')
   const [scriptModal,        setScriptModal]        = useState(null)
   const [timeRange,          setTimeRange]          = useState(() => {
     const stored = localStorage.getItem('auditorr_chart_days')
@@ -280,6 +281,23 @@ function AppInner() {
     document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : '')
     localStorage.setItem('auditorr_theme', theme)
   }, [theme])
+
+  // Page width: Readable sets `data-page-width` on the root, which gives every
+  // .page-frame index.css's --page-max. A layout effect, so a stored Readable is
+  // in place before the first paint rather than the page jumping in from full
+  // width.
+  useLayoutEffect(() => {
+    if (pageWidth === 'readable') document.documentElement.setAttribute('data-page-width', 'readable')
+    else document.documentElement.removeAttribute('data-page-width')
+  }, [pageWidth])
+
+  // Stored only when chosen, never on load: a stored value would otherwise say
+  // nothing about whether anyone picked it, and a change of default would reach
+  // nobody who had opened the app.
+  const changePageWidth = useCallback(w => {
+    setPageWidth(w)
+    localStorage.setItem('auditorr_page_width', w)
+  }, [])
 
   useEffect(() => {
     localStorage.setItem('auditorr_chart_days', timeRange)
@@ -519,7 +537,11 @@ function AppInner() {
         statusMessage={scanState.status_message}
         score={results?.dashboard?.score}
         crossSeedMultiplier={crossSeedMultiplier}
-        activeImportCount={activeImports.filter(j => WATCH_ACTIVE.includes(j.status)).length}
+        // Each download is counted on the row of the workflow that started it.
+        importCounts={activeImports.reduce((n, j) => {
+          if (WATCH_ACTIVE.includes(j.status)) n[j.workflow] = (n[j.workflow] || 0) + 1
+          return n
+        }, {})}
         onOpenImportPanel={() => setImportPanelOpen(true)}
         workflowCounts={(() => {
           const det = results?.dashboard?.current?.details
@@ -606,6 +628,8 @@ function AppInner() {
                 onScan={handleScan}
                 theme={theme}
                 onThemeChange={setTheme}
+                pageWidth={pageWidth}
+                onPageWidthChange={changePageWidth}
               />
             )}
             {tab === 'backfill' && (
@@ -613,8 +637,7 @@ function AppInner() {
             )}
             {tab === 'triage' && (
               <Triage onNavigate={handleNavigate}
-                cleanupCount={cleanupRowCount(results?.dashboard?.current?.details)}
-                trumpedCount={deadSeedCount(results?.dashboard?.current?.details)} />
+                cleanupCount={cleanupRowCount(results?.dashboard?.current?.details)} />
             )}
             {tab === 'cleanup' && (
               <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}

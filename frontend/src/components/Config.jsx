@@ -335,7 +335,7 @@ function Card({ title, children }) {
   )
 }
 
-export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, onScan }) {
+export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, pageWidth, onPageWidthChange, onScan }) {
   const [conf,        setConf]        = useState(null)
   const [testStatus,        setTestStatus]        = useState(null)
   const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
@@ -1182,6 +1182,19 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               options={[{ value: 'dark', label: 'Dark', icon: THEME_ICONS.dark }, { value: 'light', label: 'Light', icon: THEME_ICONS.light }]}
               value={theme}
               onChange={t => onThemeChange && onThemeChange(t)}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18 }}>
+          <div>
+            <div style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>Page width</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Readable keeps pages to a laptop's width on a large screen. Full width is the default.</div>
+          </div>
+          <div style={{ flexShrink: 0, marginLeft: 24 }}>
+            <Segmented size="lg"
+              options={[{ value: 'full', label: 'Full width' }, { value: 'readable', label: 'Readable' }]}
+              value={pageWidth}
+              onChange={w => onPageWidthChange && onPageWidthChange(w)}
             />
           </div>
         </div>

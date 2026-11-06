@@ -500,7 +500,8 @@ const RELEASE_GRID = 'minmax(0,1fr) 110px 64px 44px'
 
 // `step` ("2 of 3") and `onNext` are set when Triage's bar steps through several
 // seasons: Next moves on whether or not this season grabbed or replaced anything.
-export function SeasonPackModal({ target, step, onNext, onCancel }) {
+// `workflow` is the page that opened it, whose sidebar row counts the download.
+export function SeasonPackModal({ target, step, onNext, onCancel, workflow }) {
   const params = useMemo(() => ({
     connection_id: target.connection_id, arr_id: target.arr_id, season: target.season,
   }), [target])
@@ -556,7 +557,7 @@ export function SeasonPackModal({ target, step, onNext, onCancel }) {
     try {
       await api.seasonPackGrab({
         ...params, guid: pick.guid, indexer_id: pick.indexer_id, info_hash: pick.info_hash || undefined,
-        series_title: title, force: force || undefined,
+        series_title: title, force: force || undefined, workflow,
       })
       if (!mounted.current) return
       setGrab({ state: 'grabbed', error: null })

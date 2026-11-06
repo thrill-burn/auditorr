@@ -110,7 +110,7 @@ const NAV = [
 
 const WORKFLOW_TAB_IDS = ['backfill', 'triage', 'cleanup', 'dedupe', 'trumped']
 
-export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, activeImportCount, onOpenImportPanel, workflowCounts }) {
+export default function Sidebar({ active, onChange, isScanning, progress, lastAuditTime, lastScanStatus, trigger, nextScanIn, statusMessage, score, crossSeedMultiplier, importCounts, onOpenImportPanel, workflowCounts }) {
   const scoreC = score != null ? scoreColor(score) : 'var(--text-dim)'
   const scoreDisplay = score != null ? Math.round(Number(score)) : null
   const csDisplay = crossSeedMultiplier != null ? crossSeedMultiplier.toFixed(2) : null
@@ -218,6 +218,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                     {children.map(child => {
                       const childActive = active === child.id
                       const count = child.badgeKey && workflowCounts ? workflowCounts[child.badgeKey] : null
+                      const imports = importCounts?.[child.id] || 0
                       return (
                         <button key={child.label} onClick={() => onChange(child.id)} style={{
                           display: 'flex', alignItems: 'center', gap: 8,
@@ -248,10 +249,10 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                               {count > 999 ? '999+' : count}
                             </span>
                           )}
-                          {child.id === 'backfill' && activeImportCount > 0 && (
+                          {imports > 0 && (
                             <span
                               onClick={e => { e.stopPropagation(); onOpenImportPanel && onOpenImportPanel() }}
-                              title={`${activeImportCount} import job${activeImportCount !== 1 ? 's' : ''} in progress — click to view`}
+                              title={`${imports} import job${imports !== 1 ? 's' : ''} in progress — click to view`}
                               style={{
                                 fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 'var(--r-pill)',
                                 background: 'var(--accent)', color: '#fff',
@@ -259,7 +260,7 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
                                 animation: 'sidebarBadgePulse 2s ease-in-out infinite',
                               }}
                             >
-                              ↓ {activeImportCount}
+                              ↓ {imports}
                             </span>
                           )}
                         </button>

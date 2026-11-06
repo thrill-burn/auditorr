@@ -28,6 +28,9 @@
   --r-pill:    99px;
   --sidebar-w: 224px;
   --page-gutter: 32px;
+  /* Widest a page runs, gutters included: no cap unless Config's Page width is
+     Readable, which sets it below. */
+  --page-max:  none;
   --card-gap: 18px;
   --elev-1:    0 1px 2px rgba(0, 0, 0, 0.30);
   --elev-2:    0 8px 22px rgba(0, 0, 0, 0.32);
@@ -309,4 +312,19 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 @keyframes slideIn {
   from { transform: scaleX(0); transform-origin: left; }
   to   { transform: scaleX(1); transform-origin: left; }
+}
+
+/* Page frame: caps a page at --page-max, left-aligned like every other page,
+   so on a wide screen a row's title and its readouts do not drift a screen
+   apart and the page still starts where the others do. Every page has it but
+   the two with a fixed column of their own (Config, Rounds), which keep that
+   width whatever Page width says.
+
+   Readable is the page a laptop-sized window gives, 1440px less the sidebar,
+   which is also what a 4K portrait screen at 150% shows. */
+[data-page-width="readable"] {
+  --page-max: calc(1440px - var(--sidebar-w));
+}
+.page-frame {
+  max-width: var(--page-max);
 }

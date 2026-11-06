@@ -1160,7 +1160,7 @@ export default function Backfill({ onNavigate }) {
       />
 
       <SeasonPackSeasons rows={results} onFind={setPackFor} />
-      {packFor && <SeasonPackModal target={packFor} onCancel={() => setPackFor(null)} />}
+      {packFor && <SeasonPackModal target={packFor} workflow="backfill" onCancel={() => setPackFor(null)} />}
 
       {/* Results list */}
       {rows.length > 0 && (
