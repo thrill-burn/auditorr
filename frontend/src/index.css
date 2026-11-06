@@ -320,9 +320,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    the two with a fixed column of their own (Config, Rounds), which keep that
    width whatever Page width says.
 
-   Readable is the page a laptop-sized window gives, 1440px less the sidebar.
-   That is also a 4K portrait screen at 150%, where the app is built and
-   checked, so on a large screen every page keeps the layout it was made at. */
+   Readable is the page a laptop-sized window gives, 1440px less the sidebar,
+   which is also what a 4K portrait screen at 150% shows. */
 [data-page-width="readable"] {
   --page-max: calc(1440px - var(--sidebar-w));
 }
