@@ -19,11 +19,12 @@ Built to stay light on memory, it runs on **500+ TB** libraries.
 
 ---
 
-## What's new in 1.8.2
+## What's new in 1.8.3
 
-- **Filter Triage and Cleanup** - narrow either list by search, size and age, and Triage also by tracker, seed time and ratio. An action only touches the rows you can see. Contributed by [OrbitMPGH](https://github.com/OrbitMPGH). [Full list](CHANGELOG.md).
-- **A readable page width** - on a large monitor, Config → Appearance can keep pages to a laptop's width, so a row's title and its details stay together. Also from OrbitMPGH.
-- **Fixes** - messages, Import Jobs and the scan card stack instead of covering each other, a download's badge sits on the workflow that started it, and a crowded action bar wraps instead of pushing its last button out.
+- **1.8.2's CPU use is fixed** - on a library with a few thousand folders or more, 1.8.2 could keep a CPU core busy for as long as it ran. If you're on 1.8.2, upgrade. [Full list](CHANGELOG.md).
+- **Filter Triage and Cleanup** (1.8.2) - narrow either list by search, size and age, and Triage also by tracker, seed time and ratio. An action only touches the rows you can see. Contributed by [OrbitMPGH](https://github.com/OrbitMPGH).
+- **A readable page width** (1.8.2) - on a large monitor, Config → Appearance can keep pages to a laptop's width, so a row's title and its details stay together. Also from OrbitMPGH.
+- **Fixes** (1.8.2) - messages, Import Jobs and the scan card stack instead of covering each other, a download's badge sits on the workflow that started it, and a crowded action bar wraps instead of pushing its last button out.
 
 Upgrading needs no configuration changes. From 1.7.0 or earlier? 1.7.1 [closed off-LAN API access by default](docs/remote-access.md) - LAN is unaffected.
 

@@ -184,6 +184,10 @@ Every workflow that deletes, hardlinks or replaces a file was reviewed end to en
 - **Bottom-right cards stack** — messages, Import Jobs and the scan card no longer cover each other
 - **Download badges** — the sidebar's ↓ count sits on the workflow that started the download
 
+### Shipped in v1.8.3
+- **CPU fix (#29)** — watchdog pinned to 6.0.0; 7.1.0, which 1.8.2's image picked up, could loop at a full core after an inotify queue overflow
+- **Quieter folder watcher** — asks the kernel only for creates, deletes and moves, so seeding reads and download writes no longer reach it
+
 ---
 
 ## Future Ideas
