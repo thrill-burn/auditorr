@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v1.8.3 — 2026-11-07
+
+Upgrading needs no configuration changes. If you're on 1.8.2, upgrade: it can keep a CPU core busy on a library with a few thousand folders or more.
 
 ### Fixes
 
@@ -25,6 +27,7 @@ Upgrading needs no configuration changes.
 
 ### Known issues
 
+- **Can use a full CPU core for as long as it runs**, on a library with a few thousand folders or more, logging `Inotify queue overflowed` several times a second. Fixed in 1.8.3. Reported in [#29](https://github.com/thrill-burn/auditorr/issues/29).
 - **Rounds can credit a dead torrent you didn't touch.** If a scan runs while a dead torrent's tracker can't be read, because your client just restarted or the tracker is down, the torrent stops reading as dead for that scan. It drops off Triage until the next scan, and Rounds' Shoveler count goes up and stays up. Nothing is deleted, and a later release will fix it.
 
 ## v1.8.1 — 2026-10-26

@@ -264,8 +264,8 @@ Worth reporting if allocated blocks climb steadily across hours.
 
 ## auditorr uses 100% CPU and logs "Inotify queue overflowed"
 
-This is version 1.8.2 only, and the next release fixes it. The log shows these
-lines several times a second, for as long as the container runs:
+This is version 1.8.2 only. **Upgrade to 1.8.3**, which fixes it. The log
+shows these lines several times a second, for as long as the container runs:
 
 ```
 [WARNING] Inotify queue overflowed; filesystem events were lost
@@ -274,7 +274,7 @@ lines several times a second, for as long as the container runs:
 
 The 1.8.2 image included a new release of watchdog, the library auditorr uses
 to watch your folders, that gets stuck in a loop on libraries with a few
-thousand folders or more. Until you can upgrade, either:
+thousand folders or more. If you can't upgrade yet, either:
 
 - go back to 1.8.1 (`ghcr.io/thrill-burn/auditorr:1.8.1`), or
 - turn the watchdog off under **Config → Watchdog & Scheduled Audits** and
