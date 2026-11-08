@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **1.8.2 could use a full CPU core for as long as it ran.** The log filled with `Inotify queue overflowed; reconciling recursive watches` several times a second. The 1.8.2 image was built the day after watchdog 7.1.0, the library auditorr uses to watch your folders, was released, and auditorr didn't name a version, so the image got it. When more changes arrive than the kernel can queue, 7.1.0 stops watching every folder and starts watching them all again. On a library of a few thousand folders, doing that queues more changes than the kernel holds, so it starts over, and never stops. auditorr now names watchdog 6.0.0, the version 1.8.1 used. Reported by **yotsu44** in [#29](https://github.com/thrill-burn/auditorr/issues/29).
+- **The folder watcher was told about every file read and write.** It acts only on files and folders being created, deleted or moved, but it was also sent an event whenever a file was opened, closed or written to. That's every piece qBittorrent seeds or downloads, every file your media server plays, and every folder a scan lists. auditorr ignored them, but reading them still cost CPU, and they took up the kernel's queue, so when the queue overflowed the event lost could be the one that should have started a scan. The watcher now asks for only the events it uses.
+
 ## v1.8.2 — 2026-11-05
 
 Upgrading needs no configuration changes.

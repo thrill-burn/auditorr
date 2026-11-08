@@ -5,7 +5,11 @@ import logging
 from datetime import datetime
 
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+from watchdog.events import (
+    FileSystemEventHandler,
+    FileCreatedEvent, FileDeletedEvent, FileMovedEvent,
+    DirCreatedEvent, DirDeletedEvent, DirMovedEvent,
+)
 
 from db import db_load_config
 from state import get_state, set_state, try_start_scanning, workflow_active
@@ -22,6 +26,24 @@ _handler  = None
 # back more than 10 minutes so a long session can't starve scan freshness.
 _WORKFLOW_DEFER_RETRY_S = 60
 _MAX_WORKFLOW_DEFER_S   = 600
+
+# The only events the handler acts on, passed to `schedule` as `event_filter`
+# (#29). On Linux watchdog builds the inotify mask from it, so the kernel queues
+# nothing else. With no filter it also queues an open, a close and a modify for
+# every file read or written, which is all of qBittorrent's seeding and
+# downloading, a media server's playback and the scan's own directory listing.
+# The handler threw those away, but the inotify thread still had to read them,
+# and they filled the kernel queue, so when it overflowed the event lost could
+# be the one create the handler needed. Created events must stay in the list:
+# IN_CREATE is how a recursive watch learns about a new subfolder.
+#
+# The pin in requirements.txt is what fixes #29. This alone doesn't: 7.1.0 still
+# loops above 16,384 folders, because removing a watch queues an event whatever
+# the mask (.internal/watchdog_repro/).
+WATCHED_EVENTS = [
+    FileCreatedEvent, FileDeletedEvent, FileMovedEvent,
+    DirCreatedEvent, DirDeletedEvent, DirMovedEvent,
+]
 
 
 class AuditDebounceHandler(FileSystemEventHandler):
@@ -136,7 +158,7 @@ def start_watchdog():
     _handler  = handler
     _observer = Observer()
     for path in paths:
-        _observer.schedule(handler, path, recursive=True)
+        _observer.schedule(handler, path, recursive=True, event_filter=WATCHED_EVENTS)
         log.info(f"Watchdog: watching {path}")
     _observer.start()
 

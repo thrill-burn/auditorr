@@ -1,5 +1,11 @@
 flask
 flask-cors
 qbittorrent-api
-watchdog
+# Pinned exactly (#29). 7.1.0 rebuilds every recursive watch after an inotify
+# queue overflow, and on a library of a few thousand folders the rebuild
+# overflows the queue again, so it loops at 100% CPU for good. 1.8.2's image
+# picked it up because this line had no version. Upstream's fix is
+# gorakhargosh/watchdog#1428; don't move off 6.0.0 until a release has it, and
+# check the move against .internal/watchdog_repro/ first.
+watchdog==6.0.0
 gunicorn
