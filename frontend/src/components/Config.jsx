@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { FixedSizeList } from 'react-window'
 import { api } from '../api'
 import { tint } from '../utils'
-import { Button, Segmented, Disclosure } from './workflows/shared'
+import { Button, Segmented, Disclosure, placeholderClass } from './workflows/shared'
 
 const AUDIT_ROW_H = 36
 const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 0.8fr 1fr'
@@ -54,7 +54,7 @@ const AuditRunRow = ({ index, style, data }) => {
             dropped tints, and a pill on every row of a long run list is more
             hue than the ration-colour rule allows (R9). */}
         <span style={{
-          padding: '2px 8px', fontSize: 'var(--font-sm)',
+          padding: '2px 8px', fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)',
           color: isOk ? 'var(--green)' : 'var(--red)',
         }}>
           {isOk ? 'ok' : run.error_message?.split(':')[0] || 'error'}
@@ -72,11 +72,11 @@ function DataBrowser({ onSelectMedia, onSelectTorrents }) {
   }, [])
 
   if (!result) return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 10 }}>Browsing /data…</div>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 10 }}>Browsing /data…</div>
   )
 
   if (result.missing || result.dirs.length === 0) return (
-    <div style={{ marginTop: 10, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', lineHeight: 1.55 }}>
+    <div style={{ marginTop: 10, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', lineHeight: 1.55 }}>
       {result.missing
         ? <span style={{ color: '#f59e0b' }}>⚠ /data is not mounted or is empty. Check your Docker volume configuration — auditorr expects your data to be mounted at /data.</span>
         : <span style={{ color: 'var(--text-dim)' }}>No subdirectories found in /data.</span>
@@ -118,7 +118,7 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
           }}>{prefix}</span>
         )}
         <input
-          type={type} value={value ?? ''} placeholder={placeholder}
+          type={type} value={value ?? ''} placeholder={placeholder} className={placeholderClass(placeholder)}
           onChange={e => onChange(e.target.value)}
           onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           style={{
@@ -215,7 +215,7 @@ function ExternalUrlSection({ fields }) {
               />
               {(f.value || '').trim() && (
                 <a href={f.value} target="_blank" rel="noopener noreferrer"
-                  style={{ display: 'inline-block', marginTop: 5, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)', textDecoration: 'none' }}>
+                  style={{ display: 'inline-block', marginTop: 5, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--accent)', textDecoration: 'none' }}>
                   open ↗
                 </a>
               )}
@@ -427,7 +427,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     })
   }, [auditRuns])
 
-  if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 'var(--font-base)' }}>Loading…</div>
+  if (!conf) return <div style={{ padding: 40, color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)' }}>Loading…</div>
 
   const set = key => val => { setConf(c => ({ ...c, [key]: val })); setIsDirty(true) }
 
@@ -696,7 +696,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
           {testStatus && (testStatus.loading || !testStatus.ok) && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
               {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
             </span>
           )}
@@ -704,7 +704,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
         {sourceInfo && testStatus?.ok && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--green)' }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--green)' }}>
               {isQui
                 ? `✓ Connected · qui${sourceInfo.version ? ` v${sourceInfo.version}` : ''} · ${sourceInfo.summary}`
                 : `✓ Connected · qBittorrent ${sourceInfo.version || ''}`}
@@ -717,7 +717,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                 {quiSkippedOpen && (
                   <div style={{ marginTop: 4, paddingLeft: 10, borderLeft: '2px solid var(--border2)' }}>
                     {sourceInfo.skipped.map((inst, i) => (
-                      <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                      <div key={i} style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
                         {inst.name || inst.id}: {inst._skip_reason}
                       </div>
                     ))}
@@ -752,8 +752,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           <Button size="sm" onClick={handleFetchSavePath}>
             {savePathStatus === 'loading' ? 'Fetching…' : `Fetch from ${isQui ? 'qui' : 'qBittorrent'}`}
           </Button>
-          {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
-          {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ Could not connect</span>}
+          {savePathStatus === 'empty' && <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No torrents found in qBittorrent</span>}
+          {savePathStatus === 'error' && <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ Could not connect</span>}
         </div>
         <div style={formGrid}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -761,7 +761,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               hint="Where your final media library lives inside this container — e.g. /data/media"
               placeholder="/data/media" value={conf.MEDIA_PATH} onChange={v => { set('MEDIA_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
             {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: pathTestStatus.media_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: pathTestStatus.media_path?.ok ? 'var(--green)' : 'var(--red)' }}>
                 {pathTestStatus.media_path?.ok ? '✓ Found' : '✗ Not found inside container'}
               </span>
             )}
@@ -771,7 +771,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               hint="The path qBittorrent saves downloads on disk from this container's perspective."
               placeholder="/data/torrents" value={conf.LOCAL_PATH} onChange={v => { set('LOCAL_PATH')(v); setPersistentWarnings([]); setPathTestStatus(null) }} />
             {pathTestStatus && pathTestStatus !== 'loading' && !pathTestStatus.error && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: pathTestStatus.local_path?.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: pathTestStatus.local_path?.ok ? 'var(--green)' : 'var(--red)' }}>
                 {pathTestStatus.local_path?.ok ? '✓ Found' : '✗ Not found inside container'}
               </span>
             )}
@@ -782,10 +782,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Click Test Paths to verify these are visible inside the container</span>
           )}
           {pathTestStatus === 'loading' && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Testing…</span>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Testing…</span>
           )}
           {pathTestStatus?.error && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ {pathTestStatus.error}</span>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ {pathTestStatus.error}</span>
           )}
           <Button onClick={handleTestPaths}>Test Paths</Button>
         </div>
@@ -809,7 +809,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           background: '#f59e0b12',
         }}>
           {saveWarnings.map((w, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: '#f59e0b', lineHeight: 1.5 }}>
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: '#f59e0b', lineHeight: 1.5 }}>
               <span style={{ flexShrink: 0 }}>⚠</span>
               <span>Path warning — {w}</span>
             </div>
@@ -859,7 +859,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               value={conf.SONARR_REMOTE_PATH} onChange={set('SONARR_REMOTE_PATH')} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {sonarrTestStatus && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: sonarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: sonarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                   {sonarrTestStatus.loading ? 'Testing…' : (sonarrTestStatus.ok ? '✓ ' : '✗ ') + sonarrTestStatus.msg}
                 </span>
               )}
@@ -875,7 +875,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               value={conf.RADARR_REMOTE_PATH} onChange={set('RADARR_REMOTE_PATH')} />
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {radarrTestStatus && (
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: radarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: radarrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                   {radarrTestStatus.loading ? 'Testing…' : (radarrTestStatus.ok ? '✓ ' : '✗ ') + radarrTestStatus.msg}
                 </span>
               )}
@@ -916,7 +916,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
                           {conn.id || `${service}-${index + 1}`}
                         </span>
                         {conn._stored_api_key && !conn.api_key && (
-                          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--green)', padding: '1px 6px' }}>stored key</span>
+                          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--green)', padding: '1px 6px' }}>stored key</span>
                         )}
                       </div>
                       <Button size="sm" onClick={() => removeArrConnection(index)}>
@@ -961,7 +961,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
               {arrTestStatus?.loading ? 'Testing...' : 'Test Arr Connections'}
             </Button>
             {arrTestStatus && !arrTestStatus.loading && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: arrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: arrTestStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                 {arrTestStatus.ok ? 'Connected' : `${arrTestStatus.msg || 'Connection check failed'}`}
               </span>
             )}
@@ -969,7 +969,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           {arrTestStatus?.connections?.length > 0 && (
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
               {arrTestStatus.connections.map(conn => (
-                <div key={conn.id} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: conn.ok ? 'var(--text-dim)' : 'var(--red)' }}>
+                <div key={conn.id} style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: conn.ok ? 'var(--text-dim)' : 'var(--red)' }}>
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {conn.ok ? 'ok' : 'error'} · {conn.name || conn.id} · {conn.service} · {conn.managed_file_count || 0} managed file{conn.managed_file_count === 1 ? '' : 's'}
                     {conn.message ? ` · ${conn.message}` : ''}
@@ -1054,7 +1054,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
         {allWeightsZero && (
           <div style={{
-            fontSize: 'var(--font-sm)', color: 'var(--red)', fontFamily: 'var(--mono)',
+            fontSize: 'var(--font-sm)', color: 'var(--red)', fontFamily: 'var(--sans)',
             background: tint('var(--red)', 8), border: `1px solid ${tint('var(--red)', 20)}`,
             borderRadius: 'var(--r)', padding: '7px 10px', marginBottom: 18,
           }}>
@@ -1102,7 +1102,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
             const max = weightPoints(weights)[key]
             if (!v || isNaN(v) || !(max > 0.05)) return null
             return (
-              <div key={label} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '6px 10px' }}>
+              <div key={label} style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', background: 'var(--surface2)', borderRadius: 'var(--r)', padding: '6px 10px' }}>
                 {label}: all {+max.toFixed(1)} pts lost at <span style={{ color: 'var(--accent)' }}>{v}%</span> of library
               </div>
             )
@@ -1208,9 +1208,9 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
 
         {!auditRuns ? (
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: '12px 0' }}>Loading…</div>
+          <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: '12px 0' }}>Loading…</div>
         ) : dedupedRuns.length === 0 ? (
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: '12px 0' }}>No audit runs recorded yet.</div>
+          <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', padding: '12px 0' }}>No audit runs recorded yet.</div>
         ) : (
           <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', overflow: 'hidden' }}>
             <div style={{
@@ -1236,8 +1236,8 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, borderTop: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-            Last audit: {lastAuditTime}
+          <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+            Last audit: <span style={{ fontFamily: 'var(--mono)' }}>{lastAuditTime}</span>
           </span>
           <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             Watchdog (if enabled) re-audits on file changes. Scheduled interval runs independently regardless of watchdog state. Use the button below to trigger one manually.
@@ -1245,7 +1245,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0, marginLeft: 20 }}>
           {saveStatus && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: saveStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+            <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: saveStatus.ok ? 'var(--green)' : 'var(--red)' }}>
               {saveStatus.ok ? '✓ ' : '✗ '}{saveStatus.msg}
             </span>
           )}

@@ -5,7 +5,7 @@ import MultiLineChart from './MultiLineChart'
 import CompareTable from './CompareTable'
 import { api } from '../api'
 import { Segmented } from './workflows/shared'
-import { TopTrackersCard, UploadActivityCard, UploadByTrackerCard, TrackerDetailModal } from './TrackerPanels'
+import { CrossSeedCard, TopTrackersCard, UploadActivityCard, UploadByTrackerCard, TrackerDetailModal } from './TrackerPanels'
 
 // Categorical series palette — one stable hue per tracker. Color IS the data
 // here: this is the one place auditorr spends hue freely (a chart series).
@@ -194,7 +194,7 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
           <MetricSwitch value={metricKey} onChange={setMetricKey} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: visCount ? 'var(--green)' : 'var(--text-faint)' }} />
             <span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{visCount}</span> of {allTrackers.length} trackers on chart</span>
           </div>
@@ -203,7 +203,7 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
           <MultiLineChart series={chartSeries} dates={labels} unit={metric.unit} baseline={metric.baseline} hovered={hovered} />
           {!hasHistory && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>Trend data will appear after a few audits</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>Trend data will appear after a few audits</span>
             </div>
           )}
         </div>
@@ -219,12 +219,21 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
 
       {/* The Dashboard's upload panels, moved here as they were (2026-11-09).
           They follow this page's date range and the trackers on its chart, and
-          their bars take each tracker's chart colour. */}
+          their bars take each tracker's chart colour. Cross-seed effectiveness
+          came after them (2026-11-10) and sits beside the leaderboard, as the
+          two did on the Dashboard before it was rebuilt; it's library-wide. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         <UploadActivityCard uploadStats={uploadStats} trackers={visible} colorFor={colorFor} />
         <UploadByTrackerCard uploadStats={uploadStats} trackers={visible} onTrackerDetail={setTrackerDetail} />
       </div>
-      <TopTrackersCard trackerStats={crossSeedStats?.tracker_stats} trackers={visible} onTrackerDetail={setTrackerDetail} />
+      {crossSeedStats ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
+          <CrossSeedCard stats={crossSeedStats} onNavigate={onNavigate} />
+          <TopTrackersCard trackerStats={crossSeedStats.tracker_stats} trackers={visible} onTrackerDetail={setTrackerDetail} />
+        </div>
+      ) : (
+        <TopTrackersCard trackerStats={null} trackers={visible} onTrackerDetail={setTrackerDetail} />
+      )}
 
       {trackerDetail && (
         <TrackerDetailModal

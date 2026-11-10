@@ -334,27 +334,29 @@ export default function Sidebar({ active, onChange, isScanning, progress, lastAu
         {isScanning ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>Scanning…</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>Scanning…</span>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>{progress}%</span>
             </div>
             <div style={{ height: 3, background: 'var(--border2)', borderRadius: 'var(--r-pill)', overflow: 'hidden' }}>
               <div style={{ width: progress + '%', height: '100%', background: 'var(--accent)', borderRadius: 'var(--r-pill)', transition: 'width 0.4s ease' }} />
             </div>
             {statusMessage && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.4 }}>{statusMessage}</span>
             )}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {lastScanStatus === 'error' && statusMessage && (
               <div style={{ padding: '5px 8px', borderRadius: 'var(--r-sm)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, marginBottom: 2 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--red)', display: 'block', lineHeight: 1.4 }}>
                   ✗ {statusMessage}
                 </span>
               </div>
             )}
             {lastAuditTime !== 'Never' && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>last run {lastAuditTime}</span>
+              // A readout, like the ⏱/⏰/👁 lines below, which the guide names as
+              // its "dense mono context". Dim, not faint: it's read.
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>last run {lastAuditTime}</span>
             )}
             {nextScanIn != null && (
               <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--yellow)' }}>⏱ next in {nextScanIn}s</span>

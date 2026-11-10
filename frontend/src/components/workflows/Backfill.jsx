@@ -181,14 +181,14 @@ function sizeDelta(delta) {
 // "anyway" and "Failed ↺" — are chips again.
 function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
   if (state === 'idle')        return <Button size="chip" tone="var(--accent)" onClick={onGrab}>Grab</Button>
-  if (state === 'grabbing')    return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
-  if (state === 'refreshing')  return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>Re-searching…</span>
-  if (state === 'grabbed')     return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
+  if (state === 'grabbing')    return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--sans)' }}>Grabbing…</span>
+  if (state === 'refreshing')  return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--accent)', fontFamily: 'var(--sans)' }}>Re-searching…</span>
+  if (state === 'grabbed')     return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--green)', fontFamily: 'var(--sans)', padding: '2px 8px' }}>✓ Grabbed</span>
   // Already in the arr's queue (B12): a second grab would download it twice, so
   // it takes a deliberate click.
   if (state === 'queued') return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span title={errorMsg} style={{ fontSize: 'var(--font-sm)', color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>In queue</span>
+      <span title={errorMsg} style={{ fontSize: 'var(--font-sm)', color: 'var(--yellow)', fontFamily: 'var(--sans)' }}>In queue</span>
       <Button size="chip" variant="ghost" onClick={onForce} title="Already downloading — grab another copy anyway">anyway</Button>
     </span>
   )
@@ -246,7 +246,7 @@ function SeasonPackSeasons({ rows, onFind }) {
               <div style={{ ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {s.target.title} · S{pad2(s.target.season)}
               </div>
-              <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+              <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--text-dim)', marginTop: 2 }}>
                 {s.episodes} episode{s.episodes !== 1 ? 's' : ''} in this run
               </div>
             </div>
@@ -467,21 +467,21 @@ function ResultItem({ item }) {
           </div>
           {/* Single-release info line */}
           {!multi && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--sans)', marginTop: 2 }}>
               {searching && 'Querying indexers…'}
               {found && item.best_release && (() => {
                 const r = item.best_release
                 const parts = [r.indexer, formatBytes(r.size), r.size_delta != null ? sizeDelta(r.size_delta) : null,
                   r.seeders != null ? `${r.seeders}S` : null, r.quality_name, r.hdr || null].filter(Boolean)
                 if (r.custom_format_score) parts.push(`CF:${r.custom_format_score}`)
-                return <><span>{parts.join(' · ')}</span><MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" /></>
+                return <><span style={{ fontFamily: 'var(--mono)' }}>{parts.join(' · ')}</span><MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" /></>
               })()}
               {notFound  && 'No releases found'}
               {errored   && item.error}
             </div>
           )}
           {multi && (
-            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--sans)', marginTop: 2 }}>
               {releases.length} releases found
             </div>
           )}
@@ -553,7 +553,7 @@ function ResultItem({ item }) {
         {importStatus && (() => {
           const pct = watchPercent(importStatus, importProgress)
           return (
-            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
               {WATCH_ACTIVE.includes(importStatus) && pct == null && <Spinner size={8} weight={1.5} />}
               <span style={{ color: watchColor(importStatus) }} title={importMessage}>
                 {pct != null ? `Downloading ${pct}%` : (IMPORT_LABEL[importStatus] || importStatus)}
@@ -1113,11 +1113,11 @@ export default function Backfill({ onNavigate, initialUnder }) {
               {unmatchedVideo > 0 && unmatchedExample && (
                 <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: -4, marginBottom: 12, lineHeight: 1.6 }}>
                   For example, one of those videos and the {exampleArr}{unmatchedExample.connection_name && unmatchedExample.connection_name.toLowerCase() !== exampleArr.toLowerCase() ? ` (${unmatchedExample.connection_name})` : ''} file of the same name:
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', marginTop: 4, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 2, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', marginTop: 4, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 2, minWidth: 0 }}>
                     <span>your library</span>
-                    <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.path}>{unmatchedExample.path}</span>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.path}>{unmatchedExample.path}</span>
                     <span>{exampleArr}</span>
-                    <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.arr_path}>{unmatchedExample.arr_path}</span>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.arr_path}>{unmatchedExample.arr_path}</span>
                   </div>
                 </div>
               )}

@@ -187,7 +187,7 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
 // (TR20). A tracker spells names its own way, so the one the user came for can
 // score as a near match or not at all — it has to be reachable anyway.
 const LIST_HEADER = {
-  ...meta, position: 'sticky', top: 0, zIndex: 1, padding: '6px 12px',
+  ...meta, fontFamily: 'var(--sans)', position: 'sticky', top: 0, zIndex: 1, padding: '6px 12px',
   background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
 }
 
@@ -293,17 +293,19 @@ const HEALTH = {
 }
 
 const cell = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }
+// A header, a link state or a tracker's health: words in the same cell size.
+const wordCell = { ...cell, fontFamily: 'var(--sans)' }
 
 function GroupTable({ torrents }) {
   const showInstance = torrents.some(t => t.instance_name)
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-        <span style={{ ...cell, width: 84 }}>library link</span>
-        <span style={{ ...cell, flex: 1, minWidth: 0 }}>torrent</span>
-        <span style={{ ...cell, width: 150, textAlign: 'right' }}>tracker</span>
-        <span style={{ ...cell, width: 64, textAlign: 'right' }}>size</span>
-        <span style={{ ...cell, width: 96, textAlign: 'right' }}>seeded · up</span>
+        <span style={{ ...wordCell, width: 84 }}>library link</span>
+        <span style={{ ...wordCell, flex: 1, minWidth: 0 }}>torrent</span>
+        <span style={{ ...wordCell, width: 150, textAlign: 'right' }}>tracker</span>
+        <span style={{ ...wordCell, width: 64, textAlign: 'right' }}>size</span>
+        <span style={{ ...wordCell, width: 96, textAlign: 'right' }}>seeded · up</span>
       </div>
       {torrents.map(t => {
         const link = LINK_STATE[String(t.hardlinked ?? null)]
@@ -311,7 +313,7 @@ function GroupTable({ torrents }) {
         return (
           <div key={regKey(t)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
             <span title={t.hardlinked === false && t.only_copy_bytes ? `${link.title} (${formatBytes(t.only_copy_bytes)})` : link.title}
-              style={{ ...cell, width: 84, fontSize: 'var(--font-sm)', fontWeight: 700, color: link.color }}>
+              style={{ ...wordCell, width: 84, fontSize: 'var(--font-sm)', fontWeight: 700, color: link.color }}>
               {link.mark}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -322,11 +324,11 @@ function GroupTable({ torrents }) {
               </div>
             </div>
             <div style={{ width: 150, textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ ...cell, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.tracker || 'no tracker'}</div>
+              <div style={{ ...cell, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.tracker || <span style={{ fontFamily: 'var(--sans)' }}>no tracker</span>}</div>
               {/* The tracker already dropping this registration is it agreeing, in
                   the client, that the PM is real (TR12). */}
               {health && (
-                <div title={t.tracker_msg || undefined} style={{ ...cell, color: health.color, marginTop: 2 }}>
+                <div title={t.tracker_msg || undefined} style={{ ...wordCell, color: health.color, marginTop: 2 }}>
                   {health.text}{t.tracker_health === 'unregistered' ? ' ✓ trumped' : ''}
                 </div>
               )}
@@ -889,7 +891,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               {search.arr_item_ambiguous && search.arr_item_others?.length > 0 && (
                 <span
                   title={`${search.arr_item_others.length + 1} ${search.service === 'radarr' ? 'Radarr' : 'Sonarr'} instances hold the files of this group. The search and the grab go to ${search.connection_name || search.connection_id}. ${search.arr_item_others.map(o => `${o.connection_name || o.connection_id} holds ${o.title || 'it'} too`).join('; ')}.`}
-                  style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9, alignSelf: 'flex-start' }}
+                  style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--yellow)', opacity: 0.9, alignSelf: 'flex-start' }}
                 >
                   on {search.connection_name || search.connection_id} · also {search.arr_item_others.map(o => o.connection_name || o.connection_id).join(', ')}
                 </span>

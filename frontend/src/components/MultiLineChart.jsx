@@ -80,12 +80,12 @@ export default function MultiLineChart({ series, dates, unit, baseline, height =
         {yTicks.map((t, i) => (
           <g key={i}>
             <line x1={gL} y1={y(t)} x2={w - gR} y2={y(t)} stroke="var(--border)" strokeOpacity={i === 0 ? 0.9 : 0.45} strokeDasharray={i === 0 ? '0' : '2 4'} />
-            <text x={gL - 8} y={y(t) + 3.5} textAnchor="end" fontFamily="var(--mono)" style={{ fontSize: 'var(--font-sm)' }} fill="var(--text-faint)">{fmtAxis(t, unit)}</text>
+            <text x={gL - 8} y={y(t) + 3.5} textAnchor="end" fontFamily="var(--mono)" style={{ fontSize: 'var(--font-sm)' }} fill="var(--text-dim)">{fmtAxis(t, unit)}</text>
           </g>
         ))}
         {/* x labels */}
         {xTickIdx.map(i => (
-          <text key={i} x={x(i)} y={height - 9} textAnchor="middle" fontFamily="var(--mono)" style={{ fontSize: 'var(--font-sm)' }} fill="var(--text-faint)">{dates[i]}</text>
+          <text key={i} x={x(i)} y={height - 9} textAnchor="middle" fontFamily="var(--mono)" style={{ fontSize: 'var(--font-sm)' }} fill="var(--text-dim)">{dates[i]}</text>
         ))}
         {/* crosshair */}
         {cursor != null && <line x1={x(cursor)} y1={gT} x2={x(cursor)} y2={gT + plotH} stroke="var(--border2)" strokeWidth="1" />}

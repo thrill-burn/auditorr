@@ -160,6 +160,12 @@ const shownIn = (folder, p) => (folder !== '(root)' && p.startsWith(folder + '/'
 
 const READOUT = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, whiteSpace: 'nowrap' }
 
+// A row's age in the readout column: an age ("12d old", "today") is a figure,
+// "age unavailable" is words, so Geist.
+function Age({ mtime, style }) {
+  return <span style={{ ...READOUT, ...style, ...(mtime == null ? { fontFamily: 'var(--sans)' } : null) }}>{ageLabel(mtime)}</span>
+}
+
 // A state's dot alone, for a row in the state its pile's heading names. The
 // hover text names the state, which the row no longer prints.
 function StateDot({ state }) {
@@ -175,7 +181,7 @@ function StateDot({ state }) {
 function StateLabel({ state, dot = false }) {
   const s = STATE[state] || STATE.last_copy
   return (
-    <span title={s.title} style={{ ...READOUT, display: 'inline-flex', alignItems: 'center', gap: 6, color: s.color, lineHeight: '16px' }}>
+    <span title={s.title} style={{ ...READOUT, fontFamily: 'var(--sans)', display: 'inline-flex', alignItems: 'center', gap: 6, color: s.color, lineHeight: '16px' }}>
       {dot && <Dot color={s.color} />}{s.label}
     </span>
   )
@@ -255,7 +261,7 @@ function FileRow({ row, folder, pileState, checked, onToggle }) {
       {/* Beside the readouts rather than before the path, so paths stay in
           one column whichever rows print a label. */}
       {row.state !== pileState && <StateLabel state={row.state} />}
-      <span style={{ ...READOUT, lineHeight: '16px' }}>{ageLabel(row.mtime)}</span>
+      <Age mtime={row.mtime} style={{ lineHeight: '16px' }} />
       <span style={{ ...READOUT, minWidth: 60, textAlign: 'right', lineHeight: '16px' }}>
         {formatBytes(row.size)}
       </span>
@@ -283,7 +289,7 @@ function FolderGroup({ group, first, pileState, selected, onToggleFile, onToggle
   const rule = first ? 'none' : '1px solid var(--border)'
   // Why no folder rule is offered here. Saying so is what stops the header
   // checkbox reading as "this whole folder".
-  const reasonChip = reason && <span title={reason.title} style={READOUT}>{reason.chip}</span>
+  const reasonChip = reason && <span title={reason.title} style={{ ...READOUT, fontFamily: 'var(--sans)' }}>{reason.chip}</span>
 
   // A folder the filter narrowed keeps its header even at one file shown: the
   // one-line form says the folder holds only that file.
@@ -314,7 +320,7 @@ function FolderGroup({ group, first, pileState, selected, onToggleFile, onToggle
         {reasonChip}
         <span style={{ flex: 1 }} />
         {row.state === pileState ? <StateDot state={row.state} /> : <StateLabel state={row.state} dot />}
-        <span style={READOUT}>{ageLabel(row.mtime)}</span>
+        <Age mtime={row.mtime} />
         <span style={{ ...READOUT, minWidth: 64, textAlign: 'right' }}>{formatBytes(row.size)}</span>
       </div>
     )
@@ -340,12 +346,13 @@ function FolderGroup({ group, first, pileState, selected, onToggleFile, onToggle
         {reasonChip}
         <span style={{ flex: 1 }} />
         {tallies.length > 1 && tallies.map(([s, n]) => (
-          <span key={s} title={STATE[s].title} style={{ ...READOUT, display: 'inline-flex', alignItems: 'center', gap: 5, color: STATE[s].color }}>
-            <Dot color={STATE[s].color} />{n} {STATE[s].label}
+          <span key={s} title={STATE[s].title} style={{ ...READOUT, fontFamily: 'var(--sans)', display: 'inline-flex', alignItems: 'center', gap: 5, color: STATE[s].color }}>
+            <Dot color={STATE[s].color} /><span style={{ fontFamily: 'var(--mono)' }}>{n}</span> {STATE[s].label}
           </span>
         ))}
         <span style={READOUT}>
-          {group.oldest_mtime != null ? `oldest ${ageLabel(group.oldest_mtime)}` : 'age unavailable'}
+          {group.oldest_mtime != null ? `oldest ${ageLabel(group.oldest_mtime)}`
+            : <span style={{ fontFamily: 'var(--sans)' }}>age unavailable</span>}
         </span>
         <span style={READOUT}>
           {group.hidden
@@ -436,7 +443,7 @@ function EmptyFolders({ empty, shown, selected, onToggle, onToggleAll }) {
                 {f.path}
               </span>
               <span style={{ flex: 1 }} />
-              <span style={READOUT}>{ageLabel(f.mtime)}</span>
+              <Age mtime={f.mtime} />
             </div>
           )
         })}

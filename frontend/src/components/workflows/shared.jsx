@@ -221,11 +221,19 @@ export function IconButton({ onClick, title, pressed, size, children }) {
 // while focused. Mono for paths, sans for titles. size: 'sm' is
 // var(--control-h), 'lg' var(--control-h-lg), as Segmented's. Backfill's was the
 // one hand-copy that drifted: filled and at 70% opacity until typed in.
+// The class a mono field takes when its placeholder is a hint ("paste API key…",
+// "(unchanged — leave blank to keep current)") rather than an example value
+// ("/data/torrents", "http://192.168.1.x:8080"): index.css's .ph-words sets the
+// hint in Geist, while what's typed stays mono. A hint here ends in an ellipsis
+// or opens with a bracket, and an example never does.
+export const placeholderClass = ph => (/(…|\.\.\.)$|^\(/.test(String(ph || '')) ? 'ph-words' : undefined)
+
 export function SearchInput({ value, onChange, placeholder, width = 160, size = 'sm', mono = false }) {
   const [focused, setFocused] = useState(false)
   return (
     <input
       type="text"
+      className="ph-words"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -707,7 +715,7 @@ export function ActionBar({ children, summary }) {
       boxShadow: 'var(--shadow-pop)',
     }}>
       <div title={typeof summary === 'string' ? summary : undefined} style={{
-        flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
+        flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minWidth: 0, marginLeft: 'auto' }}>{children}</div>
     </div>
   )
@@ -841,6 +849,8 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
 //   sm    a small control inside a panel or a sentence (Retry, Select all).
 //   chip  an action inside a row — R8's "action chip", at --font-sm like the
 //         tags it sits beside, so a slot that swaps a chip for a tag keeps its size.
+//         Geist, like every label that's a word (it was mono until 2026-11-10);
+//         `mono` sets a chip whose label is a name, such as a tracker's host.
 //
 // Colours arrive as custom properties and index.css's `.wf-btn` applies them,
 // because an inline `background` would outrank the `:hover` rule. Pass `href`
@@ -859,7 +869,7 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
 const BUTTON_SIZE = {
   md:   { fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)', minHeight: 'var(--control-h-lg)' },
   sm:   { fontSize: 'var(--font-base)', fontWeight: 500, padding: '4px 10px', borderRadius: 'var(--r)', minHeight: 'var(--control-h)' },
-  chip: { fontSize: 'var(--font-sm)', fontWeight: 500, padding: '1px 7px', borderRadius: 'var(--r-sm)', fontFamily: 'var(--mono)' },
+  chip: { fontSize: 'var(--font-sm)', fontWeight: 500, padding: '1px 7px', borderRadius: 'var(--r-sm)' },
 }
 const SQUARE = { md: 'var(--control-h-lg)', sm: 'var(--control-h)' }
 
@@ -875,11 +885,11 @@ const toneLook = c => ({ bg: tint(c, 8), border: tint(c, 30), fg: c, bgHover: ti
 
 export function Button({
   variant = 'secondary', size = 'md', tone, href, target, rel,
-  onClick, disabled, title, ariaLabel, pressed, square = false, style, children,
+  onClick, disabled, title, ariaLabel, pressed, square = false, mono = false, style, children,
 }) {
   const look = tone ? toneLook(tone) : (BUTTON_LOOK[variant] || BUTTON_LOOK.secondary)
   const css = {
-    fontFamily: 'var(--sans)', lineHeight: 1.25, ...(BUTTON_SIZE[size] || BUTTON_SIZE.md),
+    fontFamily: mono ? 'var(--mono)' : 'var(--sans)', lineHeight: 1.25, ...(BUTTON_SIZE[size] || BUTTON_SIZE.md),
     ...(square && SQUARE[size] ? { padding: 0, width: SQUARE[size] } : null),
     '--btn-bg': look.bg, '--btn-border': look.border, '--btn-fg': look.fg,
     '--btn-bg-hover': look.bgHover || look.bg, '--btn-fg-hover': look.fgHover || look.fg,

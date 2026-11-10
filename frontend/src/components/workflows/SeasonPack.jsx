@@ -121,6 +121,8 @@ function ModalFrame({ width = 600, onCancel, children }) {
 }
 
 const MONO = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)' }
+// The same size in Geist, for what's words: a verdict, a state, a loading line.
+const WORDS = { fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)' }
 const PROSE = { fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6, margin: '10px 0 0' }
 const TITLE = { fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }
 
@@ -214,7 +216,7 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
 
       <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
         {!plan && !error && (
-          <div style={{ ...MONO, display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', color: 'var(--text-dim)' }}>
+          <div style={{ ...WORDS, display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', color: 'var(--text-dim)' }}>
             <Spinner /> Checking {clientName} and Sonarr…
           </div>
         )}
@@ -232,7 +234,7 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
               return (
                 <div key={e.path} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 12px', borderBottom: '1px solid var(--border)' }}>
                   <span style={{ ...MONO, width: 76, flexShrink: 0, color: 'var(--text)' }}>{e.label}</span>
-                  <span style={{ ...MONO, width: 56, flexShrink: 0, color: unsure ? 'var(--yellow)' : look.color, fontWeight: look.weight }}>
+                  <span style={{ ...WORDS, width: 56, flexShrink: 0, color: unsure ? 'var(--yellow)' : look.color, fontWeight: look.weight }}>
                     {look.word}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -284,7 +286,7 @@ export function ReplaceModal({ title, season, packs, initial, pickNote, clientNa
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
         {busy && (
-          <span style={{ ...MONO, fontSize: 'var(--font-base)', display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--text-dim)' }}>
+          <span style={{ ...WORDS, fontSize: 'var(--font-base)', display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--text-dim)' }}>
             <Spinner /> Importing in Sonarr…
           </span>
         )}
@@ -366,7 +368,7 @@ export function ForceImportModal({ title, params, clientName = 'your client', st
 
       <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
         {!plan && !error && (
-          <div style={{ ...MONO, display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', color: 'var(--text-dim)' }}>
+          <div style={{ ...WORDS, display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', color: 'var(--text-dim)' }}>
             <Spinner /> Checking {clientName} and {arr}…
           </div>
         )}
@@ -384,7 +386,7 @@ export function ForceImportModal({ title, params, clientName = 'your client', st
                 <div key={e.path} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 12px', borderBottom: '1px solid var(--border)' }}>
                   {/* A movie's one file needs no label; an episode keeps its E05. */}
                   {!movie && <span style={{ ...MONO, width: 76, flexShrink: 0, color: 'var(--text)' }}>{e.label}</span>}
-                  <span style={{ ...MONO, width: 56, flexShrink: 0, color: unsure ? 'var(--yellow)' : look.color, fontWeight: look.weight }}>
+                  <span style={{ ...WORDS, width: 56, flexShrink: 0, color: unsure ? 'var(--yellow)' : look.color, fontWeight: look.weight }}>
                     {look.word}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -436,7 +438,7 @@ export function ForceImportModal({ title, params, clientName = 'your client', st
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
         {busy && (
-          <span style={{ ...MONO, fontSize: 'var(--font-base)', display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--text-dim)' }}>
+          <span style={{ ...WORDS, fontSize: 'var(--font-base)', display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--text-dim)' }}>
             <Spinner /> Importing in {arr}…
           </span>
         )}
@@ -613,7 +615,7 @@ export function SeasonPackModal({ target, step, onNext, onCancel, workflow }) {
           <p style={{ fontSize: 'var(--font-base)', color: 'var(--yellow)', lineHeight: 1.5, margin: '14px 0 0' }}>{lookupError}</p>
         )}
         {!lookup && !lookupError && (
-          <div style={{ ...MONO, display: 'flex', alignItems: 'center', gap: 8, padding: '14px 0 0', color: 'var(--text-dim)' }}>
+          <div style={{ ...WORDS, display: 'flex', alignItems: 'center', gap: 8, padding: '14px 0 0', color: 'var(--text-dim)' }}>
             <Spinner /> Checking Sonarr and {client}…
           </div>
         )}
@@ -622,12 +624,12 @@ export function SeasonPackModal({ target, step, onNext, onCancel, workflow }) {
           <>
             <div style={{ margin: '16px 0 6px' }}><SectionLabel>In your library</SectionLabel></div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-              {runs.length === 0 && <span style={{ ...MONO, color: 'var(--text-dim)' }}>Sonarr lists no episodes in this season.</span>}
+              {runs.length === 0 && <span style={{ ...WORDS, color: 'var(--text-dim)' }}>Sonarr lists no episodes in this season.</span>}
               {runs.map(r => (
                 <div key={r.label} style={{ ...MONO, display: 'flex', gap: 10 }}>
                   <span style={{ width: 76, flexShrink: 0, color: 'var(--text)' }}>{r.label}</span>
                   <span style={{ width: 120, flexShrink: 0, color: 'var(--text-dim)' }}>{r.quality || '—'}</span>
-                  <span style={{ color: STATE_COLOR[r.state] }}>{r.state}</span>
+                  <span style={{ fontFamily: 'var(--sans)', color: STATE_COLOR[r.state] }}>{r.state}</span>
                 </div>
               ))}
             </div>
@@ -643,7 +645,7 @@ export function SeasonPackModal({ target, step, onNext, onCancel, workflow }) {
               <div key={p.reg} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '3px 0' }}>
                 <span title={p.name} style={{ ...MONO_TITLE, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                 <span style={{ ...MONO, color: 'var(--text-dim)', flexShrink: 0 }}>{formatBytes(p.size)}</span>
-                <span style={{ ...MONO, flexShrink: 0, color: p.complete === true ? 'var(--green)' : 'var(--text-dim)' }}>
+                <span style={{ ...WORDS, flexShrink: 0, color: p.complete === true ? 'var(--green)' : 'var(--text-dim)' }}>
                   {p.complete === true ? 'complete' : p.complete === false ? 'downloading' : 'completion unknown'}
                 </span>
               </div>
@@ -659,7 +661,7 @@ export function SeasonPackModal({ target, step, onNext, onCancel, workflow }) {
               )}
             </div>
             {search.state === 'searching' && (
-              <div style={{ ...MONO, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-dim)' }}>
+              <div style={{ ...WORDS, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-dim)' }}>
                 <Spinner /> Searching Sonarr’s indexers for a season {target.season} pack…
               </div>
             )}
@@ -693,8 +695,10 @@ export function SeasonPackModal({ target, step, onNext, onCancel, workflow }) {
                       <div style={{ minWidth: 0 }}>
                         <div title={r.title} style={{ ...MONO_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</div>
                         <div style={{ ...MONO, color: 'var(--text-dim)', marginTop: 2 }}>
-                          {[r.quality_name, vsLibrary(r.vs_library) && `${vsLibrary(r.vs_library)} in your library`]
-                            .filter(Boolean).join(' · ')}
+                          {r.quality_name}
+                          {vsLibrary(r.vs_library) && (
+                            <span style={{ fontFamily: 'var(--sans)' }}>{r.quality_name ? ' · ' : ''}{vsLibrary(r.vs_library)} in your library</span>
+                          )}
                         </div>
                         {r.preferred && (
                           <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text)', marginTop: 2 }}>

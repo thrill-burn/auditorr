@@ -1,7 +1,7 @@
 import React from 'react'
 import { tint } from '../utils'
 import { Button } from './workflows/shared'
-import { SECTION_LABEL, CARD, fmtChartDate, HeroNumber } from './dashKit'
+import { SECTION_LABEL, CARD, CAPTION, READOUT, fmtChartDate, HeroNumber, TrendPill } from './dashKit'
 
 // Two of the Dashboard's disk-and-links cards (2026-11-09).
 //
@@ -16,8 +16,11 @@ import { SECTION_LABEL, CARD, fmtChartDate, HeroNumber } from './dashKit'
 // whose two folders became separate mounts) shows only as a slow drift. This
 // counts each scan's new library files by how they arrived, and a copy of a
 // torrent file says the link wasn't made. It never says who made the copy.
+//
+// Their text is dashKit's two kinds: a line of figures (a run's time, trigger,
+// duration and memory; a chart's dates) is a READOUT in mono, and everything
+// that reads as words, the scan's verdicts included, is Geist.
 
-const META = { fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 export function fmtWhen(iso) {
   if (!iso) return ''
@@ -118,7 +121,7 @@ export function LastScanCard({ id, scanReport, details, savedAt, onScan }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 4 }}>
         <span style={SECTION_LABEL}>Last scan</span>
         {st && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 600, color: st.color, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600, color: st.color, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span className="ui-status-dot" style={{ background: st.color }} />{st.label}
           </span>
         )}
@@ -137,14 +140,14 @@ export function LastScanCard({ id, scanReport, details, savedAt, onScan }) {
                 {run.status === 'anomaly' && ACCEPTABLE_BY_HAND.has(sr.anomaly?.code) && ' If the drop is real, a manual scan accepts it.'}
               </p>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginTop: 6 }}>
-                <span style={META}>{fmtWhen(run.ran_at)} · {run.trigger}</span>
+                <span style={READOUT}>{fmtWhen(run.ran_at)} · {run.trigger}</span>
                 {onScan && run.status === 'anomaly' && ACCEPTABLE_BY_HAND.has(sr.anomaly?.code) && (
                   <Button size="sm" onClick={onScan}>Scan now</Button>
                 )}
               </div>
             </div>
           ) : null}
-          <div style={{ ...META, marginBottom: 10 }}>
+          <div style={{ ...(bad ? CAPTION : READOUT), marginBottom: 10 }}>
             {bad
               ? `The numbers on this page · ${fmtWhen(savedAt)}`
               : `${fmtWhen(run.ran_at)} · ${run.trigger}${run.duration_seconds != null ? ` · ${run.duration_seconds} s` : ''}${run.peak_rss_mb != null ? ` · ${run.peak_rss_mb} MB` : ''}`}
@@ -154,7 +157,7 @@ export function LastScanCard({ id, scanReport, details, savedAt, onScan }) {
               {rows.map(([k, v]) => (
                 <React.Fragment key={k}>
                   <dt style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>{k}</dt>
-                  <dd style={{ margin: 0, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)' }}>{v}</dd>
+                  <dd style={{ margin: 0, fontSize: 'var(--font-base)', color: 'var(--text)' }}>{v}</dd>
                 </React.Fragment>
               ))}
             </dl>
@@ -164,7 +167,7 @@ export function LastScanCard({ id, scanReport, details, savedAt, onScan }) {
             </p>
           )}
           {runs && (
-            <div style={{ ...META, borderTop: '1px solid var(--border)', marginTop: 'auto', paddingTop: 12 }}>{runs}</div>
+            <div style={{ ...CAPTION, borderTop: '1px solid var(--border)', marginTop: 'auto', paddingTop: 12 }}>{runs}</div>
           )}
         </>
       )}
@@ -210,7 +213,7 @@ export function NewInLibraryCard({ uploadStats, timeRange, onNavigate }) {
     <div style={{ ...CARD, padding: '18px 20px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
         <span style={SECTION_LABEL}>New in the library</span>
-        <span style={META}>{timeRange ? `last ${timeRange} days` : 'all time'}</span>
+        <span style={CAPTION}>{timeRange ? `last ${timeRange} days` : 'all time'}</span>
       </div>
       {!series.length ? (
         <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: 0, lineHeight: 1.6 }}>
@@ -220,21 +223,17 @@ export function NewInLibraryCard({ uploadStats, timeRange, onNavigate }) {
         <>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
             <HeroNumber value={sum.linked.toLocaleString()} />
-            <span style={META}>of {total.toLocaleString()} new file{total !== 1 ? 's' : ''} hardlinked</span>
+            <span style={CAPTION}>of {total.toLocaleString()} new file{total !== 1 ? 's' : ''} hardlinked</span>
           </div>
+          {/* The metric cards' trend pill, in its own words. */}
           <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
             {sum.copies > 0 ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--red)', lineHeight: 1.35 }}>
-                <span style={{ fontSize: 'var(--font-sm)', lineHeight: 1 }}>▼</span>
-                {plural(sum.copies, 'copy', 'copies')} since {fmtChartDate(firstCopy.date)}: new files aren't all being linked
-              </span>
+              <TrendPill trend={{ sentiment: 'bad' }}
+                label={`${plural(sum.copies, 'copy', 'copies')} since ${fmtChartDate(firstCopy.date)}: new files aren't all being linked`} />
             ) : total > 0 ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--green)', lineHeight: 1.35 }}>
-                <span style={{ fontSize: 'var(--font-sm)', lineHeight: 1 }}>✓</span>
-                No copies: new files are being linked
-              </span>
+              <TrendPill trend={{ sentiment: 'good' }} icon="✓" label="No copies: new files are being linked" />
             ) : (
-              <span style={META}>Nothing new in this range</span>
+              <span style={CAPTION}>Nothing new in this range</span>
             )}
           </div>
           <svg viewBox={`0 0 ${Math.max(cols.length, 1)} 50`} preserveAspectRatio="none" width="100%" height="50"
@@ -254,21 +253,21 @@ export function NewInLibraryCard({ uploadStats, timeRange, onNavigate }) {
               })
             })}
           </svg>
-          <div style={{ ...META, display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
+          <div style={{ ...READOUT, display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
             <span>{cols.length ? fmtChartDate(cols[0].date) : ''}</span>
             <span>{cols.length ? fmtChartDate(cols[cols.length - 1].date) : ''}</span>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 8 }}>
             {KINDS.map(k => (
-              <span key={k.key} style={{ ...META, display: 'inline-flex', alignItems: 'center', gap: 6, opacity: sum[k.key] ? 1 : 0.55 }}
+              <span key={k.key} style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6, opacity: sum[k.key] ? 1 : 0.55 }}
                 title={k.key === 'copies' ? 'A library file with the same bytes as a torrent file but its own inode, so it takes the space twice. Who made the copy isn\'t known.' : undefined}>
                 <span style={{ width: 9, height: 9, borderRadius: 2, background: k.color, flexShrink: 0 }} />
-                <span style={{ color: 'var(--text)', fontWeight: 500 }}>{sum[k.key].toLocaleString()}</span> {k.label}
+                <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)', fontWeight: 500 }}>{sum[k.key].toLocaleString()}</span> {k.label}
               </span>
             ))}
           </div>
           {lateStart && (
-            <div style={{ ...META, marginTop: 6 }}>Counted since {fmtChartDate(series[0].date)}.</div>
+            <div style={{ ...CAPTION, marginTop: 6 }}>Counted since {fmtChartDate(series[0].date)}.</div>
           )}
           {sum.copies > 0 && onNavigate && (
             <div style={{ marginTop: 'auto', paddingTop: 14 }}>

@@ -525,7 +525,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
               title={unconfirmed === 'unknown'
                 ? `The ${client?.name || 'client'} instance holding this torrent did not answer after the removal, so auditorr cannot say whether it left. It stays here until the next scan.`
                 : `auditorr asked ${client?.name || 'the client'} to remove this torrent and it was still listed a moment later. It stays here until the next scan shows what happened.`}
-              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--yellow)', flexShrink: 0 }}
             >
               removal unconfirmed
             </span>
@@ -533,7 +533,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
           {rescanned && (
             <span
               title="Handed to Sonarr/Radarr. The arr imports on its own schedule, and this row is built from the last audit — it clears once a scan has seen the result."
-              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', flexShrink: 0 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--blue)', flexShrink: 0 }}
             >
               import requested
             </span>
@@ -564,7 +564,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
           {lib?.others?.length > 0 && (
             <span
               title={`${lib.others.length + 1} ${lib.service} instances hold this title. Retry import and force import go to ${lib.connection_name || 'the best match'}${lib.quality_name ? ` (${lib.quality_name})` : ''}. ${lib.others.map(o => `${o.name || o.connection_id} ${o.quality_name ? `holds ${o.quality_name}` : 'holds it too'}`).join('; ')}.`}
-              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--yellow)', opacity: 0.9 }}
             >
               on {lib.connection_name || lib.service} · also {lib.others.map(o => o.name || o.connection_id).join(', ')}
             </span>
@@ -573,7 +573,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
           {item.verdict === 'dead_registration' && (item.alive_library || item.alive_sibling) && (
             <span
               title="Where this registration's data is still alive — why removing just the registration loses nothing"
-              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--green)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--green)', opacity: 0.9 }}
             >
               alive in {[item.alive_library && 'your library', item.alive_sibling && 'a seeding cross-seed'].filter(Boolean).join(' and ')}
             </span>
@@ -584,7 +584,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
             </span>
           )}
           {item.tracker_health === 'not_working' && !item.tracker_msg && (
-            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.8 }}>tracker not responding</span>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--yellow)', opacity: 0.8 }}>tracker not responding</span>
           )}
           {/* An unfinished download is not-imported by definition, so it used
               to sit here as junk. Known-incomplete torrents are filtered out
@@ -593,7 +593,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
           {item.completion_unknown && (
             <span
               title="The torrent client exposed no completion field for this torrent, so auditorr cannot tell whether the payload is finished. Check it in the client before deleting anything."
-              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--yellow)', opacity: 0.9 }}
             >
               completion unknown
             </span>
@@ -601,7 +601,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
           {item.status === 'Downloading' && !item.completion_unknown && (
             <span
               title="Still downloading — the files are incomplete and will grow. Nothing here needs a verdict yet."
-              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--blue)', opacity: 0.9 }}
+              style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--blue)', opacity: 0.9 }}
             >
               downloading
             </span>
@@ -634,7 +634,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
         {/* The number a delete touches: the whole torrent once verify knows it (T5). */}
         <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)' }}>{formatBytes(item.torrent_size ?? item.total_size)}</div>
         <div title={(item.trackers || []).join(', ')} style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {(item.trackers || [])[0] || 'no tracker'}{item.trackers?.length > 1 ? ` +${item.trackers.length - 1}` : ''}
+          {(item.trackers || [])[0] || <span style={{ fontFamily: 'var(--sans)' }}>no tracker</span>}{item.trackers?.length > 1 ? ` +${item.trackers.length - 1}` : ''}
         </div>
       </div>
 
@@ -1417,7 +1417,7 @@ export default function Triage({ onNavigate, cleanupCount, initialSearch }) {
       {!loading && items.length > 0 && (
         <>
           {report?.truncated && (
-            <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
+            <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', fontFamily: 'var(--sans)' }}>
               {report.total != null
                 ? `Showing the ${report.shown} largest of ${report.total} torrents — resolve some to see the rest.`
                 : 'Showing the largest torrents — resolve some to see the rest.'}
@@ -1767,7 +1767,7 @@ function ConfirmDeleteModal({
     const unsure = d.reason === 'unknown' || d.reason === 'unusable_listing'
     return (
       <span title={`${kept ? 'Files kept' : 'Files deleted'} — ${FILE_REASON[d.reason] || d.reason}`}
-            style={{ flexShrink: 0, color: kept ? (unsure ? 'var(--yellow)' : 'var(--text-dim)') : 'var(--red)' }}>
+            style={{ flexShrink: 0, fontFamily: 'var(--sans)', color: kept ? (unsure ? 'var(--yellow)' : 'var(--text-dim)') : 'var(--red)' }}>
         {kept ? (unsure ? 'files kept — not checked' : 'files kept') : 'files deleted'}
       </span>
     )
@@ -1841,7 +1841,7 @@ function ConfirmDeleteModal({
         </div>
         <div style={{ margin: '14px 20px 0', border: '1px solid var(--border)', borderRadius: 8, overflowY: 'auto', flex: '0 1 auto' }}>
           {resolving && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', fontSize: 'var(--font-base)', fontFamily: 'var(--sans)', color: 'var(--text-dim)' }}>
               <Spinner /> Finding cross-seeds in {clientName}…
             </div>
           )}
@@ -1885,7 +1885,7 @@ function ConfirmDeleteModal({
                         return (
                           <div key={regKey(m)} title={m.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)' }}>
                             <span style={{
-                              flexShrink: 0, width: 48, color: willRemove ? 'var(--red)' : 'var(--text-dim)',
+                              flexShrink: 0, width: 48, fontFamily: 'var(--sans)', color: willRemove ? 'var(--red)' : 'var(--text-dim)',
                               fontWeight: willRemove ? 700 : 400,
                             }}>
                               {willRemove ? 'remove' : 'keep'}
@@ -1908,7 +1908,7 @@ function ConfirmDeleteModal({
                       <span title={item.hash} style={{ flexShrink: 0 }}>hash {String(item.hash).slice(0, 12)}…</span>
                       {(item.trackers || [])[0] && <span style={{ flexShrink: 0 }}>{item.trackers[0]}</span>}
                       {!resolving && (
-                        <span style={{ flexShrink: 0 }}>
+                        <span style={{ flexShrink: 0, fontFamily: 'var(--sans)' }}>
                           {gone ? `no longer in ${clientName}`
                             : resolveError ? 'cross-seeds not checked'
                             : unchecked ? 'no cross-seeds found'
@@ -1937,7 +1937,7 @@ function ConfirmDeleteModal({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 20px 18px' }}>
           {busy && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-base)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-base)', fontFamily: 'var(--sans)', color: 'var(--text-dim)' }}>
               <Spinner /> Removing via {clientName}…
             </span>
           )}

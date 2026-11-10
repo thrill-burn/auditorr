@@ -6,7 +6,7 @@ import { RangePresets } from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
 import { Button } from './workflows/shared'
-import { SECTION_LABEL, CARD, fmtChartDate, splitValueUnit, HeroNumber } from './dashKit'
+import { SECTION_LABEL, fmtChartDate, splitValueUnit, HeroNumber, TrendPill } from './dashKit'
 import LibraryMap from './LibraryMap'
 import { LastScanCard, NewInLibraryCard, scanAlert } from './ScanCards'
 
@@ -262,17 +262,9 @@ function GrafanaTooltip({ active, payload, label, color }) {
   )
 }
 
-// ── Trend pill ────────────────────────────────────────────────────────────────
-// Sentiment-based, NOT directional: it reports whether the metric's *health* is
-// improving/worsening, decoupled from whether the raw number went up or down.
-// `lowerIsBetter` flips the mapping (orphaned/not-imported/dupes shrink = good;
-// hardlinked % grows = good).
-const TREND_META = {
-  good:    { label: 'Improving', color: 'var(--green)',    icon: '▲' },
-  neutral: { label: 'Steady',    color: 'var(--text-dim)', icon: '—' },
-  bad:     { label: 'Worsening', color: 'var(--red)',      icon: '▼' },
-}
-
+// ── Trend ─────────────────────────────────────────────────────────────────────
+// The pill is dashKit's. `lowerIsBetter` flips the mapping (orphaned/not-
+// imported/dupes shrink = good; hardlinked % grows = good).
 function computeTrend(data, lowerIsBetter) {
   if (!data || data.length < 2) return null
   const first = data[0], last = data[data.length - 1]
@@ -295,17 +287,6 @@ function makeTrend(data, lowerIsBetter, unit) {
     ? `Roughly flat over the last ${days} days`
     : `${sign}${mag} over the last ${days} days`
   return t
-}
-
-function TrendPill({ trend }) {
-  if (!trend) return null
-  const m = TREND_META[trend.sentiment]
-  return (
-    <div title={trend.detail} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: m.color, lineHeight: 1.35 }}>
-      <span style={{ fontSize: 'var(--font-sm)', lineHeight: 1, flexShrink: 0 }}>{m.icon}</span>
-      {m.label}
-    </div>
-  )
 }
 
 // ── Metric card ───────────────────────────────────────────────────────────────
@@ -428,106 +409,12 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
   )
 }
 
-// ── Cross-seed bar ────────────────────────────────────────────────────────────
-// SEED_COLORS[0] = orphaned (0 trackers), [1] = 1 tracker, [2] = 2, etc.
-const SEED_COLORS = [
-  '#ef4444',   // 0x — red (orphaned/dead weight)
-  '#777777',   // 1x — grey (baseline)
-  '#38bdf8',   // 2x — blue
-  '#a78bfa',   // 3x — purple
-  '#22c55e',   // 4x — green
-  '#f59e0b',   // 5x+
-]
-
-function seedColor(n) {
-  return SEED_COLORS[Math.min(n, SEED_COLORS.length - 1)]
-}
-
-function CrossSeedBar({ segments, totalSize, onNavigate }) {
-  const [hovered, setHovered] = useState(null)
-
-  if (!segments || totalSize === 0) return null
-
-  return (
-    <div>
-      {/* The bar — each segment clickable */}
-      <div style={{ display: 'flex', height: 36, borderRadius: 8, overflow: 'hidden', gap: 1 }}>
-        {segments.map((seg, i) => {
-          if (seg.size === 0) return null
-          const pct = (seg.size / totalSize) * 100
-          const color = seedColor(seg.count)
-          return (
-            <div
-              key={i}
-              title={`Click to filter media by ${seg.count}× seeded`}
-              style={{
-                flex: `0 0 ${pct}%`,
-                // The one place the alpha suffix worked: SEED_COLORS are hex, so
-                // `#ef4444cc` is a valid 8-digit colour. Said as tint() anyway,
-                // so the guard needs no exception and a var() can't creep in.
-                background: hovered === i ? color : tint(color, 80),
-                transition: 'background 0.15s',
-                cursor: 'pointer',
-                position: 'relative',
-              }}
-              onMouseEnter={() => setHovered(i)}
-              onMouseLeave={() => setHovered(null)}
-              onClick={() => onNavigate && onNavigate({ tab: 'media', seedCount: seg.count })}
-            />
-          )
-        })}
-      </div>
-
-      {/* Hover info strip — fixed height so legend never shifts */}
-      <div style={{ height: 28, marginTop: 8, display: 'flex', alignItems: 'center' }}>
-        {hovered !== null && segments[hovered]?.size > 0 && (() => {
-          const seg = segments[hovered]
-          const color = seedColor(seg.count)
-          const pct = ((seg.size / totalSize) * 100).toFixed(1)
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)' }}>
-                {seg.count === 0 ? 'Not Seeded (0×)' : `${seg.count}× seeded`}
-              </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-                {formatBytes(seg.size)} · {pct}%
-              </span>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--accent)' }}>click to filter →</span>
-            </div>
-          )
-        })()}
-      </div>
-
-      {/* Legend */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px' }}>
-        {segments.map((seg, i) => {
-          if (seg.size === 0) return null
-          const color = seedColor(seg.count)
-          const pct = ((seg.size / totalSize) * 100).toFixed(1)
-          return (
-            <button
-              key={i}
-              onClick={() => onNavigate && onNavigate({ tab: 'media', seedCount: seg.count })}
-              style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-            >
-              <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-                {seg.count === 0 ? '0× (not seeded)' : `${seg.count}×`} — {pct}%
-              </span>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 // Health, the four workflow cards, then the disk and its links: the library
-// map, cross-seed effectiveness, the last scan and what's new in the library
-// (2026-11-09). The upload panels and the tracker leaderboard moved to the
-// Trackers page, and the tracker dropdown, which filtered only them, went.
+// map, the last scan and what's new in the library (2026-11-09). The upload
+// panels and the tracker leaderboard moved to the Trackers page, and the
+// tracker dropdown, which filtered only them, went. Cross-seed effectiveness
+// followed them on 2026-11-10, beside the leaderboard it used to sit with.
 export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, onReveal, onScan, mediaFiles, torrentFiles, ensureFilesLoaded }) {
   const toast = useToast()
   const [uploadStats, setUploadStats] = useState(null)
@@ -537,9 +424,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       if (!d.status) setUploadStats(d)
     }).catch(() => {})
   }, [timeRange])
-
-  // Cross-seed stats are pre-computed by the backend audit process
-  const cs = data?.cross_seed_stats ?? null
 
   if (!data) return <DashboardSkeleton />
 
@@ -686,7 +570,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
     return { delta, label: `vs ${actualDays}d ago` }
   })()
 
-  const csMultDisplay = cs ? cs.multiplier.toFixed(2) : null
   const scanReport = data.scan_report
   const lastScanAlert = scanAlert(scanReport, current.timestamp)
   const toLastScan = () => document.getElementById('last-scan-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -789,33 +672,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       <LibraryMap details={det} onNavigate={onNavigate}
         mediaFiles={mediaFiles} torrentFiles={torrentFiles} ensureFilesLoaded={ensureFilesLoaded} />
 
-      {/* Row 4: cross-seed, the last scan, and what's new in the library */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
-        {cs ? (
-          <div style={{ ...CARD, padding: '18px 20px 16px', gap: 14 }}>
-            <div>
-              <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                <HeroNumber value={csMultDisplay} unit="×" />
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>avg seed multiplier</span>
-              </div>
-            </div>
-            <div>
-              <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Disk space by seed count</div>
-              <CrossSeedBar segments={cs.segments} totalSize={cs.total_size} onNavigate={onNavigate} />
-            </div>
-            {/* The upload panels are on the Trackers page; this is the line
-                that says what's there. */}
-            <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-                {uploadStats
-                  ? <><span style={{ color: 'var(--text)' }}>{formatBytes(uploadStats.total_uploaded)}</span> uploaded · last {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}</>
-                  : 'Upload stats appear after a few scans'}
-              </span>
-              <Button size="sm" variant="ghost" onClick={() => onNavigate({ tab: 'trackers' })}>Trackers →</Button>
-            </div>
-          </div>
-        ) : <div />}
+      {/* Row 4: the last scan, and what's new in the library */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
         <LastScanCard id="last-scan-card" scanReport={scanReport} details={det} savedAt={current.timestamp} onScan={onScan} />
         <NewInLibraryCard uploadStats={uploadStats} timeRange={timeRange} onNavigate={onNavigate} />
       </div>

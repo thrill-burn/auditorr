@@ -293,7 +293,7 @@ export default function ChangeLog({ onNavigate }) {
 
       {/* Error */}
       {error && (
-        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--red)' }}>
+        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--red)' }}>
           Failed to load change log: {error}
         </div>
       )}
@@ -359,7 +359,7 @@ export default function ChangeLog({ onNavigate }) {
       )}
 
       {!error && entries != null && rows.length > 0 && (
-        <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'right' }}>
+        <div style={{ marginTop: 8, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'right' }}>
           {rows.length.toLocaleString()} {rows.length === 1 ? 'change' : 'changes'}
           {entries.length > 0 && ` across ${entries.length.toLocaleString()} ${entries.length === 1 ? 'audit' : 'audits'}`}
         </div>

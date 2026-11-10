@@ -40,11 +40,13 @@ function detectMediaType(filePath) {
 // existed it has rendered as coloured text — which is also what the
 // ration-colour rule asks for on a list where every row carries one. Kept that
 // way deliberately when the tints were fixed (R9); do not "restore" the fill.
+// A tag is a state word, so it's Geist; the name, size and trackers beside it
+// are data (mono, 2026-11-10).
 function Tag({ color, children }) {
   return (
     <span style={{
       padding: '1px 7px', fontSize: 'var(--font-sm)', fontWeight: 600,
-      fontFamily: 'var(--mono)', color, whiteSpace: 'nowrap', flexShrink: 0,
+      fontFamily: 'var(--sans)', color, whiteSpace: 'nowrap', flexShrink: 0,
     }}>{children}</span>
   )
 }
@@ -91,7 +93,7 @@ function ArrSearchButton({ service, color, state, onClick }) {
       onClick={onClick}
       style={{
         background: 'none', border: 'none', padding: '1px 2px',
-        color, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 600,
+        color, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600,
         cursor: 'pointer', flexShrink: 0, textDecoration: 'none',
       }}
       onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
@@ -209,6 +211,7 @@ function SizeInput({ value, onChange, placeholder }) {
       type="number"
       min="0"
       step="any"
+      className="ph-words"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -667,7 +670,7 @@ function SizeRangeFilter({ minVal, maxVal, unit, onMinVal, onMaxVal, onUnit, onC
   const hasValue = minVal || maxVal
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
       <SizeInput value={minVal} onChange={onMinVal} placeholder="min" />
       <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>–</span>
       <SizeInput value={maxVal} onChange={onMaxVal} placeholder="max" />

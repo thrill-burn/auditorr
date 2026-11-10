@@ -2,7 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallba
 import { api } from '../api'
 import { formatBytes } from '../utils'
 import { Button, Segmented, Spinner, useAuditComplete } from './workflows/shared'
-import { SECTION_LABEL, CARD, Hero } from './dashKit'
+import { SECTION_LABEL, CARD, CAPTION, READOUT, Hero } from './dashKit'
 import {
   STATES, PROBLEM, LINKED, ROOT_HEAD, HEAD,
   modelFromRow, modelFromFiles, modelTotals, biggestGaps, navFor, layoutMap, leafAt,
@@ -160,20 +160,24 @@ function draw(canvas, model, W, H, detail) {
   for (const f of L.folders) {
     ctx.fillStyle = P.band; ctx.fillRect(f.x, f.y, f.w, f.h)
     if (!f.head) continue
-    ctx.font = monoSm
-    // A torrent block is named for its state and the workflow that acts on it.
+    // A torrent block is named for its state and the workflow that acts on it,
+    // which are words (Geist); a library folder's name is off the disk (mono).
+    // What follows either is figures, in mono.
+    ctx.font = f.state != null ? sansSm : monoSm
     const name = fit(ctx, f.state != null
       ? `${STATES[f.state].name}${STATES[f.state].workflow ? ' · ' + STATES[f.state].workflow : ''}`
       : (f.name || '(top level)'), f.w - 12)
-    const room = f.w - 12 - ctx.measureText(name).width
+    const nameW = ctx.measureText(name).width
+    const room = f.w - 12 - nameW
     ctx.fillStyle = P.text; ctx.fillText(name, f.x + 6, f.y + HEAD / 2 + 0.5)
+    ctx.font = monoSm
     const n = f.titles.length
     const rest = f.state != null
       ? longest(ctx, [`  ${formatBytes(f.v)} · ${n.toLocaleString()} release${n !== 1 ? 's' : ''}`, `  ${formatBytes(f.v)}`], room)
       : (() => { const b = breakdown(f.by); return longest(ctx, [
           `  ${[...b, `${n.toLocaleString()} titles`].join(' · ')}`, `  ${b.join(' · ')}`,
           `  ${b.slice(0, 2).join(' · ')}`, `  ${b[0] || ''}`], room) })()
-    ctx.fillStyle = P.dim; ctx.fillText(rest, f.x + 6 + ctx.measureText(name).width, f.y + HEAD / 2 + 0.5)
+    ctx.fillStyle = P.dim; ctx.fillText(rest, f.x + 6 + nameW, f.y + HEAD / 2 + 0.5)
   }
   for (const l of L.leaves) tile(ctx, l, P)
   // Titles part with a 1px line of the card, so a title reads as one block.
@@ -184,7 +188,8 @@ function draw(canvas, model, W, H, detail) {
     if (t.w < 64 || t.h < 20) continue
     const under = leafAt(L, t.x + 6, t.y + 6)
     ctx.fillStyle = labelOn(P.c[under && under.T === t ? under.s : LINKED])
-    ctx.font = sansSm
+    // A library title is one auditorr knows (Geist); a torrent's is a release name (mono).
+    ctx.font = t.root === 'torrents' ? monoSm : sansSm
     ctx.fillText(fit(ctx, t.name, t.w - 10), t.x + 5, t.y + 4)
     if (t.h >= 38 && t.w >= 60) {
       ctx.globalAlpha = 0.78; ctx.font = monoSm
@@ -199,13 +204,16 @@ function draw(canvas, model, W, H, detail) {
 const mapHeight = W => Math.round(Math.min(640, Math.max(420, W * 0.42)))
 
 // ── The card ─────────────────────────────────────────────────────────────────
-const META = { fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }
+// Its text is dashKit's two kinds: words in Geist (CAPTION), figures and names
+// off the disk in Geist Mono. A stat's figure is mono at --font-base, MONO_TITLE's
+// step: at --font-md, Geist Mono read larger and heavier than the card's title.
+const FIGURE = { fontFamily: 'var(--mono)', color: 'var(--text)', fontWeight: 500 }
 
 function Stat({ label, value }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{label}</span>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap' }}>{value}</span>
+      <span style={CAPTION}>{label}</span>
+      <span style={{ ...FIGURE, fontSize: 'var(--font-base)', whiteSpace: 'nowrap' }}>{value}</span>
     </div>
   )
 }
@@ -265,7 +273,10 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
   const totals = useMemo(() => (model ? modelTotals(model) : null), [model])
   const gaps = useMemo(() => (model ? biggestGaps(model) : []), [model])
 
-  // Redraw on resize and on a theme change, which is an attribute on <html>.
+  // Redraw on resize, on a theme change (an attribute on <html>), and when a
+  // web font finishes loading: a canvas draws in whatever face is there and
+  // never redraws by itself, so a map drawn before Geist arrived would keep
+  // the fallback face for good.
   useEffect(() => {
     const el = wrapRef.current
     if (!el) return undefined
@@ -274,9 +285,12 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
     return () => ro.disconnect()
   }, [model != null])
   useEffect(() => {
-    const mo = new MutationObserver(() => setThemeTick(t => t + 1))
+    const redraw = () => setThemeTick(t => t + 1)
+    const mo = new MutationObserver(redraw)
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => mo.disconnect()
+    const fonts = document.fonts
+    fonts?.addEventListener?.('loadingdone', redraw)
+    return () => { mo.disconnect(); fonts?.removeEventListener?.('loadingdone', redraw) }
   }, [])
   const height = mapHeight(width)
   useLayoutEffect(() => {
@@ -313,7 +327,7 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
         <span style={SECTION_LABEL}>Library map</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {detail === 'files' && !filesReady && (
-            <span style={{ ...META, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Spinner size={10} /> Loading file lists…</span>
+            <span style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Spinner size={10} /> Loading file lists…</span>
           )}
           <Segmented label="Map detail" value={detail} onChange={setDetail}
             options={[{ value: 'titles', label: 'Titles' }, { value: 'files', label: 'Files' }]} />
@@ -324,9 +338,9 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
             <Hero text={formatBytes(shared)} />
-            <span style={META}>saved by hardlinks</span>
+            <span style={CAPTION}>saved by hardlinks</span>
           </div>
-          <span style={META}>
+          <span style={CAPTION}>
             <span style={{ color: 'var(--text)' }}>{formatBytes(both - shared)}</span> on disk · {formatBytes(both)} if every link were a copy{free ? ` · ${free}` : ''}
           </span>
         </div>
@@ -344,7 +358,7 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
       {row === undefined && drawn === 'titles' ? (
         <div className="skeleton" style={{ height: 420, borderRadius: 4 }} />
       ) : !model || model.roots.length === 0 ? (
-        <div style={{ ...META, height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+        <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
           {row === null ? 'The map appears after the next scan.' : 'Nothing to draw yet.'}
         </div>
       ) : (
@@ -367,12 +381,13 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
         </div>
       )}
 
-      <div style={{ ...META, height: 22, marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+      {/* The hovered tile's folder and figures are data; the hint is words. */}
+      <div style={{ ...CAPTION, height: 22, marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         {hover?.text ? (
           <>
             <Swatch s={hover.text.s} />
-            <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{hover.text.name}</span>
-            <span style={{ whiteSpace: 'nowrap' }}>{hover.text.facts}</span>
+            <span style={{ ...READOUT, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{hover.text.name}</span>
+            <span style={{ ...READOUT, whiteSpace: 'nowrap' }}>{hover.text.facts}</span>
             {hover.text.nav && <span style={{ color: 'var(--accent)', whiteSpace: 'nowrap' }}>{STATES[hover.leaf.s].workflow} →</span>}
           </>
         ) : model ? (
@@ -387,10 +402,10 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
       {totals && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 4 }}>
           {STATES.slice(0, 5).map((st, s) => (
-            <span key={st.name} style={{ ...META, display: 'inline-flex', alignItems: 'center', gap: 6, opacity: totals.by[s] ? 1 : 0.55 }}>
+            <span key={st.name} style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6, opacity: totals.by[s] ? 1 : 0.55 }}>
               <Swatch s={s} />
               {st.name}{st.workflow && <span>· {st.workflow}</span>}
-              <span style={{ color: 'var(--text)', fontWeight: 500 }}>{formatBytes(totals.by[s])}</span>
+              <span style={FIGURE}>{formatBytes(totals.by[s])}</span>
             </span>
           ))}
         </div>
@@ -399,15 +414,18 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
       {gaps.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 4px', marginTop: 10 }}>
           <span style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginRight: 6 }}>Biggest gaps</span>
+          {/* The kit's quiet button as it comes. A library title is one
+              auditorr knows, so Geist (ITEM_TITLE's rule); a torrent folder's
+              is a release name, so mono (MONO_TITLE's). */}
           {gaps.map(g => {
             const nav = navFor(g.state, g.t)
             return (
               <span key={`${g.t.root}/${g.t.rel}`} onMouseEnter={() => showTitle(g.t)} onMouseLeave={() => setHover(null)}>
                 <Button size="sm" variant="ghost" disabled={!nav} onClick={() => nav && onNavigate(nav)}
-                  style={{ '--btn-border': 'transparent', gap: 6, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>
+                  style={{ '--btn-border': 'transparent', gap: 6 }}>
                   <Swatch s={g.state} />
-                  <span style={{ color: 'var(--text)' }}>{g.t.name}</span>
-                  <span>{formatBytes(g.bytes)}</span>
+                  <span style={{ color: 'var(--text)', ...(g.t.root === 'torrents' ? { fontFamily: 'var(--mono)' } : null) }}>{g.t.name}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>{formatBytes(g.bytes)}</span>
                 </Button>
               </span>
             )

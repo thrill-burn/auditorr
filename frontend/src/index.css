@@ -149,6 +149,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   color: var(--text);
 }
 
+/* A mono field (a path, a key, a size) whose placeholder is a hint rather than
+   an example value: "Search filename…", "paste API key…", "min". The hint is
+   words, so it's Geist; what's typed is data, so it stays mono. A placeholder
+   that's an example value (http://192.168.1.x:8080, /data/torrents) stays mono. */
+.ph-words::placeholder { font-family: var(--sans); }
+
 .ui-status-dot {
   display: inline-block;
   width: 7px;

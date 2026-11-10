@@ -1,14 +1,132 @@
 import React, { useState } from 'react'
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { formatBytes, formatBytesCompact } from '../utils'
+import { formatBytes, formatBytesCompact, tint } from '../utils'
 import { Button, CloseButton, Segmented } from './workflows/shared'
-import { SECTION_LABEL, CARD, fmtChartDate, splitValueUnit, HeroNumber, Hero } from './dashKit'
+import { SECTION_LABEL, CARD, CAPTION, READOUT, fmtChartDate, splitValueUnit, HeroNumber, Hero } from './dashKit'
 
 // The tracker panels the Dashboard used to end with: the leaderboard, upload
 // activity, and upload by tracker / library yield, with the detail popup they
 // open. They moved to the Trackers page as they were (2026-11-09), where they
 // follow that page's date range and the trackers its chart shows, and the
-// Dashboard's tracker dropdown, which filtered nothing else, went.
+// Dashboard's tracker dropdown, which filtered nothing else, went. Cross-seed
+// effectiveness followed on 2026-11-10, beside the leaderboard again, as it sat
+// before the Dashboard was rebuilt.
+
+// ── Cross-seed effectiveness ──────────────────────────────────────────────────
+// SEED_COLORS[0] = orphaned (0 trackers), [1] = 1 tracker, [2] = 2, etc.
+const SEED_COLORS = [
+  '#ef4444',   // 0x — red (orphaned/dead weight)
+  '#777777',   // 1x — grey (baseline)
+  '#38bdf8',   // 2x — blue
+  '#a78bfa',   // 3x — purple
+  '#22c55e',   // 4x — green
+  '#f59e0b',   // 5x+
+]
+
+function seedColor(n) {
+  return SEED_COLORS[Math.min(n, SEED_COLORS.length - 1)]
+}
+
+function CrossSeedBar({ segments, totalSize, onNavigate }) {
+  const [hovered, setHovered] = useState(null)
+
+  if (!segments || totalSize === 0) return null
+
+  return (
+    <div>
+      {/* The bar — each segment clickable */}
+      <div style={{ display: 'flex', height: 36, borderRadius: 8, overflow: 'hidden', gap: 1 }}>
+        {segments.map((seg, i) => {
+          if (seg.size === 0) return null
+          const pct = (seg.size / totalSize) * 100
+          const color = seedColor(seg.count)
+          return (
+            <div
+              key={i}
+              title={`Click to filter media by ${seg.count}× seeded`}
+              style={{
+                flex: `0 0 ${pct}%`,
+                // The one place the alpha suffix worked: SEED_COLORS are hex, so
+                // `#ef4444cc` is a valid 8-digit colour. Said as tint() anyway,
+                // so the guard needs no exception and a var() can't creep in.
+                background: hovered === i ? color : tint(color, 80),
+                transition: 'background 0.15s',
+                cursor: 'pointer',
+                position: 'relative',
+              }}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => onNavigate && onNavigate({ tab: 'media', seedCount: seg.count })}
+            />
+          )
+        })}
+      </div>
+
+      {/* Hover info strip — fixed height so legend never shifts */}
+      <div style={{ height: 28, marginTop: 8, display: 'flex', alignItems: 'center' }}>
+        {hovered !== null && segments[hovered]?.size > 0 && (() => {
+          const seg = segments[hovered]
+          const color = seedColor(seg.count)
+          const pct = ((seg.size / totalSize) * 100).toFixed(1)
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
+              <span style={{ ...READOUT, color: 'var(--text)' }}>
+                {seg.count === 0 ? 'Not Seeded (0×)' : `${seg.count}× seeded`}
+              </span>
+              <span style={READOUT}>
+                {formatBytes(seg.size)} · {pct}%
+              </span>
+              <span style={{ ...CAPTION, color: 'var(--accent)' }}>click to filter →</span>
+            </div>
+          )
+        })()}
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px' }}>
+        {segments.map((seg, i) => {
+          if (seg.size === 0) return null
+          const color = seedColor(seg.count)
+          const pct = ((seg.size / totalSize) * 100).toFixed(1)
+          return (
+            <button
+              key={i}
+              onClick={() => onNavigate && onNavigate({ tab: 'media', seedCount: seg.count })}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              <div style={{ width: 9, height: 9, borderRadius: 2, background: color, flexShrink: 0 }} />
+              <span style={READOUT}>
+                {seg.count === 0 ? '0× (not seeded)' : `${seg.count}×`} — {pct}%
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Library-wide, so it doesn't follow the chart's tracker picks: a file's seed
+// count is every tracker seeding it, whichever of them are on the chart.
+export function CrossSeedCard({ stats, onNavigate }) {
+  if (!stats) return null
+  return (
+    <div style={{ ...CARD, padding: '18px 20px', gap: 14 }}>
+      <div>
+        <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          <HeroNumber value={stats.multiplier.toFixed(2)} unit="×" />
+          <span style={CAPTION}>avg seed multiplier</span>
+        </div>
+      </div>
+      <div>
+        <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Disk space by seed count</div>
+        <CrossSeedBar segments={stats.segments} totalSize={stats.total_size} onNavigate={onNavigate} />
+      </div>
+    </div>
+  )
+}
 
 // ── Upload activity tooltip ───────────────────────────────────────────────────
 export function UploadActivityTooltip({ active, payload, label }) {
@@ -27,7 +145,7 @@ export function UploadActivityTooltip({ active, payload, label }) {
       ))}
       {items.length > 1 && (
         <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Total</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Total</span>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
         </div>
       )}
@@ -263,7 +381,7 @@ export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate
               </div>
             </div>
           ) : (
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
               Upload data will appear after a few audits
             </div>
           )
@@ -326,7 +444,7 @@ export function TrackerDetailModal({ trackerName, trackerStats, uploadStats, onN
 
 function NoneSelected() {
   return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
       No trackers selected
     </div>
   )
@@ -358,7 +476,7 @@ export function TopTrackersCard({ trackerStats, trackers, onTrackerDetail }) {
       {rows.length > 3 && (
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {rows.slice(3).map(t => (
-            <Button key={t.name} size="chip" variant="ghost" onClick={() => onTrackerDetail(t.name)}>
+            <Button key={t.name} size="chip" variant="ghost" mono onClick={() => onTrackerDetail(t.name)}>
               {t.name}
             </Button>
           ))}
@@ -439,7 +557,7 @@ export function UploadByTrackerCard({ uploadStats, trackers, onTrackerDetail }) 
           <>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
               <Hero text={seeding > 0 ? (uploaded / seeding * 100).toFixed(1) + '%' : '—'} />
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+              <span style={CAPTION}>
                 over {days} day{days !== 1 ? 's' : ''}
               </span>
             </div>

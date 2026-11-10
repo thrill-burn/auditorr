@@ -91,7 +91,7 @@ function DupGroup({ group, checked, onToggle }) {
         </span>
         <span style={{ flex: 1 }} />
         {status.label && (
-          <span title={note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: status.color, flexShrink: 0 }}>
+          <span title={note || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: status.color, flexShrink: 0 }}>
             <Dot color={status.color} />{status.label}
           </span>
         )}
@@ -115,7 +115,7 @@ function DupGroup({ group, checked, onToggle }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             {m.paths.map(p => (
               <div key={p.path} style={{ display: 'flex', alignItems: 'center', gap: 8, lineHeight: '16px' }}>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 48 }}>
+                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--text-dim)', flexShrink: 0, minWidth: 48 }}>
                   {p.tree === 'media' ? 'library' : 'torrent'}
                 </span>
                 <span title={p.path} style={{ flex: 1, minWidth: 0, fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

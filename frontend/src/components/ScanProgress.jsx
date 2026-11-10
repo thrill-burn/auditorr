@@ -45,7 +45,7 @@ function PhaseBar({ label, fillPct, pulse, phaseStatus }) {
           style={{ height: '100%', width: `${fillPct}%`, background: 'var(--accent)', borderRadius: 99, transition: 'width 0.3s ease' }}
         />
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', width: 130, flexShrink: 0, textAlign: 'right' }}>{phaseStatus}</span>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', width: 130, flexShrink: 0, textAlign: 'right' }}>{phaseStatus}</span>
     </div>
   )
 }
@@ -68,7 +68,7 @@ function LoadingResultsCard() {
       <div style={{ display: 'flex', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {LOGO}
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--accent)' }}>Loading results…</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--accent)' }}>Loading results…</span>
         </div>
       </div>
 
@@ -78,7 +78,7 @@ function LoadingResultsCard() {
       </div>
 
       {/* Status */}
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)' }}>
+      <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
         Deserializing audit results…
       </div>
     </>
@@ -150,7 +150,7 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 {LOGO}
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--accent)' }}>Scanning library…</span>
+                <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--accent)' }}>Scanning library…</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', color: 'var(--accent)' }}>{progress}%</span>
@@ -171,7 +171,7 @@ export default function ScanProgress({ isScanning, progress, phase, statusMessag
 
             {/* Status message */}
             {statusMessage && (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {statusMessage}
               </div>
             )}

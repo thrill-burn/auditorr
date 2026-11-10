@@ -64,8 +64,8 @@ export default function CompareTable({
       <button onClick={() => onSort(m.key)} title={`Sort by ${m.label}`} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, width: '100%',
         background: metricKey === m.key ? tint(m.color, 8) : 'none', border: 'none', cursor: 'pointer',
-        padding: '0 12px', height: '100%', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', letterSpacing: 1,
-        textTransform: 'uppercase', color: active ? 'var(--text)' : 'var(--text-dim)', fontWeight: active ? 700 : 500,
+        padding: '0 12px', height: '100%', fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)',
+        color: active ? 'var(--text)' : 'var(--text-dim)', fontWeight: active ? 700 : 500,
       }}>
         {m.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
       </button>
@@ -78,7 +78,7 @@ export default function CompareTable({
       <div style={{ display: 'grid', gridTemplateColumns: grid, background: 'var(--surface2)', borderBottom: '1px solid var(--border)', height: 34, alignItems: 'stretch' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px' }}>
           <Checkbox checked={allOn} indeterminate={someOn} onChange={onToggleAll} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', letterSpacing: 1, textTransform: 'uppercase', color: 'var(--text-dim)' }}>Tracker</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 500, color: 'var(--text-dim)' }}>Tracker</span>
         </div>
         {metrics.map(m => <Th key={m.key} m={m} />)}
       </div>
