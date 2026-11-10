@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react'
 import { api } from '../api'
 import { formatBytes } from '../utils'
-import { Button, Segmented, Spinner, useAuditComplete } from './workflows/shared'
-import { SECTION_LABEL, CARD, CAPTION, READOUT, Hero } from './dashKit'
+import { Button, Segmented, Spinner, useAuditComplete, ITEM_TITLE, MONO_TITLE } from './workflows/shared'
+import { SECTION_LABEL, CARD, CAPTION, READOUT, Hero, TrendPill } from './dashKit'
 import {
   STATES, PROBLEM, LINKED, ROOT_HEAD, HEAD,
-  modelFromRow, modelFromFiles, modelTotals, biggestGaps, navFor, layoutMap, leafAt,
+  modelFromFiles, modelTotals, biggestGaps, navFor, layoutMap, leafAt,
 } from './libraryMapRules'
 
 // The library map (2026-11-09): WinDirStat's idea applied to hardlinks. Every
@@ -18,6 +18,22 @@ import {
 // Titles by default, from the scan's stored row (`/api/library_map`, a few KB).
 // Files is the same map at one tile per file, from the two file lists File
 // Explorer loads, fetched the first time it's picked and never on a visit.
+//
+// The Dashboard fetches the row (useLibraryMapRow) and hands it to both this
+// card and Biggest gaps, which has been a card of its own since 2026-11-10, so
+// one request feeds both. Hovering a gap outlines its tile here (`focus`).
+
+// The stored row: undefined while loading, null before the first scan that
+// writes one. Reloaded when a scan completes.
+export function useLibraryMapRow() {
+  const [row, setRow] = useState(undefined)
+  const load = useCallback(() => {
+    api.libraryMap().then(r => setRow(r && r.version ? r : null)).catch(() => setRow(null))
+  }, [])
+  useEffect(() => { load() }, [load])
+  useAuditComplete(load)
+  return row
+}
 
 const LABEL = {
   [LINKED]: '', 1: 'not seeded', 2: 'orphaned', 3: 'not imported', 4: 'copies', 5: 'other',
@@ -201,7 +217,26 @@ function draw(canvas, model, W, H, detail) {
   return L
 }
 
-const mapHeight = W => Math.round(Math.min(640, Math.max(420, W * 0.42)))
+// The map's height: its width's share by default, or what this browser was
+// dragged to (2026-11-10, the user: "it's pretty information dense… people have
+// some pretty big libraries"). The default rose from 420–640 to 480–820, a third
+// taller at both of the user's screens. The dragged height is per browser, like
+// the page width, because it belongs to the screen, and it's written only when
+// someone drags, never on load, so a stored value means someone picked it.
+const mapHeight = W => Math.round(Math.min(820, Math.max(480, W * 0.55)))
+const HEIGHT_KEY = 'auditorr_map_height'
+const MAP_MIN = 320, MAP_MAX = 2000
+const clampHeight = h => Math.round(Math.min(MAP_MAX, Math.max(MAP_MIN, h)))
+function storedHeight() {
+  try { const v = Number(localStorage.getItem(HEIGHT_KEY)); return v > 0 ? clampHeight(v) : null } catch { return null }
+}
+function storeHeight(h) {
+  try { if (h == null) localStorage.removeItem(HEIGHT_KEY); else localStorage.setItem(HEIGHT_KEY, String(h)) } catch { /* private window */ }
+}
+// A drag redraws live while a draw is this quick (Titles always is, the stored
+// row being at most 2,000 titles); a slower one (Files on a big library) is
+// stretched while dragging and drawn once on release.
+const LIVE_DRAW_MS = 30
 
 // ── The card ─────────────────────────────────────────────────────────────────
 // Its text is dashKit's two kinds: words in Geist (CAPTION), figures and names
@@ -218,45 +253,64 @@ function Stat({ label, value }) {
   )
 }
 
-function freeLine(ds) {
-  if (!ds) return null
-  if (ds.same || !ds.media || !ds.torrents) {
+// The drive's numbers, as stats beside the title counts (2026-11-10). What the
+// header's large "saved by hardlinks" figure said is the legend's Linked figure
+// and the Hardlinked Media card's, so it went; what's on disk and what's free
+// are said nowhere else. One free figure when both roots are one filesystem,
+// which hardlinks need; two when they aren't. A scan before disk_space has none.
+function diskStats(d) {
+  const shared = d.shared_size ?? d.hardlinked_media_size ?? 0
+  const both = (d.total_media_size || 0) + (d.total_torrents_size || 0)
+  const out = [['On disk', formatBytes(both - shared)]]
+  const ds = d.disk_space
+  const free = x => (x.total ? `${formatBytes(x.free)} of ${formatBytes(x.total)}` : formatBytes(x.free))
+  if (ds && (ds.same || !ds.media || !ds.torrents)) {
     const one = ds.torrents || ds.media
-    return one ? `${formatBytes(one.free)} free` : null
+    if (one) out.push(['Free', free(one)])
+  } else if (ds) {
+    out.push(['Free for torrents', free(ds.torrents)], ['Free for the library', free(ds.media)])
   }
-  return `${formatBytes(ds.torrents.free)} free for torrents · ${formatBytes(ds.media.free)} for the library`
+  return out
 }
 
+// The hover line's parts. `name` is the line's title, set by kind like a row
+// title on the workflow pages: a library title is one auditorr knows (Geist,
+// ITEM_TITLE), a release or file name is off the disk (mono, MONO_TITLE), a
+// folded tile's "N smaller titles" is words. `prefix` is the folder it sits in.
 function hoverText(leaf, detail) {
   const t = leaf.T, nav = navFor(leaf.s, t)
-  const where = t.root === 'library' ? `${t.folder ? t.folder + ' / ' : ''}${t.name}` : t.name
   if (detail === 'files' && leaf.file) {
     const st = STATES[leaf.s]
-    return { s: leaf.s, name: `${where} / ${leaf.file}`,
+    return { s: leaf.s, prefix: t.root === 'library' && t.folder ? `${t.folder} / ${t.name}` : t.name,
+             name: leaf.file, kind: 'mono',
              facts: `${formatBytes(leaf.bytes)} · ${st.name.toLowerCase()}${st.workflow ? ` (${st.workflow})` : ''}`, nav }
   }
   const facts = t.root === 'library'
     ? [formatBytes(t.v), ...(t.by[LINKED] ? [`${pctLinked(t.by)}% linked`] : []),
        ...PROBLEM.filter(s => t.by[s]).map(s => `${formatBytes(t.by[s])} ${LABEL[s]} (${STATES[s].workflow})`)].join(' · ')
     : `${formatBytes(t.v)} ${STATES[leaf.s].name.toLowerCase()}`
-  return { s: leaf.s, name: `${where}${t.folded ? ` (${t.files.toLocaleString()} files)` : ''}`, facts, nav }
+  const files = t.folded ? ` (${t.files.toLocaleString()} files)` : ''
+  if (t.folded) return { s: leaf.s, prefix: '', name: `${t.name}${files}`, kind: 'words', facts, nav }
+  if (t.root === 'library') return { s: leaf.s, prefix: t.folder || '', name: t.name, kind: 'title', facts, nav }
+  // A torrent title's name is its root-relative folder; its category is the prefix.
+  const cut = t.folder && t.name.startsWith(t.folder + '/') ? t.folder.length + 1 : 0
+  return { s: leaf.s, prefix: cut ? t.folder : '', name: t.name.slice(cut), kind: 'mono', facts, nav }
 }
 
-export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFiles, ensureFilesLoaded }) {
-  const [row, setRow] = useState(undefined)          // undefined = loading, null = none stored yet
+const HOVER_NAME = { title: ITEM_TITLE, words: ITEM_TITLE, mono: MONO_TITLE }
+
+export default function LibraryMap({ details, onNavigate, row, rowModel, focus, mediaFiles, torrentFiles, ensureFilesLoaded }) {
   const [detail, setDetail] = useState('titles')     // Titles by default, every visit (the user's call)
   const [width, setWidth] = useState(0)
   const [themeTick, setThemeTick] = useState(0)
   const [hover, setHover] = useState(null)           // { box, text }
+  const [userH, setUserH] = useState(storedHeight)   // null = the width's default
+  const [dragging, setDragging] = useState(false)
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const layoutRef = useRef(null)
-
-  const load = useCallback(() => {
-    api.libraryMap().then(r => setRow(r && r.version ? r : null)).catch(() => setRow(null))
-  }, [])
-  useEffect(() => { load() }, [load])
-  useAuditComplete(load)
+  const drawMs = useRef(0)
+  const dragRef = useRef(null)
 
   const filesReady = mediaFiles != null && torrentFiles != null
   useEffect(() => {
@@ -268,10 +322,9 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
   const drawn = detail === 'files' && filesReady ? 'files' : 'titles'
   const model = useMemo(() => {
     if (drawn === 'files') return modelFromFiles(mediaFiles, torrentFiles)
-    return row ? modelFromRow(row) : null
-  }, [drawn, mediaFiles, torrentFiles, row])
+    return rowModel || null
+  }, [drawn, mediaFiles, torrentFiles, rowModel])
   const totals = useMemo(() => (model ? modelTotals(model) : null), [model])
-  const gaps = useMemo(() => (model ? biggestGaps(model) : []), [model])
 
   // Redraw on resize, on a theme change (an attribute on <html>), and when a
   // web font finishes loading: a canvas draws in whatever face is there and
@@ -292,12 +345,47 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
     fonts?.addEventListener?.('loadingdone', redraw)
     return () => { mo.disconnect(); fonts?.removeEventListener?.('loadingdone', redraw) }
   }, [])
-  const height = mapHeight(width)
+  const height = userH ?? mapHeight(width)
   useLayoutEffect(() => {
     if (!model || !width || !canvasRef.current) return
+    const t0 = performance.now()
     layoutRef.current = draw(canvasRef.current, model, width, height, drawn)
+    drawMs.current = performance.now() - t0
     setHover(null)
   }, [model, width, height, drawn, themeTick])
+
+  // ── The height grip ──
+  const commitHeight = h => { const c = clampHeight(h); setUserH(c); storeHeight(c) }
+  const onGripDown = e => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = { y: e.clientY, h: height, last: height }
+    setDragging(true)
+    setHover(null)
+  }
+  const onGripMove = e => {
+    const d = dragRef.current
+    if (!d) return
+    const h = clampHeight(d.h + e.clientY - d.y)
+    if (h === d.last) return
+    d.last = h
+    if (drawMs.current <= LIVE_DRAW_MS) setUserH(h)
+    else if (canvasRef.current) canvasRef.current.style.height = h + 'px'
+  }
+  const onGripUp = () => {
+    const d = dragRef.current
+    if (!d) return
+    dragRef.current = null
+    setDragging(false)
+    if (d.last !== d.h) commitHeight(d.last)    // a click without a drag stores nothing
+  }
+  const resetHeight = () => { setUserH(null); storeHeight(null) }
+  const onGripKey = e => {
+    const step = e.shiftKey ? 160 : 40
+    if (e.key === 'ArrowUp') { e.preventDefault(); commitHeight(height - step) }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); commitHeight(height + step) }
+  }
 
   const onMove = e => {
     const r = e.currentTarget.getBoundingClientRect()
@@ -308,17 +396,25 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
     setHover({ box, leaf, text: hoverText(leaf, drawn) })
   }
   const onClick = () => { if (hover?.text?.nav) onNavigate(hover.text.nav) }
-  const showTitle = t => {
-    const box = layoutRef.current?.titles.find(x => x.root === t.root && x.rel === t.rel && x.name === t.name)
-    const leaf = { s: worstOf(t), T: t, bytes: t.v }
-    setHover({ box: box || null, leaf, text: hoverText(leaf, 'titles') })
-  }
 
-  // ── Header numbers: the Where your disk goes card's, which the map replaced.
-  const d = details || {}
-  const shared = d.shared_size ?? d.hardlinked_media_size ?? 0
-  const both = (d.total_media_size || 0) + (d.total_torrents_size || 0)
-  const free = freeLine(d.disk_space)
+  // A gap hovered on the Biggest gaps card: outline its tile and name it here.
+  // A torrent release has a tile in each state's block, so it's the gap's state's.
+  useEffect(() => {
+    if (!focus) { setHover(null); return }
+    const t = focus.t, s = focus.state
+    const box = layoutRef.current?.titles.find(x => x.root === t.root && x.rel === t.rel && x.name === t.name
+      && (t.root !== 'torrents' || x.by[s] > 0))
+    const leaf = { s, T: t, bytes: t.v }
+    setHover({ box: box || null, leaf, text: hoverText(leaf, 'titles') })
+  }, [focus])
+
+  const stats = totals ? [
+    ...diskStats(details || {}),
+    ['Fully linked', `${totals.full.toLocaleString()} titles`],
+    ['Partly linked', `${totals.partly.toLocaleString()} titles`],
+    ['Not linked', `${totals.none.toLocaleString()} titles`],
+    ['Files', totals.files.toLocaleString()],
+  ] : []
   const tiny = layoutRef.current?.tiny || []
 
   return (
@@ -334,29 +430,14 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '16px 28px', flexWrap: 'wrap', marginBottom: 14 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-            <Hero text={formatBytes(shared)} />
-            <span style={CAPTION}>saved by hardlinks</span>
-          </div>
-          <span style={CAPTION}>
-            <span style={{ color: 'var(--text)' }}>{formatBytes(both - shared)}</span> on disk · {formatBytes(both)} if every link were a copy{free ? ` · ${free}` : ''}
-          </span>
+      {stats.length > 0 && (
+        <div style={{ display: 'flex', gap: '12px 28px', flexWrap: 'wrap', marginBottom: 14 }}>
+          {stats.map(([label, value]) => <Stat key={label} label={label} value={value} />)}
         </div>
-        {totals && (
-          <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
-            <Stat label="To act on" value={`${formatBytes(totals.problem)} · ${totals.problemTitles.toLocaleString()} titles`} />
-            <Stat label="Fully linked" value={`${totals.full.toLocaleString()} titles`} />
-            <Stat label="Partly linked" value={`${totals.partly.toLocaleString()} titles`} />
-            <Stat label="Not linked" value={`${totals.none.toLocaleString()} titles`} />
-            <Stat label="Files" value={totals.files.toLocaleString()} />
-          </div>
-        )}
-      </div>
+      )}
 
       {row === undefined && drawn === 'titles' ? (
-        <div className="skeleton" style={{ height: 420, borderRadius: 4 }} />
+        <div className="skeleton" style={{ height, borderRadius: 4 }} />
       ) : !model || model.roots.length === 0 ? (
         <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
           {row === null ? 'The map appears after the next scan.' : 'Nothing to draw yet.'}
@@ -380,16 +461,35 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
           )}
         </div>
       )}
+      {model && model.roots.length > 0 && (
+        // Drag for a taller or shorter map; double-click for the default.
+        <div className="map-grip" role="separator" aria-orientation="horizontal" aria-label="Map height"
+          aria-valuenow={height} aria-valuemin={MAP_MIN} aria-valuemax={MAP_MAX} tabIndex={0}
+          data-dragging={dragging} title="Drag to change the map's height · double-click for the default"
+          onPointerDown={onGripDown} onPointerMove={onGripMove} onPointerUp={onGripUp} onPointerCancel={onGripUp}
+          onDoubleClick={resetHeight} onKeyDown={onGripKey}>
+          <svg width="24" height="6" viewBox="0 0 24 6" aria-hidden="true">
+            <path d="M2 1.5h20M2 4.5h20" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </div>
+      )}
 
-      {/* The hovered tile's folder and figures are data; the hint is words. */}
-      <div style={{ ...CAPTION, height: 22, marginTop: 8, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+      {/* The hovered tile: its name is the line's title, a row title's size
+          and face (2026-11-10, it was the legend's 11px); the folder before it
+          and the figures after it stay small. The hint is words. */}
+      <div style={{ ...CAPTION, height: 30, marginTop: 2, display: 'flex', alignItems: 'center', minWidth: 0 }}>
         {hover?.text ? (
-          <>
-            <Swatch s={hover.text.s} />
-            <span style={{ ...READOUT, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{hover.text.name}</span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, minWidth: 0 }}>
+            <span style={{ alignSelf: 'center', display: 'inline-flex' }}><Swatch s={hover.text.s} /></span>
+            <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+              {hover.text.prefix && (
+                <span style={{ ...READOUT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220, flexShrink: 0 }}>{hover.text.prefix} /</span>
+              )}
+              <span style={{ ...HOVER_NAME[hover.text.kind], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{hover.text.name}</span>
+            </span>
             <span style={{ ...READOUT, whiteSpace: 'nowrap' }}>{hover.text.facts}</span>
             {hover.text.nav && <span style={{ color: 'var(--accent)', whiteSpace: 'nowrap' }}>{STATES[hover.leaf.s].workflow} →</span>}
-          </>
+          </div>
         ) : model ? (
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
             {totals.titles.toLocaleString()} titles · hover a tile, click one to open its workflow
@@ -400,7 +500,7 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
       </div>
 
       {totals && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 4 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 6 }}>
           {STATES.slice(0, 5).map((st, s) => (
             <span key={st.name} style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6, opacity: totals.by[s] ? 1 : 0.55 }}>
               <Swatch s={s} />
@@ -411,33 +511,77 @@ export default function LibraryMap({ details, onNavigate, mediaFiles, torrentFil
         </div>
       )}
 
-      {gaps.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 4px', marginTop: 10 }}>
-          <span style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginRight: 6 }}>Biggest gaps</span>
-          {/* The kit's quiet button as it comes. A library title is one
-              auditorr knows, so Geist (ITEM_TITLE's rule); a torrent folder's
-              is a release name, so mono (MONO_TITLE's). */}
-          {gaps.map(g => {
-            const nav = navFor(g.state, g.t)
-            return (
-              <span key={`${g.t.root}/${g.t.rel}`} onMouseEnter={() => showTitle(g.t)} onMouseLeave={() => setHover(null)}>
-                <Button size="sm" variant="ghost" disabled={!nav} onClick={() => nav && onNavigate(nav)}
-                  style={{ '--btn-border': 'transparent', gap: 6 }}>
-                  <Swatch s={g.state} />
-                  <span style={{ color: 'var(--text)', ...(g.t.root === 'torrents' ? { fontFamily: 'var(--mono)' } : null) }}>{g.t.name}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>{formatBytes(g.bytes)}</span>
-                </Button>
-              </span>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }
 
-function worstOf(t) {
-  let best = LINKED, most = 0
-  for (const s of PROBLEM) if (t.by[s] > most) { most = t.by[s]; best = s }
-  return best
+// ── Biggest gaps ─────────────────────────────────────────────────────────────
+// The titles with the most bytes for a workflow, from the stored scan whatever
+// the map's Titles/Files switch says. A card of its own since 2026-11-10, left
+// of Last scan; it was a wrapped row of buttons under the map. Its headline is
+// what the map's "To act on" stat said, since the list is the top of that total.
+//
+// Each row is the kit's quiet button, full width: the swatch, the name (a
+// library title in Geist, a release name in mono, as ITEM_TITLE and MONO_TITLE
+// set a row title), the bytes, and the workflow a click opens, in words,
+// because at 9px a swatch's pattern is too small to tell states apart by.
+const GAP_ROWS = 6
+
+export function BiggestGapsCard({ row, model, onNavigate, onHighlight }) {
+  const totals = useMemo(() => (model ? modelTotals(model) : null), [model])
+  const gaps = useMemo(() => (model ? biggestGaps(model, GAP_ROWS) : []), [model])
+  useEffect(() => () => onHighlight?.(null), [])     // never leave a tile outlined behind
+  const clear = () => onHighlight?.(null)
+
+  return (
+    <div style={{ ...CARD, padding: '18px 20px 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 8 }}>
+        <span style={SECTION_LABEL}>Biggest gaps</span>
+      </div>
+      {row === undefined ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="skeleton" style={{ width: 140, height: 30, borderRadius: 5 }} />
+          {[0, 1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 14, borderRadius: 4 }} />)}
+        </div>
+      ) : !totals ? (
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: 0, lineHeight: 1.6 }}>
+          The list appears after the next scan.
+        </p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <Hero text={formatBytes(totals.problem)} />
+            <span style={CAPTION}>
+              to act on{totals.problemTitles ? ` in ${totals.problemTitles.toLocaleString()} title${totals.problemTitles !== 1 ? 's' : ''}` : ''}
+            </span>
+          </div>
+          {totals.problem === 0 ? (
+            <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
+              <TrendPill trend={{ sentiment: 'good' }} icon="✓" label="Nothing to act on: every title is linked" />
+            </div>
+          ) : gaps.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 12, marginLeft: -8, marginRight: -8 }}
+              onMouseLeave={clear} onBlur={clear}>
+              {gaps.map(g => {
+                const nav = navFor(g.state, g.t)
+                const show = () => onHighlight?.({ t: g.t, state: g.state })
+                return (
+                  <span key={`${g.t.root}/${g.t.rel}`} style={{ display: 'flex' }} onMouseEnter={show} onFocus={show}>
+                    <Button size="sm" variant="ghost" disabled={!nav} onClick={() => nav && onNavigate(nav)}
+                      title={nav ? `Open ${STATES[g.state].workflow} on this title` : undefined}
+                      style={{ '--btn-border': 'transparent', width: '100%', justifyContent: 'flex-start', gap: 10, padding: '4px 8px', fontWeight: 400 }}>
+                      <Swatch s={g.state} />
+                      <span style={{ ...(g.t.root === 'torrents' ? MONO_TITLE : ITEM_TITLE), flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'left' }}>{g.t.name}</span>
+                      <span style={{ ...READOUT, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{formatBytes(g.bytes)}</span>
+                      <span style={{ ...CAPTION, width: 52, textAlign: 'left' }}>{STATES[g.state].workflow}</span>
+                    </Button>
+                  </span>
+                )
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, scoreColor, tint } from '../utils'
 import ChangesPanel from './ChangesPanel'
@@ -7,7 +7,8 @@ import { api } from '../api'
 import { useToast } from './Toast'
 import { Button } from './workflows/shared'
 import { SECTION_LABEL, fmtChartDate, splitValueUnit, HeroNumber, TrendPill } from './dashKit'
-import LibraryMap from './LibraryMap'
+import LibraryMap, { BiggestGapsCard, useLibraryMapRow } from './LibraryMap'
+import { modelFromRow } from './libraryMapRules'
 import { LastScanCard, NewInLibraryCard, scanAlert } from './ScanCards'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
@@ -414,10 +415,16 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
 // map, the last scan and what's new in the library (2026-11-09). The upload
 // panels and the tracker leaderboard moved to the Trackers page, and the
 // tracker dropdown, which filtered only them, went. Cross-seed effectiveness
-// followed them on 2026-11-10, beside the leaderboard it used to sit with.
+// followed them on 2026-11-10, beside the leaderboard it used to sit with, and
+// Biggest gaps left the map for a card of its own, left of Last scan.
 export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, onReveal, onScan, mediaFiles, torrentFiles, ensureFilesLoaded }) {
   const toast = useToast()
   const [uploadStats, setUploadStats] = useState(null)
+  // The map's stored row, one fetch for the map and Biggest gaps; a gap
+  // hovered there outlines its tile on the map.
+  const mapRow = useLibraryMapRow()
+  const mapModel = useMemo(() => (mapRow ? modelFromRow(mapRow) : null), [mapRow])
+  const [mapFocus, setMapFocus] = useState(null)
 
   useEffect(() => {
     api.uploadStats(timeRange).then(d => {
@@ -669,11 +676,12 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       </div>
 
       {/* Row 3: the library map, the page's width */}
-      <LibraryMap details={det} onNavigate={onNavigate}
+      <LibraryMap details={det} onNavigate={onNavigate} row={mapRow} rowModel={mapModel} focus={mapFocus}
         mediaFiles={mediaFiles} torrentFiles={torrentFiles} ensureFilesLoaded={ensureFilesLoaded} />
 
-      {/* Row 4: the last scan, and what's new in the library */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
+      {/* Row 4: the biggest gaps, the last scan, and what's new in the library */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
+        <BiggestGapsCard row={mapRow} model={mapModel} onNavigate={onNavigate} onHighlight={setMapFocus} />
         <LastScanCard id="last-scan-card" scanReport={scanReport} details={det} savedAt={current.timestamp} onScan={onScan} />
         <NewInLibraryCard uploadStats={uploadStats} timeRange={timeRange} onNavigate={onNavigate} />
       </div>

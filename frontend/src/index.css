@@ -266,6 +266,27 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .seg-opt:disabled { opacity: 0.45; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) { .seg-opt { transition: none; } }
 
+/* The library map's height grip (LibraryMap.jsx, 2026-11-10): a full-width bar
+   under the map with a line icon, washed on hover like a segment. Drag it,
+   double-click it for the default, or focus it and use the arrow keys.
+   touch-action: none, or a touch drag scrolls the page instead. */
+.map-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  cursor: row-resize;
+  touch-action: none;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
+}
+.map-grip:hover,
+.map-grip[data-dragging="true"] { color: var(--text); background: color-mix(in srgb, var(--text) 4%, transparent); }
+.map-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .map-grip { transition: none; } }
+
 /* IconButton / CloseButton (shared.jsx): a quiet square for a line icon — the
    close ×, a collapse chevron. An icon has no font size, which is what retired
    the type guard's two close-× exemptions. */

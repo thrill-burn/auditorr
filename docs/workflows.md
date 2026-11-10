@@ -129,7 +129,7 @@ the indexer pickers either.
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
 **From the library map.** The Dashboard's library map draws every title not
-seeded in blue. Click one, or one of the *Biggest gaps* under the map, and
+seeded in blue. Click one, or a title on the *Biggest gaps* card below it, and
 Backfill opens with only that title's candidates; a line at the top names it,
 with **Show everything** to go back to the whole library. It goes by the title's
 folder, not its name, so a show whose folder is named differently from its title

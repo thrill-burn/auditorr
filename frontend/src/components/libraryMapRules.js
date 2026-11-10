@@ -149,25 +149,30 @@ export function modelFromFiles(media, torrents) {
   ])
 }
 
-// Totals for the card's header: bytes by state, and the library's titles by
-// how much of each is linked.
+// Totals for the map's header and the Biggest gaps card: bytes by state, the
+// library's titles by how much of each is linked, and how many titles in
+// either root have bytes for a workflow. A torrent release sits in one block
+// per state, so it's counted once by its folder; a folded tile is many titles
+// of unknown problems, so it isn't counted.
 export function modelTotals(model) {
   const by = zeros()
-  let files = 0, full = 0, partly = 0, none = 0, problemTitles = 0, titles = 0
+  let files = 0, full = 0, partly = 0, none = 0, titles = 0
+  const problemKeys = new Set()
   for (const r of model.roots) {
     r.by.forEach((b, i) => { by[i] += b })
     for (const f of r.folders) for (const t of f.titles) {
       files += t.files || 0
-      if (r.name !== 'library' || t.folded) continue
-      titles += 1
+      if (t.folded) continue
       const bad = PROBLEM.some(s => t.by[s] > 0)
-      if (bad) problemTitles += 1
+      if (bad) problemKeys.add(`${r.name}\u0000${t.rel}`)
+      if (r.name !== 'library') continue
+      titles += 1
       if (!bad) full += 1
       else if (t.by[LINKED] > 0) partly += 1
       else none += 1
     }
   }
-  return { by, files, full, partly, none, titles, problemTitles,
+  return { by, files, full, partly, none, titles, problemTitles: problemKeys.size,
            problem: PROBLEM.reduce((x, s) => x + by[s], 0) }
 }
 
