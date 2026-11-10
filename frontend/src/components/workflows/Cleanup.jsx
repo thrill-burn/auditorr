@@ -455,7 +455,7 @@ function EmptyFolders({ empty, shown, selected, onToggle, onToggleAll }) {
 const DISMISSED = new Set()
 const DISMISSED_FOLDERS = new Set()
 
-export default function Cleanup({ onNavigate, onScript, triageCount }) {
+export default function Cleanup({ onNavigate, onScript, triageCount, initialSearch }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
@@ -500,7 +500,7 @@ export default function Cleanup({ onNavigate, onScript, triageCount }) {
   // exclusion builder below keeps every group, so a folder rule is still written
   // only when every orphan under it — shown or not — was picked.
   const allFiles = useMemo(() => groups.flatMap(g => g.files), [groups])
-  const [filters, setFilters, { visible, unknownHidden }] = useListFilters('auditorr_filters_cleanup', FILTER_FIELDS, allFiles)
+  const [filters, setFilters, { visible, unknownHidden }] = useListFilters('auditorr_filters_cleanup', FILTER_FIELDS, allFiles, initialSearch)
   const visibleGroups = useMemo(() => {
     if (visible === allFiles) return groups
     const keep = new Set(visible)

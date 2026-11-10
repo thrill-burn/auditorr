@@ -464,6 +464,20 @@ def db_get_last_two_snapshots():
         conn.close()
 
 
+def db_count_runs_since(since_iso):
+    """`{status: count}` of the audit runs at or after `since_iso` — the Last scan
+    card's "N scans in the last 30 days", without reading every row."""
+    conn = _db_conn()
+    try:
+        rows = conn.execute(
+            'SELECT status, COUNT(*) AS n FROM audit_runs WHERE ran_at >= ? GROUP BY status',
+            (since_iso,)
+        ).fetchall()
+        return {r['status']: r['n'] for r in rows}
+    finally:
+        conn.close()
+
+
 def db_get_recent_runs(limit=None):
     conn = _db_conn()
     try:

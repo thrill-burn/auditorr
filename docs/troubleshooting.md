@@ -113,8 +113,9 @@ over it.
 
 ## A scan refused to save its results
 
-**Symptom:** the status message starts with *Source anomaly*, Audit History shows
-a run marked `anomaly`, and every figure still describes the last scan that
+**Symptom:** the Dashboard's **Last scan** card says *Refused*, a line at the top
+of the Dashboard says the numbers are from an earlier scan, the status message
+starts with *Source anomaly*, and every figure still describes the last scan that
 completed.
 
 That is deliberate. "Orphaned" is not something auditorr reads off a file — it
@@ -150,9 +151,11 @@ five minutes before recording a failure — an array or a network share can take
 that long. A scan is otherwise next attempted on the scheduled interval, so if
 you fixed a mount, start a scan yourself rather than waiting for it.
 
-The debug report's `source_health` section carries the last report (including how
-many files were walked per root and any folders that couldn't be listed), the
-reference counts and the last refusal.
+The **Last scan** card on the Dashboard shows the last saved scan's report: how
+many instances answered, whether every torrent's file list was read, how many
+files each folder held and whether any couldn't be listed. The debug report's
+`source_health` section carries the same report, the reference counts and the
+last refusal.
 
 ---
 
@@ -280,6 +283,23 @@ thousand folders or more. If you can't upgrade yet, either:
 - turn the watchdog off under **Config → Watchdog & Scheduled Audits** and
   save. The loop stops as soon as you save, and the scheduled audit keeps
   your results current.
+
+---
+
+## Cleanup never lists empty folders
+
+**Symptom:** the Dashboard's **Last scan** card says *Empty folders: not looked
+for*, and Cleanup says your client's folders didn't load.
+
+Cleanup offers an empty folder only once it knows every folder your client saves
+into, so it never offers one a category is about to fill. If your client's
+settings or categories can't be read, it offers none rather than guess.
+
+**With qui**, versions of auditorr before this fix read qui's newer way of
+answering for those settings (since October 2026) as one they couldn't use, so
+no scan looked for empty folders. Upgrade, and the next scan does. If it still
+says *not looked for*, the container log has a line starting
+`qui[<instance>]: preferences or categories` saying why.
 
 ---
 

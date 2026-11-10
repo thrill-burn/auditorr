@@ -29,9 +29,14 @@ function readStored(storageKey, fields) {
 }
 
 // [state, setState, result] — `result` is `applyListFilters` for `items`,
-// recomputed when either changes.
-export function useListFilters(storageKey, fields, items) {
-  const [state, setState] = useState(() => readStored(storageKey, fields))
+// recomputed when either changes. `initialQuery` (a tile on the Dashboard's
+// library map, 2026-11-09) starts the page on an empty filter with just that
+// search, rather than the stored one: a tracker or range left from earlier
+// could hide the very row the tile was for.
+export function useListFilters(storageKey, fields, items, initialQuery) {
+  const [state, setState] = useState(() => (initialQuery
+    ? { ...emptyFilterState(fields), q: String(initialQuery) }
+    : readStored(storageKey, fields)))
   useEffect(() => {
     try { sessionStorage.setItem(storageKey, JSON.stringify(state)) } catch { /* private mode */ }
   }, [storageKey, state])

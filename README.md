@@ -1,8 +1,8 @@
 # auditorr
 
 **An audit tool for hardlinked media libraries using qBittorrent / qui + Sonarr / Radarr, following the [TRaSH Guides folder structure](https://trash-guides.info/File-and-Folder-Structure/).**
-A dashboard with health score, per-tracker analytics, and cross-seed effectiveness 
-tells you what's wrong with your library. Five automated workflows fix it.
+A dashboard with a health score, a map of where your disk goes and which files aren't hardlinked,
+and cross-seed effectiveness tells you what's wrong with your library. Five automated workflows fix it.
 Built to stay light on memory, it runs on **500+ TB** libraries.
 
 <p align="center">
@@ -49,8 +49,8 @@ Upgrading needs no configuration changes. From 1.7.0 or earlier? 1.7.1 [closed o
     <td width="50%" valign="top">
       <a href="docs/feature-trackers.png"><img src="docs/feature-trackers.png" alt="Trackers" /></a>
       <p><b>Trackers</b><br>
-      Configurable chart of per-tracker analytics. Deep-link into the explorer pre-filtered
-      by tracker.</p>
+      Configurable chart of per-tracker analytics, with upload activity, yield and disk
+      space by tracker. Deep-link into the explorer pre-filtered by tracker.</p>
     </td>
     <td width="50%" valign="top">
       <a href="docs/feature-changes.png"><img src="docs/feature-changes.png" alt="Change log" /></a>

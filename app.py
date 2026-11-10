@@ -12,7 +12,7 @@ import functools
 import ipaddress
 import urllib.parse
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -29,7 +29,7 @@ from db import (
     db_load_file_results, db_stream_file_results, db_has_file_results,
     db_read_snapshot,
     db_save_history,
-    db_get_recent_runs,
+    db_get_recent_runs, db_count_runs_since,
     db_clear_audit_history,
     db_get_upload_snapshots,
     db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
@@ -485,10 +485,68 @@ def client_error():
     return jsonify({'status': 'ok'})
 
 
+# The source report's counts the Last scan card reads. Notes and the failed
+# instances' reasons stay out: a reason is a raw exception that can name a host
+# (CR7), and the card has no use for one.
+_SCAN_REPORT_KEYS = ('source', 'torrent_count', 'distinct_torrents', 'file_map_size',
+                     'instances_ok', 'instances_total', 'listing_failures', 'listing_recovered',
+                     'listing_unresolved', 'tracker_failures', 'incomplete_torrents',
+                     'completion_unknown', 'partial')
+_SCAN_WALK_KEYS = ('configured', 'exists', 'files', 'stat_errors', 'unlistable', 'vanished')
+
+
+def _scan_report():
+    """What the last scan could see, for the dashboard's Last scan card.
+
+    R1 on the page: the scan has stored this since S03 and C2, and only the debug
+    report read it, so a refused scan left the dashboard showing the previous
+    one's numbers with nothing on it saying so. `last_run` is the newest run of
+    any status — a refusal is `anomaly`, with `anomaly` saying why; `report` is
+    the last scan that persisted, which is what every number on the page is.
+    """
+    rep = db_get_meta('last_source_report') or None
+    out = {'report': None, 'anomaly': None, 'last_run': None, 'runs_30d': {}}
+    if isinstance(rep, dict):
+        report = {k: rep.get(k) for k in _SCAN_REPORT_KEYS}
+        report['instances_failed'] = len(rep.get('instances_failed') or [])
+        report['filesystem'] = {
+            root: {k: (block or {}).get(k) for k in _SCAN_WALK_KEYS}
+            for root, block in (rep.get('filesystem') or {}).items()}
+        out['report'] = report
+    runs = db_get_recent_runs(limit=1)
+    if runs:
+        r = runs[0]
+        out['last_run'] = {k: r.get(k) for k in ('ran_at', 'trigger', 'status', 'duration_seconds',
+                                                  'peak_rss_mb')}
+        if r.get('status') != 'ok':
+            out['last_run']['error_message'] = r.get('error_message')
+        if r.get('status') == 'anomaly':
+            a = db_get_meta('last_source_anomaly') or {}
+            out['anomaly'] = {k: a.get(k) for k in ('at', 'trigger', 'code', 'message')}
+    out['runs_30d'] = db_count_runs_since((datetime.now() - timedelta(days=30)).isoformat())
+    return out
+
+
 @app.route('/api/results')
 @require_auth
 def get_results():
-    return jsonify(db_load_results())
+    data = db_load_results()
+    try:
+        data['scan_report'] = _scan_report()
+    except Exception as e:
+        log.warning(f"Could not build the scan report: {e}")
+        data['scan_report'] = None
+    return jsonify(data)
+
+
+@app.route('/api/library_map')
+@require_auth
+def get_library_map():
+    """The dashboard's library map, as the last scan stored it (`audit.library_map_row`).
+
+    Streamed through like `/api/files`. `[]` until the first scan that writes it.
+    """
+    return app.response_class(db_stream_file_results('library_map'), mimetype='application/json')
 
 
 @app.route('/api/next_steps')
@@ -6079,10 +6137,27 @@ def _build_generate_candidates(cfg, folders=None, title_search=None):
     return _narrow_backfill(_resolve_backfill(cfg)['groups'], folders, title_search)
 
 
-def _narrow_backfill(groups, folders=None, title_search=None, exclude_keys=None):
-    """The page's folder and title filters, and the candidates it already grabbed (B6)."""
+def _backfill_under(group, under):
+    """Whether a candidate's files sit at or under `under`, a library-relative folder
+    (BACKFILL B15: the dashboard's library map opens Backfill on one title).
+
+    By path, never by title: the map's tiles are folders, and a folder's name
+    isn't the arr's title (`Pluribus` is Sonarr's `PLUR1BUS` on the box, and a
+    movie folder carries its year). Every file of a candidate is in one series
+    or movie folder, so its representative path answers for all of them.
+    """
+    path = str(group.get('path') or '').replace('\\', '/')
+    under = str(under).replace('\\', '/').strip('/')
+    return bool(under) and (path == under or path.startswith(under + '/'))
+
+
+def _narrow_backfill(groups, folders=None, title_search=None, exclude_keys=None, under=None):
+    """The page's folder and title filters, the map's folder scope (B15), and the
+    candidates it already grabbed (B6)."""
     if exclude_keys:
         groups = [g for g in groups if g['key'] not in exclude_keys]
+    if under:
+        groups = [g for g in groups if _backfill_under(g, under)]
     if folders:
         groups = [g for g in groups if g['folder'] in folders]
     if title_search:
@@ -6116,6 +6191,7 @@ def workflows_generate():
     source_filter = data.get('source_filter') or []
     hdr_filter    = data.get('hdr_filter') or []
     title_search  = (data.get('title_search') or '').strip()
+    under         = (data.get('under') or '').strip() if isinstance(data.get('under'), str) else ''
     # B6 — the keys of candidates whose grab this page's server accepted, held by
     # the page until the audit lands. The run builds its candidates here, so a
     # grabbed candidate the page merely hid would be searched and offered again.
@@ -6137,7 +6213,8 @@ def workflows_generate():
         backfill = _resolve_backfill(cfg)
         candidates = _sort_generate_candidates(
             _narrow_backfill(backfill['groups'], folders=folders or None,
-                             title_search=title_search or None, exclude_keys=exclude_keys),
+                             title_search=title_search or None, exclude_keys=exclude_keys,
+                             under=under or None),
             sort,
         )[:count]
     except Exception as e:

@@ -12,6 +12,18 @@ import {
 import { SeasonPackModal } from './SeasonPack'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// BACKFILL B15: a candidate is under a library folder when its representative
+// file is, which answers for all of it (one series or movie folder holds every
+// file of a candidate). `app._backfill_under` is the same test, applied to the
+// run; this one counts the page. By path, never by title: the library map's
+// tiles are folders, and a folder's name isn't the arr's (`Pluribus` is
+// Sonarr's `PLUR1BUS`, and a movie folder carries its year).
+export function underFolder(group, under) {
+  const path = String(group.path || '').replace(/\\/g, '/')
+  const u = String(under || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  return !!u && (path === u || path.startsWith(u + '/'))
+}
+
 // Candidates arrive grouped, scoped and labelled with their root folder by the
 // server (`_resolve_backfill`), from the same computation the search runs on.
 // There is deliberately no grouping on this side any more (B7b): whether a
@@ -691,8 +703,12 @@ function saveJobId(id) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function Backfill({ onNavigate }) {
+export default function Backfill({ onNavigate, initialUnder }) {
   const [phase, setPhase] = useState(() => (readJobId() ? 'running' : 'config'))  // config | running | done | stopped
+  // B15 — one library folder, from a tile on the Dashboard's library map. While
+  // it's set it is the selection: the root-folder chips and the title filter
+  // step aside, since either could only narrow the one title to nothing.
+  const [under, setUnder] = useState(() => initialUnder || null)
   // T25 — the season whose *Find season pack…* opened the dialog.
   const [packFor, setPackFor] = useState(null)
 
@@ -807,12 +823,14 @@ export default function Backfill({ onNavigate }) {
   const handleDownloadFromChange = v => { setDownloadFrom(v); saveFilters(v, seedingOn) }
   const handleSeedingOnChange    = v => { setSeedingOn(v);    saveFilters(downloadFrom, v) }
 
-  // Filter raw groups by title search, then derive folder chips + count reactively
+  // Filter raw groups by the map's folder or the title search, then derive
+  // folder chips + count reactively
   const filteredGroups = useMemo(() => {
+    if (under) return allGroups.filter(g => underFolder(g, under))
     if (!titleSearch.trim()) return allGroups
     const term = titleSearch.trim().toLowerCase()
     return allGroups.filter(g => (g.arr_title || '').toLowerCase().includes(term))
-  }, [allGroups, titleSearch])
+  }, [allGroups, titleSearch, under])
 
   const folderEntries = useMemo(() => groupByFolder(filteredGroups), [filteredGroups])
   const folders = useMemo(
@@ -826,10 +844,10 @@ export default function Backfill({ onNavigate }) {
     () => selectedFolders.filter(f => folders.some(x => x.name === f)), [selectedFolders, folders])
 
   const selectedGroups = useMemo(() => (
-    liveFolders.length === 0
+    under || liveFolders.length === 0
       ? filteredGroups
       : folderEntries.filter(([name]) => liveFolders.includes(name)).flatMap(([, items]) => items)
-  ), [folderEntries, filteredGroups, liveFolders])
+  ), [folderEntries, filteredGroups, liveFolders, under])
 
   const availableCount = selectedGroups.length
   const willSearch = searchCount === null ? availableCount : Math.min(availableCount, searchCount)
@@ -915,14 +933,15 @@ export default function Backfill({ onNavigate }) {
     setPollError(null)
     try {
       const resp = await api.startGenerate({
-        folders:       liveFolders,
+        folders:       under ? [] : liveFolders,
         count:         searchCount ?? availableCount,
         sort,
         release_rank:  releaseRank,
         res_filter:    resFilter,
         source_filter: sourceFilter,
         hdr_filter:    hdrFilter,
-        title_search:  titleSearch.trim() || undefined,
+        title_search:  under ? undefined : (titleSearch.trim() || undefined),
+        under:         under || undefined,
         download_from: downloadFrom,
         seeding_on:    seedingOn,
         // B6 — grabbed since the last audit; the run builds its own list.
@@ -984,6 +1003,16 @@ export default function Backfill({ onNavigate }) {
           extra="Everything affected is missing from the candidates and folders below."
         />
 
+        {under && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 8, background: tint('var(--blue)', 6), border: `1px solid ${tint('var(--blue)', 19)}` }}>
+            <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.5, minWidth: 0 }}>
+              From the library map: only <span style={{ fontFamily: 'var(--mono)' }}>{under}</span>
+              {!loading && <span style={{ color: 'var(--text-dim)' }}> · {availableCount.toLocaleString()} candidate{availableCount !== 1 ? 's' : ''}</span>}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => setUnder(null)} style={{ marginLeft: 'auto' }}>Show everything</Button>
+          </div>
+        )}
+
         {loading ? (
           <LoadingRow label="Loading candidates…" />
         ) : (
@@ -1015,7 +1044,7 @@ export default function Backfill({ onNavigate }) {
               </div>
             )}
 
-            {folders.length > 0 && (
+            {folders.length > 0 && !under && (
               <div>
                 <SectionLabel>Root Folders</SectionLabel>
                 <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
@@ -1060,9 +1089,11 @@ export default function Backfill({ onNavigate }) {
                 How to order candidates when there are more than the search limit.
               </div>
               <SortPicker options={SORT_OPTIONS} value={sort} onChange={setSort} label="Priority" />
-              <div style={{ marginTop: 12 }}>
-                <SearchInput value={titleSearch} onChange={setTitleSearch} placeholder="Filter by title…" width={220} />
-              </div>
+              {!under && (
+                <div style={{ marginTop: 12 }}>
+                  <SearchInput value={titleSearch} onChange={setTitleSearch} placeholder="Filter by title…" width={220} />
+                </div>
+              )}
             </div>
 
             <div>
@@ -1098,8 +1129,10 @@ export default function Backfill({ onNavigate }) {
                 Generate {willSearch > 0 ? `${willSearch} ` : ''}Releases →
               </Button>
               {availableCount === 0 && (
-                <div style={{ marginTop: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
-                  No resolved candidates — check that Radarr/Sonarr is configured.
+                <div style={{ marginTop: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                  {under
+                    ? <>Nothing under <span style={{ fontFamily: 'var(--mono)' }}>{under}</span> to search: Sonarr and Radarr manage none of its unseeded files, or they're excluded. Backfill can only search for what an arr manages.</>
+                    : 'No resolved candidates — check that Radarr/Sonarr is configured.'}
                 </div>
               )}
             </div>

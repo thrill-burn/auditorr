@@ -5,6 +5,7 @@ import MultiLineChart from './MultiLineChart'
 import CompareTable from './CompareTable'
 import { api } from '../api'
 import { Segmented } from './workflows/shared'
+import { TopTrackersCard, UploadActivityCard, UploadByTrackerCard, TrackerDetailModal } from './TrackerPanels'
 
 // Categorical series palette — one stable hue per tracker. Color IS the data
 // here: this is the one place auditorr spends hue freely (a chart series).
@@ -87,8 +88,9 @@ function MetricSwitch({ value, onChange }) {
   )
 }
 
-export default function Trackers({ trackerFileStats, allTrackers, timeRange, onNavigate }) {
+export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers, timeRange, onNavigate }) {
   const [uploadStats, setUploadStats] = useState(null)
+  const [trackerDetail, setTrackerDetail] = useState(null)
   const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(timeRange))
   const [dateTo,      setDateTo]      = useState('')
   const [metricKey,   setMetricKey]   = useState('uploaded')
@@ -214,6 +216,25 @@ export default function Trackers({ trackerFileStats, allTrackers, timeRange, onN
         hovered={hovered} onHover={setHovered} sortKey={sortKey} sortDir={sortDir} onSort={sortBy}
         onNavigate={onNavigate}
       />
+
+      {/* The Dashboard's upload panels, moved here as they were (2026-11-09).
+          They follow this page's date range and the trackers on its chart, and
+          their bars take each tracker's chart colour. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
+        <UploadActivityCard uploadStats={uploadStats} trackers={visible} colorFor={colorFor} />
+        <UploadByTrackerCard uploadStats={uploadStats} trackers={visible} onTrackerDetail={setTrackerDetail} />
+      </div>
+      <TopTrackersCard trackerStats={crossSeedStats?.tracker_stats} trackers={visible} onTrackerDetail={setTrackerDetail} />
+
+      {trackerDetail && (
+        <TrackerDetailModal
+          trackerName={trackerDetail}
+          trackerStats={trackerFileStats?.[trackerDetail]}
+          uploadStats={uploadStats}
+          onNavigate={(action) => { setTrackerDetail(null); onNavigate(action) }}
+          onClose={() => setTrackerDetail(null)}
+        />
+      )}
     </div>
   )
 }

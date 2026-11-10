@@ -128,6 +128,17 @@ the indexer pickers either.
 
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
+**From the library map.** The Dashboard's library map draws every title not
+seeded in blue. Click one, or one of the *Biggest gaps* under the map, and
+Backfill opens with only that title's candidates; a line at the top names it,
+with **Show everything** to go back to the whole library. It goes by the title's
+folder, not its name, so a show whose folder is named differently from its title
+in Sonarr is still found. If nothing comes up, Sonarr and Radarr manage none of
+that folder's unseeded files (a rip, a file in no series or movie folder), or
+they're excluded. Yellow, red and purple tiles open Cleanup, Triage and Dedupe
+the same way; Cleanup and Triage start with that release's folder in their
+search.
+
 ### Season packs and single episodes
 
 A Sonarr season is searched as **one season pack only when every episode file

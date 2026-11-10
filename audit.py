@@ -3,6 +3,7 @@ import re
 import gc
 import math
 import time
+import shutil
 import hashlib
 import logging
 import posixpath
@@ -1301,7 +1302,158 @@ def _library_shape(scoring_media):
 # config save until the next scan. (`dedupe_group_count` is recomputed there
 # instead, from the lists the recompute already holds.)
 SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
-                     'cleanup_unchecked_count', 'empty_folder_count', 'empty_folders_unknown')
+                     'cleanup_unchecked_count', 'empty_folder_count', 'empty_folders_unknown',
+                     'disk_space')
+
+
+# ---------------------------------------------------------------------------
+# The library map (the dashboard's treemap, 2026-11-09)
+# ---------------------------------------------------------------------------
+#
+# The disk as root → top-level folder → title, each title's bytes split by the
+# workflow that acts on them. **Linked bytes are counted once, in the library**:
+# a torrent-tree record with a library link is the same inode the library side
+# already counted, so the torrent root holds only what isn't linked. The states
+# are in the four dashboard cards' order, and the frontend's file-level view
+# (`libraryMapRules.js`, `stateOfMedia` / `stateOfTorrent`) is the same rule in
+# JavaScript, so the two views of a file can't disagree.
+MAP_LINKED, MAP_UNSEEDED, MAP_ORPHANED, MAP_NOT_IMPORTED, MAP_COPY, MAP_OTHER = range(6)
+# Titles kept by name, largest first. The rest fold into one tile per folder:
+# a title under a pixel draws nothing, and the row stays small on a library
+# with tens of thousands of titles.
+LIBRARY_MAP_TITLES_MAX = 2000
+
+
+def _map_state_media(f):
+    if f.get('linked_paths'):
+        return MAP_LINKED
+    if f.get('duplicate_paths'):
+        return MAP_COPY
+    return MAP_UNSEEDED
+
+
+def _map_state_torrent(f):
+    """An unlinked torrent-tree record's state. Never called for a linked one."""
+    if f.get('status') == 'Orphaned':
+        return MAP_ORPHANED
+    # An unfinished download is nobody's to act on yet (T4), and a sidecar of an
+    # imported torrent isn't "not imported" (T19), so both are Other, as the
+    # Not Imported card and Triage read them.
+    if not f.get('imported') and not f.get('sidecar') and not f.get('incomplete'):
+        return MAP_NOT_IMPORTED
+    if f.get('duplicate_paths'):
+        return MAP_COPY
+    return MAP_OTHER
+
+
+def _map_title(path):
+    """`(top-level folder, title)` of a root-relative path. A title is the folder
+    below the top-level one, or the file itself when it sits directly in it; a
+    file at the root has no folder (`''`)."""
+    if '\\' in path:
+        path = path.replace('\\', '/')
+    parts = path.split('/', 2)
+    if len(parts) == 1:
+        return '', parts[0]
+    return parts[0], parts[1]
+
+
+def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MAX):
+    """The library map's compact row: `{version, folders, titles, folded}`.
+
+    * `folders` — `[root, name]`, root `library` or `torrents`.
+    * `titles`  — `[folder index, name, files, b0, b1, b2, b3, b4, b5]`, one
+      byte sum per state (`MAP_*`), the `titles_max` largest.
+    * `folded`  — `[folder index, titles, files, b0 … b5]`, every other title of
+      that folder in one.
+
+    Excluded files are left out, as the score leaves them out. Holds names, so it
+    is its own file_results row, served by `/api/library_map` and never part of
+    the summary or the debug report.
+    """
+    # Runs over every record of both trees each scan, so it's written for that:
+    # a title's key is the path up to its second slash (one slice, not a split
+    # into parts), the media state is inline, and the torrent side's commonest
+    # case, a linked file, leaves first. 1.24 s → see .internal/dash_bench/.
+    lib, tor = {}, {}
+    for f in media_files:
+        if f.get('excluded'):
+            continue
+        path = f.get('path') or ''
+        if '\\' in path:
+            path = path.replace('\\', '/')
+        i = path.find('/')
+        j = path.find('/', i + 1) if i >= 0 else -1
+        key = path[:j] if j > 0 else path
+        row = lib.get(key)
+        if row is None:
+            row = lib[key] = [0, 0, 0, 0, 0, 0, 0]
+        row[0] += 1
+        # 1 + MAP_LINKED / MAP_COPY / MAP_UNSEEDED, as `_map_state_media`.
+        row[1 if f.get('linked_paths') else (5 if f.get('duplicate_paths') else 2)] += f.get('size') or 0
+    for f in torrent_files:
+        if f.get('linked_paths') or f.get('excluded'):
+            continue
+        path = f.get('path') or ''
+        if '\\' in path:
+            path = path.replace('\\', '/')
+        i = path.find('/')
+        j = path.find('/', i + 1) if i >= 0 else -1
+        key = path[:j] if j > 0 else path
+        row = tor.get(key)
+        if row is None:
+            row = tor[key] = [0, 0, 0, 0, 0, 0, 0]
+        row[0] += 1
+        row[1 + _map_state_torrent(f)] += f.get('size') or 0
+    # Sorted in place, largest first, without a second copy of either dict.
+    items = [('library', key, row) for key, row in lib.items()]
+    del lib
+    items.extend(('torrents', key, row) for key, row in tor.items())
+    del tor
+    items.sort(key=lambda it: -sum(it[2][1:]))
+    folders, fidx, out, folded = [], {}, [], {}
+    for root, key, row in items:
+        folder, title = _map_title(key)
+        fk = (root, folder)
+        fi = fidx.get(fk)
+        if fi is None:
+            fi = fidx[fk] = len(folders)
+            folders.append([root, folder])
+        if len(out) < titles_max:
+            out.append([fi, title, *row])
+        else:
+            agg = folded.get(fi)
+            if agg is None:
+                agg = folded[fi] = [0] * 8
+            agg[0] += 1
+            for i, v in enumerate(row):
+                agg[1 + i] += v
+    return {'version': 1, 'folders': folders, 'titles': out,
+            'folded': [[fi, *agg] for fi, agg in sorted(folded.items())]}
+
+
+def disk_space(local_path, media_path):
+    """Free and total bytes of the filesystem under each root, for the map's header.
+
+    `same` says the two roots report one filesystem, so the card shows one free
+    figure. Counts only — the details reach the debug report. A root that isn't
+    there or can't be asked is left out rather than read as empty (R1).
+    """
+    out, devs = {}, {}
+    for name, path in (('torrents', local_path), ('media', media_path)):
+        if not path:
+            continue
+        try:
+            st = os.stat(path)
+            du = shutil.disk_usage(path)
+        except OSError:
+            continue
+        out[name] = {'free': du.free, 'total': du.total}
+        devs[name] = st.st_dev
+    if not out:
+        return None
+    out['same'] = len(devs) == 2 and devs['torrents'] == devs['media']
+    return out
 
 
 def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
@@ -1325,6 +1477,14 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
     total_media_size      = sum(f['size'] for f in scoring_media)
     hardlinked_media_size = sum(f['size'] for f in scoring_media if f.get('linked_paths'))
     total_torrents_size   = sum(f['size'] for f in scoring_torrents)
+    # The bytes both trees hold, counted once: the library map's "saved by
+    # hardlinks", and what turns the two totals into bytes on disk.
+    # `hardlinked_media_size` can't stand in for it: a library file whose torrent
+    # twin is excluded counts there but not in the torrent total (on the box, one
+    # disc rip's 23 GB made it larger than the whole torrent folder). The smaller
+    # of the two sides is what is held twice.
+    shared_size = min(sum(f['size'] for f in scoring_torrents if f.get('linked_paths')),
+                      hardlinked_media_size)
     orphaned_torrent_size = sum(f['size'] for f in scoring_torrents if f['status'] == 'Orphaned')
     # A sidecar of a torrent the library holds is not "not imported" (T19). An
     # unfinished download still is, here: T4 left the per-file figure alone.
@@ -1370,6 +1530,7 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
         "details": {
             "total_media_size": total_media_size, "hardlinked_media_size": hardlinked_media_size,
             "total_torrents_size": total_torrents_size, "orphaned_torrent_size": orphaned_torrent_size,
+            "shared_size": shared_size,
             "not_imported_size": not_imported_size, "duplicate_size": dup_size,
             "orphaned_torrent_count": sum(1 for f in scoring_torrents if f['status'] == 'Orphaned'),
             # Cleanup's Excluded box. Counted here rather than carried on the
@@ -1516,6 +1677,9 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
     # Use the last snapshot of each day (all rows, not just delta pairs)
     daily_point_by_tracker = {}
     daily_library_by_date  = {}
+    # New library files per day, by how they arrived. Each snapshot holds its own
+    # scan's count, so a day is the **sum** of its scans, not its last one.
+    daily_new_media        = {}
     for row in all_rows:
         try:
             t = datetime.fromisoformat(row['taken_at'])
@@ -1536,7 +1700,12 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
         # Library-wide block (hardlinked/duplicates) — absent in old snapshots
         lib = row['snapshot'].get('_library')
         if isinstance(lib, dict):
-            daily_library_by_date[date_str] = lib
+            nm = lib.get('new_media')
+            if isinstance(nm, dict):
+                day = daily_new_media.setdefault(date_str, {'linked': 0, 'copies': 0, 'unseeded': 0})
+                for k in day:
+                    day[k] += int(nm.get(k) or 0)
+            daily_library_by_date[date_str] = {k: v for k, v in lib.items() if k != 'new_media'}
 
     daily_tracker_stats = [
         {'date': date_str, 'by_tracker': stats}
@@ -1595,6 +1764,8 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
         "daily_uploads":       daily_uploads,
         "daily_tracker_stats": daily_tracker_stats,
         "daily_library_stats": daily_library_stats,
+        # Only days a scan counted: a day before counting began is absent, not 0.
+        "daily_new_media":     [{'date': d, **v} for d, v in sorted(daily_new_media.items())],
         "tracker_yields":      tracker_yields,
     }
 
@@ -1651,12 +1822,34 @@ def file_signatures(files):
     }
 
 
-def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None):
+def new_media_class(f, torrent_root):
+    """How a library file new since the last scan arrived (the dashboard's New in
+    the library card): `linked` to a torrent file, a `copies` of one (identical
+    bytes, its own inode, so the link wasn't made), or `unseeded` (neither: a
+    rip, a Usenet grab, a copy of another library file). Says nothing about who
+    made a copy — the first copy the box served was a hand copy (DEDUPE)."""
+    if f.get('linked_paths'):
+        return 'linked'
+    for p in f.get('duplicate_paths') or ():
+        if not torrent_root or _path_under(_norm_abs(p), torrent_root):
+            return 'copies'
+    return 'unseeded'
+
+
+def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
+                                 new_media=None, torrent_root=None):
     """Diff the current snapshot against compact signatures of the previous scan.
 
     prev_sigs_by_tab: {'media': {path: bitmask}, 'torrents': {path: bitmask}}
     Lists are capped at 50 entries during collection (not after) so a mass
     rename/move can't transiently allocate one diff entry per file.
+
+    `new_media`, when a dict of counters (`linked`, `copies`, `unseeded`), is
+    filled in place with every new library path's `new_media_class`, uncapped
+    and whether or not anything else changed: an out-parameter like the walk's
+    `walk_report`, so the return value every caller reads is unchanged. Counted
+    here because this loop already visits every library file against the
+    previous scan's paths. `torrent_root` is `_norm_abs`'d.
     """
     if not prev_sigs_by_tab or not curr_snap:
         return None
@@ -1686,12 +1879,17 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None):
     for tab, key in [('media', 'media_files'), ('torrents', 'torrent_files')]:
         prev = prev_sigs_by_tab.get(tab) or {}
         curr_paths = set()
+        # A tree with no previous signatures is a first scan of it, where every
+        # path is "new" and none of them arrived.
+        count_new = new_media is not None and tab == 'media' and bool(prev)
 
         for f in curr_snap.get(key, []):
             path = f['path']
             curr_paths.add(path)
             if path not in prev:
                 add('new_files', {'path': path, 'size': f['size'], 'tab': tab})
+                if count_new and not f.get('excluded'):
+                    new_media[new_media_class(f, torrent_root)] += 1
             else:
                 sig = prev[path]
                 if not (sig & SIG_ORPHANED) and f.get('status') == 'Orphaned':
@@ -2612,6 +2810,8 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # Empty folders (C27), and whether they could be looked for at all.
             'empty_folder_count': len(empty_folders),
             'empty_folders_unknown': empty_dirs is None,
+            # The library map's free space: two system calls, counts only.
+            'disk_space': disk_space(cfg.get('LOCAL_PATH', ''), cfg.get('MEDIA_PATH', '')),
         }
         # The history point is staged rather than written: it joins the publish
         # below, because the hourly/daily series accumulates and a point left
@@ -2693,7 +2893,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                     "dashboard":   dashboard_stats,
                 }
                 prev_score = (db_load_results().get('dashboard') or {}).get('score')
-                diff = compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
+                new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
+                diff = compute_diff_from_signatures(
+                    prev_sigs, curr_snap, prev_score=prev_score, new_media=new_media,
+                    torrent_root=_norm_abs(cfg.get('LOCAL_PATH', '')) if cfg.get('LOCAL_PATH') else None)
+                # The New in the library card's series rides the upload snapshot,
+                # so the dashboard's range applies to it like every other series.
+                # Only a scan that compared its library against a previous one
+                # counts, so a gap reads as "not counted", never as zero.
+                if upload_snapshot is not None and prev_sigs['media']:
+                    upload_snapshot.setdefault('_library', {})['new_media'] = new_media
                 del prev_sigs, curr_snap
             else:
                 log.info("No previous file signatures stored — change log skipped this run, "
@@ -2744,7 +2953,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
 
         # ── Compress, then publish (S04, decisions 1/2/4 — 2026-09-15) ────────
         # Everything above is computed; nothing above this line has been stored.
-        # The six blobs are built **outside** the transaction because
+        # The seven blobs are built **outside** the transaction because
         # compression is the expensive half and the write is the cheap one
         # (measured: 21 s against 0.1 s per tab at 650,000 files — see
         # db.PreparedFileResults), so the write lock is held for a fraction of a
@@ -2774,6 +2983,10 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # read this, never both full lists. References, keyed by tree.
             ('dedupe',   db_prepare_file_results(
                 dedupe_row(torrent_files_data, media_files_data))),
+            # The dashboard's library map: per-title byte sums by state, both
+            # trees. Names, so its own row, served by /api/library_map.
+            ('library_map', db_prepare_file_results(
+                library_map_row(media_files_data, torrent_files_data))),
         ]
         staged_sigs = [
             ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),

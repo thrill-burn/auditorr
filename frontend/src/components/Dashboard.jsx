@@ -1,31 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { formatBytes, formatBytesCompact, scoreColor, tint } from '../utils'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { formatBytes, scoreColor, tint } from '../utils'
 import ChangesPanel from './ChangesPanel'
-import { RangePresets, TrackerDropdown } from './FilterBar'
+import { RangePresets } from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
-import { Button, CloseButton, Segmented } from './workflows/shared'
-
-// Shared section-header label style — keeps every dashboard card title uniform.
-const SECTION_LABEL = {
-  fontFamily: 'var(--sans)',
-  fontSize: 'var(--font-md)',
-  fontWeight: 600,
-  color: 'var(--text)',
-  letterSpacing: 0,
-  textTransform: 'none',
-  textAlign: 'left',
-}
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-// Accepts a full ISO date (YYYY-MM-DD) and renders e.g. "Jun 12"; passes
-// through anything that isn't a date so it's safe as a tooltip formatter too.
-const fmtChartDate = v => {
-  if (typeof v !== 'string') return v
-  const p = v.split('-')
-  return p.length === 3 ? `${MONTHS[+p[1] - 1]} ${+p[2]}` : v
-}
+import { Button } from './workflows/shared'
+import { SECTION_LABEL, CARD, fmtChartDate, splitValueUnit, HeroNumber } from './dashKit'
+import LibraryMap from './LibraryMap'
+import { LastScanCard, NewInLibraryCard, scanAlert } from './ScanCards'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 function Skeleton({ w = '100%', h = 16, style = {} }) {
@@ -279,53 +262,6 @@ function GrafanaTooltip({ active, payload, label, color }) {
   )
 }
 
-// ── Upload activity tooltip ───────────────────────────────────────────────────
-const TRACKER_COLORS = [
-  '#38bdf8', '#a78bfa', '#22c55e', '#f59e0b',
-  '#ef4444', '#ec4899', '#14b8a6', '#f97316',
-]
-
-function UploadActivityTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null
-  const items = payload.filter(p => p.value > 0)
-  const total = payload.reduce((s, p) => s + (p.value || 0), 0)
-  return (
-    <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 160 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
-      {items.map(p => (
-        <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
-          <div style={{ width: 8, height: 8, borderRadius: 2, background: p.fill, flexShrink: 0 }} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: '#ebebeb', flex: 1 }}>{p.name}</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{formatBytes(p.value)}</span>
-        </div>
-      ))}
-      {items.length > 1 && (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Total</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function RoundedStackedBar({ x, y, width, height, fill, allTrackers, host, payload }) {
-  if (!height || height <= 0) return null
-  const r = 3
-  // Determine if this segment is the topmost non-zero segment for this day
-  const idx = allTrackers.indexOf(host)
-  const isTop = allTrackers.slice(idx + 1).every(t => !(payload[t] > 0))
-  if (isTop) {
-    return (
-      <path
-        d={`M${x},${y + r} a${r},${r} 0 0 1 ${r},-${r} h${width - 2 * r} a${r},${r} 0 0 1 ${r},${r} v${height - r} h-${width} Z`}
-        fill={fill}
-      />
-    )
-  }
-  return <rect x={x} y={y} width={width} height={height} fill={fill} />
-}
-
 // ── Trend pill ────────────────────────────────────────────────────────────────
 // Sentiment-based, NOT directional: it reports whether the metric's *health* is
 // improving/worsening, decoupled from whether the raw number went up or down.
@@ -395,29 +331,6 @@ const WORKFLOW_ICONS = {
       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
     </svg>
   ),
-}
-
-// Split a formatted metric value ("15.8 GB", "82%", "0 B") into its numeric
-// lead and trailing unit, so the unit can render small + dim per the design
-// system (value leads near-white; unit is a quiet caption).
-function splitValueUnit(s) {
-  const str = String(s ?? '')
-  if (str.endsWith('%')) return { num: str.slice(0, -1), unit: '%' }
-  const sp = str.lastIndexOf(' ')
-  if (sp !== -1) return { num: str.slice(0, sp), unit: str.slice(sp + 1) }
-  return { num: str, unit: '' }
-}
-
-// A dashboard hero stat: big near-white numeral + small, dim unit caption
-// (×, %, GB…). Weight 500, tabular figures, tight tracking — the "Instrument"
-// number treatment, shared across every panel so units read consistently.
-function HeroNumber({ value, unit, size = 33 }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 3, whiteSpace: 'nowrap' }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: size, fontWeight: 500, color: 'var(--text)', lineHeight: 1, letterSpacing: '-0.5px', fontVariantNumeric: 'tabular-nums' }}>{value}</span>
-      {unit && <span style={{ fontFamily: 'var(--mono)', fontSize: Math.round(size * 0.55), fontWeight: 500, color: 'var(--text-dim)' }}>{unit}</span>}
-    </span>
-  )
 }
 
 function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, onNavigate, onScript, toast }) {
@@ -610,278 +523,14 @@ function CrossSeedBar({ segments, totalSize, onNavigate }) {
   )
 }
 
-// ── Tracker leaderboard ───────────────────────────────────────────────────────
-function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
-  if (!trackerStats || trackerStats.length === 0) return null
-
-  const top3 = trackerStats.slice(0, 3)
-  const maxSize = top3[0]?.size || 1
-
-  const medals = ['🥇', '🥈', '🥉']
-  const colors = ['var(--yellow)', 'var(--text-dim)', '#cd7f32']
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {top3.map((t, i) => {
-        const barPct = (t.size / maxSize) * 100
-        return (
-          <button
-            key={t.name}
-            onClick={() => onTrackerDetail(t.name)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '10px 12px', borderRadius: 8,
-              background: 'var(--surface2)', border: '1px solid var(--border)',
-              cursor: 'pointer', textAlign: 'left', width: '100%',
-              transition: 'border-color 0.15s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = colors[i]}
-            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
-          >
-            <span style={{ fontSize: 16, flexShrink: 0 }}>{medals[i]}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{t.name}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>{t.count} files · {formatBytes(t.size)}</span>
-              </div>
-              <div style={{ height: 4, background: 'var(--surface3)', borderRadius: 99, overflow: 'hidden' }}>
-                <div style={{ width: barPct + '%', height: '100%', background: colors[i], borderRadius: 99 }} />
-              </div>
-            </div>
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Tracker card (shared between modal and Trackers page) ─────────────────────
-// trackerStats = { seeding_count, seeding_size, orphaned_count, orphaned_size,
-//                  not_imported_count, not_imported_size } — pre-computed by backend
-export function TrackerCard({ trackerName, trackerStats, uploadStats, onNavigate, onClose }) {
-  const [chartTab, setChartTab] = useState('upload')
-
-  const seedingSize      = trackerStats?.seeding_size       ?? 0
-  const seedingCount     = trackerStats?.seeding_count      ?? 0
-  const orphanedSize     = trackerStats?.orphaned_size      ?? 0
-  const orphanedCount    = trackerStats?.orphaned_count     ?? 0
-  const notImportedSize  = trackerStats?.not_imported_size  ?? 0
-  const notImportedCount = trackerStats?.not_imported_count ?? 0
-
-  const yieldData     = uploadStats?.tracker_yields?.find(t => t.tracker === trackerName)
-  const yieldPct      = yieldData?.yield != null ? (yieldData.yield * 100).toFixed(1) + '%' : '—'
-  const uploadedBytes = yieldData?.uploaded ?? null
-
-  // Merge daily_uploads (delta bytes) + daily_tracker_stats (point-in-time) by date
-  const trendData = (() => {
-    if (!uploadStats) return []
-    const byDate = {}
-    for (const day of (uploadStats.daily_uploads || [])) {
-      const d = day.date
-      if (!byDate[d]) byDate[d] = { date: d }
-      byDate[d].uploaded = day.by_tracker?.[trackerName] || 0
-    }
-    for (const day of (uploadStats.daily_tracker_stats || [])) {
-      const s = day.by_tracker?.[trackerName]
-      if (!s) continue
-      const d = day.date
-      if (!byDate[d]) byDate[d] = { date: d }
-      byDate[d].seeding_size      = s.seeding_size || 0
-      byDate[d].orphaned_size     = s.orphaned_size || 0
-      byDate[d].not_imported_size = s.not_imported_size || 0
-      const uploaded = byDate[d].uploaded || 0
-      const seeding  = s.seeding_size || 0
-      byDate[d].yield_pct = seeding > 0 ? (uploaded / seeding) * 100 : null
-    }
-    return Object.entries(byDate)
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([, v]) => v)
-  })()
-  const hasTrendData = trendData.some(d => (d.uploaded || 0) > 0 || (d.seeding_size || 0) > 0)
-  const gradId = `tug-${trackerName.replace(/[^a-zA-Z0-9]/g, '')}-${chartTab}`
-
-  const CHART_TABS = [
-    { key: 'seeding',      label: 'Seeding',      dataKey: 'seeding_size',      color: 'var(--green)',  fmt: formatBytes },
-    { key: 'upload',       label: 'Uploaded',     dataKey: 'uploaded',          color: 'var(--blue)',   fmt: formatBytes },
-    { key: 'yield',        label: 'Yield',        dataKey: 'yield_pct',         color: 'var(--accent)', fmt: v => v != null ? v.toFixed(1) + '%' : '—' },
-    { key: 'orphaned',     label: 'Orphaned',     dataKey: 'orphaned_size',     color: 'var(--yellow)', fmt: formatBytes },
-    { key: 'not_imported', label: 'Not Imported', dataKey: 'not_imported_size', color: 'var(--red)',    fmt: formatBytes },
-  ]
-  const activeTab = CHART_TABS.find(t => t.key === chartTab) || CHART_TABS[0]
-
-  const statBoxes = [
-    { label: 'Seeding',      tabKey: 'seeding',      value: formatBytes(seedingSize),                                  sub: `${seedingCount} files`,                                                   color: 'var(--green)'  },
-    { label: 'Uploaded',     tabKey: 'upload',        value: uploadedBytes !== null ? formatBytes(uploadedBytes) : '—', sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet',         color: 'var(--blue)'   },
-    { label: 'Yield',        tabKey: 'yield',         value: yieldPct,                                                  sub: uploadStats ? `last ${uploadStats.period_days}d` : 'no data yet',         color: 'var(--accent)' },
-    { label: 'Orphaned',     tabKey: 'orphaned',      value: formatBytes(orphanedSize),                                 sub: `${orphanedCount} files`,                                                  color: 'var(--yellow)' },
-    { label: 'Not Imported', tabKey: 'not_imported',  value: formatBytes(notImportedSize),                              sub: `${notImportedCount} files`,                                               color: 'var(--red)'    },
-  ]
-
-  // The drill-downs to File Explorer: quiet full-width link rows, the same
-  // ghost-with-no-hairline the dashboard cards' "just look" actions use.
-  const NAV = { width: '100%', justifyContent: 'flex-start', fontWeight: 500, '--btn-border': 'transparent' }
-
-  return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-lg)', fontWeight: 700, color: 'var(--text)' }}>{trackerName}</span>
-        {onClose && (
-          <CloseButton onClick={onClose} />
-        )}
-      </div>
-
-      {/* Content */}
-      <div style={{ overflowY: 'auto', flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-        {/* Stats row — click to select chart */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-          {statBoxes.map(s => {
-            const active = chartTab === s.tabKey
-            return (
-              <div
-                key={s.label}
-                onClick={() => setChartTab(s.tabKey)}
-                style={{
-                  background: active ? 'var(--surface3)' : 'var(--surface2)',
-                  border: `1px solid ${active ? 'var(--border2)' : 'var(--border)'}`,
-                  borderRadius: 'var(--r)', padding: '10px 14px',
-                  cursor: 'pointer', transition: 'border-color 0.12s, background 0.12s',
-                }}
-              >
-                <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text-dim)', letterSpacing: 0, textTransform: 'none', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: 99, background: s.color, flexShrink: 0 }} />
-                  {s.label}
-                </div>
-                <div>{(() => {
-                  const { num, unit } = splitValueUnit(s.value)
-                  return <HeroNumber value={num} unit={unit} size={22} />
-                })()}</div>
-                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 4 }}>{s.sub}</div>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Trend charts */}
-        {uploadStats && (
-          hasTrendData ? (
-            <div>
-              <div style={{ ...SECTION_LABEL, marginBottom: 10 }}>
-                {activeTab.label} Trend
-              </div>
-              <div style={{ height: 160 }}>
-                <ResponsiveContainer width="100%" height={160}>
-                  <AreaChart data={trendData} margin={{ top: 4, right: 20, left: 4, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={activeTab.color} stopOpacity={0.25} />
-                        <stop offset="100%" stopColor={activeTab.color} stopOpacity={0.02} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
-                    <YAxis
-                      width={44}
-                      tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }}
-                      tickLine={false} axisLine={false}
-                      domain={chartTab === 'seeding' ? ['auto', 'auto'] : [0, 'auto']}
-                      tickFormatter={chartTab === 'yield'
-                        ? v => v != null ? v.toFixed(1) + '%' : ''
-                        : formatBytesCompact}
-                    />
-                    <Tooltip
-                      content={({ active, payload, label }) => {
-                        if (!active || !payload?.length) return null
-                        const val = payload[0].value
-                        return (
-                          <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 4 }}>{fmtChartDate(label)}</div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 700, color: '#ebebeb' }}>
-                              {val != null ? activeTab.fmt(val) : '—'}
-                            </div>
-                          </div>
-                        )
-                      }}
-                      cursor={{ stroke: activeTab.color, strokeWidth: 1, strokeOpacity: 0.4, strokeDasharray: '3 3' }}
-                    />
-                    <Area
-                      type="linear"
-                      dataKey={activeTab.dataKey}
-                      stroke={activeTab.color}
-                      strokeWidth={1.5}
-                      fill={`url(#${gradId})`}
-                      dot={false}
-                      connectNulls={false}
-                      activeDot={{ r: 4, fill: activeTab.color, stroke: 'var(--bg)', strokeWidth: 2 }}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          ) : (
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>
-              Upload data will appear after a few audits
-            </div>
-          )
-        )}
-
-        {/* Navigation buttons */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {seedingCount > 0 && (
-            <Button variant="ghost" style={NAV}
-              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Seeding' })}>
-              View seeding files <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>({seedingCount} files · {formatBytes(seedingSize)})</span>
-            </Button>
-          )}
-          {orphanedCount > 0 && (
-            <Button variant="ghost" style={NAV}
-              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, status: 'Orphaned' })}>
-              View orphaned files <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>({orphanedCount} files · {formatBytes(orphanedSize)})</span>
-            </Button>
-          )}
-          {notImportedCount > 0 && (
-            <Button variant="ghost" style={NAV}
-              onClick={() => onNavigate({ tab: 'torrents', tracker: trackerName, importFilter: 'notImported' })}>
-              View not imported <span style={{ color: 'var(--text-dim)', fontSize: 'var(--font-sm)' }}>({notImportedCount} files · {formatBytes(notImportedSize)})</span>
-            </Button>
-          )}
-        </div>
-
-      </div>
-    </div>
-  )
-}
-
-// ── Tracker detail modal (thin wrapper around TrackerCard) ────────────────────
-function TrackerDetailModal({ trackerName, trackerStats, uploadStats, onNavigate, onClose }) {
-  return (
-    <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
-      onClick={onClose}
-    >
-      <div
-        style={{ maxWidth: 860, width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
-        onClick={e => e.stopPropagation()}
-      >
-        <TrackerCard
-          trackerName={trackerName}
-          trackerStats={trackerStats}
-          uploadStats={uploadStats}
-          onNavigate={onNavigate}
-          onClose={onClose}
-        />
-      </div>
-    </div>
-  )
-}
-
 // ── Main Dashboard ────────────────────────────────────────────────────────────
-export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, selectedTrackers, setSelectedTrackers, allTrackers, onReveal }) {
+// Health, the four workflow cards, then the disk and its links: the library
+// map, cross-seed effectiveness, the last scan and what's new in the library
+// (2026-11-09). The upload panels and the tracker leaderboard moved to the
+// Trackers page, and the tracker dropdown, which filtered only them, went.
+export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, onReveal, onScan, mediaFiles, torrentFiles, ensureFilesLoaded }) {
   const toast = useToast()
   const [uploadStats, setUploadStats] = useState(null)
-  const [trackerDetail, setTrackerDetail] = useState(null)
-  const [yieldPanelTab, setYieldPanelTab] = useState('upload')
 
   useEffect(() => {
     api.uploadStats(timeRange).then(d => {
@@ -1038,36 +687,17 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   })()
 
   const csMultDisplay = cs ? cs.multiplier.toFixed(2) : null
-
-  // Upload chart: derive active trackers and reshape daily data for Recharts
-  const effectiveTrackers = selectedTrackers !== null ? selectedTrackers : allTrackers
-  const filteredTrackerStats = cs ? cs.tracker_stats.filter(t => effectiveTrackers.includes(t.name)) : []
-  const uploadChartData = uploadStats ? (() => {
-    const activeTrackers = Object.keys(
-      (uploadStats.daily_uploads || []).reduce((acc, day) => {
-        Object.entries(day.by_tracker || {}).forEach(([h, v]) => { if (v > 0) acc[h] = true })
-        return acc
-      }, {})
-    ).filter(h => effectiveTrackers.includes(h))
-    const chartData = (uploadStats.daily_uploads || []).map(day => {
-      const row = { date: day.date }
-      for (const h of activeTrackers) row[h] = day.by_tracker[h] || 0
-      return row
-    })
-    return { activeTrackers, data: chartData }
-  })() : null
-  const yieldRows = (uploadStats?.tracker_yields || [])
-    .filter(t => !(t.uploaded === 0 && (t.yield === null || t.yield === 0)))
-    .filter(t => effectiveTrackers.includes(t.tracker))
+  const scanReport = data.scan_report
+  const lastScanAlert = scanAlert(scanReport, current.timestamp)
+  const toLastScan = () => document.getElementById('last-scan-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 
   return (
     <div className="fade-in page-frame" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-      {/* Time range presets + tracker filter — inline top row, aligned with the
-          panels below and matching the Trackers page's layout. */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+      {/* Time range presets — the score history, the trend pills and New in
+          the library follow it. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <RangePresets isActive={v => timeRange === v} onSelect={setTimeRange} />
-        <TrackerDropdown selectedTrackers={selectedTrackers} allTrackers={allTrackers} onTrackersChange={setSelectedTrackers} />
       </div>
 
       {/* Changes since last scan */}
@@ -1081,10 +711,13 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         />
       )}
 
-      {/* Threshold alerts */}
+      {/* Alerts: a scan that didn't save comes first, then the thresholds. */}
       {(() => {
         const alerts = []
         const d = det
+        if (lastScanAlert) {
+          alerts.push({ ...lastScanAlert, action: { label: 'Last scan ↓', onClick: toLastScan } })
+        }
         if (d.orphaned_torrent_size > 0 && d.or_limit > 0 && d.orphaned_torrent_size > d.or_limit * 2) {
           alerts.push({ msg: `Orphaned torrent data (${formatBytes(d.orphaned_torrent_size)}) is significantly above your threshold`, color: 'var(--yellow)', action: { label: 'View', tab: 'torrents', status: 'Orphaned' } })
         }
@@ -1107,8 +740,8 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
                   </svg>
                   <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)' }}>{a.msg}</span>
                 </div>
-                <Button size="sm" tone={a.color} onClick={() => onNavigate(a.action)} style={{ marginLeft: 12 }}>
-                  {a.action.label} →
+                <Button size="sm" tone={a.color} onClick={() => (a.action.onClick ? a.action.onClick() : onNavigate(a.action))} style={{ marginLeft: 12 }}>
+                  {a.action.label}{a.action.onClick ? '' : ' →'}
                 </Button>
               </div>
             ))}
@@ -1152,219 +785,40 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
         {metrics.map(m => <MetricCard key={m.label} {...m} onNavigate={onNavigate} onScript={onScript} toast={toast} />)}
       </div>
 
-      {/* Row 3: cross-seed panels */}
-      {cs && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      {/* Row 3: the library map, the page's width */}
+      <LibraryMap details={det} onNavigate={onNavigate}
+        mediaFiles={mediaFiles} torrentFiles={torrentFiles} ensureFilesLoaded={ensureFilesLoaded} />
 
-          {/* Cross-seed effectiveness */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-              <div>
-                <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                  <HeroNumber value={csMultDisplay} unit="×" />
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>avg seed multiplier</span>
-                </div>
+      {/* Row 4: cross-seed, the last scan, and what's new in the library */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
+        {cs ? (
+          <div style={{ ...CARD, padding: '18px 20px 16px', gap: 14 }}>
+            <div>
+              <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Cross-seed effectiveness</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                <HeroNumber value={csMultDisplay} unit="×" />
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>avg seed multiplier</span>
               </div>
             </div>
-
-            {/* Distribution bar */}
             <div>
               <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Disk space by seed count</div>
               <CrossSeedBar segments={cs.segments} totalSize={cs.total_size} onNavigate={onNavigate} />
             </div>
-          </div>
-
-          {/* Tracker leaderboard */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={SECTION_LABEL}>Top trackers by disk space</div>
-            <TrackerLeaderboard trackerStats={filteredTrackerStats} onTrackerDetail={setTrackerDetail} />
-
-            {/* All trackers summary */}
-            {filteredTrackerStats.length > 3 && (
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {filteredTrackerStats.slice(3).map(t => (
-                  <Button key={t.name} size="chip" variant="ghost" onClick={() => setTrackerDetail(t.name)}>
-                    {t.name}
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-
-      {/* Row 4: upload activity + library yield */}
-      {uploadStats && uploadChartData && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-
-          {/* Upload Activity */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
-              <div style={{ ...SECTION_LABEL, marginBottom: 4 }}>Upload activity</div>
-            </div>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              {effectiveTrackers.length === 0
-                ? <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No trackers selected</div>
-                : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={uploadChartData.data} margin={{ top: 4, right: 20, left: 4, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-                      <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
-                      <YAxis
-                        width={44}
-                        tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }}
-                        tickLine={false} axisLine={false}
-                        tickFormatter={formatBytesCompact}
-                      />
-                      <Tooltip content={<UploadActivityTooltip />} cursor={{ fill: 'var(--surface2)' }} />
-                      {uploadChartData.activeTrackers.map((host, i) => (
-                        <Bar
-                          key={host} dataKey={host} stackId="uploads"
-                          fill={TRACKER_COLORS[i % TRACKER_COLORS.length]}
-                          maxBarSize={80}
-                          shape={props => <RoundedStackedBar {...props} allTrackers={uploadChartData.activeTrackers} host={host} />}
-                        />
-                      ))}
-                    </BarChart>
-                  </ResponsiveContainer>
-                )
-              }
+            {/* The upload panels are on the Trackers page; this is the line
+                that says what's there. */}
+            <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+                {uploadStats
+                  ? <><span style={{ color: 'var(--text)' }}>{formatBytes(uploadStats.total_uploaded)}</span> uploaded · last {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}</>
+                  : 'Upload stats appear after a few scans'}
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => onNavigate({ tab: 'trackers' })}>Trackers →</Button>
             </div>
           </div>
-
-          {/* Library Yield */}
-          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <div style={SECTION_LABEL}>
-                  {yieldPanelTab === 'upload' ? 'Upload by tracker' : 'Library yield'}
-                </div>
-                <Segmented label="Panel" value={yieldPanelTab} onChange={setYieldPanelTab}
-                  options={[{ value: 'upload', label: 'Upload' }, { value: 'yield', label: 'Yield' }]} />
-              </div>
-              {yieldPanelTab === 'upload' ? (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    {(() => {
-                      const { num, unit } = splitValueUnit(formatBytes(yieldRows.reduce((s, t) => s + t.uploaded, 0)))
-                      return <HeroNumber value={num} unit={unit} />
-                    })()}
-                  </div>
-                  <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
-                    total uploaded · {uploadStats.period_days} day window
-                  </p>
-                </>
-              ) : (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    {(() => {
-                      const filteredUploaded = yieldRows.reduce((s, t) => s + t.uploaded, 0)
-                      const filteredSeeding  = yieldRows.reduce((s, t) => s + t.seeding_size, 0)
-                      const filteredYield    = filteredSeeding > 0 ? filteredUploaded / filteredSeeding : null
-                      const { num, unit } = splitValueUnit(filteredYield !== null ? (filteredYield * 100).toFixed(1) + '%' : '—')
-                      return <HeroNumber value={num} unit={unit} />
-                    })()}
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-                      over {uploadStats.period_days} day{uploadStats.period_days !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                  <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
-                    Upload volume relative to seeding size. Higher yield = your disk space is earning more.
-                  </p>
-                </>
-              )}
-            </div>
-            {effectiveTrackers.length === 0
-              ? <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'center', padding: '16px 0' }}>No trackers selected</div>
-              : yieldPanelTab === 'yield'
-                ? yieldRows.length > 0 && (
-                    <div style={{ flex: 1, overflow: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>
-                        <thead>
-                          <tr>
-                            {['Tracker', 'Uploaded', 'Seeding', 'Yield'].map(h => (
-                              <th key={h} style={{
-                                textAlign: h === 'Tracker' ? 'left' : 'right',
-                                padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 'var(--font-sm)', textTransform: 'none',
-                                borderBottom: '1px solid var(--border)',
-                              }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {yieldRows.map((t, i) => (
-                            <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
-                              <td style={{ padding: '5px 8px', maxWidth: 120 }}>
-                                <button
-                                  onClick={() => setTrackerDetail(t.tracker)}
-                                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)' }}
-                                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--text)' }}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
-                                >{t.tracker}</button>
-                              </td>
-                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
-                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
-                              <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
-                                {t.yield !== null ? (t.yield * 100).toFixed(1) + '%' : '—'}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )
-                : yieldRows.length > 0 && (
-                    <div style={{ flex: 1, overflow: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>
-                        <thead>
-                          <tr>
-                            {['Tracker', 'Total Uploaded'].map(h => (
-                              <th key={h} style={{
-                                textAlign: h === 'Tracker' ? 'left' : 'right',
-                                padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-                                fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 'var(--font-sm)', textTransform: 'none',
-                                borderBottom: '1px solid var(--border)',
-                              }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {[...yieldRows].sort((a, b) => b.uploaded - a.uploaded).map((t, i) => (
-                            <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
-                              <td style={{ padding: '5px 8px', maxWidth: 120 }}>
-                                <button
-                                  onClick={() => setTrackerDetail(t.tracker)}
-                                  onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)' }}
-                                  onMouseLeave={e => { e.currentTarget.style.color = 'var(--text)' }}
-                                  style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
-                                >{t.tracker}</button>
-                              </td>
-                              <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )
-            }
-          </div>
-
-        </div>
-      )}
-
-
-      {trackerDetail && (
-        <TrackerDetailModal
-          trackerName={trackerDetail}
-          trackerStats={data.tracker_file_stats?.[trackerDetail]}
-          uploadStats={uploadStats}
-          onNavigate={(action) => { setTrackerDetail(null); onNavigate(action) }}
-          onClose={() => setTrackerDetail(null)}
-        />
-      )}
+        ) : <div />}
+        <LastScanCard id="last-scan-card" scanReport={scanReport} details={det} savedAt={current.timestamp} onScan={onScan} />
+        <NewInLibraryCard uploadStats={uploadStats} timeRange={timeRange} onNavigate={onNavigate} />
+      </div>
     </div>
   )
 }

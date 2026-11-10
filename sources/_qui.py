@@ -684,20 +684,46 @@ def _process_instance(session, base, inst, remote_path, local_path,
 # fetch_file_map
 # ---------------------------------------------------------------------------
 
+def _preference_values(raw):
+    """qui's `/preferences` answer as qBittorrent's own `{key: value}` dict.
+
+    qui used to pass qBittorrent's preferences through. Since its preference
+    catalog (autobrr/qui, October 2026) it answers with a *view*: a list of
+    `{key, value, tab, section, control, …}` fields, one per setting it shows,
+    which still includes the four `client_save_dirs` reads (`save_path`,
+    `temp_path`, `temp_path_enabled`, `use_subcategories`). Anything else comes
+    back unchanged, so `client_save_dirs` still declines it (CLEANUP C28).
+    """
+    if isinstance(raw, list):
+        return {f['key']: f.get('value') for f in raw
+                if isinstance(f, dict) and isinstance(f.get('key'), str)}
+    return raw
+
+
 def _read_save_scope(sess, base, inst, remote_path, local_path, save_scope):
     """One instance's default, category and incomplete folders into `save_scope` (C27).
 
-    qui serves qBittorrent's own answers at `/preferences` and `/categories`.
-    Either failing, or not being a dict, makes the scope `unknown`: the scan
-    then offers no empty folder rather than one qBittorrent may save into (R1).
-    The instance itself still counts as answered; its torrents did.
+    qui serves qBittorrent's preferences at `/preferences`, as a list of fields
+    since its preference catalog (`_preference_values`, C28), and its categories
+    at `/categories`. Either failing, or coming back in a shape this doesn't
+    read, makes the scope `unknown`: the scan then offers no empty folder rather
+    than one qBittorrent may save into (R1). The instance itself still counts as
+    answered; its torrents did. **Every way to `unknown` logs**: the shape check
+    used to return quietly, so on the box no scan offered an empty folder for a
+    month and nothing said why.
     """
     try:
         prefs = sess.get(f"{base}/api/instances/{inst['id']}/preferences", timeout=15)
         prefs.raise_for_status()
         cats = sess.get(f"{base}/api/instances/{inst['id']}/categories", timeout=15)
         cats.raise_for_status()
-        dirs = client_save_dirs(prefs.json(), cats.json())
+        prefs_raw, cats_raw = prefs.json(), cats.json()
+        dirs = client_save_dirs(_preference_values(prefs_raw), cats_raw)
+        if dirs is None:
+            # Types only: the values are the user's folders.
+            log.info("qui[%s]: preferences (%s) or categories (%s) came back in a shape "
+                     "auditorr doesn't read — no empty folders this scan",
+                     inst.get('name', '?'), type(prefs_raw).__name__, type(cats_raw).__name__)
     except Exception as e:
         log.info("qui[%s]: preferences or categories did not load (%s) — no empty folders "
                  "this scan", inst.get('name', '?'), type(e).__name__)

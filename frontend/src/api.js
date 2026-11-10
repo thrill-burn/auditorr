@@ -115,6 +115,7 @@ export const api = {
   uploadSnapshotCounts: ()               => req('/upload_snapshots/source_counts'),
   retagUploadSnapshots:  (from, to, source) => req('/upload_snapshots/retag',  { method: 'POST', body: JSON.stringify({ from, to: to || undefined, source }) }),
   deleteUploadSnapshots: (from, to)         => req('/upload_snapshots/delete', { method: 'POST', body: JSON.stringify({ from, to: to || undefined }) }),
+  libraryMap: ()          => req('/library_map'),
   acquireCandidates: ()   => req('/workflows/acquire_candidates'),
   acquireReleases: (params) => req('/workflows/acquire_releases?' + new URLSearchParams(params)),
   saveAcquirePrefs: (prefs) => req('/workflows/acquire_prefs', { method: 'POST', body: JSON.stringify(prefs) }),

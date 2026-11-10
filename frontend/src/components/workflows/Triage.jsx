@@ -695,7 +695,7 @@ function TriageRow({ item, color, checked, onToggle, client, onNavigate, pending
 // own answer becomes correct.
 const DISMISSED = new Set()
 
-export default function Triage({ onNavigate, cleanupCount }) {
+export default function Triage({ onNavigate, cleanupCount, initialSearch }) {
   const toast = useToast()
   const [report,   setReport]   = useState(null)
   const [loading,  setLoading]  = useState(true)
@@ -878,7 +878,7 @@ export default function Triage({ onNavigate, cleanupCount }) {
   // The sections, the select-alls and the action bar all work from the rows the
   // filter shows. The season card, retry-verify and a replace's siblings keep
   // using every row: they are about a season or a batch, not what is on screen.
-  const [filters, setFilters, { visible, unknownHidden }] = useListFilters('auditorr_filters_triage', FILTER_FIELDS, items)
+  const [filters, setFilters, { visible, unknownHidden }] = useListFilters('auditorr_filters_triage', FILTER_FIELDS, items, initialSearch)
   const visibleKeys = useMemo(() => visible.map(itemKey), [visible])
   usePruneSelection(visibleKeys, setSelected)
   // The page holds the largest `_TRIAGE_GROUP_CAP` rows, so a filter searches

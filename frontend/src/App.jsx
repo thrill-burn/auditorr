@@ -256,7 +256,6 @@ function AppInner() {
     const stored = localStorage.getItem('auditorr_chart_days')
     return stored !== null ? parseInt(stored) : 30
   })
-  const [selectedTrackers,   setSelectedTrackers]   = useState(null)
   const [revealPath,         setRevealPath]         = useState(null)
   const [showWizard,         setShowWizard]         = useState(false)
   const [isLoadingResults,   setIsLoadingResults]   = useState(false)
@@ -369,11 +368,12 @@ function AppInner() {
         // across an audit keeps rendering pre-scan data indefinitely — the
         // same window idiom as `auditorr:import_started` below.
         window.dispatchEvent(new CustomEvent('auditorr:audit_complete'))
-        const msg = state.status_message?.startsWith('Audit error') ||
-                    state.status_message?.startsWith('qBittorrent') ||
-                    state.status_message?.startsWith('qui')
-          ? state.status_message : 'Audit complete'
-        const isError = msg !== 'Audit complete'
+        // The scan's own status, not its message's first word: a refused scan's
+        // message starts "Source anomaly:", which no prefix list here named, so a
+        // scan that saved nothing announced "Audit complete" in green, with a
+        // browser notification to match.
+        const isError = state.last_scan_status === 'error'
+        const msg = isError ? (state.status_message || 'The scan did not finish') : 'Audit complete'
         toast(msg, isError ? 'error' : 'success')
         if (!isError && 'Notification' in window && Notification.permission === 'granted')
           new Notification('auditorr', { body: 'Library audit complete.', icon: '/favicon.ico' })
@@ -476,6 +476,10 @@ function AppInner() {
       seedCount: action.seedCount != null ? action.seedCount : null,
       // Triage's "Trumped?" chip pre-fills the trumped release name.
       oldTitle: action.oldTitle || null,
+      // The library map's tiles (2026-11-09): Backfill scoped to one library
+      // folder (BACKFILL B15), and Triage or Cleanup with its search filled in.
+      under: action.under || null,
+      search: action.search || null,
     }
     setPendingNav(nav)
     setHashTab(action.tab)
@@ -490,7 +494,9 @@ function AppInner() {
     (pendingNav?.importFilter || '') +
     (pendingNav?.tracker || '') +
     (pendingNav?.seedCount != null ? String(pendingNav.seedCount) : '') +
-    (pendingNav?.oldTitle || '')
+    (pendingNav?.oldTitle || '') +
+    (pendingNav?.under || '') +
+    (pendingNav?.search || '')
 
   // Server is fail-closed: AUDITORR_REQUIRE_AUTH is set but no AUDITORR_SECRET
   // is configured. Nothing in the app can work, so take over the page with
@@ -576,18 +582,20 @@ function AppInner() {
               <Dashboard
                 data={results?.dashboard ? {
                   ...results.dashboard,
-                  tracker_file_stats: results.tracker_file_stats,
-                  not_imported_paths: results.not_imported_paths,
+                  scan_report: results.scan_report,
                 } : null}
                 changes={changes}
                 onNavigate={handleNavigate}
                 isRefreshing={isRefreshing}
                 onScript={setScriptModal}
+                onScan={handleScan}
                 timeRange={timeRange}
                 setTimeRange={setTimeRange}
-                selectedTrackers={selectedTrackers}
-                setSelectedTrackers={setSelectedTrackers}
-                allTrackers={allTrackers}
+                // The library map's Files view draws from the lists File
+                // Explorer loads, so the two share one fetch.
+                mediaFiles={mediaFiles}
+                torrentFiles={torrentFiles}
+                ensureFilesLoaded={ensureFilesLoaded}
                 onReveal={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }}
               />
             )}
@@ -612,6 +620,7 @@ function AppInner() {
             {tab === 'trackers' && (
               <Trackers
                 trackerFileStats={results?.tracker_file_stats || {}}
+                crossSeedStats={results?.dashboard?.cross_seed_stats || null}
                 onNavigate={handleNavigate}
                 timeRange={timeRange}
                 allTrackers={allTrackers}
@@ -633,14 +642,14 @@ function AppInner() {
               />
             )}
             {tab === 'backfill' && (
-              <Backfill onNavigate={handleNavigate} />
+              <Backfill key={navKey} onNavigate={handleNavigate} initialUnder={pendingNav?.under} />
             )}
             {tab === 'triage' && (
-              <Triage onNavigate={handleNavigate}
+              <Triage key={navKey} onNavigate={handleNavigate} initialSearch={pendingNav?.search}
                 cleanupCount={cleanupRowCount(results?.dashboard?.current?.details)} />
             )}
             {tab === 'cleanup' && (
-              <Cleanup onNavigate={handleNavigate} onScript={setScriptModal}
+              <Cleanup key={navKey} onNavigate={handleNavigate} onScript={setScriptModal} initialSearch={pendingNav?.search}
                 triageCount={triageRowCount(results?.dashboard?.current?.details)} />
             )}
             {tab === 'dedupe' && (

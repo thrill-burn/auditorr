@@ -538,9 +538,10 @@ def test_the_publish_never_holds_two_inventories(tmp_path):
 
     # Phase 14 added the compact `dedupe` row, staged beside the other two and
     # held to the same rule — this list gained a name, the assertion did not
-    # change meaning. CLEANUP C26 added `cleanup_folders` the same way.
+    # change meaning. CLEANUP C26 added `cleanup_folders` the same way, and the
+    # dashboard's library map `library_map` (2026-11-09).
     assert [tab for tab, _ in handed] == ['media', 'torrents', 'triage', 'cleanup',
-                                          'cleanup_folders', 'dedupe']
+                                          'cleanup_folders', 'dedupe', 'library_map']
     for tab, files in handed:
         assert isinstance(files, db.PreparedFileResults), f"{tab} was handed a record list"
         assert isinstance(files.blob, bytes)
