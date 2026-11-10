@@ -6,6 +6,7 @@ import { SECTION_LABEL, CARD, CAPTION, READOUT, Hero, TrendPill } from './dashKi
 import {
   STATES, PROBLEM, LINKED, ROOT_HEAD, HEAD,
   modelFromFiles, modelTotals, biggestGaps, navFor, layoutMap, leafAt,
+  zoomModel, zoomOut, headingTarget, headingAt,
 } from './libraryMapRules'
 
 // The library map (2026-11-09): WinDirStat's idea applied to hardlinks. Every
@@ -100,6 +101,21 @@ function fit(ctx, s, max) {
   if (ctx.measureText(s).width <= max) return s
   while (s.length > 1 && ctx.measureText(s + '…').width > max) s = s.slice(0, -1)
   return s.length > 1 ? s + '…' : ''
+}
+// A title's name is drawn whole, or cut where at least this many characters
+// fit (2026-11-10; it was any tile 64px wide). Fewer reads as noise. A cut
+// drops an unclosed bracket and what follows it, so "Halloween (19…" reads
+// "Halloween…": half a year says nothing, and the tile is one of several.
+const MIN_NAME_CHARS = 6
+function nameFit(ctx, s, max) {
+  const f = fit(ctx, s, max)
+  if (f === s) return f
+  if (f.length - 1 < MIN_NAME_CHARS) return ''
+  let cut = f.slice(0, -1)
+  const open = Math.max(cut.lastIndexOf('('), cut.lastIndexOf('['))
+  if (open > 0 && !/[)\]]/.test(cut.slice(open))) cut = cut.slice(0, open)
+  cut = cut.replace(/[\s\-–—:,.]+$/, '')
+  return cut.length >= 3 ? cut + '…' : f
 }
 // The longest that fits whole, never a number cut in half.
 const longest = (ctx, options, max) => options.find(t => ctx.measureText(t).width <= max) ?? ''
@@ -201,12 +217,14 @@ function draw(canvas, model, W, H, detail) {
   for (const t of L.titles) if (t.w > 3 && t.h > 3) ctx.strokeRect(t.x + 0.5, t.y + 0.5, t.w - 1, t.h - 1)
   ctx.textBaseline = 'top'
   for (const t of L.titles) {
-    if (t.w < 64 || t.h < 20) continue
-    const under = leafAt(L, t.x + 6, t.y + 6)
-    ctx.fillStyle = labelOn(P.c[under && under.T === t ? under.s : LINKED])
+    if (t.w < 24 || t.h < 18) continue
     // A library title is one auditorr knows (Geist); a torrent's is a release name (mono).
     ctx.font = t.root === 'torrents' ? monoSm : sansSm
-    ctx.fillText(fit(ctx, t.name, t.w - 10), t.x + 5, t.y + 4)
+    const name = nameFit(ctx, t.name, t.w - 10)
+    if (!name) continue
+    const under = leafAt(L, t.x + 6, t.y + 6)
+    ctx.fillStyle = labelOn(P.c[under && under.T === t ? under.s : LINKED])
+    ctx.fillText(name, t.x + 5, t.y + 4)
     if (t.h >= 38 && t.w >= 60) {
       ctx.globalAlpha = 0.78; ctx.font = monoSm
       const b = t.root === 'library' ? breakdown(t.by).slice(0, 1) : []
@@ -279,22 +297,51 @@ function diskStats(d) {
 // folded tile's "N smaller titles" is words. `prefix` is the folder it sits in.
 function hoverText(leaf, detail) {
   const t = leaf.T, nav = navFor(leaf.s, t)
+  const action = nav ? `${STATES[leaf.s].workflow} →` : null
   if (detail === 'files' && leaf.file) {
     const st = STATES[leaf.s]
     return { s: leaf.s, prefix: t.root === 'library' && t.folder ? `${t.folder} / ${t.name}` : t.name,
              name: leaf.file, kind: 'mono',
-             facts: `${formatBytes(leaf.bytes)} · ${st.name.toLowerCase()}${st.workflow ? ` (${st.workflow})` : ''}`, nav }
+             facts: `${formatBytes(leaf.bytes)} · ${st.name.toLowerCase()}${st.workflow ? ` (${st.workflow})` : ''}`, nav, action }
   }
   const facts = t.root === 'library'
     ? [formatBytes(t.v), ...(t.by[LINKED] ? [`${pctLinked(t.by)}% linked`] : []),
        ...PROBLEM.filter(s => t.by[s]).map(s => `${formatBytes(t.by[s])} ${LABEL[s]} (${STATES[s].workflow})`)].join(' · ')
     : `${formatBytes(t.v)} ${STATES[leaf.s].name.toLowerCase()}`
   const files = t.folded ? ` (${t.files.toLocaleString()} files)` : ''
-  if (t.folded) return { s: leaf.s, prefix: '', name: `${t.name}${files}`, kind: 'words', facts, nav }
-  if (t.root === 'library') return { s: leaf.s, prefix: t.folder || '', name: t.name, kind: 'title', facts, nav }
+  if (t.folded) return { s: leaf.s, prefix: '', name: `${t.name}${files}`, kind: 'words', facts, nav, action }
+  if (t.root === 'library') return { s: leaf.s, prefix: t.folder || '', name: t.name, kind: 'title', facts, nav, action }
   // A torrent title's name is its root-relative folder; its category is the prefix.
   const cut = t.folder && t.name.startsWith(t.folder + '/') ? t.folder.length + 1 : 0
-  return { s: leaf.s, prefix: cut ? t.folder : '', name: t.name.slice(cut), kind: 'mono', facts, nav }
+  return { s: leaf.s, prefix: cut ? t.folder : '', name: t.name.slice(cut), kind: 'mono', facts, nav, action }
+}
+
+// A heading under the pointer: what it is, its figures, and where a click
+// takes the map. `target` is the zoom it sets (null is the whole map).
+function headingText(h, target, zoomingOut) {
+  const action = zoomingOut ? 'Zoom out' : 'Zoom in'
+  if (h.kind === 'root') {
+    return { s: null, prefix: '', name: ROOT_LABEL[h.r.name], kind: 'words',
+             facts: [formatBytes(h.r.v), ...breakdown(h.r.by)].join(' · '), target, action }
+  }
+  const f = h.f, n = f.titles.length
+  if (f.state != null) {
+    const st = STATES[f.state]
+    return { s: f.state, prefix: '', name: `${st.name}${st.workflow ? ' · ' + st.workflow : ''}`, kind: 'words',
+             facts: `${formatBytes(f.v)} · ${n.toLocaleString()} release${n !== 1 ? 's' : ''}`, target, action }
+  }
+  return { s: null, prefix: '', name: f.name || '(top level)', kind: 'mono',
+           facts: [formatBytes(f.v), ...breakdown(f.by), `${n.toLocaleString()} titles`].join(' · '), target, action }
+}
+
+// What the header names while zoomed: the root's word, or the folder's name
+// (off the disk, mono) or state (words).
+function zoomLabel(model, zoom) {
+  if (zoom.folder == null) return { text: ROOT_SHORT[zoom.root] || zoom.root, mono: false }
+  const r = model.roots.find(x => x.name === zoom.root)
+  const f = r?.folders[0]
+  if (f?.state != null) return { text: STATES[f.state].name, mono: false }
+  return { text: f?.name || '(top level)', mono: true }
 }
 
 const HOVER_NAME = { title: ITEM_TITLE, words: ITEM_TITLE, mono: MONO_TITLE }
@@ -306,6 +353,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   const [hover, setHover] = useState(null)           // { box, text }
   const [userH, setUserH] = useState(storedHeight)   // null = the width's default
   const [dragging, setDragging] = useState(false)
+  const [zoom, setZoom] = useState(null)             // null = the whole map; ephemeral, like the detail switch
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const layoutRef = useRef(null)
@@ -324,7 +372,14 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
     if (drawn === 'files') return modelFromFiles(mediaFiles, torrentFiles)
     return rowModel || null
   }, [drawn, mediaFiles, torrentFiles, rowModel])
+  // The header's stats and the legend stay the whole library's; only the
+  // canvas zooms, and a folder's own figures are on its heading.
   const totals = useMemo(() => (model ? modelTotals(model) : null), [model])
+  const zoomed = useMemo(() => (model && zoom ? zoomModel(model, zoom) : null), [model, zoom])
+  const activeZoom = zoomed ? zoom : null             // a zoom a rescan took away draws the whole map
+  const shown = zoomed || model
+  const zoomCrumb = activeZoom ? zoomLabel(shown, activeZoom) : null
+  const shownTitles = zoomed ? zoomed.roots.reduce((a, r) => a + r.folders.reduce((b, f) => b + f.titles.length, 0), 0) : 0
 
   // Redraw on resize, on a theme change (an attribute on <html>), and when a
   // web font finishes loading: a canvas draws in whatever face is there and
@@ -336,7 +391,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
     const ro = new ResizeObserver(([e]) => setWidth(Math.floor(e.contentRect.width)))
     ro.observe(el)
     return () => ro.disconnect()
-  }, [model != null])
+  }, [shown != null])
   useEffect(() => {
     const redraw = () => setThemeTick(t => t + 1)
     const mo = new MutationObserver(redraw)
@@ -347,12 +402,12 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   }, [])
   const height = userH ?? mapHeight(width)
   useLayoutEffect(() => {
-    if (!model || !width || !canvasRef.current) return
+    if (!shown || !width || !canvasRef.current) return
     const t0 = performance.now()
-    layoutRef.current = draw(canvasRef.current, model, width, height, drawn)
+    layoutRef.current = draw(canvasRef.current, shown, width, height, drawn)
     drawMs.current = performance.now() - t0
     setHover(null)
-  }, [model, width, height, drawn, themeTick])
+  }, [shown, width, height, drawn, themeTick])
 
   // ── The height grip ──
   const commitHeight = h => { const c = clampHeight(h); setUserH(c); storeHeight(c) }
@@ -387,15 +442,35 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
     else if (e.key === 'ArrowDown') { e.preventDefault(); commitHeight(height + step) }
   }
 
-  const onMove = e => {
+  // What's under a pointer event: a heading (which zooms; its outline is the
+  // whole folder or root it would fill the map with) or a tile. A click works
+  // it out from its own coordinates, never from the hover state, which a click
+  // straight after a move (a tap on a touchscreen) arrives ahead of.
+  const hitAt = e => {
     const r = e.currentTarget.getBoundingClientRect()
-    const leaf = leafAt(layoutRef.current, e.clientX - r.left, e.clientY - r.top)
-    if (!leaf) { if (hover) setHover(null); return }
-    const box = drawn === 'files' ? leaf : leaf.T
-    if (hover && hover.box === box && hover.leaf?.s === leaf.s) return
-    setHover({ box, leaf, text: hoverText(leaf, drawn) })
+    const x = e.clientX - r.left, y = e.clientY - r.top
+    const h = headingAt(layoutRef.current, x, y)
+    const target = h && model ? headingTarget(model, activeZoom, h) : undefined
+    if (h && target !== undefined) {
+      const out = target === null || (activeZoom?.folder != null && target.folder == null)
+      return { box: h.kind === 'folder' ? h.f : h.r, heading: true, text: headingText(h, target, out) }
+    }
+    const leaf = leafAt(layoutRef.current, x, y)
+    return leaf ? { box: drawn === 'files' ? leaf : leaf.T, leaf, text: hoverText(leaf, drawn) } : null
   }
-  const onClick = () => { if (hover?.text?.nav) onNavigate(hover.text.nav) }
+  const onMove = e => {
+    const hit = hitAt(e)
+    if (!hit) { if (hover) setHover(null); return }
+    if (hover && hover.box === hit.box && hover.leaf?.s === hit.leaf?.s) return
+    setHover(hit)
+  }
+  const onClick = e => {
+    const hit = hitAt(e)
+    if (hit?.heading) setZoom(hit.text.target)
+    else if (hit?.text?.nav) onNavigate(hit.text.nav)
+  }
+  const cursor = hover?.heading ? (hover.text.action === 'Zoom out' ? 'zoom-out' : 'zoom-in')
+    : hover?.text?.nav ? 'pointer' : 'default'
 
   // A gap hovered on the Biggest gaps card: outline its tile and name it here.
   // A torrent release has a tile in each state's block, so it's the gap's state's.
@@ -420,8 +495,18 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   return (
     <div style={{ ...CARD, padding: '18px 20px 16px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
-        <span style={SECTION_LABEL}>Library map</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {/* While zoomed, the header names what fills the map and offers the way back. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, minHeight: 'var(--control-h)' }}>
+          <span style={{ ...SECTION_LABEL, flexShrink: 0 }}>Library map</span>
+          {zoomCrumb && (
+            <>
+              <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>/</span>
+              <span style={{ ...(zoomCrumb.mono ? MONO_TITLE : ITEM_TITLE), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{zoomCrumb.text}</span>
+              <Button size="sm" variant="ghost" onClick={() => setZoom(zoomOut(model, activeZoom))}>Zoom out</Button>
+            </>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
           {detail === 'files' && !filesReady && (
             <span style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Spinner size={10} /> Loading file lists…</span>
           )}
@@ -447,10 +532,10 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
           <canvas
             ref={canvasRef}
             role="img"
-            aria-label={`Library map: ${formatBytes(totals?.by[LINKED] || 0)} linked, ${formatBytes(totals?.problem || 0)} for the workflows`}
+            aria-label={`Library map${zoomCrumb ? `, zoomed into ${zoomCrumb.text}` : ''}: ${formatBytes(totals?.by[LINKED] || 0)} linked, ${formatBytes(totals?.problem || 0)} for the workflows`}
             onMouseMove={onMove}
             onClick={onClick}
-            style={{ display: 'block', borderRadius: 4, cursor: hover?.text?.nav ? 'pointer' : 'default' }}
+            style={{ display: 'block', borderRadius: 4, cursor }}
           />
           {hover?.box && (
             <div style={{
@@ -480,7 +565,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
       <div style={{ ...CAPTION, height: 30, marginTop: 2, display: 'flex', alignItems: 'center', minWidth: 0 }}>
         {hover?.text ? (
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, minWidth: 0 }}>
-            <span style={{ alignSelf: 'center', display: 'inline-flex' }}><Swatch s={hover.text.s} /></span>
+            {hover.text.s != null && <span style={{ alignSelf: 'center', display: 'inline-flex' }}><Swatch s={hover.text.s} /></span>}
             <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
               {hover.text.prefix && (
                 <span style={{ ...READOUT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220, flexShrink: 0 }}>{hover.text.prefix} /</span>
@@ -488,11 +573,16 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
               <span style={{ ...HOVER_NAME[hover.text.kind], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{hover.text.name}</span>
             </span>
             <span style={{ ...READOUT, whiteSpace: 'nowrap' }}>{hover.text.facts}</span>
-            {hover.text.nav && <span style={{ color: 'var(--accent)', whiteSpace: 'nowrap' }}>{STATES[hover.leaf.s].workflow} →</span>}
+            {hover.text.action && <span style={{ color: 'var(--accent)', whiteSpace: 'nowrap' }}>{hover.text.action}</span>}
           </div>
+        ) : zoomCrumb ? (
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+            {shownTitles.toLocaleString()} title{shownTitles !== 1 ? 's' : ''} here · click a tile to open its workflow, or the heading to zoom out
+            {tiny.length > 0 && ` · too small to draw: ${tiny.map(t => t.name || '(top level)').join(', ')}`}
+          </span>
         ) : model ? (
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-            {totals.titles.toLocaleString()} titles · hover a tile, click one to open its workflow
+            {totals.titles.toLocaleString()} titles · hover a tile, click one to open its workflow, or click a folder's name to zoom in
             {!model.roots.some(r => r.name === 'torrents') && ' · torrent folder: all linked, drawn once in the library'}
             {tiny.length > 0 && ` · too small to draw: ${tiny.map(t => t.name || '(top level)').join(', ')}`}
           </span>

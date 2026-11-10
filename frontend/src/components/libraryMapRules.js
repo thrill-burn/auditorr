@@ -245,6 +245,18 @@ export function squarify(items, x, y, w, h) {
   return out
 }
 
+// Titles are laid out wide, not square (2026-11-10). A name is one line of
+// text, so a tile 2:1 wide holds one at half the area a square needs: at the
+// default size on the user's portrait screen, the box's map named 18 of its
+// 729 titles (22% of the bytes) square, and 108 (49%) wide, with the label
+// rule in LibraryMap.jsx. Squarified in a space twice as tall, then squashed:
+// its squares there are 2:1 here. Roots, folders and the leaves inside a
+// title stay square; only titles carry names.
+export const TITLE_ASPECT = 2
+function squarifyWide(items, x, y, w, h, k = TITLE_ASPECT) {
+  return squarify(items, x, 0, w, h * k).map(t => ({ ...t, y: y + t.y / k, h: t.h / k }))
+}
+
 export const ROOT_GAP = 6, GAP = 3, ROOT_HEAD = 22, HEAD = 18
 
 // Rectangles for every root, folder, title and leaf. A leaf is a title's share
@@ -264,7 +276,7 @@ export function layoutMap(model, W, H, detail) {
       const fhead = w >= 56 && h >= 44
       folders.push({ ...f, root: r.name, x, y, w, h, head: fhead })
       const iy = fhead ? y + HEAD : y, ih = fhead ? h - HEAD : h
-      for (const t of squarify(f.titles, x, iy, w, ih)) {
+      for (const t of squarifyWide(f.titles, x, iy, w, ih)) {
         titles.push(t)
         if (detail === 'files' && t.list) {
           for (const l of squarify(t.list.map(q => ({ ...q, v: q.size })), t.x, t.y, t.w, t.h)) {
@@ -285,5 +297,63 @@ export function layoutMap(model, W, H, detail) {
 export function leafAt(layout, x, y) {
   if (!layout) return null
   for (const l of layout.leaves) if (x >= l.x && x < l.x + l.w && y >= l.y && y < l.y + l.h) return l
+  return null
+}
+
+// ── Zoom (2026-11-10) ────────────────────────────────────────────────────────
+// A heading zooms: a folder's fills the map with that folder, and a root's with
+// that root. However the map is laid out, an overview of a big library can only
+// name its biggest titles (729 titles on the box at the portrait default are
+// ~930px² each); one folder on the whole map is how the rest get room. A zoom
+// is `{root}` or `{root, folder}`, and `null` is the whole map. It holds keys,
+// not objects, so it survives a rescan and the Titles/Files switch.
+
+// A folder's key: its name in the library, its state in the torrent root.
+export const folderKey = f => (f.state != null ? `state:${f.state}` : `name:${f.name}`)
+export const sameZoom = (a, b) => !!a && !!b && a.root === b.root && (a.folder ?? null) === (b.folder ?? null)
+
+// The model a zoom draws, or null when it no longer resolves (a rescan took
+// the folder away). A zoomed root keeps its size, so its heading still says
+// how big the whole root is.
+export function zoomModel(model, zoom) {
+  if (!zoom) return model
+  const r = model.roots.find(x => x.name === zoom.root)
+  if (!r) return null
+  if (zoom.folder == null) return { roots: [r] }
+  const f = r.folders.find(x => folderKey(x) === zoom.folder)
+  return f ? { roots: [{ ...r, folders: [f] }] } : null
+}
+
+// One level out. A folder's parent is its root, unless that root is the whole
+// map (the torrent root is often empty: everything linked), when it's the map.
+export function zoomOut(model, zoom) {
+  if (!zoom || zoom.folder == null) return null
+  return model.roots.length > 1 ? { root: zoom.root } : null
+}
+
+// Where a click on a heading goes, or undefined for a heading that doesn't
+// zoom (the only root's, on the whole map). Clicking the heading of what's
+// already filling the map zooms out.
+export function headingTarget(model, zoom, h) {
+  if (h.kind === 'folder') {
+    const to = { root: h.f.root, folder: folderKey(h.f) }
+    return sameZoom(to, zoom) ? zoomOut(model, zoom) : to
+  }
+  if (model.roots.length <= 1) return zoom ? null : undefined
+  const to = { root: h.r.name }
+  return sameZoom(to, zoom) ? null : to
+}
+
+// The heading under a point: a folder's band or a root's line. A root or a
+// folder too small to show its heading is its own heading, all of it: a torrent
+// folder beside a big library is a sliver with no room to name it, which is
+// where a zoom is wanted most, and tiles that small are no target for a click.
+export function headingAt(layout, x, y) {
+  if (!layout) return null
+  const inside = (b, h = b.h) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + h
+  for (const f of layout.folders) if (f.head && inside(f, HEAD)) return { kind: 'folder', f }
+  for (const r of layout.roots) if (r.head && inside(r, ROOT_HEAD)) return { kind: 'root', r }
+  for (const r of layout.roots) if (!r.head && inside(r)) return { kind: 'root', r, whole: true }
+  for (const f of layout.folders) if (!f.head && inside(f)) return { kind: 'folder', f, whole: true }
   return null
 }
