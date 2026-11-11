@@ -206,3 +206,57 @@ def test_finished_runs_are_swept_by_age_and_by_count():
 
     assert sorted(app._gen_jobs) == ['j0', 'j1', 'j2', 'live']
     app._gen_jobs.clear()
+
+
+# ── B17: a run says what it searched with ────────────────────────────────────
+# A run from the library map never shows its settings, and a page that picks a
+# run up later can't know them from its own state, so the run carries them.
+
+def test_a_run_says_what_it_searched_with(gen):
+    job_id = gen.start(count=2, under='movies', min_quality='file', res_filter=['1080p'],
+                       seeding_on=['Aither (API) (Prowlarr)'], download_from=[]).get_json()['job_id']
+
+    body = gen.status(job_id).get_json()
+
+    assert body['filters'] == {
+        'under': 'movies', 'folders': [], 'title_search': None, 'min_quality': 'file',
+        'res_filter': ['1080p'], 'source_filter': [], 'hdr_filter': [],
+        'download_from': [], 'seeding_on': ['Aither (API) (Prowlarr)']}
+    # Three under the folder, two searched: the page says "2 of its 3".
+    assert (body['total'], body['available']) == (2, 3)
+    assert body['kinds'] == {'season': 0, 'episode': 0, 'movie': 2}
+
+
+def test_an_unfiltered_run_says_nothing_narrowed_it(gen):
+    job_id = gen.start().get_json()['job_id']
+
+    f = gen.status(job_id).get_json()['filters']
+
+    assert f['under'] is None and f['title_search'] is None and f['min_quality'] is None
+    assert all(f[k] == [] for k in ('folders', 'res_filter', 'source_filter', 'hdr_filter',
+                                    'download_from', 'seeding_on'))
+
+
+def test_a_filter_that_is_not_a_list_of_names_is_recorded_as_none(gen):
+    """A string would come back split into letters, each read as an indexer."""
+    job_id = gen.start(seeding_on='Aither', hdr_filter=['DV', 7, None]).get_json()['job_id']
+
+    f = gen.status(job_id).get_json()['filters']
+
+    assert (f['seeding_on'], f['hdr_filter']) == ([], ['DV'])
+
+
+def test_a_refused_second_run_names_the_running_ones_folder(gen):
+    """So a map click that finds its own title's search running just shows it."""
+    gen.start(under='movies')
+
+    res = gen.start(under='movies')
+
+    assert res.status_code == 409
+    assert res.get_json()['under'] == 'movies'
+
+
+def test_a_refused_second_run_of_the_whole_library_names_no_folder(gen):
+    gen.start()
+
+    assert gen.start(under='movies').get_json()['under'] is None

@@ -128,18 +128,32 @@ the indexer pickers either.
 
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
+While a search runs and after it, the line under its heading lists the filters
+it used, for example *Filters: your file's quality or better · also seeding on
+Aither*. Only what narrows the search is listed (a row left on *All* or *Any*
+isn't), and a search with no filters has no line. It's the search's own record,
+so it's right even for a search you come back to later or one started in
+another tab.
+
 **From the library map.** The Dashboard's library map draws every title not
 seeded in blue. Click one, or a title on the *Biggest gaps* card below it, and
-Backfill opens with only that title's candidates; a line at the top names it,
-with **Show everything** to go back to the whole library. It goes by the title's
-folder, not its name, so a show whose folder is named differently from its title
-in Sonarr is still found. If nothing comes up, Sonarr and Radarr manage none of
-that folder's unseeded files (a rip, a file in no series or movie folder), or
-they're excluded. A search started this way asks for releases at your file's
-quality or better, of any resolution, source or HDR, instead of the quality
-filters you last used, so a filter left on 2160p can't hide the 1080p release a
-1080p show needs; change them for that search if you like, and the filters you
-keep for the whole library stay as they were. Yellow, red and purple tiles open Cleanup, Triage and Dedupe
+Backfill searches that title straight away: a movie is one search, a show one
+per season pack or unseeded episode, up to 10. The line under the results says
+what was searched, and if the title had more than 10, how many it has. Your
+**Indexer Strategy** applies as it does to every search, so if *Must also be
+seeding on* names a tracker, only releases also listed there are offered. It goes
+by the title's folder, not its name, so a show whose folder is named differently
+from its title in Sonarr is still found. A search started this way asks for
+releases at your file's quality or better, of any resolution, source or HDR,
+instead of the quality filters you last used, so a filter left on 2160p can't
+hide the 1080p release a 1080p show needs. To change any of that, click **New
+Search**: the settings open on the same title, with **Show everything** to go
+back to the whole library, and what you change there is for that search only;
+the filters and search depth you keep for the whole library stay as they were.
+If there's nothing to search, the settings open instead and say why: Sonarr and
+Radarr manage none of that folder's unseeded files (a rip, a file in no series
+or movie folder), or they're excluded. If another search is still running,
+Backfill shows that one and says so, since only one runs at a time. Yellow, red and purple tiles open Cleanup, Triage and Dedupe
 the same way; Cleanup and Triage start with that release's folder in their
 search.
 

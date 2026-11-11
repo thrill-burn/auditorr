@@ -78,6 +78,11 @@ function scopeReason(item) {
 function kindsLine(groups) {
   const n = { season: 0, episode: 0, movie: 0 }
   for (const g of groups) n[g.scope] = (n[g.scope] || 0) + 1
+  return kindsText(n)
+}
+
+// The same words from counts, as a run reports its own (`job.kinds`, B17).
+function kindsText(n) {
   const parts = []
   if (n.season)  parts.push(`${n.season} season pack${n.season !== 1 ? 's' : ''}`)
   if (n.episode) parts.push(`${n.episode} single episode${n.episode !== 1 ? 's' : ''}`)
@@ -177,6 +182,13 @@ const MIN_OPTIONS = [
 // whole-library runs are neither used nor overwritten.
 const MAP_QUALITY = { min: 'file', res: [], source: [], hdr: [] }
 
+// B17 — a click from the library map searches straight away, so it needs a
+// depth of its own: one title is one candidate for a movie and a season pack
+// each for a show, but a show whose seasons are partly seeded is searched an
+// episode at a time (B1) and can hold dozens. Ten keeps the run quick. Held like
+// MAP_QUALITY, so the stored Search Depth is neither used nor overwritten.
+const MAP_DEPTH = 10
+
 // ── Why a row is empty (B16) ──────────────────────────────────────────────────
 // From the run's own counts (`app._backfill_empty`). The row said "No releases
 // found" whatever happened, so a Resolution chip left on 2160p read the same as
@@ -222,6 +234,42 @@ export function emptyBreakdown(item) {
     e.below_floor  && `${e.below_floor.toLocaleString()} below your file`,
   ].filter(Boolean)
   return `${arr} listed ${plural(e.returned, 'release')}${parts.length ? `: ${parts.join(', ')}` : ''}.`
+}
+
+// ── What a run searched with (B17) ────────────────────────────────────────────
+// From the run's own record (`app._gen_run_filters`). A run from the library map
+// never shows its settings, and a filter left on from last time (B16's 2160p,
+// a "Must also be seeding on" tracker) hides releases with nothing on screen to
+// say so until a row comes back empty. Only what narrows the run: a filter left
+// on All or Any isn't one. `[label, names]` pairs: the label in words, the
+// names (folders, qualities, indexers) as data.
+const optionLabel = (options, v) => options.find(o => o.value === v)?.label || v
+
+export function runFilterParts(f) {
+  if (!f) return []
+  const out = []
+  if (f.folders?.length)        out.push(['root folders ', f.folders])
+  if (f.title_search)           out.push(['titles matching ', [f.title_search]])
+  if (f.min_quality === 'file') out.push(["your file's quality or better", null])
+  if (f.res_filter?.length)     out.push(['resolution ', f.res_filter.map(v => optionLabel(QUALITY_RES_OPTIONS, v))])
+  if (f.source_filter?.length)  out.push(['source ', f.source_filter.map(v => optionLabel(QUALITY_SOURCE_OPTIONS, v))])
+  if (f.hdr_filter?.length)     out.push(['HDR ', f.hdr_filter.map(v => optionLabel(HDR_OPTIONS, v))])
+  if (f.download_from?.length)  out.push(['downloading from ', f.download_from])
+  if (f.seeding_on?.length)     out.push(['also seeding on ', f.seeding_on])
+  return out
+}
+
+function RunFilters({ parts }) {
+  return (
+    <span>
+      Filters: {parts.map(([label, names], i) => (
+        <span key={i}>
+          {i > 0 && ' · '}{label}
+          {names && <span style={{ fontFamily: 'var(--mono)' }}>{names.join(', ')}</span>}
+        </span>
+      ))}
+    </span>
+  )
 }
 
 function EmptyLine({ item }) {
@@ -778,7 +826,9 @@ function saveJobId(id) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Backfill({ onNavigate, initialUnder }) {
-  const [phase, setPhase] = useState(() => (readJobId() ? 'running' : 'config'))  // config | running | done | stopped
+  // config | running | done | stopped. From the library map the page opens on
+  // the search it is about to start (B17), never on this tab's last run.
+  const [phase, setPhase] = useState(() => (initialUnder || readJobId() ? 'running' : 'config'))
   // B15 — one library folder, from a tile on the Dashboard's library map. While
   // it's set it is the selection: the root-folder chips and the title filter
   // step aside, since either could only narrow the one title to nothing.
@@ -820,7 +870,10 @@ export default function Backfill({ onNavigate, initialUnder }) {
   // (MAP_QUALITY), for as long as `under` is set. "Show everything" goes back
   // to the stored chips, which nothing here changed.
   const [mapQuality,      setMapQuality]      = useState(() => (initialUnder ? MAP_QUALITY : null))
+  const [mapDepth,        setMapDepth]        = useState(MAP_DEPTH)
   const mapRun = !!(under && mapQuality)
+  const depth    = mapRun ? mapDepth : searchCount
+  const setDepth = mapRun ? setMapDepth : setSearchCount
   const quality = mapRun
     ? mapQuality
     : { min: minQuality, res: resFilter, source: sourceFilter, hdr: hdrFilter }
@@ -831,9 +884,9 @@ export default function Backfill({ onNavigate, initialUnder }) {
   }, [mapRun])
 
   // Job
-  const [jobId,       setJobId]       = useState(() => readJobId())
+  const [jobId,       setJobId]       = useState(() => (initialUnder ? null : readJobId()))
   const [jobData,     setJobData]     = useState(null)
-  const [reattaching, setReattaching] = useState(() => !!readJobId())
+  const [reattaching, setReattaching] = useState(() => !initialUnder && !!readJobId())
   const [notice,      setNotice]      = useState(null)
   const [pollError,   setPollError]   = useState(null)
   const pollRef     = useRef(null)
@@ -939,7 +992,8 @@ export default function Backfill({ onNavigate, initialUnder }) {
   ), [folderEntries, filteredGroups, liveFolders, under])
 
   const availableCount = selectedGroups.length
-  const willSearch = searchCount === null ? availableCount : Math.min(availableCount, searchCount)
+  const willSearch = depth === null ? availableCount : Math.min(availableCount, depth)
+
 
   const matchedLine = useMemo(
     () => matchedFilesLine(matchedFiles, totalUnseeded), [matchedFiles, totalUnseeded])
@@ -969,6 +1023,10 @@ export default function Backfill({ onNavigate, initialUnder }) {
           completed:  data.completed,
           stopReason: data.stop_reason,
           current:    data.current || null,
+          // B17 — what the run searched with, in its own words (`job.filters`).
+          filters:    data.filters || null,
+          available:  data.available ?? null,
+          kinds:      data.kinds || null,
           results:    since === 0 ? (data.results || []) : [...(prev?.results || []), ...(data.results || [])],
         }))
         if (data.arr_errors) setArrErrors(data.arr_errors)
@@ -1009,8 +1067,11 @@ export default function Backfill({ onNavigate, initialUnder }) {
     startPoll(id)
   }, [startPoll])
 
-  // Reattach to this tab's run, if it has one.
+  // Reattach to this tab's run, if it has one. Not from the map, which starts
+  // its own (B17): a finished run of another title isn't what the click asked
+  // for, and a running one answers the new run's 409 below.
   useEffect(() => {
+    if (initialUnder) return
     const id = readJobId()
     if (id) startPoll(id)
   }, [startPoll])
@@ -1023,7 +1084,7 @@ export default function Backfill({ onNavigate, initialUnder }) {
     try {
       const resp = await api.startGenerate({
         folders:       under ? [] : liveFolders,
-        count:         searchCount ?? availableCount,
+        count:         depth ?? availableCount,
         sort,
         release_rank:  releaseRank,
         res_filter:    quality.res,
@@ -1045,8 +1106,14 @@ export default function Backfill({ onNavigate, initialUnder }) {
     } catch (e) {
       if (e.code === 'job_running' && e.data?.job_id) {
         // Somebody's run — another tab's, or this one's from before. A new run
-        // no longer stops it; this page shows it instead (B4).
-        setNotice('A search was already running, so this is that search rather than a new one.')
+        // no longer stops it; this page shows it instead (B4). A map click that
+        // finds its own title's search still running just shows it (B17): the
+        // refusal names the running one's folder.
+        if (!(under && e.data.under === under)) {
+          setNotice(under
+            ? <>A search was already running, so this is that search, not one for <span style={{ fontFamily: 'var(--mono)' }}>{under}</span>. Stop it, then choose New Search to search that title.</>
+            : 'A search was already running, so this is that search rather than a new one.')
+        }
         attach(e.data.job_id)
         return
       }
@@ -1054,6 +1121,24 @@ export default function Backfill({ onNavigate, initialUnder }) {
       setLoadError(e.message)
     }
   }
+
+  // B17 — from the library map the search starts by itself, once the page has
+  // loaded the indexer strategy the run posts. Nearly every click wants the
+  // defaults (this title, your file's quality or better), so the settings are
+  // one "New Search" away rather than in the way. It stays on the settings
+  // where they explain something a search couldn't: nothing under the folder,
+  // a load that failed, or only Usenet indexers. Once per mount: App keys the
+  // page by `under`, so another tile is another mount.
+  const autoRun = useRef(!!initialUnder)
+  useEffect(() => {
+    if (!autoRun.current || loading) return
+    autoRun.current = false
+    if (loadError || availableCount === 0 || (indexers.length === 0 && usenetCount > 0)) {
+      setPhase('config')
+      return
+    }
+    handleGenerate()
+  }, [loading])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStop = useCallback(async () => {
     if (jobId) { try { await api.stopGenerate(jobId) } catch (_) {} }
@@ -1197,6 +1282,7 @@ export default function Backfill({ onNavigate, initialUnder }) {
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
                 Each candidate queries your indexers — expect 10–90s per search depending on your setup.
                 {availableCount > 0 && ` ${availableCount.toLocaleString()} searchable candidate${availableCount !== 1 ? 's' : ''}${kinds ? ` — ${kinds}` : ''}.`}
+                {mapRun && ` From the library map it searches up to ${MAP_DEPTH}, for this search only.`}
                 {/* Shown even at zero candidates: that is the case where a
                     resolution failure is most likely and the numbers matter
                     most. */}
@@ -1217,7 +1303,9 @@ export default function Backfill({ onNavigate, initialUnder }) {
                   </div>
                 </div>
               )}
-              <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount} />
+              {/* Keyed, because the picker keeps its custom box's text: a map
+                  run's 10 must not stay in it after Show everything. */}
+              <CountPicker key={mapRun ? 'map' : 'all'} value={depth} onChange={setDepth} max={availableCount} />
             </div>
 
             <div>
@@ -1252,10 +1340,33 @@ export default function Backfill({ onNavigate, initialUnder }) {
 
   const phaseLabel =
     reattaching                            ? 'Picking your search back up…' :
+    phase === 'running' && !jobId          ? 'Starting search…' :
     phase === 'running'                    ? `Searching ${completed} of ${total}…` :
     phase === 'done'                       ? `Done — ${found}` :
     jobData?.stopReason === 'abandoned'    ? `Stopped with nobody watching — ${found}` :
                                              `Stopped — ${found}`
+
+  // B17 — what the shown run searched, from the run itself, so a search picked
+  // up from the sidebar, another tab or a refused second run says the same as
+  // one this page started. Map runs never showed their settings, so they also
+  // say their folder and, when capped, how many their filters left.
+  const run = jobData?.filters ? jobData : null
+  const runUnder = run?.filters.under || null
+  const capped = !!(runUnder && run.available != null && run.total < run.available)
+  const kinds = run?.kinds ? kindsText(run.kinds) : ''
+  const scopeLine = notice || (runUnder && (
+    <>
+      From the library map: only <span style={{ fontFamily: 'var(--mono)' }}>{runUnder}</span>
+      {capped
+        ? ` · ${run.total} of its ${run.available} candidates. New Search to choose how many.`
+        : kinds ? ` · ${kinds}` : ''}
+    </>
+  ))
+  const filterParts = run ? runFilterParts(run.filters) : []
+  const filterLine = filterParts.length > 0 && <RunFilters parts={filterParts} />
+  const blurb = (scopeLine || filterLine)
+    ? <>{scopeLine}{scopeLine && filterLine && <br />}{filterLine}</>
+    : null
 
   return (
     <WorkflowPage gap={14}>
@@ -1264,7 +1375,7 @@ export default function Backfill({ onNavigate, initialUnder }) {
           the middle of the page above a left-aligned title. */}
       <WorkflowHeader
         title={phaseLabel}
-        blurb={notice}
+        blurb={blurb}
         right={phase === 'running'
           ? <Button onClick={handleStop}>Stop</Button>
           : <Button onClick={handleReset}>← New Search</Button>}
@@ -1301,7 +1412,7 @@ export default function Backfill({ onNavigate, initialUnder }) {
       {rows.length === 0 && phase === 'running' && (
         <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>
           <Spinner />
-          {reattaching ? 'Picking your search back up…' : 'Starting search…'}
+          {reattaching ? 'Picking your search back up…' : loading && !jobId ? 'Loading candidates…' : 'Starting search…'}
         </div>
       )}
 

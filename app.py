@@ -5815,8 +5815,13 @@ def _running_gen_job():
 
 
 def _gen_job_running_response(job):
-    """Refused, not replaced: a new run never stops somebody else's (B4)."""
+    """Refused, not replaced: a new run never stops somebody else's (B4).
+
+    `under` is the running one's library-map folder, so a map click that finds
+    its own title's search running can show it without saying it's another (B17).
+    """
     return jsonify({'status': 'error', 'code': 'job_running', 'job_id': job['id'],
+                    'under': (job.get('filters') or {}).get('under'),
                     'message': 'A search is already running — showing it instead.'}), 409
 
 
@@ -6141,6 +6146,30 @@ _UNMATCHED_NAMES_MAX = 200
 # them only until the audit lands, so this is a sanity bound, not a working one.
 _EXCLUDE_KEYS_MAX = 2000
 
+# The most names a run's recorded filters keep per list (B17). An indexer, root
+# folder or chip list holds a handful; this only bounds what a status poll sends.
+_GEN_FILTER_NAMES_MAX = 50
+
+
+def _gen_run_filters(under, folders, title_search, min_file, res_filter, source_filter,
+                     hdr_filter, download_from, seeding_on):
+    """What a generate run narrows by, said by the run (B17).
+
+    A page that picks a run up later (the sidebar, another tab, a refused second
+    run) can't know these from its own state, and a run from the library map
+    never showed its settings, so `/generate/status` carries them. Only what
+    narrows the run, and an empty list is no restriction. Release ranking and
+    priority only order it, and the grabbed keys (B6) are the page's own.
+    """
+    def names(v):
+        return [x for x in v if isinstance(x, str)][:_GEN_FILTER_NAMES_MAX] if isinstance(v, list) else []
+    return {'under': under or None, 'folders': names(folders),
+            'title_search': title_search or None,
+            'min_quality': 'file' if min_file else None,
+            'res_filter': names(res_filter), 'source_filter': names(source_filter),
+            'hdr_filter': names(hdr_filter),
+            'download_from': names(download_from), 'seeding_on': names(seeding_on)}
+
 
 def _unmatched_example(unmatched_names, arr_media, conn_by_id):
     """One unmatched video beside the arr's own path for a file of the same name (B9).
@@ -6371,12 +6400,10 @@ def workflows_generate():
     cfg = db_load_config()
     try:
         backfill = _resolve_backfill(cfg)
-        candidates = _sort_generate_candidates(
-            _narrow_backfill(backfill['groups'], folders=folders or None,
-                             title_search=title_search or None, exclude_keys=exclude_keys,
-                             under=under or None),
-            sort,
-        )[:count]
+        narrowed = _narrow_backfill(backfill['groups'], folders=folders or None,
+                                    title_search=title_search or None, exclude_keys=exclude_keys,
+                                    under=under or None)
+        candidates = _sort_generate_candidates(narrowed, sort)[:count]
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     # The errors of the fetch this run's candidates came from (S11). The cache is
@@ -6393,7 +6420,15 @@ def workflows_generate():
            'started_at': now, 'last_polled': now, 'finished_at': None,
            # Kept on the job so a page that reattaches can still say which
            # instances this run could not read.
-           'arr_errors': arr_errors}
+           'arr_errors': arr_errors,
+           # B17 — what it searched with, how many candidates its filters left
+           # before the depth cut, and what kind each searched one is. Set here
+           # and never changed: the status poll reads them while the thread runs.
+           'filters': _gen_run_filters(under, folders, title_search, min_file, res_filter,
+                                       source_filter, hdr_filter, download_from, seeding_on),
+           'available': len(narrowed),
+           'kinds': {s: sum(1 for c in candidates if c.get('scope') == s)
+                     for s in ('season', 'episode', 'movie')}}
     with _gen_jobs_lock:
         running = _running_gen_job()
         if running:
@@ -6543,7 +6578,10 @@ def workflows_generate_status():
                     'results': job['results'][since:completed],
                     'current': current,
                     'stop_reason': job.get('stop_reason'),
-                    'arr_errors': job.get('arr_errors') or []})
+                    'arr_errors': job.get('arr_errors') or [],
+                    'filters': job.get('filters'),
+                    'available': job.get('available'),
+                    'kinds': job.get('kinds')})
 
 
 @app.route('/api/workflows/generate/stop', methods=['POST'])

@@ -420,11 +420,13 @@ export function initials(name) {
   return keep.slice(0, 2).map(w => (w.match(/[\p{L}\p{N}]/u) || [''])[0].toUpperCase()).join('') || '?'
 }
 
-// What a click on a tile opens, said as a sentence.
+// What a click on a tile opens, said as a sentence. Backfill's is a search,
+// which starts by itself (BACKFILL B17), so the sentence says so.
 function actionFor(nav, t) {
   if (!nav) return null
   const wf = STATES.find(x => x.tab === nav.tab)?.workflow || nav.tab
   if (nav.tab === 'dedupe') return `Click to open ${wf} →`
+  if (nav.tab === 'backfill') return 'Click to search for this title in Backfill →'
   return `Click to open ${wf} on this ${t.root === 'library' ? 'title' : 'release'} →`
 }
 
@@ -1002,7 +1004,9 @@ export function BiggestGapsCard({ row, model, onNavigate, onHighlight }) {
                 return (
                   <span key={`${g.t.root}/${g.t.rel}`} style={{ display: 'flex' }} onMouseEnter={show} onFocus={show}>
                     <Button size="sm" variant="ghost" disabled={!nav} onClick={() => nav && onNavigate(nav)}
-                      title={nav ? `Open ${STATES[g.state].workflow} on this title` : undefined}
+                      title={!nav ? undefined : nav.tab === 'backfill'
+                        ? 'Search for this title in Backfill'
+                        : `Open ${STATES[g.state].workflow} on this title`}
                       style={{ '--btn-border': 'transparent', width: '100%', justifyContent: 'flex-start', gap: 10, padding: '4px 8px', fontWeight: 400 }}>
                       <Swatch s={g.state} />
                       <span style={{ ...(g.t.root === 'torrents' ? MONO_TITLE : ITEM_TITLE), flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'left' }}>{shortName(g.t)}</span>
