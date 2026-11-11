@@ -339,6 +339,15 @@ function storeHeight(h) {
 const FREE_KEY = 'auditorr_map_free'
 function storedFree() { try { return localStorage.getItem(FREE_KEY) === '1' } catch { return false } }
 function storeFree(on) { try { if (on) localStorage.setItem(FREE_KEY, '1'); else localStorage.removeItem(FREE_KEY) } catch { /* private window */ } }
+// So is the sizing (2026-11-11): Attention by default, Actual size when picked.
+// Both picks are written, so a stored "attention" says someone chose it too.
+const SIZING_KEY = 'auditorr_map_sizing'
+function storedSizing() { try { return localStorage.getItem(SIZING_KEY) === 'actual' ? 'actual' : 'attention' } catch { return 'attention' } }
+function storeSizing(v) { try { localStorage.setItem(SIZING_KEY, v) } catch { /* private window */ } }
+const SIZING_OPTIONS = [
+  { value: 'attention', label: 'Attention', title: 'What needs a workflow is drawn larger, as the health score weighs it' },
+  { value: 'actual', label: 'Actual size', title: "Every tile's area is its size" },
+]
 // A drag redraws live while a draw is this quick (Titles always is, the stored
 // row being at most 2,000 titles); a slower one (Files on a big library) is
 // stretched while dragging and drawn once on release.
@@ -600,9 +609,11 @@ function zoomLabel(model, zoom) {
 const HOVER_NAME = { title: ITEM_TITLE, words: ITEM_TITLE, mono: MONO_TITLE }
 
 // The idle strip's word on scale: the map draws a gap larger than its bytes
-// ("Attention" in the rules), and names the states the score magnifies.
+// ("Attention" in the rules), and names the states the score magnifies. At
+// Actual size (null weights) it says what that costs.
 function scaleNote(weights, by) {
   if (!PROBLEM.some(s => by[s] > 0)) return null
+  if (!weights) return 'Drawn to scale, so a small gap can be too thin to see.'
   const up = PROBLEM.filter(s => by[s] > 0 && weights[s] >= 1.5)
     .map(s => `${STATES[s].name.toLowerCase()} ${Math.round(weights[s])}×`)
   return `Not to scale: what needs a workflow is drawn larger${up.length ? `, ${up.join(' and ')} its bytes as the health score weighs it` : ''}.`
@@ -618,6 +629,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   const [zoom, setZoom] = useState(null)             // null = the whole map; ephemeral, like the detail switch
   const [highlight, setHighlight] = useState(null)   // a state lit from the legend; ephemeral
   const [showFree, setShowFree] = useState(storedFree)
+  const [sizing, setSizing] = useState(storedSizing) // 'attention' | 'actual', per browser
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const layoutRef = useRef(null)
@@ -658,7 +670,9 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   // Area per byte by state, from the health score (see "Attention" in the rules).
   // Kept by value, so a refetch of the same scan doesn't redraw.
   const weightKey = attentionWeights(details).join(',')
-  const weights = useMemo(() => weightKey.split(',').map(Number), [weightKey])
+  const score = useMemo(() => weightKey.split(',').map(Number), [weightKey])
+  const weights = sizing === 'actual' ? null : score   // null draws every tile at its bytes
+  const pickSizing = v => { if (v === sizing) return; setSizing(v); storeSizing(v) }
   const zoomCrumb = activeZoom ? zoomLabel(shown, activeZoom) : null
   const shownTitles = zoomed ? zoomed.roots.reduce((a, r) => a + r.folders.reduce((b, f) => b + f.titles.length, 0), 0) : 0
 
@@ -786,7 +800,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
 
   return (
     <div style={{ ...CARD, padding: '18px 20px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px 12px', marginBottom: 10 }}>
         {/* While zoomed, the header names what fills the map and offers the way back. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, minHeight: 'var(--control-h)' }}>
           <span style={{ ...SECTION_LABEL, flexShrink: 0 }}>Library map</span>
@@ -798,7 +812,8 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
             </>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        {/* Wraps on a narrow window rather than running off the card. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '6px 10px', minWidth: 0, marginLeft: 'auto' }}>
           {detail === 'files' && !filesReady && (
             <span style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Spinner size={10} /> Loading file lists…</span>
           )}
@@ -810,6 +825,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
               Free space
             </Button>
           )}
+          <Segmented label="Map sizing" value={sizing} onChange={pickSizing} options={SIZING_OPTIONS} />
           <Segmented label="Map detail" value={detail} onChange={setDetail}
             options={[{ value: 'titles', label: 'Titles' }, { value: 'files', label: 'Files' }]} />
         </div>

@@ -301,6 +301,11 @@ export const ROOT_GAP = 6, GAP = 3, ROOT_HEAD = 22, HEAD = 18
 // shrinks, and the floor and ROOT_MIN only raise. Only the canvas is sized
 // this way. Every figure (headings, hover, legend, the header's stats) stays
 // bytes.
+//
+// **Attention is the default, and the header can switch it off** (2026-11-11,
+// the user's call: "attention can be the default, but user's choice will be
+// remembered"). `weights` of null is Actual size: every tile's area is its
+// bytes, with none of the three rules, so a gap can be too thin to see.
 export const LIFT_SMALLEST_PX = 400, LIFT_MIN_PX = 576, LIFT_MAX_PX = 3000, LIFT_BUDGET = 0.4, ROOT_MIN = 140
 const ONES = [1, 1, 1, 1, 1, 1]
 
@@ -325,16 +330,18 @@ export function attentionWeights(d) {
 
 // Each title's size by state as drawn (`eby`), with rules 2 and 3 applied for
 // a W × H canvas, and the sums its folders and roots are laid out by (`inner`
-// is a root's before rule 3). Exported for backend_tests' guard, which holds
-// "only ever bigger" (test_library_map_attention.py).
+// is a root's before rule 3). `weights` of null is Actual size: the bytes,
+// none of the rules. Exported for backend_tests' guard, which holds "only ever
+// bigger" and "Actual size is the bytes" (test_library_map_attention.py).
 export function attentionSizes(model, W, H, weights = ONES) {
+  const toScale = weights == null, w = weights || ONES
   const eby = new Map(), lifts = [], sizes = []
   let calm = 0, bytes = 0
   for (const r of model.roots) {
     bytes += r.v
     if (r.free) { calm += r.v; continue }
     for (const f of r.folders) for (const t of f.titles) {
-      const e = t.by.map((b, s) => b * weights[s])
+      const e = t.by.map((b, s) => b * w[s])
       eby.set(t, e)
       sizes.push(t.v)
       for (let s = 0; s < 6; s++) {
@@ -349,7 +356,7 @@ export function attentionSizes(model, W, H, weights = ONES) {
   // than e, keeps the parts in order, and takes the smallest to m·φ
   // (LIFT_SMALLEST_PX). With c held under LIFT_BUDGET over the count, the
   // iteration contracts.
-  if (lifts.length && bytes > 0) {
+  if (!toScale && lifts.length && bytes > 0) {
     sizes.sort((p, q) => p - q)
     const median = sizes[sizes.length >> 1] / bytes * W * H
     const lift = Math.min(LIFT_MAX_PX, Math.max(LIFT_MIN_PX, median))
@@ -379,7 +386,7 @@ export function attentionSizes(model, W, H, weights = ONES) {
   }
   // Rule 3: a root's strip is its share of the map's long side.
   const k = ROOT_MIN / Math.max(W, H)
-  if (model.roots.length > 1 && k < 0.5) {
+  if (!toScale && model.roots.length > 1 && k < 0.5) {
     for (const r of model.roots) {
       if (r.free || !PROBLEM.some(s => r.by[s] > 0)) continue
       const a = root.get(r), need = k * (total - a) / (1 - k)
@@ -400,12 +407,14 @@ export function shortName(t) {
 // Rectangles for every root, folder, title and leaf. A leaf is a title's share
 // in one state (`detail` 'titles') or one file ('files'). `tiny` lists what was
 // too small to draw, so the card can name it rather than drop it. Sized by
-// `weights` (see Attention above); without them, by bytes with the lifts.
+// `weights` (see Attention above); without them, by bytes with the lifts, and
+// with null, by bytes alone (Actual size).
 // Each leaf's `boost` is how many times larger than its bytes it's drawn,
 // beside a linked byte, rule 3's widening included; `weight` is its state's.
 export function layoutMap(model, W, H, detail, weights = ONES) {
   const roots = [], folders = [], titles = [], leaves = [], tiny = []
   const A = attentionSizes(model, W, H, weights)
+  const wt = weights || ONES   // not `w`: the folder loop below names its width that
   const grown = x => (A.inner.get(x) > 0 ? A.root.get(x) / A.inner.get(x) : 1)
   for (const r of squarify(model.roots.map(x => ({ ...x, a: A.root.get(x), grow: grown(x) })), 0, 0, W, H, 'a')) {
     const rx = r.x + ROOT_GAP / 2, ry = r.y + ROOT_GAP / 2, rw = r.w - ROOT_GAP, rh = r.h - ROOT_GAP
@@ -428,12 +437,12 @@ export function layoutMap(model, W, H, detail, weights = ONES) {
           const scale = t.by.map((b, s) => (b > 0 ? t.eby[s] / b : 0))
           for (const l of squarify(t.list.map(q => ({ ...q, a: q.size * scale[q.s] })), t.x, t.y, t.w, t.h, 'a')) {
             leaves.push({ x: l.x, y: l.y, w: l.w, h: l.h, s: l.s, T: t, file: l.name, bytes: l.size,
-                          boost: scale[l.s] * r.grow, weight: weights[l.s] })
+                          boost: scale[l.s] * r.grow, weight: wt[l.s] })
           }
         } else {
           for (const p of squarify(t.by.map((v, s) => ({ v, s, a: t.eby[s] })), t.x, t.y, t.w, t.h, 'a')) {
             leaves.push({ x: p.x, y: p.y, w: p.w, h: p.h, s: p.s, T: t, bytes: p.v,
-                          boost: t.eby[p.s] / p.v * r.grow, weight: weights[p.s] })
+                          boost: t.eby[p.s] / p.v * r.grow, weight: wt[p.s] })
           }
         }
       }

@@ -9,6 +9,9 @@ never drew. The user's rule is that **attention only ever makes a gap bigger**:
 the score weights up and never below a linked byte, a raise never shrinks and
 keeps parts in order, and every figure stays bytes.
 
+The header's *Actual size* switch (2026-11-11) draws with null weights, which
+must be the bytes and nothing else: no weight, no raise, no widened root.
+
 The rules are React-free JavaScript, so this runs them under node on a made-up
 library shaped like the box's and checks the rule over several scoring configs
 and canvas sizes. It is the fourth test that reads frontend files, beside
@@ -112,11 +115,35 @@ for (const [cname, w] of Object.entries(W8)) {
       for (const l of L.leaves) {
         ok(close(l.bytes, l.T.by[l.s]), `${at}: a leaf's figure isn't its bytes`)
         ok(l.boost >= 1 - 1e-9, `${at}: a leaf drawn at ${l.boost}x its size`)
+        // The hover strip reads it to say whether the score enlarged a tile.
+        ok(l.weight === w[l.s], `${at}: a leaf's weight is ${l.weight}, not its state's ${w[l.s]}`)
       }
     }
   }
 }
 ok(raised > 0, 'no part was ever raised: rule 2 went unexercised')
+
+// Actual size (null weights) is the bytes and nothing else: no state weighted,
+// no part raised, no root widened, and every leaf drawn at 1x.
+for (const [vname, m] of Object.entries(views)) {
+  for (const [W, H] of [[1110, 611], [2230, 820], [400, 300]]) {
+    const at = `actual size, ${vname}, ${W}x${H}`
+    const A = R.attentionSizes(m, W, H, null)
+    for (const r of m.roots) {
+      ok(close(A.root.get(r), r.v), `${at}: root ${r.name} drawn at ${A.root.get(r)}, not its ${r.v} bytes`)
+      for (const f of r.folders) for (const t of f.titles) {
+        const e = A.eby.get(t)
+        t.by.forEach((b, s) => ok(e[s] === b, `${at}: ${t.name} state ${s} drawn at ${e[s]}, not its ${b} bytes`))
+      }
+    }
+    const L = R.layoutMap(m, W, H, 'titles', null)
+    ok(L.leaves.length > 0, `${at}: nothing drawn`)
+    for (const l of L.leaves) {
+      ok(close(l.boost, 1) && l.weight === 1, `${at}: a leaf drawn at ${l.boost}x its size`)
+      ok(close(l.bytes, l.T.by[l.s]), `${at}: a leaf's figure isn't its bytes`)
+    }
+  }
+}
 
 // The bug this exists for: at the user's two screens the not-imported
 // releases are drawn, each big enough to see, whatever the config.
@@ -147,6 +174,9 @@ for (const [W, H] of [[1110, 611], [400, 300]]) {
   for (const l of L.leaves) {
     ok(l.boost >= 1 - 1e-9, `files, ${W}x${H}: ${l.file} drawn at ${l.boost}x its size`)
     ok(l.T.list.some(q => q.name === l.file && q.size === l.bytes), `files, ${W}x${H}: ${l.file}'s figure isn't its size`)
+  }
+  for (const l of R.layoutMap(files, W, H, 'files', null).leaves) {
+    ok(close(l.boost, 1), `files at actual size, ${W}x${H}: ${l.file} drawn at ${l.boost}x its size`)
   }
 }
 
