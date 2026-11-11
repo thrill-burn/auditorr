@@ -78,6 +78,24 @@ export async function reportClientError(body) {
   }
 }
 
+// Decoration the library map asks for on hover (a title's arr detail and its
+// poster): never throws, and a 401 never opens the key prompt, which a hover
+// mustn't. The poster comes back as a blob, not an <img src>, because an image
+// request can't carry the access key. Null on any failure.
+async function reqQuiet(path, as = 'json') {
+  try {
+    const secret = getSecret()
+    const res = await fetch('/api' + path, { headers: secret ? { 'X-Auditorr-Secret': secret } : {} })
+    if (!res.ok) return null
+    if (as === 'image') {
+      return (res.headers.get('content-type') || '').startsWith('image/') ? await res.blob() : null
+    }
+    return await res.json()
+  } catch (_) {
+    return null
+  }
+}
+
 export const api = {
   results:        ()     => req('/results'),
   nextSteps:      ()     => req('/next_steps'),
@@ -116,6 +134,8 @@ export const api = {
   retagUploadSnapshots:  (from, to, source) => req('/upload_snapshots/retag',  { method: 'POST', body: JSON.stringify({ from, to: to || undefined, source }) }),
   deleteUploadSnapshots: (from, to)         => req('/upload_snapshots/delete', { method: 'POST', body: JSON.stringify({ from, to: to || undefined }) }),
   libraryMap: ()          => req('/library_map'),
+  libraryMapTitle:  (folder) => reqQuiet('/library_map/title?folder=' + encodeURIComponent(folder)),
+  libraryMapPoster: (folder) => reqQuiet('/library_map/poster?folder=' + encodeURIComponent(folder), 'image'),
   acquireCandidates: ()   => req('/workflows/acquire_candidates'),
   acquireReleases: (params) => req('/workflows/acquire_releases?' + new URLSearchParams(params)),
   saveAcquirePrefs: (prefs) => req('/workflows/acquire_prefs', { method: 'POST', body: JSON.stringify(prefs) }),

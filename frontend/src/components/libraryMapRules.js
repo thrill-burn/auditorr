@@ -266,7 +266,8 @@ export function layoutMap(model, W, H, detail) {
   const roots = [], folders = [], titles = [], leaves = [], tiny = []
   for (const r of squarify(model.roots, 0, 0, W, H)) {
     const rx = r.x + ROOT_GAP / 2, ry = r.y + ROOT_GAP / 2, rw = r.w - ROOT_GAP, rh = r.h - ROOT_GAP
-    if (rw < 4 || rh < 4) { tiny.push({ name: r.name === 'library' ? 'Library folder' : 'Torrent folder', v: r.v }); continue }
+    if (rw < 4 || rh < 4) { tiny.push({ name: r.free ? r.label : r.name === 'library' ? 'Library folder' : 'Torrent folder', v: r.v }); continue }
+    if (r.free) { roots.push({ ...r, x: rx, y: ry, w: rw, h: rh, head: false }); continue }
     const head = rw >= 56 && rh >= 60
     roots.push({ ...r, x: rx, y: ry, w: rw, h: rh, head })
     const fy = head ? ry + ROOT_HEAD : ry, fh = head ? rh - ROOT_HEAD : rh
@@ -352,8 +353,28 @@ export function headingAt(layout, x, y) {
   if (!layout) return null
   const inside = (b, h = b.h) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + h
   for (const f of layout.folders) if (f.head && inside(f, HEAD)) return { kind: 'folder', f }
-  for (const r of layout.roots) if (r.head && inside(r, ROOT_HEAD)) return { kind: 'root', r }
-  for (const r of layout.roots) if (!r.head && inside(r)) return { kind: 'root', r, whole: true }
+  for (const r of layout.roots) if (!r.free && r.head && inside(r, ROOT_HEAD)) return { kind: 'root', r }
+  for (const r of layout.roots) if (!r.free && !r.head && inside(r)) return { kind: 'root', r, whole: true }
   for (const f of layout.folders) if (!f.head && inside(f)) return { kind: 'folder', f, whole: true }
   return null
+}
+
+// The free-space tile under a point, or null.
+export function freeAt(layout, x, y) {
+  if (!layout) return null
+  for (const r of layout.roots) if (r.free && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return r
+  return null
+}
+
+// ── Free space (2026-11-10) ──────────────────────────────────────────────────
+// WinDirStat's <Free Space>, behind a switch: the drive's free bytes as a tile
+// beside the roots, one per filesystem (one when both roots share it, which
+// hardlinks need). Never part of the model the totals, the zoom and the
+// headings read: the card adds it to what's drawn, on the whole map only.
+export function freeRoots(ds) {
+  if (!ds) return []
+  const one = (x, label, name) => (x && x.free > 0
+    ? [{ name, label, free: true, v: x.free, total: x.total, by: zeros(), folders: [] }] : [])
+  if (ds.same || !ds.media || !ds.torrents) return one(ds.torrents || ds.media, 'Free space', 'free')
+  return [...one(ds.torrents, 'Free for torrents', 'free-torrents'), ...one(ds.media, 'Free for the library', 'free-media')]
 }

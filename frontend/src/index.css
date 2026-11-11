@@ -287,6 +287,33 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .map-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-reduced-motion: reduce) { .map-grip { transition: none; } }
 
+/* The library map's legend (LibraryMap.jsx, 2026-11-10): each entry is a
+   button that highlights its state on the map, as WinDirStat's extension list
+   lights up one type's files. Quiet until hovered, washed like a segment, and
+   raised like a selected segment while its state is lit. A state with no bytes
+   is disabled at the legend's old 55%. */
+.map-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: var(--font-sm);
+  line-height: 1.25;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
+}
+.map-key:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); background: color-mix(in srgb, var(--text) 4%, transparent); }
+.map-key[aria-pressed="true"] { background: var(--seg-on); color: var(--text); box-shadow: var(--elev-1), inset 0 0 0 1px var(--seg-edge); }
+.map-key:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.map-key:disabled { opacity: 0.55; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .map-key { transition: none; } }
+
 /* IconButton / CloseButton (shared.jsx): a quiet square for a line icon — the
    close ×, a collapse chevron. An icon has no font size, which is what retired
    the type guard's two close-× exemptions. */

@@ -44,7 +44,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, arr_title_for_folder, fetch_arr_poster, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
 from exclusions import reads_bracket_as_glob
@@ -547,6 +547,77 @@ def get_library_map():
     Streamed through like `/api/files`. `[]` until the first scan that writes it.
     """
     return app.response_class(db_stream_file_results('library_map'), mimetype='application/json')
+
+
+def _map_folder_arg():
+    """The `folder` a library-map detail asks about: library-relative, only ever compared."""
+    rel = (request.args.get('folder') or '').strip()
+    return rel if 0 < len(rel) <= 1024 and '\x00' not in rel else None
+
+
+@app.route('/api/library_map/title')
+@require_auth
+def get_library_map_title():
+    """The series or movie a library-map title is, for the map's detail strip (2026-11-10).
+
+    Found by folder from the cached title list (`arr_title_for_folder`), so a
+    hover costs no arr call while the cache is warm. Answers `found: true` with
+    what the strip says; `found: false` when every instance answered and none
+    holds the folder; `found: null` with the instances that didn't answer when
+    it couldn't ask (R1); `configured: false` with no arr at all.
+    """
+    rel = _map_folder_arg()
+    if rel is None:
+        return jsonify({'error': 'folder required', 'code': 'folder_required'}), 400
+    cfg = db_load_config()
+    try:
+        if not normalize_arr_connections(cfg):
+            return jsonify({'found': False, 'configured': False})
+    except ValueError:
+        return jsonify({'found': None, 'unreachable': []})
+    row, errors = arr_title_for_folder(cfg, rel)
+    if row is None:
+        if errors:
+            return jsonify({'found': None, 'unreachable': [e.get('name') or e.get('service') for e in errors]})
+        return jsonify({'found': False})
+    return jsonify({
+        'found':   True,
+        'service': row.get('service'),
+        'title':   row.get('title') or '',
+        'year':    row.get('year'),
+        'status':  row.get('status') or '',
+        'network': row.get('network') or row.get('studio') or '',
+        'seasons': row.get('season_count'),
+        'runtime': row.get('runtime') or 0,
+        'poster':  bool(row.get('poster')),
+    })
+
+
+@app.route('/api/library_map/poster')
+@require_auth
+def get_library_map_poster():
+    """The poster of the series or movie a library-map title is, from its arr (2026-11-10).
+
+    Fetched through auditorr because the arr wants its API key, which never
+    reaches the browser. 404 when there's no match or no poster; the strip
+    then draws the title's initials. Cached by the browser for a day, so a
+    second look costs nothing; nothing is held here.
+    """
+    rel = _map_folder_arg()
+    if rel is None:
+        return jsonify({'error': 'folder required', 'code': 'folder_required'}), 400
+    cfg = db_load_config()
+    try:
+        row, _ = arr_title_for_folder(cfg, rel)
+    except ValueError:
+        row = None
+    got = fetch_arr_poster(cfg, row) if row else None
+    if not got:
+        return ('', 404)
+    data, ctype = got
+    resp = app.response_class(data, mimetype=ctype)
+    resp.headers['Cache-Control'] = 'private, max-age=86400'
+    return resp
 
 
 @app.route('/api/next_steps')

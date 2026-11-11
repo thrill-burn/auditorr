@@ -9,6 +9,7 @@ import unicodedata
 from types import MappingProxyType
 import urllib.request
 import urllib.error
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
@@ -2260,12 +2261,19 @@ def _arr_titles_snapshot(cfg, force=False):
     The media index only contains items that HAVE files — this list is what lets
     Triage distinguish "in the library but never imported" from "not in the
     library at all". Rows are [{service, connection_id, arr_id, title,
-    title_slug, year, has_file, alt_titles}].
+    title_slug, year, has_file, alt_titles, folder, status, runtime, poster}],
+    plus `network` and `season_count` on a series and `studio` on a movie.
 
     `alt_titles` is the arr's own `alternateTitles` — see `title_alias_keys`.
     It rides the listing both services already return, so it costs no extra
     call; it is capped per item because Radarr can carry a translation for
     every region it knows about.
+
+    `folder` (the item's own folder as auditorr sees it, `_arr_item_folder`) and
+    the rest are the library map's title detail (2026-11-10): which series or
+    movie a map tile is, by folder (`arr_title_for_folder`), and what to say
+    about it. `poster` is the arr's own address for the poster (`/MediaCover/…`),
+    never fetched here. They ride the same listing too.
     """
     now = time.monotonic()
     snap = _arr_titles_cache.get('snapshot')
@@ -2286,6 +2294,11 @@ def _arr_titles_snapshot(cfg, force=False):
                         'year':          m.get('year'),
                         'has_file':      bool(m.get('hasFile')),
                         'alt_titles':    _alt_titles(m),
+                        'folder':        _arr_item_folder(conn, cfg, m),
+                        'status':        m.get('status') or '',
+                        'studio':        m.get('studio') or '',
+                        'runtime':       m.get('runtime') or 0,
+                        'poster':        _poster_path(m),
                     })
             else:
                 for s in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT):
@@ -2299,6 +2312,12 @@ def _arr_titles_snapshot(cfg, force=False):
                         'year':          s.get('year'),
                         'has_file':      (stats.get('episodeFileCount') or 0) > 0,
                         'alt_titles':    _alt_titles(s),
+                        'folder':        _arr_item_folder(conn, cfg, s),
+                        'status':        s.get('status') or '',
+                        'network':       s.get('network') or '',
+                        'season_count':  stats.get('seasonCount'),
+                        'runtime':       s.get('runtime') or 0,
+                        'poster':        _poster_path(s),
                     })
         except Exception as e:
             log.warning("Could not fetch %s titles from %s: %s", conn['service'], conn['id'], e)
@@ -2806,6 +2825,86 @@ def _arr_item_folder(conn, cfg, item):
     local_root = conn.get('local_media_path', '') or cfg.get('MEDIA_PATH', '')
     folder = _replace_path_prefix(folder, conn.get('media_path', ''), local_root).rstrip('/')
     return folder if folder.isascii() else unicodedata.normalize('NFC', folder)
+
+
+def _poster_path(item):
+    """The arr's own address for an item's poster (`/MediaCover/1/poster.jpg?…`), or ''."""
+    for im in item.get('images') or []:
+        if str(im.get('coverType') or '').lower() == 'poster' and im.get('url'):
+            return str(im['url'])
+    return ''
+
+
+def arr_title_for_folder(cfg, rel):
+    """The series or movie a library-map title is: `(row, errors)` (2026-11-10).
+
+    `rel` is a folder relative to the library root (`television/Pluribus`),
+    which is what a map tile is. Matched by folder, like `arr_search` and B15,
+    never by name: a folder's name isn't the arr's title (`Pluribus` is Sonarr's
+    `PLUR1BUS`). The item whose own folder it is; else the deepest one above it;
+    else the only one below it (a folder of several, say a letter folder, is
+    none). `rel` is only ever compared, never opened.
+
+    `row` is a cached title row (`fetch_arr_all_titles_result`, 120s) or None.
+    `errors` are the instances that didn't answer: with none found, a non-empty
+    list means "couldn't ask", never "not there" (R1).
+    """
+    local = posixpath.normpath(_local_to_abs(_path_norm(rel), cfg.get('MEDIA_PATH', '')))
+    if not local.isascii():
+        local = unicodedata.normalize('NFC', local)
+    rows, errors = fetch_arr_all_titles_result(cfg)
+    above, below = None, []
+    for r in rows:
+        folder = r.get('folder') or ''
+        if not folder:
+            continue
+        if folder == local:
+            return r, errors
+        if local.startswith(folder + '/'):
+            if above is None or len(folder) > len(above['folder']):
+                above = r
+        elif folder.startswith(local + '/'):
+            below.append(r)
+    return (above or (below[0] if len(below) == 1 else None)), errors
+
+
+_POSTER_MAX_BYTES = 2 * 1024 * 1024
+
+
+def fetch_arr_poster(cfg, row):
+    """A title's poster from its own arr, 250px tall: `(bytes, content_type)` or None.
+
+    Asked first at the media-cover route (`/api/v3/mediacover/{id}/poster-250.jpg`,
+    which serves the full poster when the resized one is missing), then at the
+    address the listing gave (`/MediaCover/…`, with its `poster.jpg` asked as
+    `poster-250.jpg`), both with the API key on the **API address**, never the
+    link address (#21). The listing's address is used only as a path on that
+    host: one carrying a scheme or a host of its own is refused, or the arr's
+    key would go wherever it pointed. Decoration, so any failure is None and
+    the map draws initials; a log line names the instance, never an address.
+    """
+    conn = next((c for c in normalize_arr_connections(cfg)
+                 if c['id'] == row.get('connection_id')), None)
+    if not conn or not row.get('arr_id'):
+        return None
+    base = conn['base_url'].rstrip('/')
+    tries = [f"{base}/api/v3/mediacover/{int(row['arr_id'])}/poster-250.jpg"]
+    listed = urllib.parse.urlsplit(row.get('poster') or '')
+    if listed.path and not listed.scheme and not listed.netloc:
+        path = re.sub(r'poster\.jpg$', 'poster-250.jpg', listed.path)
+        tries.append(urllib.parse.urljoin(base + '/', path) + (f"?{listed.query}" if listed.query else ''))
+    for url in tries:
+        try:
+            http_req = urllib.request.Request(url, headers={"X-Api-Key": conn['api_key']})
+            with urllib.request.urlopen(http_req, timeout=8) as resp:
+                ctype = resp.headers.get('Content-Type', '').split(';')[0].strip()
+                data = resp.read(_POSTER_MAX_BYTES + 1)
+            if ctype.startswith('image/') and 0 < len(data) <= _POSTER_MAX_BYTES:
+                return data, ctype
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    log.debug("No poster from %s for one title", conn['id'])
+    return None
 
 
 def arr_search(cfg, service, file_path):

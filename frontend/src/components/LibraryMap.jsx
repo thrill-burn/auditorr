@@ -4,9 +4,9 @@ import { formatBytes } from '../utils'
 import { Button, Segmented, Spinner, useAuditComplete, ITEM_TITLE, MONO_TITLE } from './workflows/shared'
 import { SECTION_LABEL, CARD, CAPTION, READOUT, Hero, TrendPill } from './dashKit'
 import {
-  STATES, PROBLEM, LINKED, ROOT_HEAD, HEAD,
+  STATES, PROBLEM, LINKED, ORPHANED, NOT_IMPORTED, COPY, OTHER, ROOT_HEAD, HEAD, worstState,
   modelFromFiles, modelTotals, biggestGaps, navFor, layoutMap, leafAt,
-  zoomModel, zoomOut, headingTarget, headingAt,
+  zoomModel, zoomOut, headingTarget, headingAt, freeAt, freeRoots,
 } from './libraryMapRules'
 
 // The library map (2026-11-09): WinDirStat's idea applied to hardlinks. Every
@@ -66,6 +66,8 @@ function palette() {
     c: [mix(dim, s3, 0.42), toRgb(cssVar('--blue')), toRgb(cssVar('--yellow')), toRgb(cssVar('--red')),
         toRgb(cssVar('--purple')), mix(dim, s3, 0.18)],
     ink: light ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.34)',
+    // Free space's sparse hatch: the dim text colour, faint.
+    hatch: `rgba(${dim.map(Math.round).join(',')},${light ? 0.28 : 0.22})`,
     sm: cssVar('--font-sm') || '11px', md: cssVar('--font-base') || '12px',
     mono: cssVar('--mono'), sans: cssVar('--sans'),
   }
@@ -168,7 +170,35 @@ function breakdown(by) {
 const ROOT_LABEL = { library: 'Library folder', torrents: "Torrent folder · what isn't linked" }
 const ROOT_SHORT = { library: 'Library', torrents: 'Torrents' }
 
-function draw(canvas, model, W, H, detail) {
+// Free space (the switch in the header): the card's band colour with a sparse
+// hatch, unlike any state's fill or pattern, and named like a root.
+function freeTile(ctx, r, P) {
+  ctx.save()
+  ctx.fillStyle = P.band; ctx.fillRect(r.x, r.y, r.w, r.h)
+  ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip()
+  ctx.strokeStyle = P.hatch; ctx.lineWidth = 1
+  ctx.beginPath()
+  for (let i = -r.h; i < r.w; i += 11) { ctx.moveTo(r.x + i, r.y + r.h); ctx.lineTo(r.x + i + r.h, r.y) }
+  ctx.stroke()
+  if (r.w >= 56 && r.h >= ROOT_HEAD) {
+    ctx.textBaseline = 'middle'
+    ctx.font = `600 ${P.md} ${P.sans}`; ctx.fillStyle = P.text
+    const label = longest(ctx, [r.label, 'Free'], r.w - 12)
+    const lw = ctx.measureText(label).width
+    ctx.fillText(label, r.x + 6, r.y + ROOT_HEAD / 2)
+    ctx.font = `500 ${P.sm} ${P.mono}`; ctx.fillStyle = P.dim
+    const size = longest(ctx, [`  ${formatBytes(r.v)} of ${formatBytes(r.total)}`, `  ${formatBytes(r.v)}`], r.w - 12 - lw)
+    ctx.fillText(size, r.x + 6 + lw, r.y + ROOT_HEAD / 2)
+  }
+  ctx.restore()
+}
+
+// A highlighted state (a legend entry clicked) fades every other leaf to the
+// card, as WinDirStat lights up one extension's files. It doesn't depend on
+// telling two colours apart, which the user can't always.
+const FADE = 0.78
+
+function draw(canvas, model, W, H, detail, highlight = null) {
   const P = palette(), dpr = window.devicePixelRatio || 1
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr)
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px'
@@ -212,10 +242,17 @@ function draw(canvas, model, W, H, detail) {
     ctx.fillStyle = P.dim; ctx.fillText(rest, f.x + 6 + nameW, f.y + HEAD / 2 + 0.5)
   }
   for (const l of L.leaves) tile(ctx, l, P)
+  for (const r of L.roots) if (r.free) freeTile(ctx, r, P)
+  if (highlight != null) {
+    ctx.save(); ctx.globalAlpha = FADE; ctx.fillStyle = P.surface
+    for (const l of L.leaves) if (l.s !== highlight) ctx.fillRect(l.x, l.y, l.w, l.h)
+    ctx.restore()
+  }
   // Titles part with a 1px line of the card, so a title reads as one block.
   ctx.strokeStyle = P.surface; ctx.lineWidth = 1
   for (const t of L.titles) if (t.w > 3 && t.h > 3) ctx.strokeRect(t.x + 0.5, t.y + 0.5, t.w - 1, t.h - 1)
   ctx.textBaseline = 'top'
+  const faded = labelOn(mix(toRgb(P.surface), [128, 128, 128], 0.85))
   for (const t of L.titles) {
     if (t.w < 24 || t.h < 18) continue
     // A library title is one auditorr knows (Geist); a torrent's is a release name (mono).
@@ -223,14 +260,19 @@ function draw(canvas, model, W, H, detail) {
     const name = nameFit(ctx, t.name, t.w - 10)
     if (!name) continue
     const under = leafAt(L, t.x + 6, t.y + 6)
-    ctx.fillStyle = labelOn(P.c[under && under.T === t ? under.s : LINKED])
+    const us = under && under.T === t ? under.s : LINKED
+    // Under a highlight, a title without the state fades with its tiles, and a
+    // label over a faded leaf is set against the card, not the leaf's colour.
+    const lit = highlight == null || t.by[highlight] > 0
+    ctx.globalAlpha = lit ? 1 : 0.4
+    ctx.fillStyle = highlight != null && us !== highlight ? faded : labelOn(P.c[us])
     ctx.fillText(name, t.x + 5, t.y + 4)
     if (t.h >= 38 && t.w >= 60) {
-      ctx.globalAlpha = 0.78; ctx.font = monoSm
+      ctx.globalAlpha = lit ? 0.78 : 0.3; ctx.font = monoSm
       const b = t.root === 'library' ? breakdown(t.by).slice(0, 1) : []
       ctx.fillText(longest(ctx, [[formatBytes(t.v), ...b].join(' · '), formatBytes(t.v)], t.w - 10), t.x + 5, t.y + 19)
-      ctx.globalAlpha = 1
     }
+    ctx.globalAlpha = 1
   }
   return L
 }
@@ -251,6 +293,10 @@ function storedHeight() {
 function storeHeight(h) {
   try { if (h == null) localStorage.removeItem(HEIGHT_KEY); else localStorage.setItem(HEIGHT_KEY, String(h)) } catch { /* private window */ }
 }
+// The free-space switch is per browser too, written only when flipped.
+const FREE_KEY = 'auditorr_map_free'
+function storedFree() { try { return localStorage.getItem(FREE_KEY) === '1' } catch { return false } }
+function storeFree(on) { try { if (on) localStorage.setItem(FREE_KEY, '1'); else localStorage.removeItem(FREE_KEY) } catch { /* private window */ } }
 // A drag redraws live while a draw is this quick (Titles always is, the stored
 // row being at most 2,000 titles); a slower one (Files on a big library) is
 // stretched while dragging and drawn once on release.
@@ -291,47 +337,197 @@ function diskStats(d) {
   return out
 }
 
-// The hover line's parts. `name` is the line's title, set by kind like a row
-// title on the workflow pages: a library title is one auditorr knows (Geist,
-// ITEM_TITLE), a release or file name is off the disk (mono, MONO_TITLE), a
-// folded tile's "N smaller titles" is words. `prefix` is the folder it sits in.
-function hoverText(leaf, detail) {
-  const t = leaf.T, nav = navFor(leaf.s, t)
-  const action = nav ? `${STATES[leaf.s].workflow} →` : null
-  if (detail === 'files' && leaf.file) {
-    const st = STATES[leaf.s]
-    return { s: leaf.s, prefix: t.root === 'library' && t.folder ? `${t.folder} / ${t.name}` : t.name,
-             name: leaf.file, kind: 'mono',
-             facts: `${formatBytes(leaf.bytes)} · ${st.name.toLowerCase()}${st.workflow ? ` (${st.workflow})` : ''}`, nav, action }
-  }
-  const facts = t.root === 'library'
-    ? [formatBytes(t.v), ...(t.by[LINKED] ? [`${pctLinked(t.by)}% linked`] : []),
-       ...PROBLEM.filter(s => t.by[s]).map(s => `${formatBytes(t.by[s])} ${LABEL[s]} (${STATES[s].workflow})`)].join(' · ')
-    : `${formatBytes(t.v)} ${STATES[leaf.s].name.toLowerCase()}`
-  const files = t.folded ? ` (${t.files.toLocaleString()} files)` : ''
-  if (t.folded) return { s: leaf.s, prefix: '', name: `${t.name}${files}`, kind: 'words', facts, nav, action }
-  if (t.root === 'library') return { s: leaf.s, prefix: t.folder || '', name: t.name, kind: 'title', facts, nav, action }
+// ── The detail strip (2026-11-10) ────────────────────────────────────────────
+// Under the map, always the same height: a thumbnail, then up to five lines.
+//   name     the title, set by kind like a row title on the workflow pages: a
+//            library title is one auditorr knows (Geist, ITEM_TITLE), a release
+//            or file name is off the disk (mono, MONO_TITLE); `prefix` is its folder
+//   context  a library title's arr ("Sonarr · 2025 · Continuing…", fetched on a
+//            pause), else what the state means, in words
+//   facts    figures, mono
+//   by       the bytes by state, drawn as a bar with the legend's patterns
+//   action   what a click does (accent), or `note` when it does nothing
+// It replaced a 30px hover line whose name was the legend's 11px.
+
+// What a torrent tile's state means, said where the arr line would be.
+const STATE_NOTE = {
+  [ORPHANED]:     'In the torrent folder, but no torrent in your client claims it',
+  [NOT_IMPORTED]: 'Seeding, but not in your library',
+  [COPY]:         'A copy of a library file rather than a hardlink to it',
+  [OTHER]:        'Nothing to do: a sidecar, a sample or an unfinished download',
+}
+
+// Initials for a title with no poster (yet), as other apps do: the first two
+// words' letters, past a leading article and the small words after it.
+const ARTICLES = new Set(['the', 'a', 'an'])
+const MINOR = new Set(['of', 'and', 'the', 'a', 'an', 'in', 'on', 'to', 'for', '&'])
+export function initials(name) {
+  const words = String(name || '').replace(/\(\d{4}\)|\[[^\]]*\]/g, ' ')
+    .split(/[\s._:–—-]+/).filter(w => /[\p{L}\p{N}]/u.test(w))
+  if (words.length > 1 && ARTICLES.has(words[0].toLowerCase())) words.shift()
+  const keep = words.filter((w, i) => i === 0 || !MINOR.has(w.toLowerCase()))
+  return keep.slice(0, 2).map(w => (w.match(/[\p{L}\p{N}]/u) || [''])[0].toUpperCase()).join('') || '?'
+}
+
+// What a click on a tile opens, said as a sentence.
+function actionFor(nav, t) {
+  if (!nav) return null
+  const wf = STATES.find(x => x.tab === nav.tab)?.workflow || nav.tab
+  if (nav.tab === 'dedupe') return `Click to open ${wf} →`
+  return `Click to open ${wf} on this ${t.root === 'library' ? 'title' : 'release'} →`
+}
+
+function hoverText(leaf, mode) {
+  const t = leaf.T
+  const lib = t.root === 'library'
+  // A library title's linked part opens the title's own problem, so a click
+  // anywhere on a title that needs something goes to the workflow for it.
+  const nav = navFor(leaf.s, t) || (lib && !t.folded ? navFor(worstState(t.by), t) : null)
+  const base = { s: leaf.s, nav, action: actionFor(nav, t),
+                 note: nav ? null : (lib ? 'Every file here is linked: nothing to do' : null) }
   // A torrent title's name is its root-relative folder; its category is the prefix.
-  const cut = t.folder && t.name.startsWith(t.folder + '/') ? t.folder.length + 1 : 0
-  return { s: leaf.s, prefix: cut ? t.folder : '', name: t.name.slice(cut), kind: 'mono', facts, nav, action }
+  const cut = !lib && t.folder && t.name.startsWith(t.folder + '/') ? t.folder.length + 1 : 0
+  const own = lib ? t.name : t.name.slice(cut)
+  const rel = lib && !t.folded ? t.rel : null
+  const thumb = t.folded ? { icon: 'folder' } : { initials: initials(own) }
+  if (mode === 'files' && leaf.file) {
+    const st = STATES[leaf.s]
+    return { ...base, thumb, rel, prefix: lib && t.folder ? `${t.folder} / ${t.name}` : t.name,
+             name: leaf.file, kind: 'mono', context: lib ? null : STATE_NOTE[leaf.s] || null,
+             facts: `${formatBytes(leaf.bytes)} · ${st.name.toLowerCase()}${st.workflow ? ` (${st.workflow})` : ''}`,
+             by: null }
+  }
+  const files = `${(t.files || 0).toLocaleString()} file${t.files !== 1 ? 's' : ''}`
+  if (lib) {
+    const facts = [formatBytes(t.v), files, ...(t.by[LINKED] ? [`${pctLinked(t.by)}% linked`] : []),
+      ...PROBLEM.filter(s => t.by[s]).map(s => `${formatBytes(t.by[s])} ${LABEL[s]} (${STATES[s].workflow})`)].join(' · ')
+    return { ...base, thumb, rel, prefix: t.folded ? '' : t.folder || '', name: t.name,
+             kind: t.folded ? 'words' : 'title', context: t.folded ? 'Titles too small to draw, as one tile' : null,
+             facts, by: t.by }
+  }
+  return { ...base, thumb, rel: null, prefix: t.folded ? '' : cut ? t.folder : '', name: t.folded ? t.name : own,
+           kind: t.folded ? 'words' : 'mono', context: STATE_NOTE[leaf.s] || null,
+           facts: `${formatBytes(t.v)} · ${files}`, by: null }
 }
 
 // A heading under the pointer: what it is, its figures, and where a click
 // takes the map. `target` is the zoom it sets (null is the whole map).
 function headingText(h, target, zoomingOut) {
-  const action = zoomingOut ? 'Zoom out' : 'Zoom in'
+  const common = { thumb: { icon: 'folder' }, target, zoom: zoomingOut ? 'out' : 'in',
+                   action: zoomingOut ? 'Click to zoom out' : 'Click to zoom in' }
   if (h.kind === 'root') {
-    return { s: null, prefix: '', name: ROOT_LABEL[h.r.name], kind: 'words',
-             facts: [formatBytes(h.r.v), ...breakdown(h.r.by)].join(' · '), target, action }
+    return { ...common, s: null, prefix: '', name: ROOT_LABEL[h.r.name], kind: 'words',
+             context: h.r.name === 'library' ? 'Everything in your library folder' : "What's in your torrent folder and not linked into the library",
+             facts: [formatBytes(h.r.v), ...breakdown(h.r.by)].join(' · '), by: h.r.by }
   }
   const f = h.f, n = f.titles.length
   if (f.state != null) {
     const st = STATES[f.state]
-    return { s: f.state, prefix: '', name: `${st.name}${st.workflow ? ' · ' + st.workflow : ''}`, kind: 'words',
-             facts: `${formatBytes(f.v)} · ${n.toLocaleString()} release${n !== 1 ? 's' : ''}`, target, action }
+    return { ...common, s: f.state, prefix: '', name: `${st.name}${st.workflow ? ' · ' + st.workflow : ''}`, kind: 'words',
+             context: STATE_NOTE[f.state] || null,
+             facts: `${formatBytes(f.v)} · ${n.toLocaleString()} release${n !== 1 ? 's' : ''}`, by: null }
   }
-  return { s: null, prefix: '', name: f.name || '(top level)', kind: 'mono',
-           facts: [formatBytes(f.v), ...breakdown(f.by), `${n.toLocaleString()} titles`].join(' · '), target, action }
+  return { ...common, s: null, prefix: '', name: f.name || '(top level)', kind: 'mono',
+           context: 'A folder in your library',
+           facts: [formatBytes(f.v), `${n.toLocaleString()} titles`, ...breakdown(f.by)].join(' · '), by: f.by }
+}
+
+// The arr line for a library title: which series or movie it is, from the
+// title's folder (`/api/library_map/title`). Blank until it answers; a
+// "couldn't ask" says so and is never "not there" (R1).
+const STATUS_WORD = { continuing: 'Continuing', ended: 'Ended', upcoming: 'Upcoming', deleted: 'Deleted',
+                      released: 'Released', announced: 'Announced', inCinemas: 'In cinemas', tba: 'TBA' }
+const squash = s => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+function arrLine(info, name) {
+  if (!info) return ''
+  if (info.found === null) return `Couldn't ask ${(info.unreachable || []).join(' or ') || 'Sonarr or Radarr'}`
+  if (!info.found) return info.configured === false ? '' : 'Not in Sonarr or Radarr'
+  const parts = [info.service === 'radarr' ? 'Radarr' : 'Sonarr']
+  if (info.title && squash(info.title) !== squash(name.replace(/\s*\(\d{4}\)\s*$/, ''))) parts.push(`as ${info.title}`)
+  if (info.year) parts.push(String(info.year))
+  if (info.status) parts.push(STATUS_WORD[info.status] || info.status)
+  if (info.service === 'sonarr' && info.seasons != null) parts.push(`${info.seasons} season${info.seasons !== 1 ? 's' : ''}`)
+  if (info.service === 'radarr' && info.runtime > 0) parts.push(`${Math.floor(info.runtime / 60) ? Math.floor(info.runtime / 60) + 'h ' : ''}${info.runtime % 60}m`)
+  if (info.network) parts.push(info.network)
+  return parts.join(' · ')
+}
+
+// A title's arr answer and poster, looked up once a pointer rests on it: a
+// sweep across the map asks for nothing. Both are kept for the page's life
+// (posters as object URLs, the oldest let go past POSTER_KEEP), so a second
+// look is instant; an answer that couldn't ask isn't kept, so a later look
+// asks again.
+const ARR_DELAY = 300, POSTER_KEEP = 150
+const arrInfo = new Map(), posters = new Map()
+function infoFor(rel) {
+  if (!arrInfo.has(rel)) {
+    arrInfo.set(rel, api.libraryMapTitle(rel).then(r => {
+      if (!r || r.found === null) arrInfo.delete(rel)
+      return r
+    }))
+  }
+  return arrInfo.get(rel)
+}
+function posterFor(rel) {
+  if (!posters.has(rel)) {
+    if (posters.size >= POSTER_KEEP) {
+      const [old, url] = posters.entries().next().value
+      posters.delete(old)
+      url.then(u => u && URL.revokeObjectURL(u))
+    }
+    posters.set(rel, api.libraryMapPoster(rel).then(b => (b ? URL.createObjectURL(b) : null)))
+  }
+  return posters.get(rel)
+}
+function useArrDetail(rel) {
+  const [got, setGot] = useState({ rel: null, info: null, poster: null })
+  useEffect(() => {
+    if (!rel) return undefined
+    let live = true
+    const t = setTimeout(async () => {
+      const info = await infoFor(rel)
+      if (!live) return
+      setGot({ rel, info, poster: null })
+      if (info?.found && info.poster) {
+        const poster = await posterFor(rel)
+        if (live) setGot({ rel, info, poster })
+      }
+    }, arrInfo.has(rel) ? 0 : ARR_DELAY)
+    return () => { live = false; clearTimeout(t) }
+  }, [rel])
+  return got.rel === rel ? got : { rel, info: null, poster: null }
+}
+
+// The thumbnail: the poster, else initials, else a line icon for what isn't a title.
+const ICONS = {
+  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  drive:  <><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 14h.01M11 14h6" /></>,
+  map:    <><rect x="3" y="4" width="18" height="16" rx="1.5" /><path d="M11 4v16M11 12h10M16 12v8" /></>,
+}
+function Thumb({ thumb, poster }) {
+  return (
+    <div style={{ width: 56, height: 84, flexShrink: 0, borderRadius: 4, overflow: 'hidden', background: 'var(--surface2)',
+                  border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)' }}>
+      {poster
+        ? <img src={poster} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+        : thumb?.initials
+          ? <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-lg)', fontWeight: 600, letterSpacing: '0.02em' }}>{thumb.initials}</span>
+          : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"
+              strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{ICONS[thumb?.icon || 'map']}</svg>}
+    </div>
+  )
+}
+
+// The bytes by state as one bar, in the legend's colours and patterns; only
+// where there's more than one state to tell apart.
+function StateBar({ by }) {
+  const total = by ? by.reduce((a, b) => a + b, 0) : 0
+  if (!total || by.filter(Boolean).length < 2) return null
+  return (
+    <div style={{ display: 'flex', gap: 1, width: 240, maxWidth: '100%', height: 6, borderRadius: 2, overflow: 'hidden' }} aria-hidden="true">
+      {by.map((b, s) => (b > 0 ? <span key={s} style={{ flex: `${b} 0 0`, minWidth: 2, ...swatchStyle(s) }} /> : null))}
+    </div>
+  )
 }
 
 // What the header names while zoomed: the root's word, or the folder's name
@@ -354,6 +550,8 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   const [userH, setUserH] = useState(storedHeight)   // null = the width's default
   const [dragging, setDragging] = useState(false)
   const [zoom, setZoom] = useState(null)             // null = the whole map; ephemeral, like the detail switch
+  const [highlight, setHighlight] = useState(null)   // a state lit from the legend; ephemeral
+  const [showFree, setShowFree] = useState(storedFree)
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const layoutRef = useRef(null)
@@ -377,7 +575,20 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   const totals = useMemo(() => (model ? modelTotals(model) : null), [model])
   const zoomed = useMemo(() => (model && zoom ? zoomModel(model, zoom) : null), [model, zoom])
   const activeZoom = zoomed ? zoom : null             // a zoom a rescan took away draws the whole map
-  const shown = zoomed || model
+  // Free space joins what's drawn on the whole map only; a zoom is one folder's room.
+  const free = useMemo(() => freeRoots(details?.disk_space), [details?.disk_space])
+  const shown = useMemo(() => zoomed || (model && showFree && free.length ? { roots: [...model.roots, ...free] } : model),
+    [zoomed, model, showFree, free])
+  const toggleFree = () => { const on = !showFree; setShowFree(on); storeFree(on) }
+  // What the highlighted state holds on the map as drawn (zoomed or not).
+  const lit = useMemo(() => {
+    if (highlight == null || !shown) return null
+    let bytes = 0, titles = 0
+    for (const r of shown.roots) for (const f of r.folders) for (const t of f.titles) {
+      if (t.by[highlight] > 0) { bytes += t.by[highlight]; titles += 1 }
+    }
+    return { bytes, titles }
+  }, [highlight, shown])
   const zoomCrumb = activeZoom ? zoomLabel(shown, activeZoom) : null
   const shownTitles = zoomed ? zoomed.roots.reduce((a, r) => a + r.folders.reduce((b, f) => b + f.titles.length, 0), 0) : 0
 
@@ -404,10 +615,10 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   useLayoutEffect(() => {
     if (!shown || !width || !canvasRef.current) return
     const t0 = performance.now()
-    layoutRef.current = draw(canvasRef.current, shown, width, height, drawn)
+    layoutRef.current = draw(canvasRef.current, shown, width, height, drawn, highlight)
     drawMs.current = performance.now() - t0
     setHover(null)
-  }, [shown, width, height, drawn, themeTick])
+  }, [shown, width, height, drawn, themeTick, highlight])
 
   // ── The height grip ──
   const commitHeight = h => { const c = clampHeight(h); setUserH(c); storeHeight(c) }
@@ -449,6 +660,15 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   const hitAt = e => {
     const r = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - r.left, y = e.clientY - r.top
+    const fr = freeAt(layoutRef.current, x, y)
+    if (fr) {
+      return { box: fr, outline: false, text: {
+        thumb: { icon: 'drive' }, s: null, prefix: '', name: fr.label, kind: 'words',
+        context: fr.name === 'free' ? 'On the drive your library and torrent folders share'
+          : fr.name === 'free-torrents' ? "On your torrent folder's drive" : "On your library folder's drive",
+        facts: fr.total ? `${formatBytes(fr.v)} of ${formatBytes(fr.total)} · ${Math.round(fr.v / fr.total * 100)}% free` : formatBytes(fr.v),
+        by: null, action: null, note: null } }
+    }
     const h = headingAt(layoutRef.current, x, y)
     const target = h && model ? headingTarget(model, activeZoom, h) : undefined
     if (h && target !== undefined) {
@@ -469,8 +689,9 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
     if (hit?.heading) setZoom(hit.text.target)
     else if (hit?.text?.nav) onNavigate(hit.text.nav)
   }
-  const cursor = hover?.heading ? (hover.text.action === 'Zoom out' ? 'zoom-out' : 'zoom-in')
+  const cursor = hover?.heading ? (hover.text.zoom === 'out' ? 'zoom-out' : 'zoom-in')
     : hover?.text?.nav ? 'pointer' : 'default'
+  const arr = useArrDetail(hover?.text?.rel || null)
 
   // A gap hovered on the Biggest gaps card: outline its tile and name it here.
   // A torrent release has a tile in each state's block, so it's the gap's state's.
@@ -510,6 +731,14 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
           {detail === 'files' && !filesReady && (
             <span style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Spinner size={10} /> Loading file lists…</span>
           )}
+          {free.length > 0 && (
+            // WinDirStat's <Free Space>, off unless asked for: it takes the
+            // library's room, so fewer titles carry a name.
+            <Button size="sm" variant={showFree ? 'secondary' : 'ghost'} pressed={showFree} onClick={toggleFree}
+              title={activeZoom ? 'Free space shows on the whole map' : undefined}>
+              Free space
+            </Button>
+          )}
           <Segmented label="Map detail" value={detail} onChange={setDetail}
             options={[{ value: 'titles', label: 'Titles' }, { value: 'files', label: 'Files' }]} />
         </div>
@@ -537,7 +766,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
             onClick={onClick}
             style={{ display: 'block', borderRadius: 4, cursor }}
           />
-          {hover?.box && (
+          {hover?.box && hover.outline !== false && (
             <div style={{
               position: 'absolute', pointerEvents: 'none', left: hover.box.x, top: hover.box.y,
               width: hover.box.w, height: hover.box.h, border: '2px solid var(--text)', borderRadius: 2,
@@ -559,44 +788,64 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
         </div>
       )}
 
-      {/* The hovered tile: its name is the line's title, a row title's size
-          and face (2026-11-10, it was the legend's 11px); the folder before it
-          and the figures after it stay small. The hint is words. */}
-      <div style={{ ...CAPTION, height: 30, marginTop: 2, display: 'flex', alignItems: 'center', minWidth: 0 }}>
-        {hover?.text ? (
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, minWidth: 0 }}>
-            {hover.text.s != null && <span style={{ alignSelf: 'center', display: 'inline-flex' }}><Swatch s={hover.text.s} /></span>}
-            <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
-              {hover.text.prefix && (
-                <span style={{ ...READOUT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220, flexShrink: 0 }}>{hover.text.prefix} /</span>
-              )}
-              <span style={{ ...HOVER_NAME[hover.text.kind], overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{hover.text.name}</span>
-            </span>
-            <span style={{ ...READOUT, whiteSpace: 'nowrap' }}>{hover.text.facts}</span>
-            {hover.text.action && <span style={{ color: 'var(--accent)', whiteSpace: 'nowrap' }}>{hover.text.action}</span>}
+      {/* The detail strip (2026-11-10): one height whatever it shows, so the
+          card never moves under the pointer. See "The detail strip" above. */}
+      {model && model.roots.length > 0 && (() => {
+        const tinyNote = tiny.length > 0 ? `Too small to draw: ${tiny.map(t => t.name || '(top level)').join(', ')}` : null
+        const shownBytes = shown ? shown.roots.filter(r => !r.free).reduce((a, r) => a + r.v, 0) : 0
+        const d = hover?.text || (lit ? {
+          thumb: { icon: 'map' }, s: highlight, prefix: '', name: `Highlighting ${STATES[highlight].name.toLowerCase()}`, kind: 'words',
+          context: zoomCrumb ? `In ${zoomCrumb.text}` : null,
+          facts: `${formatBytes(lit.bytes)} in ${lit.titles.toLocaleString()} title${lit.titles !== 1 ? 's' : ''}`,
+          note: 'Click it again in the legend to show everything.',
+        } : zoomCrumb ? {
+          thumb: { icon: 'folder' }, s: null, prefix: '', name: `${shownTitles.toLocaleString()} title${shownTitles !== 1 ? 's' : ''} in ${zoomCrumb.text}`, kind: 'words',
+          context: 'Click a tile to open its workflow, or the heading to zoom out.',
+          facts: formatBytes(shownBytes), note: tinyNote,
+        } : {
+          thumb: { icon: 'map' }, s: null, prefix: '', name: 'Hover a tile for its details', kind: 'words',
+          context: "Click a tile to open its workflow, or a folder's name to zoom in.",
+          facts: `${totals.titles.toLocaleString()} titles · ${formatBytes(shownBytes)}`,
+          note: [!model.roots.some(r => r.name === 'torrents') && "Your torrent folder is all linked, so it's drawn once, in the library.", tinyNote].filter(Boolean).join(' ') || null,
+        })
+        const context = d.rel ? arrLine(arr.info, d.name) : d.context
+        const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
+        return (
+          <div data-map-detail="" style={{ display: 'flex', alignItems: 'center', gap: 14, height: 92, marginTop: 4, minWidth: 0 }}>
+            <Thumb thumb={d.thumb} poster={d.rel ? arr.poster : null} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {d.s != null && <Swatch s={d.s} />}
+                <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+                  {d.prefix && <span style={{ ...READOUT, ...ellipsis, maxWidth: 240, flexShrink: 0 }}>{d.prefix} /</span>}
+                  <span style={{ ...HOVER_NAME[d.kind], ...ellipsis }}>{d.name}</span>
+                </span>
+              </div>
+              {/* A title's arr line keeps its room while it's asked for, so the lines don't jump. */}
+              {(context || d.rel) && <span style={{ ...CAPTION, ...ellipsis, minHeight: 14 }}>{context}</span>}
+              {d.facts && <span style={{ ...READOUT, ...ellipsis }}>{d.facts}</span>}
+              <StateBar by={d.by} />
+              {d.action
+                ? <span style={{ ...CAPTION, ...ellipsis, color: 'var(--accent)' }}>{d.action}</span>
+                : d.note && <span style={{ ...CAPTION, ...ellipsis }}>{d.note}</span>}
+            </div>
           </div>
-        ) : zoomCrumb ? (
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-            {shownTitles.toLocaleString()} title{shownTitles !== 1 ? 's' : ''} here · click a tile to open its workflow, or the heading to zoom out
-            {tiny.length > 0 && ` · too small to draw: ${tiny.map(t => t.name || '(top level)').join(', ')}`}
-          </span>
-        ) : model ? (
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-            {totals.titles.toLocaleString()} titles · hover a tile, click one to open its workflow, or click a folder's name to zoom in
-            {!model.roots.some(r => r.name === 'torrents') && ' · torrent folder: all linked, drawn once in the library'}
-            {tiny.length > 0 && ` · too small to draw: ${tiny.map(t => t.name || '(top level)').join(', ')}`}
-          </span>
-        ) : null}
-      </div>
+        )
+      })()}
 
+      {/* The legend: click a state to fade everything else on the map
+          (index.css's .map-key, raised like a selected segment while lit). */}
       {totals && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 6 }}>
+        <div role="group" aria-label="Highlight a state on the map"
+          style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 6px', marginTop: 4, marginLeft: -7 }}>
           {STATES.slice(0, 5).map((st, s) => (
-            <span key={st.name} style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6, opacity: totals.by[s] ? 1 : 0.55 }}>
+            <button key={st.name} type="button" className="map-key" aria-pressed={highlight === s}
+              disabled={!totals.by[s]} onClick={() => setHighlight(highlight === s ? null : s)}
+              title={totals.by[s] ? (highlight === s ? 'Show everything' : `Highlight ${st.name.toLowerCase()} on the map`) : undefined}>
               <Swatch s={s} />
               {st.name}{st.workflow && <span>· {st.workflow}</span>}
               <span style={FIGURE}>{formatBytes(totals.by[s])}</span>
-            </span>
+            </button>
           ))}
         </div>
       )}
