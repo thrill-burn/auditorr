@@ -163,6 +163,80 @@ const RANK_OPTIONS = [
   { value: 'closest', label: 'Closest to my file',       sub: 'size, then quality'  },
 ]
 
+// A floor under the chips (B16): each candidate's releases at its own file's
+// quality or better, resolution first, then source, as Triage compares them.
+// It's what a run from the library map starts on, so a chip left on 2160p by
+// an earlier run can't hide the 1080p release a 1080p title needs.
+const MIN_OPTIONS = [
+  { value: 'none', label: 'None',      sub: 'any quality'            },
+  { value: 'file', label: 'Your file', sub: "its quality or better" },
+]
+
+// The quality a run from the library map starts on (B15, B16): your file or
+// better, and every chip on Any. Ephemeral, so the chips you keep for
+// whole-library runs are neither used nor overwritten.
+const MAP_QUALITY = { min: 'file', res: [], source: [], hdr: [] }
+
+// ── Why a row is empty (B16) ──────────────────────────────────────────────────
+// From the run's own counts (`app._backfill_empty`). The row said "No releases
+// found" whatever happened, so a Resolution chip left on 2160p read the same as
+// a tracker with nothing: on the box, Aither had both 1080p packs of a season.
+function plural(n, word) {
+  return `${n.toLocaleString()} ${word}${n !== 1 ? 's' : ''}`
+}
+
+// `[sentence, names]` pairs for the stage that emptied the row: the user's own
+// quality filters first, since those are the ones to change, then the indexers,
+// then the scope, then the other titles the arr listed.
+export function emptyReasons(item) {
+  const e = item.empty
+  if (!e) return [['No releases found', null]]
+  const out = []
+  if (e.quality > 0) out.push([`${plural(e.quality, 'release')} hidden by the Quality Filter: `, e.quality_names])
+  if (e.below_floor > 0) out.push([`${plural(e.below_floor, 'release')} below your file's ${e.floor}: `, e.below_floor_names])
+  if (out.length) return out
+  if (e.indexers > 0) return [[`${plural(e.indexers, 'release')}, none on the indexers in Indexer Strategy`, null]]
+  if (e.out_of_scope > 0) {
+    return [[item.scope === 'season'
+      ? `${plural(e.out_of_scope, 'release')}, none a pack of this season`
+      : `${plural(e.out_of_scope, 'release')}, none of exactly this file's episodes`, null]]
+  }
+  if (e.other_title > 0) {
+    const arr = item.arr_service === 'radarr' ? 'Radarr' : 'Sonarr'
+    return [[`None of this title: ${arr} listed ${plural(e.other_title, 'release')} of other titles`, null]]
+  }
+  return [['No releases found', null]]
+}
+
+// The whole count, for the line's hover text.
+export function emptyBreakdown(item) {
+  const e = item.empty
+  if (!e || !e.returned) return ''
+  const arr = item.arr_service === 'radarr' ? 'Radarr' : 'Sonarr'
+  const parts = [
+    e.usenet       && `${e.usenet.toLocaleString()} Usenet`,
+    e.other_title  && `${e.other_title.toLocaleString()} of other titles`,
+    e.out_of_scope && `${e.out_of_scope.toLocaleString()} ${item.scope === 'season' ? 'not this season' : "not exactly this file's episodes"}`,
+    e.indexers     && `${e.indexers.toLocaleString()} not on your indexers`,
+    e.quality      && `${e.quality.toLocaleString()} hidden by the Quality Filter`,
+    e.below_floor  && `${e.below_floor.toLocaleString()} below your file`,
+  ].filter(Boolean)
+  return `${arr} listed ${plural(e.returned, 'release')}${parts.length ? `: ${parts.join(', ')}` : ''}.`
+}
+
+function EmptyLine({ item }) {
+  return (
+    <span title={emptyBreakdown(item) || undefined}>
+      {emptyReasons(item).map(([text, names], i) => (
+        <span key={i}>
+          {i > 0 && '; '}{text}
+          {names && <span style={{ fontFamily: 'var(--mono)' }}>{names.join(', ')}</span>}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 // ── Closeness to the file on disk (B3) ────────────────────────────────────────
 // Hue as text only, never a fill — the treatment Trumped gives its candidates
 // for the same question: is this the release I already have? (`MatchChips`,
@@ -476,7 +550,7 @@ function ResultItem({ item }) {
                 if (r.custom_format_score) parts.push(`CF:${r.custom_format_score}`)
                 return <><span style={{ fontFamily: 'var(--mono)' }}>{parts.join(' · ')}</span><MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" /></>
               })()}
-              {notFound  && 'No releases found'}
+              {notFound  && <EmptyLine item={item} />}
               {errored   && item.error}
             </div>
           )}
@@ -740,6 +814,21 @@ export default function Backfill({ onNavigate, initialUnder }) {
   const [resFilter,       setResFilter]       = useState(() => loadPref('resFilter', []))
   const [sourceFilter,    setSourceFilter]    = useState(() => loadPref('sourceFilter', []))
   const [hdrFilter,       setHdrFilter]       = useState(() => loadPref('hdrFilter', []))
+  // A new key, so a blob from before it reads the default: no PREFS_VERSION bump.
+  const [minQuality,      setMinQuality]      = useState(() => loadPref('minQuality', 'none'))
+  // B16 — a run from the library map has its own quality, not the stored one
+  // (MAP_QUALITY), for as long as `under` is set. "Show everything" goes back
+  // to the stored chips, which nothing here changed.
+  const [mapQuality,      setMapQuality]      = useState(() => (initialUnder ? MAP_QUALITY : null))
+  const mapRun = !!(under && mapQuality)
+  const quality = mapRun
+    ? mapQuality
+    : { min: minQuality, res: resFilter, source: sourceFilter, hdr: hdrFilter }
+  const setQuality = useMemo(() => {
+    if (!mapRun) return { min: setMinQuality, res: setResFilter, source: setSourceFilter, hdr: setHdrFilter }
+    const set = k => v => setMapQuality(q => ({ ...q, [k]: v }))
+    return { min: set('min'), res: set('res'), source: set('source'), hdr: set('hdr') }
+  }, [mapRun])
 
   // Job
   const [jobId,       setJobId]       = useState(() => readJobId())
@@ -765,10 +854,10 @@ export default function Backfill({ onNavigate, initialUnder }) {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({
         v: PREFS_VERSION,
-        sort, releaseRank, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders,
+        sort, releaseRank, resFilter, sourceFilter, hdrFilter, minQuality, searchCount, selectedFolders,
       }))
     } catch {}
-  }, [sort, releaseRank, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders])
+  }, [sort, releaseRank, resFilter, sourceFilter, hdrFilter, minQuality, searchCount, selectedFolders])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -937,9 +1026,10 @@ export default function Backfill({ onNavigate, initialUnder }) {
         count:         searchCount ?? availableCount,
         sort,
         release_rank:  releaseRank,
-        res_filter:    resFilter,
-        source_filter: sourceFilter,
-        hdr_filter:    hdrFilter,
+        res_filter:    quality.res,
+        source_filter: quality.source,
+        hdr_filter:    quality.hdr,
+        min_quality:   quality.min === 'file' ? 'file' : undefined,
         title_search:  under ? undefined : (titleSearch.trim() || undefined),
         under:         under || undefined,
         download_from: downloadFrom,
@@ -1057,20 +1147,26 @@ export default function Backfill({ onNavigate, initialUnder }) {
             <div>
               <SectionLabel>Quality Filter</SectionLabel>
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
-                Restrict results by resolution and/or source, exactly like a Sonarr/Radarr quality profile. <em>Any</em> = no restriction.
+                {mapRun
+                  ? <>From the library map, this search starts on releases at your file's quality or better, of any resolution, source or HDR. Changes here are for this search only, and the filters you keep for the whole library are left as they were.</>
+                  : <>Restrict results by resolution and/or source, exactly like a Sonarr/Radarr quality profile. <em>Any</em> = no restriction.</>}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div>
+                  <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Minimum</div>
+                  <SortPicker options={MIN_OPTIONS} value={quality.min} onChange={setQuality.min} label="Minimum quality" />
+                </div>
+                <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
-                  <OptionFilter options={QUALITY_RES_OPTIONS} value={resFilter} onChange={setResFilter} />
+                  <OptionFilter options={QUALITY_RES_OPTIONS} value={quality.res} onChange={setQuality.res} />
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
-                  <OptionFilter options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
+                  <OptionFilter options={QUALITY_SOURCE_OPTIONS} value={quality.source} onChange={setQuality.source} />
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
-                  <OptionFilter options={HDR_OPTIONS} value={hdrFilter} onChange={setHdrFilter} />
+                  <OptionFilter options={HDR_OPTIONS} value={quality.hdr} onChange={setQuality.hdr} />
                 </div>
               </div>
             </div>

@@ -437,7 +437,51 @@ def sonarr_series_episodes(cfg, connection_id, series_id):
             for ep in episodes or [] if ep.get('id') is not None]
 
 
-def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None, file_path=None):
+def _same_arr_id(a, b):
+    """Whether two arr item ids name the same item, whatever type each arrived as."""
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+def _release_other_title(release, service, arr_id):
+    """`'other'`, `'unidentified'` or `None`: why a release isn't one of this item's (B16).
+
+    An interactive search for one series or movie returns every result the
+    indexers sent back, and an indexer that ignores the query sends its latest
+    uploads instead. On the box, seedpool answered a *Miss Fisher's Murder
+    Mysteries* season search with 100 releases of other shows, ranked above the
+    show's own packs. The arr lists those as rejected, but it lists them.
+
+    * **`other`: the arr mapped it to another item in the library.** Sonarr's
+      `ReleaseResource.MappedSeriesId = remoteEpisode.Series?.Id`, Radarr's
+      `MappedMovieId = remoteMovie.Movie?.Id`. A grab posts only the guid and
+      indexer, so the arr grabs it **as that other item**: *Stick S02E03* from a
+      Miss Fisher row downloads Stick.
+    * **`unidentified`: the arr mapped it to nothing.** `DownloadAllowed` is a
+      plain bool that both arrs set only once a release has matched a title (a
+      series with episodes, a movie), so it's `false` for an unknown one, and
+      the mapped id is null, which the arrs leave out of the JSON. Its grab
+      can't work from here: with no series, episode or movie id in the body,
+      Sonarr answers 404 "Unable to find matching series and episodes, will
+      need to be manually provided", Radarr "Unable to find matching movie".
+
+    Positive evidence only (R1): a row with neither field, from an arr that
+    doesn't send them, is kept. A release mapped to *this* series whose
+    episodes Sonarr couldn't identify is kept too, because the grab looks the
+    episodes up again.
+    """
+    mapped = release.get('mappedMovieId' if service == 'radarr' else 'mappedSeriesId')
+    if mapped is not None:
+        return None if _same_arr_id(mapped, arr_id) else 'other'
+    if release.get('downloadAllowed') is False:
+        return 'unidentified'
+    return None
+
+
+def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None,
+                         file_path=None, report=None):
     """Fetch the interactive release search for a single Arr item.
 
     Returns a list of {title, indexer, seeders, leechers, size, guid} dicts.
@@ -453,6 +497,15 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
     Trumped, a scene release carries the same name on Usenet, so the exact name
     could be pre-selected there, grabbed, and the trumped torrent removed with
     nothing left seeding on the tracker.
+
+    **So are releases of another title, and ones the arr couldn't identify
+    (B16)**, for every caller, because each one grabs by guid alone and the arr
+    grabs a release as whatever it mapped it to (`_release_other_title`).
+
+    `report`, when a dict is passed, is filled with what was left out:
+    `returned` (every release the arr listed), `usenet`, `other_title` and
+    `unidentified`. An out-parameter, like the walk's, so every caller's
+    return value is unchanged; Backfill uses it to say why a row is empty.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn = next((c for c in conns if c['id'] == connection_id), None)
@@ -470,9 +523,15 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
                 raise ValueError("Could not determine episode ID for Sonarr release search — open in Sonarr directly")
             api_path = f'/api/v3/release?episodeId={episode_id}'
     rows = _arr_get(conn['base_url'], conn['api_key'], api_path, timeout=90)
+    dropped = {'usenet': 0, 'other_title': 0, 'unidentified': 0}
     result = []
     for r in rows:
         if _is_usenet(r.get('protocol')):
+            dropped['usenet'] += 1
+            continue
+        other = _release_other_title(r, service, arr_id)
+        if other:
+            dropped['other_title' if other == 'other' else 'unidentified'] += 1
             continue
         q_outer = r.get('quality') or {}
         q_inner = q_outer.get('quality') or {}
@@ -517,6 +576,8 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'mapped_episode_ids':  [e.get('id') for e in (r.get('mappedEpisodeInfo') or [])
                                     if isinstance(e, dict) and e.get('id') is not None],
         })
+    if report is not None:
+        report.update(dropped, returned=len(rows))
     return result
 
 

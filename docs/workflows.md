@@ -135,7 +135,11 @@ with **Show everything** to go back to the whole library. It goes by the title's
 folder, not its name, so a show whose folder is named differently from its title
 in Sonarr is still found. If nothing comes up, Sonarr and Radarr manage none of
 that folder's unseeded files (a rip, a file in no series or movie folder), or
-they're excluded. Yellow, red and purple tiles open Cleanup, Triage and Dedupe
+they're excluded. A search started this way asks for releases at your file's
+quality or better, of any resolution, source or HDR, instead of the quality
+filters you last used, so a filter left on 2160p can't hide the 1080p release a
+1080p show needs; change them for that search if you like, and the filters you
+keep for the whole library stay as they were. Yellow, red and purple tiles open Cleanup, Triage and Dedupe
 the same way; Cleanup and Triage start with that release's folder in their
 search.
 
@@ -166,7 +170,11 @@ offered two-episode releases: Sonarr replaces the whole existing file when it
 imports, so a single-episode release would delete the other episode's file. And
 a release for the same episode number in another season (`S02E01`, or the
 special `S00E01`) isn't offered for `S01E01`, nor another season's pack for a
-season-pack row. A release Sonarr couldn't match to any episode is still shown.
+season-pack row. A release Sonarr matched to this show but not to an episode is
+still shown. A release Sonarr matched to another show in your library, or to no
+show at all, isn't: some indexers answer a search with their latest uploads,
+and grabbing one of those from this row would download the other show, or
+Sonarr would refuse it. Radarr's releases follow the same rule for movies.
 
 ### Ranking
 
@@ -183,7 +191,16 @@ turn into an upgrade. Either way, each release shows its size against your file
 Results can also be filtered by resolution (including **480p / SD**), source
 (including **DVD**) and HDR format. These filters go by the quality Sonarr/Radarr
 names each release with, so they mean the same on both — Radarr reports a DVD
-release with no resolution at all, and the SD option still finds it.
+release with no resolution at all, and the SD option still finds it. **Minimum:
+Your file** keeps only releases at each file's own quality or better (resolution
+first, then source), so one setting suits a library that's part 1080p and part
+2160p; for a season pack it's the lowest quality in the season. A release whose
+quality can't be read is kept.
+
+When a row comes back empty, it says why: how many releases the quality filter
+hid and which qualities they were, how many were below your file, or that none
+were on the indexers you chose. Hover the line for the whole count, including
+the releases Sonarr/Radarr listed for other titles.
 
 ### Grabbing and importing
 

@@ -5915,8 +5915,94 @@ def _backfill_group(scope, files, season=None, held=None, unseeded=None):
         # say why an episode was not searched as part of its season.
         'season_files_held':     held,
         'season_files_unseeded': unseeded,
+        # B16: what "your file or better" is measured against. A pack covers
+        # every file of its season, so it's the lowest of them: the floor then
+        # hides only a release worse than everything you hold, never one a file
+        # in the season is at (a season whose profile was lowered part-way).
+        'floor_quality':   _lowest_quality(c.get('file_quality') for c in files),
     })
     return group
+
+
+def _parsed_quality(quality_name):
+    """An arr quality name as `compare_release_quality`'s parsed side."""
+    res, src = parse_quality_name(quality_name)
+    return {'resolution': res, 'source': src}
+
+
+def _lowest_quality(names):
+    """The lowest of some arr quality names, or `''` where none is readable.
+
+    Ordered as Triage compares a release with a library file (resolution, then
+    source). A name that can't be placed is skipped, never taken as the lowest.
+    """
+    lowest = ''
+    for name in names:
+        res, src = parse_quality_name(name)
+        if not (res or src):
+            continue
+        if not lowest or compare_release_quality(_parsed_quality(name), lowest) == 'lower':
+            lowest = name
+    return lowest
+
+
+def _below_floor(release, floor):
+    """Is this release positively worse than `floor`? (B16, "your file or better")
+
+    Only `lower` hides it: a release or a file whose quality can't be read is
+    `unknown` and stays, because a filter the user didn't choose mustn't empty a
+    row on a guess.
+    """
+    return bool(floor) and compare_release_quality(
+        _parsed_quality(release.get('quality_name')), floor) == 'lower'
+
+
+# How many distinct qualities an empty row names as hidden (B16).
+_EMPTY_QUALITIES_MAX = 4
+
+
+def _quality_labels(rows):
+    """Distinct `quality HDR` labels of some releases, first seen first, bounded."""
+    out = []
+    for r in rows:
+        label = f"{r.get('quality_name') or 'Unknown'} {r.get('hdr') or ''}".strip()
+        if label not in out:
+            out.append(label)
+            if len(out) == _EMPTY_QUALITIES_MAX:
+                break
+    return out
+
+
+def _backfill_empty(report, rows, in_scope, download_from, seeding_on, quality, floor):
+    """Why a candidate's search came back with nothing to offer (B16).
+
+    The row said "No releases found" whatever happened, so a Resolution chip
+    left on 2160p from an earlier run read the same as an empty tracker: on the
+    box, Aither had both 1080p packs of a season and the row said none existed
+    (BACKFILL B2 recorded the same silence for the Source chip). Counted in the
+    order the run filters, each stage over what reached it, and asked for only
+    when the row is empty, so a row with releases costs nothing more.
+
+    `quality` is the run's res/source/HDR chips; `floor` the candidate's
+    `floor_quality` when the run asked for "your file or better", else `''`.
+    """
+    on_indexers = _apply_release_filters(in_scope, download_from, seeding_on)
+    chosen = _apply_release_filters(on_indexers, [], [], **quality)
+    kept = {id(r) for r in chosen}
+    hidden = [r for r in on_indexers if id(r) not in kept]
+    below = [r for r in chosen if _below_floor(r, floor)]
+    return {
+        'returned':        report.get('returned', len(rows)),
+        'usenet':          report.get('usenet', 0),
+        'other_title':     report.get('other_title', 0) + report.get('unidentified', 0),
+        'out_of_scope':    len(rows) - len(in_scope),
+        'indexers':        len(in_scope) - len(on_indexers),
+        'quality':         len(hidden),
+        'quality_names':   _quality_labels(hidden),
+        'below_floor':     len(below),
+        'below_floor_names': _quality_labels(below),
+        'floor':           floor or None,
+    }
 
 
 def _resolve_backfill(cfg):
@@ -6261,6 +6347,9 @@ def workflows_generate():
     res_filter    = data.get('res_filter') or []
     source_filter = data.get('source_filter') or []
     hdr_filter    = data.get('hdr_filter') or []
+    # B16: "your file or better", each candidate against its own files
+    # (`floor_quality`). Anything else is no minimum.
+    min_file      = data.get('min_quality') == 'file'
     title_search  = (data.get('title_search') or '').strip()
     under         = (data.get('under') or '').strip() if isinstance(data.get('under'), str) else ''
     # B6 — the keys of candidates whose grab this page's server accepted, held by
@@ -6348,6 +6437,11 @@ def workflows_generate():
                 'releases':          None,
                 'best_release':      None,
                 'error':             None,
+                # B16. Present from creation and only ever reassigned: the status
+                # endpoint serialises this row as `current` while it's searched,
+                # and a key appearing mid-iteration raises there.
+                'floor_quality':     None,
+                'empty':             None,
             }
             job['results'].append(result)
             try:
@@ -6359,16 +6453,23 @@ def workflows_generate():
                     search = _backfill_search(candidate, episode_id=episode_id)
                     result['search'] = search
                     result['episode_numbers'] = episode_numbers
+                report = {}
                 rows = fetch_release_matrix(
                     cfg, search['service'], search['connection_id'], search['arr_id'],
                     episode_id=search.get('episode_id'),
                     season_number=search.get('season_number'),
                     file_path=search.get('path'),
+                    report=report,
                 )
-                rows = [r for r in rows if _release_in_scope(r, scope, episode_numbers,
-                                                             season=candidate.get('season_number'),
-                                                             episode_ids=episode_ids)]
-                filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter, hdr_filter=hdr_filter)
+                in_scope = [r for r in rows if _release_in_scope(r, scope, episode_numbers,
+                                                                 season=candidate.get('season_number'),
+                                                                 episode_ids=episode_ids)]
+                quality = {'res_filter': res_filter, 'source_filter': source_filter, 'hdr_filter': hdr_filter}
+                filtered = _apply_release_filters(in_scope, download_from, seeding_on, **quality)
+                floor = (candidate.get('floor_quality') or '') if min_file else ''
+                if floor:
+                    filtered = [r for r in filtered if not _below_floor(r, floor)]
+                result['floor_quality'] = floor or None
                 # The arr's own order unless the user asked for closeness to the
                 # file on disk (B3, amendment 2). Either way the closeness
                 # evidence is attached, so every row still shows what it is
@@ -6384,6 +6485,9 @@ def workflows_generate():
                 result['status']       = 'found' if best else 'not_found'
                 result['releases']     = filtered
                 result['best_release'] = best
+                if not best:
+                    result['empty'] = _backfill_empty(report, rows, in_scope, download_from,
+                                                      seeding_on, quality, floor)
             except Exception as e:
                 log.warning("Generate search failed for %s: %s", candidate.get('arr_title'), e)
                 result['status'] = 'error'
