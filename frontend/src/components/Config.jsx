@@ -1074,6 +1074,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
           For example, a <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text)' }}>1%</span> threshold means
           you start losing points immediately if any problem data exists, and lose them all once it reaches 1% of your library.
           Lower = stricter. Hardlinked Media has no threshold — it scores in direct proportion to how much of your library is hardlinked.
+          The weights and thresholds also size the Dashboard's library map: a category that costs more points is drawn larger.
         </p>
         <div style={formGrid}>
           <Field label="Orphaned Torrent Threshold" type="number"

@@ -33,7 +33,9 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       # The script tests run the generated bash scripts; bash, GNU stat, cmp and
-      # ln are on the runner already.
+      # ln are on the runner already. So is node, which
+      # test_library_map_attention.py runs the library map's rules under (it
+      # fails rather than skips when CI is set and node is missing).
       - name: Backend tests
         run: python -m pytest backend_tests -q -p no:cacheprovider
 

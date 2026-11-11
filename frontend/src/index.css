@@ -51,13 +51,13 @@
      the same step light mode's white takes above its own track. */
   --seg-on:    #2a2e33;
   --seg-edge:  #3a3f46;
-  /* The library map's two neutral states, mixed from the theme's own greys so
-     they follow it: linked bytes (the bulk) and Other. The four workflow
-     states are the cards' --blue, --yellow, --red and --purple. The canvas
-     mixes the same two in JavaScript (LibraryMap.jsx), from --text-dim and
-     --surface3, because a canvas can't read a color-mix(). */
-  --map-linked: color-mix(in srgb, var(--text-dim) 42%, var(--surface3));
-  --map-other:  color-mix(in srgb, var(--text-dim) 18%, var(--surface3));
+  /* The library map's two neutral states: linked bytes (the bulk) and Other.
+     The four workflow states are the cards' --blue, --yellow, --red and
+     --purple. Plain hex, because the canvas reads them and can't read a
+     color-mix(). Dark's are --text-dim mixed into --surface3 at 42% and 18%,
+     the cool slate that suits its blue. */
+  --map-linked: #55595e;
+  --map-other:  #34383c;
 }
 
 [data-theme="light"] {
@@ -83,6 +83,12 @@
   --shadow-pop: 0 18px 42px rgba(28, 25, 23, 0.16);
   --seg-on:    #ffffff;
   --seg-edge:  #ceccc7;
+  /* Neutral greys with no hue (2026-11-10, the user's pick from a preview):
+     mixed from the stone --text-dim like dark's, they read as putty beside
+     the sky blue. Lighter than dark's mix too: here more ink is darker, and
+     at 42% Linked was most of the map's weight. */
+  --map-linked: #c3c3c3;
+  --map-other:  #d8d8d8;
 }
 
 html, body, #root {
