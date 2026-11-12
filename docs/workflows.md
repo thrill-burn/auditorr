@@ -483,6 +483,14 @@ because that bucket's files are the only copy you have, and "we couldn't ask" is
 not an answer. Positive matches are unaffected: a title that *did* resolve still
 reads *Superseded* or *Import pending* as normal.
 
+**From the library map.** The red tiles on the Dashboard's library map are
+Triage's. A torrent that isn't imported sits in the torrent folder. A dead seed
+is drawn on its title in the library, because its file is the library's file:
+the torrent seeding it is the only thing that's gone. Click either, or its row
+on the *Biggest gaps* card, and Triage opens with the search set to that
+torrent. Once you've removed a dead seed's torrent, the next scan shows the
+title as not seeded, ready for [Backfill](#backfill) to find a new one to seed.
+
 **Downloads that haven't finished are not listed.** A torrent at 0% has no
 library file, which is the literal definition of the Not Imported pile, so the
 newest thing in your client used to arrive here at its full final size with a

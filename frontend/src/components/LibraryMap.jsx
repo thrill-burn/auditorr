@@ -4,17 +4,17 @@ import { formatBytes } from '../utils'
 import { Button, Segmented, Spinner, useAuditComplete, ITEM_TITLE, MONO_TITLE } from './workflows/shared'
 import { SECTION_LABEL, CARD, CAPTION, READOUT, Hero, TrendPill } from './dashKit'
 import {
-  STATES, PROBLEM, LINKED, ORPHANED, NOT_IMPORTED, COPY, OTHER, ROOT_HEAD, HEAD, worstState,
+  STATES, PROBLEM, LEGEND, LINKED, ORPHANED, NOT_IMPORTED, COPY, OTHER, DEAD_SEED, ROOT_HEAD, HEAD, worstState,
   modelFromFiles, modelTotals, biggestGaps, navFor, layoutMap, leafAt,
-  zoomModel, zoomOut, headingTarget, headingAt, freeAt, freeRoots, attentionWeights, shortName,
+  zoomModel, zoomOut, headingTarget, headingAt, freeAt, freeRoots, shortName,
 } from './libraryMapRules'
 
 // The library map (2026-11-09): WinDirStat's idea applied to hardlinks. Every
 // rectangle's area is its size on disk, grouped by top-level folder, and its
 // colour is the workflow that acts on it — the four cards' colours above it.
-// Since 2026-11-10 what needs a workflow is drawn larger than its bytes, as
-// the health score weighs it (libraryMapRules.js, "Attention"); the figures
-// stay bytes.
+// The one exception: a gap a workflow acts on that would be too small to see
+// is drawn at the smallest size that shows (libraryMapRules.js, "Sizing"); the
+// figures stay bytes.
 // Each of those four also has its own pattern (stripes, dots, back-stripes,
 // cross-hatch): the user is colorblind, and a colour alone isn't a difference.
 // The rules, the layout and the click targets are in libraryMapRules.js.
@@ -40,7 +40,7 @@ export function useLibraryMapRow() {
 }
 
 const LABEL = {
-  [LINKED]: '', 1: 'not seeded', 2: 'orphaned', 3: 'not imported', 4: 'copies', 5: 'other',
+  [LINKED]: '', 1: 'not seeded', 2: 'orphaned', 3: 'not imported', 4: 'copies', 5: 'other', [DEAD_SEED]: 'dead seed',
 }
 
 // ── Colours, read from the live theme ────────────────────────────────────────
@@ -80,7 +80,7 @@ function palette() {
     surface: cssVar('--surface'), band: cssVar('--surface2'), text: cssVar('--text'), dim: cssVar('--text-dim'),
     // Linked is the neutral bulk; Other quieter still (index.css).
     c: [toRgb(cssVar('--map-linked')), toRgb(cssVar('--blue')), toRgb(cssVar('--yellow')), toRgb(cssVar('--red')),
-        toRgb(cssVar('--purple')), toRgb(cssVar('--map-other'))],
+        toRgb(cssVar('--purple')), toRgb(cssVar('--map-other')), toRgb(cssVar('--red'))],
     lift: k.lift, shade: k.shade,
     ink: `rgba(255,255,255,${k.ink})`,
     // Free space's sparse hatch: the dim text colour, faint.
@@ -101,6 +101,7 @@ export function swatchStyle(s) {
     case 'back':  return { background: `repeating-linear-gradient(45deg, ${c} 0 2px, ${w} 2px 3.5px), ${c}` }
     case 'dots':  return { background: `radial-gradient(${w} 0.9px, transparent 1.2px) 0 0 / 4px 4px, ${c}` }
     case 'cross': return { background: `repeating-linear-gradient(45deg, transparent 0 2.5px, ${w} 2.5px 3.5px), repeating-linear-gradient(135deg, transparent 0 2.5px, ${w} 2.5px 3.5px), ${c}` }
+    case 'rows':  return { background: `repeating-linear-gradient(0deg, ${c} 0 2px, ${w} 2px 3.5px), ${c}` }
     default:      return { background: c }
   }
 }
@@ -147,6 +148,8 @@ function pattern(ctx, l, kind, ink) {
   const step = kind === 'cross' ? 7 : 6
   if (kind === 'slash' || kind === 'cross') for (let i = -l.h; i < l.w; i += step) { ctx.moveTo(l.x + i, l.y + l.h); ctx.lineTo(l.x + i + l.h, l.y) }
   if (kind === 'back' || kind === 'cross') for (let i = -l.h; i < l.w; i += step) { ctx.moveTo(l.x + i, l.y); ctx.lineTo(l.x + i + l.h, l.y + l.h) }
+  // A dead seed's rows: level, so no diagonal reads as one.
+  if (kind === 'rows') for (let y = l.y + 3; y < l.y + l.h; y += 5) { ctx.moveTo(l.x, y); ctx.lineTo(l.x + l.w, y) }
   if (kind === 'dots') {
     for (let yy = l.y + 2, row = 0; yy < l.y + l.h; yy += 4.5, row++) {
       for (let xx = l.x + 2 + (row % 2 ? 2.25 : 0); xx < l.x + l.w; xx += 4.5) { ctx.moveTo(xx + 1.1, yy); ctx.arc(xx, yy, 1.1, 0, 7) }
@@ -173,19 +176,21 @@ function tile(ctx, l, P) {
 
 function pctLinked(by) {
   const v = by.reduce((a, b) => a + b, 0)
-  const p = v ? by[LINKED] / v * 100 : 0
+  // A dead seed is linked; only its torrent is gone.
+  const p = v ? (by[LINKED] + (by[DEAD_SEED] || 0)) / v * 100 : 0
   return p >= 99.95 ? '100' : p.toFixed(p < 10 ? 1 : 0)
 }
 // What a library folder or title holds, worst first, in a few words.
 function breakdown(by) {
   const parts = []
-  if (by[LINKED]) parts.push(`${pctLinked(by)}% linked`)
+  if (by[LINKED] || by[DEAD_SEED]) parts.push(`${pctLinked(by)}% linked`)
   for (const s of PROBLEM) if (by[s]) parts.push(`${formatBytes(by[s])} ${LABEL[s]}`)
   return parts
 }
 
 const ROOT_LABEL = { library: 'Library folder', torrents: "Torrent folder · what isn't linked" }
 const ROOT_SHORT = { library: 'Library', torrents: 'Torrents' }
+const NESTED_HEAD = { library: ['library folder', ''], torrents: ['torrent folder', 'unlinked'] }
 
 // Free space (the switch in the header): the card's band colour with a sparse
 // hatch, unlike any state's fill or pattern, and named like a root.
@@ -215,19 +220,31 @@ function freeTile(ctx, r, P) {
 // telling two colours apart, which the user can't always.
 const FADE = 0.78
 
-function draw(canvas, model, W, H, detail, highlight = null, weights) {
+function draw(canvas, model, W, H, detail, highlight = null) {
   const P = palette(), dpr = window.devicePixelRatio || 1
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr)
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px'
   const ctx = canvas.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.fillStyle = P.surface; ctx.fillRect(0, 0, W, H)
-  const L = layoutMap(model, W, H, detail, weights)
+  const L = layoutMap(model, W, H, detail)
   const sansSm = `500 ${P.sm} ${P.sans}`, monoSm = `500 ${P.sm} ${P.mono}`
 
   ctx.textBaseline = 'middle'
   for (const r of L.roots) {
     if (!r.head) continue
+    // A root drawn as a box among the other root's folders (Sizing's rule 2)
+    // is headed like them (the user, 2026-11-11): its name lower case in the
+    // folders' mono, then one word, dimmed, as their figures are.
+    if (r.nested) {
+      const [nm, word] = NESTED_HEAD[r.name]
+      ctx.font = monoSm
+      const name = fit(ctx, nm, r.w - 9)
+      const nameW = ctx.measureText(name).width
+      ctx.fillStyle = P.text; ctx.fillText(name, r.x + 4.5, r.y + ROOT_HEAD / 2)
+      ctx.fillStyle = P.dim; ctx.fillText(longest(ctx, [`  ${word}`], r.w - 9 - nameW), r.x + 4.5 + nameW, r.y + ROOT_HEAD / 2)
+      continue
+    }
     ctx.font = `600 ${P.md} ${P.sans}`; ctx.fillStyle = P.text
     const label = longest(ctx, [ROOT_LABEL[r.name], ROOT_LABEL[r.name].split(' · ')[0], ROOT_SHORT[r.name]], r.w - 4)
     const lw = ctx.measureText(label).width
@@ -339,15 +356,6 @@ function storeHeight(h) {
 const FREE_KEY = 'auditorr_map_free'
 function storedFree() { try { return localStorage.getItem(FREE_KEY) === '1' } catch { return false } }
 function storeFree(on) { try { if (on) localStorage.setItem(FREE_KEY, '1'); else localStorage.removeItem(FREE_KEY) } catch { /* private window */ } }
-// So is the sizing (2026-11-11): Attention by default, Actual size when picked.
-// Both picks are written, so a stored "attention" says someone chose it too.
-const SIZING_KEY = 'auditorr_map_sizing'
-function storedSizing() { try { return localStorage.getItem(SIZING_KEY) === 'actual' ? 'actual' : 'attention' } catch { return 'attention' } }
-function storeSizing(v) { try { localStorage.setItem(SIZING_KEY, v) } catch { /* private window */ } }
-const SIZING_OPTIONS = [
-  { value: 'attention', label: 'Attention', title: 'What needs a workflow is drawn larger, as the health score weighs it' },
-  { value: 'actual', label: 'Actual size', title: "Every tile's area is its size" },
-]
 // A drag redraws live while a draw is this quick (Titles always is, the stored
 // row being at most 2,000 titles); a slower one (Files on a big library) is
 // stretched while dragging and drawn once on release.
@@ -430,18 +438,15 @@ function actionFor(nav, t) {
   return `Click to open ${wf} on this ${t.root === 'library' ? 'title' : 'release'} →`
 }
 
-// How much larger than its bytes a tile is drawn ("Attention" in the rules),
-// said beside its figures, and nothing for a tile drawn to scale. The total
-// counts the torrent folder's widening, so the score's own share is said apart.
+// How much larger than its bytes a gap is drawn ("Sizing" in the rules), said
+// beside its figures, and nothing for a tile drawn to scale, which is every
+// tile that needs nothing.
 function drawnNote(leaf, part) {
   const b = leaf.boost
   if (!(b >= 1.5)) return null
   const n = b < 10 ? b.toFixed(1).replace(/\.0$/, '') : Math.round(b).toLocaleString()
   const state = STATES[leaf.s].name.toLowerCase()
-  const what = part ? `Its ${state} part is drawn` : 'Drawn'
-  return leaf.weight >= 1.5
-    ? `${what} ${n}× its size to stand out: the health score weighs ${state} ${Math.round(leaf.weight)}×`
-    : `${what} ${n}× its size so it shows`
+  return `${part ? `Its ${state} part is drawn` : 'Drawn'} ${n}× its size so it shows`
 }
 
 function hoverText(leaf, mode) {
@@ -467,7 +472,7 @@ function hoverText(leaf, mode) {
   }
   const files = `${(t.files || 0).toLocaleString()} file${t.files !== 1 ? 's' : ''}`
   if (lib) {
-    const facts = [formatBytes(t.v), files, ...(t.by[LINKED] ? [`${pctLinked(t.by)}% linked`] : []),
+    const facts = [formatBytes(t.v), files, ...(t.by[LINKED] || t.by[DEAD_SEED] ? [`${pctLinked(t.by)}% linked`] : []),
       ...PROBLEM.filter(s => t.by[s]).map(s => `${formatBytes(t.by[s])} ${LABEL[s]} (${STATES[s].workflow})`)].join(' · ')
     return { ...base, thumb, rel, prefix: t.folded ? '' : t.folder || '', name: t.name,
              kind: t.folded ? 'words' : 'title', context: t.folded ? 'Titles too small to draw, as one tile' : null,
@@ -610,15 +615,12 @@ function zoomLabel(model, zoom) {
 
 const HOVER_NAME = { title: ITEM_TITLE, words: ITEM_TITLE, mono: MONO_TITLE }
 
-// The idle strip's word on scale: the map draws a gap larger than its bytes
-// ("Attention" in the rules), and names the states the score magnifies. At
-// Actual size (null weights) it says what that costs.
-function scaleNote(weights, by) {
-  if (!PROBLEM.some(s => by[s] > 0)) return null
-  if (!weights) return 'Drawn to scale, so a small gap can be too thin to see.'
-  const up = PROBLEM.filter(s => by[s] > 0 && weights[s] >= 1.5)
-    .map(s => `${STATES[s].name.toLowerCase()} ${Math.round(weights[s])}×`)
-  return `Not to scale: what needs a workflow is drawn larger${up.length ? `, ${up.join(' and ')} its bytes as the health score weighs it` : ''}.`
+// The idle strip's word on scale: the map is to scale except for the gaps it
+// raised ("Sizing" in the rules), and says how many, since those are the only
+// tiles that aren't their size. Nothing raised, nothing said.
+function scaleNote(raised) {
+  if (!(raised > 0)) return null
+  return `Drawn to scale, except ${raised.toLocaleString()} gap${raised !== 1 ? 's' : ''} too small to see, drawn larger so ${raised !== 1 ? 'they show' : 'it shows'}.`
 }
 
 export default function LibraryMap({ details, onNavigate, row, rowModel, focus, mediaFiles, torrentFiles, ensureFilesLoaded }) {
@@ -631,7 +633,6 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   const [zoom, setZoom] = useState(null)             // null = the whole map; ephemeral, like the detail switch
   const [highlight, setHighlight] = useState(null)   // a state lit from the legend; ephemeral
   const [showFree, setShowFree] = useState(storedFree)
-  const [sizing, setSizing] = useState(storedSizing) // 'attention' | 'actual', per browser
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const layoutRef = useRef(null)
@@ -669,12 +670,6 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
     }
     return { bytes, titles }
   }, [highlight, shown])
-  // Area per byte by state, from the health score (see "Attention" in the rules).
-  // Kept by value, so a refetch of the same scan doesn't redraw.
-  const weightKey = attentionWeights(details).join(',')
-  const score = useMemo(() => weightKey.split(',').map(Number), [weightKey])
-  const weights = sizing === 'actual' ? null : score   // null draws every tile at its bytes
-  const pickSizing = v => { if (v === sizing) return; setSizing(v); storeSizing(v) }
   const zoomCrumb = activeZoom ? zoomLabel(shown, activeZoom) : null
   const shownTitles = zoomed ? zoomed.roots.reduce((a, r) => a + r.folders.reduce((b, f) => b + f.titles.length, 0), 0) : 0
 
@@ -701,10 +696,10 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   useLayoutEffect(() => {
     if (!shown || !width || !canvasRef.current) return
     const t0 = performance.now()
-    layoutRef.current = draw(canvasRef.current, shown, width, height, drawn, highlight, weights)
+    layoutRef.current = draw(canvasRef.current, shown, width, height, drawn, highlight)
     drawMs.current = performance.now() - t0
     setHover(null)
-  }, [shown, width, height, drawn, themeTick, highlight, weights])
+  }, [shown, width, height, drawn, themeTick, highlight])
 
   // ── The height grip ──
   const commitHeight = h => { const c = clampHeight(h); setUserH(c); storeHeight(c) }
@@ -787,7 +782,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
     const box = layoutRef.current?.titles.find(x => x.root === t.root && x.rel === t.rel && x.name === t.name
       && (t.root !== 'torrents' || x.by[s] > 0))
     const lf = box && layoutRef.current.leaves.find(l => l.T === box && l.s === s)
-    const leaf = { s, T: t, bytes: t.v, boost: lf?.boost, weight: lf?.weight }
+    const leaf = { s, T: t, bytes: t.v, boost: lf?.boost }
     setHover({ box: box || null, leaf, text: hoverText(leaf, 'titles') })
   }, [focus])
 
@@ -827,7 +822,6 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
               Free space
             </Button>
           )}
-          <Segmented label="Map sizing" value={sizing} onChange={pickSizing} options={SIZING_OPTIONS} />
           <Segmented label="Map detail" value={detail} onChange={setDetail}
             options={[{ value: 'titles', label: 'Titles' }, { value: 'files', label: 'Files' }]} />
         </div>
@@ -881,7 +875,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
           card never moves under the pointer. See "The detail strip" above. */}
       {model && model.roots.length > 0 && (() => {
         const tinyNote = tiny.length > 0 ? `Too small to draw: ${tiny.map(t => t.name || '(top level)').join(', ')}` : null
-        const scale = scaleNote(weights, shown ? shown.roots.reduce((by, r) => by.map((b, s) => b + r.by[s]), [0, 0, 0, 0, 0, 0]) : [0, 0, 0, 0, 0, 0])
+        const scale = scaleNote(layoutRef.current?.raised)
         const shownBytes = shown ? shown.roots.filter(r => !r.free).reduce((a, r) => a + r.v, 0) : 0
         const d = hover?.text || (lit ? {
           thumb: { icon: 'map' }, s: highlight, prefix: '', name: `Highlighting ${STATES[highlight].name.toLowerCase()}`, kind: 'words',
@@ -934,7 +928,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
       {totals && (
         <div role="group" aria-label="Highlight a state on the map"
           style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 6px', marginTop: 4, marginLeft: -7 }}>
-          {STATES.slice(0, 5).map((st, s) => (
+          {LEGEND.map(s => [STATES[s], s]).map(([st, s]) => (
             <button key={st.name} type="button" className="map-key" aria-pressed={highlight === s}
               disabled={!totals.by[s]} onClick={() => setHighlight(highlight === s ? null : s)}
               title={totals.by[s] ? (highlight === s ? 'Show everything' : `Highlight ${st.name.toLowerCase()} on the map`) : undefined}>

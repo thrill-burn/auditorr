@@ -34,8 +34,9 @@ jobs:
 
       # The script tests run the generated bash scripts; bash, GNU stat, cmp and
       # ln are on the runner already. So is node, which
-      # test_library_map_attention.py runs the library map's rules under (it
-      # fails rather than skips when CI is set and node is missing).
+      # test_library_map_sizing.py and test_library_map.py's parity test run
+      # the library map's rules under (both fail rather than skip when CI is
+      # set and node is missing).
       - name: Backend tests
         run: python -m pytest backend_tests -q -p no:cacheprovider
 

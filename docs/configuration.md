@@ -239,15 +239,6 @@ component's points are fully gone. Valid range is `0.001` to `1.0`.
 Raise a threshold if you knowingly keep something around and are tired of being
 marked down for it. Lower it if you want the score to react earlier.
 
-The weights and thresholds also size the Dashboard's library map. Orphaned,
-not-imported and duplicate files are drawn as much larger than their size as
-the score weighs them, up to the points their category is worth. At the
-defaults that's about 15 times. So a few files to triage still stand out on a
-library that's otherwise all linked. A lower threshold or a higher weight draws
-that category larger. Nothing is drawn smaller than its size, and every figure
-on the map is the real size. Switch the map's header to **Actual size** to draw
-every tile at its real size instead; your browser remembers the choice.
-
 Hardlinked Media has no threshold — it scores in direct proportion to how much
 of your library is hardlinked.
 

@@ -1317,16 +1317,25 @@ SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
 # are in the four dashboard cards' order, and the frontend's file-level view
 # (`libraryMapRules.js`, `stateOfMedia` / `stateOfTorrent`) is the same rule in
 # JavaScript, so the two views of a file can't disagree.
-MAP_LINKED, MAP_UNSEEDED, MAP_ORPHANED, MAP_NOT_IMPORTED, MAP_COPY, MAP_OTHER = range(6)
+#
+# **A dead seed is a library state** (2026-11-11): a library file linked to a
+# torrent its tracker has deleted (`_is_dead_seed_torrent`). Its bytes are the
+# library file's, drawn once, there; Triage removes the torrent and its torrent-
+# side link, and the file turns Not seeded for Backfill. It was drawn Linked,
+# which looked healthy, and Triage's rows were on no tile. Appended last, so a
+# version 1 row's six sums keep their places.
+MAP_LINKED, MAP_UNSEEDED, MAP_ORPHANED, MAP_NOT_IMPORTED, MAP_COPY, MAP_OTHER, MAP_DEAD_SEED = range(7)
+MAP_STATES = 7
 # Titles kept by name, largest first. The rest fold into one tile per folder:
 # a title under a pixel draws nothing, and the row stays small on a library
 # with tens of thousands of titles.
 LIBRARY_MAP_TITLES_MAX = 2000
 
 
-def _map_state_media(f):
+def _map_state_media(f, dead=None):
+    """`dead`: the `file_id`s of dead seeds' torrent records, as `library_map_row` reads them."""
     if f.get('linked_paths'):
-        return MAP_LINKED
+        return MAP_DEAD_SEED if dead and f.get('file_id') in dead else MAP_LINKED
     if f.get('duplicate_paths'):
         return MAP_COPY
     return MAP_UNSEEDED
@@ -1346,6 +1355,15 @@ def _map_state_torrent(f):
     return MAP_OTHER
 
 
+def _map_key(path):
+    """A root-relative path up to its second slash: its title's key."""
+    if '\\' in path:
+        path = path.replace('\\', '/')
+    i = path.find('/')
+    j = path.find('/', i + 1) if i >= 0 else -1
+    return path[:j] if j > 0 else path
+
+
 def _map_title(path):
     """`(top-level folder, title)` of a root-relative path. A title is the folder
     below the top-level one, or the file itself when it sits directly in it; a
@@ -1358,14 +1376,31 @@ def _map_title(path):
     return parts[0], parts[1]
 
 
-def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MAX):
+def dead_seed_keys(torrent_files):
+    """`{file_id: the torrent's title key}` for every dead seed among `torrent_files`
+    (`_is_dead_seed_torrent`, linked): what the library map draws as MAP_DEAD_SEED,
+    on the library file sharing the inode. The scan passes its Triage subset,
+    which holds every dead seed, so this reads a few records rather than all."""
+    return {f['file_id']: _map_key(f.get('path') or '') for f in torrent_files
+            if f.get('tracker_health') == 'unregistered' and f.get('linked_paths') and f.get('file_id')
+            and _is_dead_seed_torrent(f)}
+
+
+def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MAX, dead=None):
     """The library map's compact row: `{version, folders, titles, folded}`.
 
     * `folders` — `[root, name]`, root `library` or `torrents`.
-    * `titles`  — `[folder index, name, files, b0, b1, b2, b3, b4, b5]`, one
-      byte sum per state (`MAP_*`), the `titles_max` largest.
-    * `folded`  — `[folder index, titles, files, b0 … b5]`, every other title of
+    * `titles`  — `[folder index, name, files, b0 … b6]`, one byte sum per state
+      (`MAP_*`), the `titles_max` largest. A library title holding a dead seed
+      adds the dead torrent's own folder (`category/release`) last, which is
+      what Triage's search matches: its rows are torrents, named as the client
+      names them, never as the library does.
+    * `folded`  — `[folder index, titles, files, b0 … b6]`, every other title of
       that folder in one.
+
+    Version 2 (2026-11-11) added the seventh state, MAP_DEAD_SEED; a version 1
+    row has six sums and no search, and the frontend reads both. `dead` is
+    `dead_seed_keys`' answer, worked out here when not given.
 
     Excluded files are left out, as the score leaves them out. Holds names, so it
     is its own file_results row, served by `/api/library_map` and never part of
@@ -1375,7 +1410,17 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
     # a title's key is the path up to its second slash (one slice, not a split
     # into parts), the media state is inline, and the torrent side's commonest
     # case, a linked file, leaves first. 1.24 s → see .internal/dash_bench/.
-    lib, tor = {}, {}
+    #
+    # A dead seed is drawn on the library file it shares an inode with, joined
+    # on `file_id` (device and inode, so no path spelling can miss). The scan
+    # hands `dead` in from its Triage subset, so neither pass checks a tracker,
+    # and with no dead seed the library pass is the loop it always was. Finding
+    # them is one membership test per library file, only while there's one to
+    # find: at 650,000 files, +0.002 s with none and +0.021 s with 1,247
+    # (Linux, .internal/dash_bench/deadseed.py).
+    if dead is None:
+        dead = dead_seed_keys(torrent_files)
+    lib, tor, search = {}, {}, {}
     for f in media_files:
         if f.get('excluded'):
             continue
@@ -1387,10 +1432,24 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
         key = path[:j] if j > 0 else path
         row = lib.get(key)
         if row is None:
-            row = lib[key] = [0, 0, 0, 0, 0, 0, 0]
+            row = lib[key] = [0, 0, 0, 0, 0, 0, 0, 0]   # files, then MAP_STATES sums
         row[0] += 1
         # 1 + MAP_LINKED / MAP_COPY / MAP_UNSEEDED, as `_map_state_media`.
         row[1 if f.get('linked_paths') else (5 if f.get('duplicate_paths') else 2)] += f.get('size') or 0
+    if dead:
+        # One membership test a record, in a comprehension; the rest runs on
+        # the few it finds.
+        for f in [f for f in media_files if f.get('file_id') in dead]:
+            q = dead[f['file_id']]
+            if not f.get('linked_paths') or f.get('excluded'):
+                continue
+            key = _map_key(f.get('path') or '')
+            row = lib[key]
+            size = f.get('size') or 0
+            row[1] -= size
+            row[1 + MAP_DEAD_SEED] += size
+            if key not in search:
+                search[key] = q
     for f in torrent_files:
         if f.get('linked_paths') or f.get('excluded'):
             continue
@@ -1402,7 +1461,7 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
         key = path[:j] if j > 0 else path
         row = tor.get(key)
         if row is None:
-            row = tor[key] = [0, 0, 0, 0, 0, 0, 0]
+            row = tor[key] = [0, 0, 0, 0, 0, 0, 0, 0]
         row[0] += 1
         row[1 + _map_state_torrent(f)] += f.get('size') or 0
     # Sorted in place, largest first, without a second copy of either dict.
@@ -1420,15 +1479,16 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
             fi = fidx[fk] = len(folders)
             folders.append([root, folder])
         if len(out) < titles_max:
-            out.append([fi, title, *row])
+            q = search.get(key) if root == 'library' else None
+            out.append([fi, title, *row, q] if q else [fi, title, *row])
         else:
             agg = folded.get(fi)
             if agg is None:
-                agg = folded[fi] = [0] * 8
+                agg = folded[fi] = [0] * (2 + MAP_STATES)
             agg[0] += 1
             for i, v in enumerate(row):
                 agg[1 + i] += v
-    return {'version': 1, 'folders': folders, 'titles': out,
+    return {'version': 2, 'folders': folders, 'titles': out,
             'folded': [[fi, *agg] for fi, agg in sorted(folded.items())]}
 
 
@@ -2962,13 +3022,14 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # the extra peak is the compressed blobs alone, 46 MB measured at that size
         # against a record list already costing several GB.
         _enter_phase("post", "Saving file results...")
+        # The Triage subset once: its own row, and the library map's dead seeds.
+        triage_set = [f for f in torrent_files_data if _is_triage_relevant(f)]
         staged = [
             ('media',    db_prepare_file_results(media_files_data)),
             ('torrents', db_prepare_file_results(torrent_files_data)),
             # Compact Triage working set (references, not copies) — lets the
             # Triage page skip deserializing the full torrent list.
-            ('triage',   db_prepare_file_results(
-                [f for f in torrent_files_data if _is_triage_relevant(f)])),
+            ('triage',   db_prepare_file_results(triage_set)),
             # Compact Cleanup working set, after the orphan stamps (C10): the
             # page and the delete script read this, never the full torrent list.
             # Orphans, then the leftover links riding their carriers (C17).
@@ -2986,7 +3047,8 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # The dashboard's library map: per-title byte sums by state, both
             # trees. Names, so its own row, served by /api/library_map.
             ('library_map', db_prepare_file_results(
-                library_map_row(media_files_data, torrent_files_data))),
+                library_map_row(media_files_data, torrent_files_data,
+                                dead=dead_seed_keys(triage_set)))),
         ]
         staged_sigs = [
             ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),

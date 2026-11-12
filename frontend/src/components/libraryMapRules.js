@@ -17,7 +17,15 @@
 // its folders, because there the folder is the point, and its three states
 // differ in pattern as well as colour.
 
-export const LINKED = 0, UNSEEDED = 1, ORPHANED = 2, NOT_IMPORTED = 3, COPY = 4, OTHER = 5
+// **A dead seed is a library state** (2026-11-11): a library file linked to a
+// torrent its tracker has deleted. Its bytes are the library file's, drawn
+// once, there. Triage removes the torrent and its torrent-side link, and the
+// file turns Not seeded, Backfill's. It was drawn Linked, which looked
+// healthy while Triage listed it. Index 6, appended so a version 1 row's six
+// sums keep their places; LEGEND and PROBLEM put it in the cards' order.
+// Triage's red, so it differs from Not imported by pattern (horizontal rows)
+// and by name, never by colour alone.
+export const LINKED = 0, UNSEEDED = 1, ORPHANED = 2, NOT_IMPORTED = 3, COPY = 4, OTHER = 5, DEAD_SEED = 6
 
 export const STATES = [
   { name: 'Linked',       workflow: null,       tab: null,       color: 'linked', pattern: null },
@@ -26,15 +34,40 @@ export const STATES = [
   { name: 'Not imported', workflow: 'Triage',   tab: 'triage',   color: 'red',    pattern: 'back' },
   { name: 'Copies',       workflow: 'Dedupe',   tab: 'dedupe',   color: 'purple', pattern: 'cross' },
   { name: 'Other',        workflow: null,       tab: null,       color: 'other',  pattern: null },
+  { name: 'Dead seed',    workflow: 'Triage',   tab: 'triage',   color: 'red',    pattern: 'rows' },
 ]
-export const PROBLEM = [UNSEEDED, ORPHANED, NOT_IMPORTED, COPY]
+export const PROBLEM = [UNSEEDED, ORPHANED, NOT_IMPORTED, DEAD_SEED, COPY]
+// The legend's entries, in the cards' order (Other has none).
+export const LEGEND = [LINKED, UNSEEDED, ORPHANED, NOT_IMPORTED, DEAD_SEED, COPY]
+const N_STATES = STATES.length
 // The torrent root's blocks, in the cards' order.
 const TORRENT_GROUPS = [ORPHANED, NOT_IMPORTED, COPY, OTHER]
 
-export function stateOfMedia(f) {
-  if (f.linked_paths?.length) return LINKED
+// `dead`: the file_ids of dead seeds' torrent records (`deadSeeds`), as
+// `audit.library_map_row` joins them, by device and inode.
+export function stateOfMedia(f, dead) {
+  if (f.linked_paths?.length) return dead && dead.has(f.file_id) ? DEAD_SEED : LINKED
   if (f.duplicate_paths?.length) return COPY
   return UNSEEDED
+}
+
+// `audit._is_dead_seed_torrent`: imported, not orphaned, and its tracker has
+// deleted it. Change one and change the other.
+export function isDeadSeed(f) {
+  return !f.excluded && !!f.imported && f.status !== 'Orphaned' && f.tracker_health === 'unregistered'
+}
+
+// file_id → the dead torrent's own folder (`category/release`), which is what
+// Triage's search matches: its rows are torrents, named as the client names them.
+function deadSeeds(torrents) {
+  const dead = new Map()
+  for (const f of torrents || []) {
+    if (f.linked_paths?.length && f.file_id && isDeadSeed(f)) {
+      const [folder, title] = titleOf(f.path)
+      dead.set(f.file_id, relOf(folder, title))
+    }
+  }
+  return dead
 }
 
 // null for a linked torrent file: the library side already drew it.
@@ -53,13 +86,14 @@ export function titleOf(path) {
   return [parts[0], parts[1]]
 }
 
-const zeros = () => [0, 0, 0, 0, 0, 0]
+const zeros = () => [0, 0, 0, 0, 0, 0, 0]
 const sum = a => a.reduce((x, y) => x + y, 0)
 
 // ── The model ────────────────────────────────────────────────────────────────
 // { roots: [{ name, folders: [{ name, state?, titles: [title] }] }] }
-// title: { name, folder, root, rel, by: [6 sums], v, files: n, list?: [{name, size, s}], folded? }
-// `rel` is the root-relative folder a click scopes a workflow to.
+// title: { name, folder, root, rel, by: [7 sums], v, files: n, list?: [{name, size, s}], folded?, search? }
+// `rel` is the root-relative folder a click scopes a workflow to; `search` a
+// library title's dead torrent's folder, which Triage's search matches.
 
 function finish(roots) {
   for (const r of roots) {
@@ -94,18 +128,23 @@ function torrentBlocks(titles) {
 const relOf = (folder, title) => (folder ? `${folder}/${title}` : title)
 
 // From the scan's stored row: {version, folders: [[root, name]], titles: [...], folded: [...]}.
+// Version 1 has six sums; version 2 (2026-11-11) seven, and a dead seed's
+// search after them.
 export function modelFromRow(row) {
   const lib = {}, tor = []
+  const n = (row.version || 1) >= 2 ? N_STATES : 6
+  const sums = rest => { const by = zeros(); for (let s = 0; s < n; s++) by[s] = rest[s] || 0; return by }
   const libFolder = name => (lib[name] ||= { name, titles: [] })
-  for (const [fi, name, files, ...by] of row.titles || []) {
+  for (const [fi, name, files, ...rest] of row.titles || []) {
     const [root, folder] = row.folders[fi]
-    const t = { name, folder, root, rel: relOf(folder, name), by: by.slice(0, 6), files }
+    const t = { name, folder, root, rel: relOf(folder, name), by: sums(rest), files }
+    if (typeof rest[n] === 'string') t.search = rest[n]
     if (root === 'library') libFolder(folder).titles.push(t)
     else tor.push({ ...t, name: relOf(folder, name) })
   }
-  for (const [fi, count, files, ...by] of row.folded || []) {
+  for (const [fi, count, files, ...rest] of row.folded || []) {
     const [root, folder] = row.folders[fi]
-    const t = { name: `${count.toLocaleString()} smaller titles`, folder, root, rel: folder, by: by.slice(0, 6), files, folded: count }
+    const t = { name: `${count.toLocaleString()} smaller titles`, folder, root, rel: folder, by: sums(rest), files, folded: count }
     if (root === 'library') libFolder(folder).titles.push(t)
     else tor.push({ ...t, name: `${folder ? folder + ': ' : ''}${t.name}` })
   }
@@ -119,6 +158,7 @@ export function modelFromRow(row) {
 // stored row leaves them out.
 export function modelFromFiles(media, torrents) {
   const titles = new Map()
+  const dead = deadSeeds(torrents)
   const add = (root, f, s) => {
     const [folder, title] = titleOf(f.path)
     const key = `${root}\u0000${folder}\u0000${title}`
@@ -131,8 +171,14 @@ export function modelFromFiles(media, torrents) {
     t.files += 1
     const p = String(f.path || '')
     t.list.push({ name: p.slice(p.replace(/\\/g, '/').lastIndexOf('/') + 1), size: f.size || 0, s })
+    return t
   }
-  for (const f of media || []) if (!f.excluded) add('library', f, stateOfMedia(f))
+  for (const f of media || []) {
+    if (f.excluded) continue
+    const s = stateOfMedia(f, dead)
+    const t = add('library', f, s)
+    if (s === DEAD_SEED && !t.search) t.search = dead.get(f.file_id)
+  }
   for (const f of torrents || []) {
     if (f.excluded) continue
     const s = stateOfTorrent(f)
@@ -167,8 +213,9 @@ export function modelTotals(model) {
       if (bad) problemKeys.add(`${r.name}\u0000${t.rel}`)
       if (r.name !== 'library') continue
       titles += 1
-      if (!bad) full += 1
-      else if (t.by[LINKED] > 0) partly += 1
+      // A dead seed is still linked: what Fully/Partly/Not linked count.
+      if (!(t.by[UNSEEDED] > 0) && !(t.by[COPY] > 0)) full += 1
+      else if (t.by[LINKED] > 0 || t.by[DEAD_SEED] > 0) partly += 1
       else none += 1
     }
   }
@@ -207,11 +254,15 @@ export function worstState(by) {
 
 // Where a click on a tile in this state goes: the workflow, scoped to the title.
 // Backfill takes a library folder (BACKFILL B15); Cleanup and Triage a search
-// for the release's path; Dedupe has no filter, so it opens whole.
+// for the release's path; Dedupe has no filter, so it opens whole. A dead seed
+// is a library tile whose Triage row is the torrent, so it searches for the
+// torrent's folder (`search`), and opens Triage whole when a row didn't carry
+// one (a folded tile, a version 1 row).
 export function navFor(state, title) {
   const tab = STATES[state]?.tab
   if (!tab) return null
   if (tab === 'backfill') return title.root === 'library' ? { tab, under: title.rel } : null
+  if (state === DEAD_SEED) return title.search ? { tab, search: title.search } : { tab }
   if (tab === 'cleanup' || tab === 'triage') return { tab, search: title.rel }
   return { tab }
 }
@@ -219,13 +270,14 @@ export function navFor(state, title) {
 // ── Layout ───────────────────────────────────────────────────────────────────
 
 // Squarified (Bruls, Huizing & van Wijk). Each item carries its size under
-// `key` (`v`, bytes, unless the map is sizing by attention, `a`); the result
-// is the items with x, y, w, h added, largest first.
-export function squarify(items, x, y, w, h, key = 'v') {
+// `key` (`v`, bytes, or `a`, its drawn size: see Sizing below); the result is
+// the items with x, y, w, h added, largest first.
+export function squarify(items, x, y, w, h, key = 'v', ordered = false) {
   const out = []
   const total = items.reduce((t, i) => t + (i[key] > 0 ? i[key] : 0), 0)
   if (!total || w <= 0 || h <= 0) return out
-  const rest = items.filter(i => i[key] > 0).sort((p, q) => q[key] - p[key]).map(i => ({ i, a: i[key] * w * h / total }))
+  const live = items.filter(i => i[key] > 0)
+  const rest = (ordered ? live : live.sort((p, q) => q[key] - p[key])).map(i => ({ i, a: i[key] * w * h / total }))
   while (rest.length) {
     const side = Math.min(w, h)
     let s = rest[0].a, mx = s, mn = s, k = 1
@@ -266,114 +318,50 @@ function squarifyWide(items, x, y, w, h, key = 'v', k = TITLE_ASPECT) {
 
 export const ROOT_GAP = 6, GAP = 3, ROOT_HEAD = 22, HEAD = 18
 
-// ── Attention (2026-11-10) ───────────────────────────────────────────────────
-// The map is sized by attention, not by bytes alone. By bytes, a well-linked
-// library's torrent folder, where every Cleanup and Triage row lives, is a
-// fraction of a percent of the map: on the box, three not-imported episodes
-// (23 GB beside 18.8 TB) were a strip 1–3px wide, which the layout dropped.
-// The better kept the library, the less of its work the map showed. The
-// user's rule: what needs attention is drawn larger, up to a limit, and the
-// health score is the dial.
+// ── Sizing (2026-11-11) ──────────────────────────────────────────────────────
+// Every tile's area is its bytes, with one exception: a gap (a title's bytes in
+// a state a workflow acts on, PROBLEM) that would be too small to see is drawn
+// at the smallest size that shows. By bytes alone a well-linked library's
+// torrent folder is a sliver: on the box, three not-imported episodes (23 GB
+// beside 18.8 TB) were a strip 1–3px wide, which the layout dropped, so Triage
+// had rows the map never drew.
 //
-// 1. A state's bytes are drawn at the points per byte the health score gives
-//    them, never at less than a linked byte (`attentionWeights`). Linked, Not
-//    seeded and Other are at the hardlink rate. Orphaned, Not imported and
-//    Copies are at their category's (its points over its threshold of the
-//    torrent folder), capped at the category's points as the score caps its
-//    penalty: that cap is the limit. At the defaults a not-imported byte is
-//    drawn ~15× a library one, and Config's score weights and thresholds tune it.
-// 2. A problem part of a title smaller than the view's median title (drawn to
-//    scale, held between LIFT_MIN_PX and LIFT_MAX_PX, the size that carries a
-//    name) is raised toward it, so a gap the score barely weighs, or a
-//    category weighted 0, still shows. The user's limit: on the box the
-//    median is 641px² at the portrait default and 1,634 at landscape. A fixed
-//    3,000 raised all 79 not-seeded parts and took blue from 10% of the map to
-//    26%. **The raise keeps their order**: the smallest gap comes out at
-//    LIFT_SMALLEST_PX and one just under the median at the median, by the
-//    square root of its share between. Raised all to the median, a 300 MB gap
-//    and a 2 GB one were the same tile. Lifts take at most LIFT_BUDGET of the
-//    canvas; past that they shrink together, and a zoom gives them room again.
-// 3. A root holding a problem is at least ROOT_MIN px across: squarify gives a
-//    small root a strip the full height of the map, too thin to read.
+// It replaced Attention (2026-11-10), which drew each state as much larger as
+// the health score weighs it (a not-imported byte 16× a linked one), raised
+// every gap toward the median title, and widened a root holding one to 140px,
+// which on the portrait default gave 23 GB of torrents an eighth of the map.
+// The user (2026-11-11): "we're changing the size of things too crazily". What
+// needs nothing keeps its size, a gap too small to draw gets a minimum, and
+// that's all, so the header's Attention / Actual size switch went with it.
 //
-// **Attention only ever makes a gap bigger** (the user's rule): no weight is
-// below a linked byte's, the score's cap stops the enlargement and never
-// shrinks, and the floor and ROOT_MIN only raise. Only the canvas is sized
-// this way. Every figure (headings, hover, legend, the header's stats) stays
-// bytes.
+// 1. A gap is at least FLOOR_PX on its short side. A title that's one gap and
+//    nothing else (every torrent release, a library title with nothing linked)
+//    is at least TITLE_ASPECT·FLOOR_PX × FLOOR_PX, the shape titles are laid
+//    out in. A gap beside other bytes is a stripe down its title's short side,
+//    so it's at least STRIPE_PX by that side: a square floor there would be a
+//    hairline down a big tile's edge.
+// 2. A small root is a box, not a strip. Squarify gives a small root a strip
+//    the full height of the map: nothing inside a 2px one is drawn, and widened
+//    to 27px for its gaps (the first cut of this) it was a column 605px tall of
+//    releases standing on end (the user: "the torrent folder is too tall?").
+//    So a root that would be a strip under NEST_PX across is laid out as one
+//    more box among the other root's folders, and one holding a gap is at
+//    least ROOT_BOX_PX square, room for its heading and its blocks'. The room
+//    is its gaps', shared equally, never what else the root holds.
+// 3. Floors take at most FLOOR_BUDGET of the canvas. Past that they shrink
+//    together, never below their bytes, and a zoom gives them room again.
 //
-// **Attention is the default, and the header can switch it off** (2026-11-11,
-// the user's call: "attention can be the default, but user's choice will be
-// remembered"). `weights` of null is Actual size: every tile's area is its
-// bytes, with none of the three rules, so a gap can be too thin to see.
-export const LIFT_SMALLEST_PX = 400, LIFT_MIN_PX = 576, LIFT_MAX_PX = 3000, LIFT_BUDGET = 0.4, ROOT_MIN = 140
-const ONES = [1, 1, 1, 1, 1, 1]
+// Only a gap is raised, so every tile that needs nothing is drawn at one scale,
+// its bytes'. What the raises take comes from all of them in proportion, so
+// the rest of the map keeps its proportions. The pixels a byte
+// gets are measured, not assumed: the gaps and headings between folders take a
+// share of the canvas, so floors are set against a layout drawn by bytes. Every
+// figure (headings, hover, legend, the header's stats) stays bytes.
+export const FLOOR_PX = 12, STRIPE_PX = 8, FLOOR_BUDGET = 0.1, NEST_PX = 80, ROOT_BOX_PX = 120
 
-// Area per byte by state, relative to a linked byte, from the scan's details.
-// A scan from before the score carried its limits draws to scale.
-export function attentionWeights(d) {
-  const w = [...ONES]
-  if (!d) return w
-  const media = d.total_media_size || 0
-  // The hardlink rate; with Hardlinked Media weighted 0, a byte's share of 100.
-  const ref = d.hl_max > 0 && media > 0 ? d.hl_max / media : 100 / Math.max(1, media + (d.total_torrents_size || 0))
-  const cat = (s, bytes, max, limit) => {
-    if (!(bytes > 0) || !(max > 0)) return
-    const lost = limit > 0 ? Math.min(bytes * max / limit, max) : max
-    w[s] = Math.max(1, lost / ref / bytes)
-  }
-  cat(ORPHANED, d.orphaned_torrent_size, d.or_max, d.or_limit)
-  cat(NOT_IMPORTED, d.not_imported_size, d.ni_max, d.ni_limit)
-  cat(COPY, d.duplicate_size, d.dup_max, d.dup_limit)
-  return w
-}
-
-// Each title's size by state as drawn (`eby`), with rules 2 and 3 applied for
-// a W × H canvas, and the sums its folders and roots are laid out by (`inner`
-// is a root's before rule 3). `weights` of null is Actual size: the bytes,
-// none of the rules. Exported for backend_tests' guard, which holds "only ever
-// bigger" and "Actual size is the bytes" (test_library_map_attention.py).
-export function attentionSizes(model, W, H, weights = ONES) {
-  const toScale = weights == null, w = weights || ONES
-  const eby = new Map(), lifts = [], sizes = []
-  let calm = 0, bytes = 0
-  for (const r of model.roots) {
-    bytes += r.v
-    if (r.free) { calm += r.v; continue }
-    for (const f of r.folders) for (const t of f.titles) {
-      const e = t.by.map((b, s) => b * w[s])
-      eby.set(t, e)
-      sizes.push(t.v)
-      for (let s = 0; s < 6; s++) {
-        if (PROBLEM.includes(s) && t.by[s] > 0) lifts.push([e, s])
-        else calm += e[s]
-      }
-    }
-  }
-  // Rule 2: the median's size φ, in drawn units, is the lift's share of
-  // everything drawn once the raises are in: φ = c · (calm + Σ raised(e, φ)).
-  // A part under φ is raised to φ·(m + (1 − m)·√(e/φ)), which is never less
-  // than e, keeps the parts in order, and takes the smallest to m·φ
-  // (LIFT_SMALLEST_PX). With c held under LIFT_BUDGET over the count, the
-  // iteration contracts.
-  if (!toScale && lifts.length && bytes > 0) {
-    sizes.sort((p, q) => p - q)
-    const median = sizes[sizes.length >> 1] / bytes * W * H
-    const lift = Math.min(LIFT_MAX_PX, Math.max(LIFT_MIN_PX, median))
-    const m = Math.min(1, LIFT_SMALLEST_PX / lift)
-    const raised = (e, phi) => (e >= phi ? e : phi * (m + (1 - m) * Math.sqrt(e / phi)))
-    const c = Math.min(lift / (W * H), LIFT_BUDGET / lifts.length)
-    let phi = 0
-    for (let i = 0; i < 100; i++) {
-      let sum = calm
-      for (const [e, s] of lifts) sum += raised(e[s], phi)
-      const next = c * sum
-      if (Math.abs(next - phi) <= next * 1e-9) { phi = next; break }
-      phi = next
-    }
-    for (const [e, s] of lifts) e[s] = raised(e[s], phi)
-  }
-  const title = new Map(), folder = new Map(), root = new Map(), inner = new Map()
+// The drawn size of every title, folder and root, from its titles' parts.
+function sums(model, eby) {
+  const title = new Map(), folder = new Map(), root = new Map()
   let total = 0
   for (const r of model.roots) {
     let ra = r.free ? r.v : 0
@@ -382,18 +370,106 @@ export function attentionSizes(model, W, H, weights = ONES) {
       for (const t of f.titles) { const a = sum(eby.get(t)); title.set(t, a); fa += a }
       folder.set(f, fa); ra += fa
     }
-    root.set(r, ra); inner.set(r, ra); total += ra
+    root.set(r, ra); total += ra
   }
-  // Rule 3: a root's strip is its share of the map's long side.
-  const k = ROOT_MIN / Math.max(W, H)
-  if (!toScale && model.roots.length > 1 && k < 0.5) {
-    for (const r of model.roots) {
-      if (r.free || !PROBLEM.some(s => r.by[s] > 0)) continue
-      const a = root.get(r), need = k * (total - a) / (1 - k)
-      if (a < need) { root.set(r, need); total += need - a }
+  return { title, folder, root, total }
+}
+
+// The share of the canvas a byte's tile really gets, the rest going to the
+// roots' and folders' gaps and headings, measured on the layout by bytes. It's
+// all lost at those two levels (titles fill their folder, and leaves their
+// title), so the layout stops at folders: one by titles made Files on 200,000
+// files a third slower to draw.
+function drawnShare(model, W, H, A) {
+  let px = 0, bytes = 0
+  for (const f of place(model, W, H, null, A).folders) { px += f.w * (f.h - (f.head ? HEAD : 0)); bytes += f.a }
+  return bytes > 0 ? Math.min(1, px / bytes / (W * H / A.total)) : 1
+}
+
+// Each title's size by state as drawn (`eby`), with the rules above applied for
+// a W × H canvas, and the sums its folders and roots are laid out by.
+// `floored` lists each [title, state, size] rule 1 raised, `widened` each root
+// rule 2 did, and `nested` the root drawn as a box inside `host`. Exported for
+// backend_tests' guard, which holds "only a gap moves, and only up"
+// (test_library_map_sizing.py).
+export function mapSizes(model, W, H) {
+  const eby = new Map(), gaps = []
+  let calm = 0
+  for (const r of model.roots) {
+    if (r.free) { calm += r.v; continue }
+    for (const f of r.folders) for (const t of f.titles) {
+      eby.set(t, [...t.by])
+      const alone = t.by.filter(b => b > 0).length === 1
+      for (let s = 0; s < N_STATES; s++) {
+        if (PROBLEM.includes(s) && t.by[s] > 0) gaps.push({ t, s, alone })
+        else calm += t.by[s]
+      }
     }
   }
-  return { eby, title, folder, root, inner }
+  const floored = []
+  let S = sums(model, eby)
+  if (gaps.length && S.total > 0 && W > 0 && H > 0) {
+    // Rule 1, in pixels: P is what the tiles get of the canvas.
+    const P = W * H * drawnShare(model, W, H, { eby, ...S })
+    const perByte = P / S.total
+    for (const g of gaps) {
+      const short = Math.sqrt(g.t.v * perByte / TITLE_ASPECT)
+      g.f = g.alone ? TITLE_ASPECT * FLOOR_PX * FLOOR_PX : Math.max(FLOOR_PX * FLOOR_PX, STRIPE_PX * short)
+    }
+    // A floor in bytes is its share of everything drawn once the floors are
+    // in: T = calm + Σ max(bytes, f·cut·T/P), which contracts while the floors
+    // are a small share of the canvas.
+    const drawnTotal = cut => {
+      let T = S.total
+      for (let i = 0; i < 100; i++) {
+        let next = calm
+        for (const g of gaps) next += Math.max(g.t.by[g.s], g.f * cut * T / P)
+        if (Math.abs(next - T) <= next * 1e-9) return next
+        T = next
+      }
+      return T
+    }
+    // Rule 3: only a gap that ends up raised costs anything. Cutting the floors
+    // only lowers T, so no gap the cut leaves raised was not raised before it,
+    // and the raised floors' total stays within the budget.
+    let T = drawnTotal(1), cut = 1
+    const need = gaps.reduce((a, g) => a + (g.f * T / P > g.t.by[g.s] ? g.f : 0), 0)
+    if (need > FLOOR_BUDGET * P) { cut = FLOOR_BUDGET * P / need; T = drawnTotal(cut) }
+    for (const g of gaps) {
+      const f = g.f * cut * T / P
+      if (f > g.t.by[g.s]) { eby.get(g.t)[g.s] = f; floored.push([g.t, g.s, f]) }
+    }
+    S = sums(model, eby)
+  }
+  // Rule 2: a root that would be a strip under NEST_PX across is drawn as a
+  // box among the other root's folders (`nested`, inside `host`), and one
+  // holding a gap is at least ROOT_BOX_PX square. The room comes from its gaps
+  // alone, shared equally, so they keep their order and the smallest gains
+  // most: shared by size, a 2 GB copy beside 23 GB of episodes came out a
+  // tile 5px wide. Widened as a whole, the root stretched what needs nothing
+  // with it, and an unfinished download beside three red episodes was drawn
+  // 11× its size. Free space isn't a root here, so its switch never nests the
+  // library or raises it.
+  const widened = []
+  let nested = null, host = null
+  const solid = model.roots.filter(r => !r.free)
+  if (solid.length === 2 && S.total > 0) {
+    const [big, small] = [...solid].sort((p, q) => S.root.get(q) - S.root.get(p))
+    if (S.root.get(small) / S.total * Math.max(W, H) < NEST_PX) {
+      nested = small; host = big
+      const k = ROOT_BOX_PX * ROOT_BOX_PX / (W * H)
+      const a = S.root.get(small), need = k * (S.total - a) / (1 - k)
+      if (k < 0.5 && a < need && PROBLEM.some(s => small.by[s] > 0)) {
+        let n = 0
+        for (const f of small.folders) for (const t of f.titles) for (const s of PROBLEM) if (t.by[s] > 0) n++
+        const add = (need - a) / n
+        for (const f of small.folders) for (const t of f.titles) { const e = eby.get(t); for (const s of PROBLEM) if (t.by[s] > 0) e[s] += add }
+        widened.push(small)
+        S = sums(model, eby)
+      }
+    }
+  }
+  return { eby, title: S.title, folder: S.folder, root: S.root, floored, widened, nested, host }
 }
 
 // A title's name as its tile and the Biggest gaps row show it: a torrent
@@ -406,28 +482,71 @@ export function shortName(t) {
 
 // Rectangles for every root, folder, title and leaf. A leaf is a title's share
 // in one state (`detail` 'titles') or one file ('files'). `tiny` lists what was
-// too small to draw, so the card can name it rather than drop it. Sized by
-// `weights` (see Attention above); without them, by bytes with the lifts, and
-// with null, by bytes alone (Actual size).
-// Each leaf's `boost` is how many times larger than its bytes it's drawn,
-// beside a linked byte, rule 3's widening included; `weight` is its state's.
-export function layoutMap(model, W, H, detail, weights = ONES) {
+// too small to draw, so the card can name it rather than drop it, and `raised`
+// counts the gaps drawn at a floor (Sizing above), so it can say so.
+// Each leaf's `boost` is how many times larger than its bytes it's drawn: 1
+// for everything but a raised gap.
+export function layoutMap(model, W, H, detail) {
+  const L = place(model, W, H, detail, mapSizes(model, W, H))
+  L.raised = 0
+  for (const t of L.titles) for (const s of PROBLEM) if (t.eby[s] > t.by[s]) L.raised++
+  return L
+}
+
+// The host's folders with the nested root in a corner. Squarify alone can't
+// make a small item square among a few big folders: it gets whatever is left
+// once they're placed, which on the box's landscape map was a 37×264 column
+// (its folders are 41%, 41%, 12%, 5% and two slivers). So the box shares a
+// column down the long side's end with the host's k smallest folders, the box
+// at its foot, and the rest are squarified beside it: every area exact. k is
+// the one that draws the box nearest the titles' 2:1, a folder beside it
+// allowed twice as long a shape before it counts against it.
+const aspect = o => (o && o.w > 0 && o.h > 0 ? Math.max(o.w / o.h, o.h / o.w) : Infinity)
+// How far a box is from the titles' 2:1 wide shape: a wide box holds release
+// names, a tall one doesn't.
+const wideness = o => (o && o.w > 0 && o.h > 0 ? Math.max(o.w / o.h / TITLE_ASPECT, TITLE_ASPECT * o.h / o.w) : Infinity)
+function nestedLayout(items, nest, x, y, w, h) {
+  const sorted = items.filter(i => i.a > 0).sort((p, q) => q.a - p.a)
+  const total = sorted.reduce((s, i) => s + i.a, 0) + nest.a
+  const wide = w >= h
+  let best = null, score = Infinity
+  for (let k = 0; k <= sorted.length; k++) {
+    const main = sorted.slice(0, sorted.length - k), side = sorted.slice(sorted.length - k)
+    const c = (side.reduce((s, i) => s + i.a, 0) + nest.a) / total * (wide ? w : h)
+    const col = wide ? [x + w - c, y, c, h] : [x, y + h - c, w, c]
+    const out = [...squarify(main, x, y, wide ? w - c : w, wide ? h : h - c, 'a'),
+                 ...squarify([...side, nest], ...col, 'a', true)]
+    // Folders smaller than the box are slivers wherever they go.
+    const beside = new Set(side.map(i => i.name))
+    let s = wideness(out.find(o => o.nest))
+    for (const o of out) if (!o.nest && beside.has(o.name) && o.a >= nest.a) s = Math.max(s, aspect(o) / 2)
+    if (s < score) { best = out; score = s }
+  }
+  return best
+}
+
+// The geometry, for drawn sizes `A` (mapSizes, or the bytes alone). A `detail`
+// of null stops at folders. A nested root (Sizing's rule 2) is laid out as one
+// more item among its host's folders, and drawn in that box as a root.
+function place(model, W, H, detail, A) {
   const roots = [], folders = [], titles = [], leaves = [], tiny = []
-  const A = attentionSizes(model, W, H, weights)
-  const wt = weights || ONES   // not `w`: the folder loop below names its width that
-  const grown = x => (A.inner.get(x) > 0 ? A.root.get(x) / A.inner.get(x) : 1)
-  for (const r of squarify(model.roots.map(x => ({ ...x, a: A.root.get(x), grow: grown(x) })), 0, 0, W, H, 'a')) {
-    const rx = r.x + ROOT_GAP / 2, ry = r.y + ROOT_GAP / 2, rw = r.w - ROOT_GAP, rh = r.h - ROOT_GAP
-    if (rw < 4 || rh < 4) { tiny.push({ name: r.free ? r.label : r.name === 'library' ? 'Library folder' : 'Torrent folder', v: r.v }); continue }
-    if (r.free) { roots.push({ ...r, x: rx, y: ry, w: rw, h: rh, head: false }); continue }
+  const nest = A.nested?.name, host = A.host?.name
+  const placeRoot = (r, X, Y, RW, RH) => {
+    const rx = X + ROOT_GAP / 2, ry = Y + ROOT_GAP / 2, rw = RW - ROOT_GAP, rh = RH - ROOT_GAP
+    if (rw < 4 || rh < 4) { tiny.push({ name: r.free ? r.label : r.name === 'library' ? 'Library folder' : 'Torrent folder', v: r.v }); return }
+    if (r.free) { roots.push({ ...r, x: rx, y: ry, w: rw, h: rh, head: false }); return }
     const head = rw >= 56 && rh >= 60
-    roots.push({ ...r, x: rx, y: ry, w: rw, h: rh, head })
+    roots.push({ ...r, x: rx, y: ry, w: rw, h: rh, head, nested: r.name === nest })
     const fy = head ? ry + ROOT_HEAD : ry, fh = head ? rh - ROOT_HEAD : rh
-    for (const f of squarify(r.folders.map(x => ({ ...x, a: A.folder.get(x) })), rx, fy, rw, fh, 'a')) {
+    const items = r.folders.map(x => ({ ...x, a: A.folder.get(x) }))
+    for (const f of r.name === host ? nestedLayout(items, { nest: A.nested, a: A.root.get(A.nested) }, rx, fy, rw, fh)
+                                    : squarify(items, rx, fy, rw, fh, 'a')) {
+      if (f.nest) { placeRoot(f.nest, f.x, f.y, f.w, f.h); continue }
       const x = f.x + GAP / 2, y = f.y + GAP / 2, w = f.w - GAP, h = f.h - GAP
       if (w < 3 || h < 3) { tiny.push(f); continue }
       const fhead = w >= 56 && h >= 44
       folders.push({ ...f, root: r.name, x, y, w, h, head: fhead })
+      if (detail == null) continue
       const iy = fhead ? y + HEAD : y, ih = fhead ? h - HEAD : h
       const ts = f.titles.map(t => ({ ...t, a: A.title.get(t), eby: A.eby.get(t) }))
       for (const t of squarifyWide(ts, x, iy, w, ih, 'a')) {
@@ -436,18 +555,19 @@ export function layoutMap(model, W, H, detail, weights = ONES) {
           // A file is drawn at its state's scale within the title.
           const scale = t.by.map((b, s) => (b > 0 ? t.eby[s] / b : 0))
           for (const l of squarify(t.list.map(q => ({ ...q, a: q.size * scale[q.s] })), t.x, t.y, t.w, t.h, 'a')) {
-            leaves.push({ x: l.x, y: l.y, w: l.w, h: l.h, s: l.s, T: t, file: l.name, bytes: l.size,
-                          boost: scale[l.s] * r.grow, weight: wt[l.s] })
+            leaves.push({ x: l.x, y: l.y, w: l.w, h: l.h, s: l.s, T: t, file: l.name, bytes: l.size, boost: scale[l.s] })
           }
         } else {
           for (const p of squarify(t.by.map((v, s) => ({ v, s, a: t.eby[s] })), t.x, t.y, t.w, t.h, 'a')) {
-            leaves.push({ x: p.x, y: p.y, w: p.w, h: p.h, s: p.s, T: t, bytes: p.v,
-                          boost: t.eby[p.s] / p.v * r.grow, weight: wt[p.s] })
+            leaves.push({ x: p.x, y: p.y, w: p.w, h: p.h, s: p.s, T: t, bytes: p.v, boost: t.eby[p.s] / p.v })
           }
         }
       }
     }
   }
+  const top = model.roots.filter(r => r.name !== nest)
+  const size = x => A.root.get(x) + (x.name === host ? A.root.get(A.nested) : 0)
+  for (const r of squarify(top.map(x => ({ ...x, a: size(x) })), 0, 0, W, H, 'a')) placeRoot(r, r.x, r.y, r.w, r.h)
   return { roots, folders, titles, leaves, tiny }
 }
 
@@ -506,11 +626,18 @@ export function headingTarget(model, zoom, h) {
 // folder too small to show its heading is its own heading, all of it: a torrent
 // folder beside a big library is a sliver with no room to name it, which is
 // where a zoom is wanted most, and tiles that small are no target for a click.
+// **A tile at least POINT_PX each way is a target, and wins** (2026-11-11):
+// since the floor (Sizing above), a torrent folder too narrow for its heading
+// holds tiles you can see, and hovering a red one described the whole folder
+// and a click zoomed rather than opening Triage.
+export const POINT_PX = 6
 export function headingAt(layout, x, y) {
   if (!layout) return null
   const inside = (b, h = b.h) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + h
   for (const f of layout.folders) if (f.head && inside(f, HEAD)) return { kind: 'folder', f }
   for (const r of layout.roots) if (!r.free && r.head && inside(r, ROOT_HEAD)) return { kind: 'root', r }
+  const leaf = leafAt(layout, x, y)
+  if (leaf && leaf.w >= POINT_PX && leaf.h >= POINT_PX) return null
   for (const r of layout.roots) if (!r.free && !r.head && inside(r)) return { kind: 'root', r, whole: true }
   for (const f of layout.folders) if (!f.head && inside(f)) return { kind: 'folder', f, whole: true }
   return null
