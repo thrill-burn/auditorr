@@ -840,8 +840,8 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
 //              ration-colour rule, and the hairline it always meant to have.
 //   ghost      transparent, dim text: a quiet control beside a louder one.
 //   subtle     a neutral row chip: raised, dim text.
-//   `tone`     any theme colour: its text and hairline, on an 8% wash. Row chips
-//              that carry a hue (Grab, radarr ↗, Dedupe ↗, Failed ↺).
+//   `tone`     any theme colour: its text and hairline, on an 8% wash. Link chips
+//              that carry a hue (radarr ↗, Dedupe ↗).
 //
 // Sizes:
 //   md    every standalone button — action bars, modal footers, page headers,

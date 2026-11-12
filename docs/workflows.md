@@ -218,6 +218,12 @@ the releases Sonarr/Radarr listed for other titles.
 
 ### Grabbing and importing
 
+When a search finds several releases, the best one in the order you chose is
+picked to start with. Click another to pick it instead (the title opens the
+release's page on the tracker). **Grab this pack** or **Grab this release**
+grabs the picked one. Each title is grabbed once: after a grab, the pick stays
+on the release that was grabbed.
+
 Grabbing hands the release to Sonarr/Radarr, which downloads and imports it
 normally — the new torrent hardlinks into the library and the file stops being
 orphaned. When the arr parks the download because it isn't an upgrade (usual
@@ -247,10 +253,13 @@ the file unseeded (say it ran before the download imported), the candidate comes
 back, and grabbing it again is refused while the first download is in the queue.
 
 A grab that fails because the release has dropped out of the arr's cache is
-searched again and retried once. Any other failure is shown as it is — a
-timeout may be a grab that actually went through, and retrying it would
-download the release twice. For the same reason, a release already in the
-arr's queue isn't grabbed again unless you click **anyway**.
+searched again and retried once. Any other failure is shown under the title
+with Sonarr/Radarr's reason, and the button is there to try again (or pick
+another release first). auditorr never retries it by itself, because a timeout
+may be a grab that actually went through, and retrying it would download the
+release twice. For the same reason, when the arr's queue already has a
+download for those episodes or that movie, nothing is grabbed unless you click
+**Grab anyway**.
 
 ### Runs
 

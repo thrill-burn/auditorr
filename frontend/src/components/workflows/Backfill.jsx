@@ -297,28 +297,21 @@ function sizeDelta(delta) {
   return `${delta > 0 ? '+' : '−'}${formatBytes(Math.abs(delta))}`
 }
 
-// ── Grab button (shared) ──────────────────────────────────────────────────────
-// The idle Grab is a row chip in the accent; every state after it is a tag in
-// the same slot at the same size (R8), and the two that take a second click —
-// "anyway" and "Failed ↺" — are chips again.
-function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
-  if (state === 'idle')        return <Button size="chip" tone="var(--accent)" onClick={onGrab}>Grab</Button>
-  if (state === 'grabbing')    return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--sans)' }}>Grabbing…</span>
-  if (state === 'refreshing')  return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--accent)', fontFamily: 'var(--sans)' }}>Re-searching…</span>
-  if (state === 'grabbed')     return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--green)', fontFamily: 'var(--sans)', padding: '2px 8px' }}>✓ Grabbed</span>
-  // Already in the arr's queue (B12): a second grab would download it twice, so
-  // it takes a deliberate click.
-  if (state === 'queued') return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span title={errorMsg} style={{ fontSize: 'var(--font-sm)', color: 'var(--yellow)', fontFamily: 'var(--sans)' }}>In queue</span>
-      <Button size="chip" variant="ghost" onClick={onForce} title="Already downloading — grab another copy anyway">anyway</Button>
-    </span>
-  )
-  return <Button size="chip" tone="var(--red)" onClick={onReset} title={`${errorMsg || 'Grab failed'} — click to reset`}>Failed ↺</Button>
-}
-
 // ── Result item ───────────────────────────────────────────────────────────────
-const RELEASE_GRID = 'minmax(0,1fr) 100px 62px 72px 40px 90px 40px 44px 84px 72px'
+// The releases' columns. There's no Grab column: a release is picked, and the
+// candidate's one Grab button takes the pick (B18).
+const RELEASE_GRID = 'minmax(0,1fr) 100px 62px 72px 40px 90px 40px 44px 84px'
+
+const releaseKey = r => r.guid || r.title
+
+// What the candidate's Grab button says, by where its grab has got to (B18).
+function grabLabel(state, scope) {
+  if (state === 'grabbing')   return 'Grabbing…'
+  if (state === 'refreshing') return 'Re-searching…'
+  if (state === 'queued')     return 'Grab anyway'
+  return scope === 'season' ? 'Grab this pack' : 'Grab this release'
+}
+const GRAB_BUSY = ['grabbing', 'refreshing']
 
 // T25 — an episode row exists because part of its season is still seeded, so
 // Backfill won't search the season as a pack (B1). The season-pack dialog is
@@ -390,10 +383,19 @@ function SeasonPackSeasons({ rows, onFind }) {
   )
 }
 
+// BACKFILL B18 — a candidate is grabbed once. Its releases are a pick (the best
+// one picked to start with), and one md Grab button in its header takes the
+// pick, as the season-pack dialog and Trumped do. It was a Grab chip on every
+// release: the design system has no row chip for an action, the accent was
+// spent on every row, each state after a click was a different shape in a 72px
+// column (In queue + anyway didn't fit), and the other releases of a grabbed
+// candidate kept a live Grab, with only B12's advisory queue check behind it.
 function ResultItem({ item }) {
-  // grabStates: { [guid]: 'idle' | 'grabbing' | 'refreshing' | 'grabbed' | 'queued' | 'error' }
-  const [grabStates,    setGrabStates]    = useState({})
-  const [grabErrors,    setGrabErrors]    = useState({})
+  // The picked release's key; null until a row is clicked, which means the
+  // first (best) release.
+  const [pickedKey,     setPickedKey]     = useState(null)
+  // grab.state: 'idle' | 'grabbing' | 'refreshing' | 'grabbed' | 'queued' | 'error'
+  const [grab,          setGrabState]     = useState({ state: 'idle', message: null })
   const [importStatus,  setImportStatus]  = useState(null)   // null | watching | importing | done | error
   const [importMessage, setImportMessage] = useState(null)
   const [importProgress, setImportProgress] = useState(null) // 0–1 while downloading, when the arr says
@@ -408,10 +410,7 @@ function ResultItem({ item }) {
     clearTimeout(refreshPollRef.current)
   }, [])
 
-  const setGrab = useCallback((key, state, message) => {
-    setGrabStates(s => ({ ...s, [key]: state }))
-    if (message !== undefined) setGrabErrors(s => ({ ...s, [key]: message }))
-  }, [])
+  const setGrab = useCallback((state, message = null) => setGrabState({ state, message }), [])
 
   const startImportWatch = useCallback(async (release) => {
     if (importStartedRef.current || !item.arr_id) return
@@ -471,13 +470,12 @@ function ResultItem({ item }) {
     force:         force || undefined,
   }), [item])
 
-  const grabFailed = useCallback((key, err) => {
-    if (err.code === 'already_queued') setGrab(key, 'queued', err.message)
-    else setGrab(key, 'error', err.message)
+  const grabFailed = useCallback(err => {
+    if (err.code === 'already_queued') setGrab('queued', err.message)
+    else setGrab('error', err.message)
   }, [setGrab])
 
   const doRefreshAndRetry = useCallback(async (originalRelease) => {
-    const key = originalRelease.guid || originalRelease.title
     // The row's own search, exactly as the run issued it. Rebuilding the query
     // from season_number — which an episode row still carries, as a label —
     // turned the retry of an episode grab into a season-pack search.
@@ -494,58 +492,55 @@ function ResultItem({ item }) {
         if (data.status === 'done' && data.releases?.length) {
           const fresh = data.releases.find(r => r.indexer === originalRelease.indexer && r.title === originalRelease.title)
           if (!fresh) {
-            setGrab(key, 'error', `Release not found on ${originalRelease.indexer} after re-search`)
+            setGrab('error', `Release not found on ${originalRelease.indexer} after re-search`)
             return
           }
-          setGrab(key, 'grabbing')
+          setGrab('grabbing')
           try {
             await api.grabRelease(grabBody(fresh, false))
             if (item.key) GRABBED.add(item.key)
-            setGrab(key, 'grabbed')
+            setGrab('grabbed')
             startImportWatch(fresh)
           } catch (err2) {
             // Never a second automatic retry.
-            if (mountedRef.current) grabFailed(key, err2)
+            if (mountedRef.current) grabFailed(err2)
           }
         } else {
-          setGrab(key, 'error', data.message || 'Re-search failed')
+          setGrab('error', data.message || 'Re-search failed')
         }
       } catch (err) {
-        if (mountedRef.current) setGrab(key, 'error', err.message)
+        if (mountedRef.current) setGrab('error', err.message)
       }
     }
     poll()
   }, [item, grabBody, grabFailed, setGrab, startImportWatch])
 
-  const doGrab = useCallback(async (release, e, force = false) => {
-    e.stopPropagation()
-    const key = release.guid || release.title
-    const current = grabStates[key]
-    if (current && current !== 'error' && !(force && current === 'queued')) return
-    setGrab(key, 'grabbing')
+  // A grab starts from idle or a failure, or from "already in the queue" only
+  // as Grab anyway. A failure isn't retried by itself: the button is there
+  // again, beside the reason, and a grab the arr did carry out meets B12's
+  // queue check on the second click.
+  const doGrab = useCallback(async (release, force = false) => {
+    const current = grab.state
+    if (current !== 'idle' && current !== 'error' && !(force && current === 'queued')) return
+    setGrab('grabbing')
     try {
       await api.grabRelease(grabBody(release, force))
       // Only an accepted grab: a refusal (`already_queued`) or a failure keeps the row.
       if (item.key) GRABBED.add(item.key)
-      setGrab(key, 'grabbed')
+      setGrab('grabbed')
       startImportWatch(release)
     } catch (err) {
       // Only a stale guid is re-searched: it is the one failure a fresh search
       // fixes. Anything else is shown as it is — a timeout may be a grab the
       // arr did process, and retrying that downloads the release twice (B12).
       if (err.code === 'stale_release') {
-        setGrab(key, 'refreshing')
+        setGrab('refreshing')
         doRefreshAndRetry(release)
       } else {
-        grabFailed(key, err)
+        grabFailed(err)
       }
     }
-  }, [item, grabStates, grabBody, grabFailed, setGrab, startImportWatch, doRefreshAndRetry])
-
-  const resetGrab = useCallback((key, e) => {
-    e.stopPropagation()
-    setGrab(key, 'idle')
-  }, [setGrab])
+  }, [item, grab.state, grabBody, grabFailed, setGrab, startImportWatch, doRefreshAndRetry])
 
   const searching = item.status === 'searching'
   const found     = item.status === 'found'
@@ -567,8 +562,11 @@ function ResultItem({ item }) {
 
   const filename = (item.path || '').replace(/\\/g, '/').split('/').pop()
 
-  // Single-release grab key
-  const singleKey = item.best_release?.guid || item.best_release?.title
+  // The release the Grab button takes. The pick is held while a grab is under
+  // way and after one is accepted, so the outlined row is the one grabbed.
+  const picked    = releases.find(r => releaseKey(r) === pickedKey) || releases[0] || null
+  const locked    = GRAB_BUSY.includes(grab.state) || grab.state === 'grabbed'
+  const pick      = r => { if (!locked) setPickedKey(releaseKey(r)) }
 
   const infoUrl = found ? (releases[0]?.info_url || '') : ''
 
@@ -604,7 +602,7 @@ function ResultItem({ item }) {
           )}
           {multi && (
             <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--sans)', marginTop: 2 }}>
-              {releases.length} releases found
+              {releases.length} releases found{!locked && ' · click one to pick it'}
             </div>
           )}
           {filename && (
@@ -671,6 +669,12 @@ function ResultItem({ item }) {
           </span>
         ))}
 
+        {grab.state === 'grabbed' && (
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--green)', flexShrink: 0 }}>
+            ✓ Grabbed
+          </span>
+        )}
+
         {/* Import status (auto-starts after any grab) */}
         {importStatus && (() => {
           const pct = watchPercent(importStatus, importProgress)
@@ -684,26 +688,41 @@ function ResultItem({ item }) {
           )
         })()}
 
-        {/* Single-release grab button */}
-        {found && !multi && item.best_release && (
-          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-            <GrabButton
-              state={grabStates[singleKey] || 'idle'}
-              errorMsg={grabErrors[singleKey]}
-              onGrab={e => doGrab(item.best_release, e)}
-              onForce={e => doGrab(item.best_release, e, true)}
-              onReset={e => resetGrab(singleKey, e)}
-            />
-          </div>
+        {/* The candidate's one grab, of the picked release (B18). Already in
+            the arr's queue (B12), it's Grab anyway, since a second grab
+            downloads it twice. */}
+        {found && picked && grab.state !== 'grabbed' && (
+          <Button onClick={() => doGrab(picked, grab.state === 'queued')}
+            disabled={GRAB_BUSY.includes(grab.state)}
+            title={grab.state === 'queued'
+              ? 'Already downloading. Grab another copy anyway'
+              : `Hand ${picked.title} to ${item.arr_service === 'radarr' ? 'Radarr' : 'Sonarr'}`}>
+            {grabLabel(grab.state, item.scope)}
+          </Button>
         )}
       </div>
 
+      {/* Why the last grab didn't go through, as a sentence: the server's own
+          reason, never only a hover. */}
+      {(grab.state === 'queued' || grab.state === 'error') && (
+        <div style={{
+          padding: multi ? '0 16px 8px 42px' : '0 16px 10px 42px', marginTop: multi ? 0 : -4,
+          fontSize: 'var(--font-base)', fontFamily: 'var(--sans)', lineHeight: 1.5,
+          color: grab.state === 'queued' ? 'var(--yellow)' : 'var(--red)',
+        }}>
+          {grab.state === 'queued'
+            ? (grab.message || 'Already in the queue')
+            : (grab.message ? `Grab failed: ${grab.message}` : 'Grab failed')}
+        </div>
+      )}
+
       {/* Multi-release picker */}
       {found && multi && (
-        <div style={{ paddingLeft: 42, paddingRight: 16, paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div role="radiogroup" aria-label={`Releases of ${item.arr_title}`}
+          style={{ paddingLeft: 42, paddingRight: 16, paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
           {/* Column headers */}
           <div style={{ display: 'grid', gridTemplateColumns: RELEASE_GRID, gap: 8, padding: '2px 10px' }}>
-            {['Title', 'Tracker', 'Size', 'vs file', 'Peers', 'Quality', 'Score', 'HDR', 'Match', ''].map((h, i) => (
+            {['Title', 'Tracker', 'Size', 'vs file', 'Peers', 'Quality', 'Score', 'HDR', 'Match'].map((h, i) => (
               <span key={i} style={{
                 fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', fontWeight: 600, letterSpacing: 0, textTransform: 'none',
                 color: 'var(--text-dim)', opacity: 0.75,
@@ -711,18 +730,23 @@ function ResultItem({ item }) {
               }}>{h}</span>
             ))}
           </div>
-          {releases.map((r, i) => {
-            const key     = r.guid || r.title
-            const gs      = grabStates[key] || 'idle'
-            const isBest  = i === 0
+          {releases.map(r => {
+            const key     = releaseKey(r)
+            const on      = picked != null && key === releaseKey(picked)
             const hdrInfo = HDR_STYLE[r.hdr]
+            // The season-pack dialog's pick: the chosen row outlined, the
+            // others plain, the title's link still its own click.
             return (
-              <div key={key} style={{
-                display: 'grid', gridTemplateColumns: RELEASE_GRID,
-                alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
-                background: isBest ? tint('var(--accent)', 3) : 'transparent',
-                border: `1px solid ${isBest ? tint('var(--accent)', 15) : 'transparent'}`,
-              }}>
+              <div key={key} role="radio" aria-checked={on} tabIndex={locked ? -1 : 0}
+                onClick={() => pick(r)}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(r) } }}
+                style={{
+                  display: 'grid', gridTemplateColumns: RELEASE_GRID,
+                  alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
+                  cursor: locked ? 'default' : 'pointer',
+                  background: on ? tint('var(--accent)', 6) : 'transparent',
+                  border: `1px solid ${on ? tint('var(--accent)', 35) : 'transparent'}`,
+                }}>
                 {r.info_url ? (
                   <a href={r.info_url} target="_blank" rel="noopener noreferrer"
                     onClick={e => e.stopPropagation()}
@@ -771,15 +795,6 @@ function ResultItem({ item }) {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                   <MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <GrabButton
-                    state={gs}
-                    errorMsg={grabErrors[key]}
-                    onGrab={e => doGrab(r, e)}
-                    onForce={e => doGrab(r, e, true)}
-                    onReset={e => resetGrab(key, e)}
-                  />
                 </div>
               </div>
             )
