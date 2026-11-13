@@ -1,16 +1,17 @@
 import React, { useState } from 'react'
-import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { formatBytes, formatBytesCompact, tint } from '../utils'
-import { Button, CloseButton, Segmented } from './workflows/shared'
-import { SECTION_LABEL, CARD, CAPTION, READOUT, fmtChartDate, splitValueUnit, HeroNumber, Hero } from './dashKit'
+import { Button, CloseButton } from './workflows/shared'
+import { SECTION_LABEL, CARD, CAPTION, READOUT, fmtChartDate, splitValueUnit, HeroNumber } from './dashKit'
 
-// The tracker panels the Dashboard used to end with: the leaderboard, upload
-// activity, and upload by tracker / library yield, with the detail popup they
-// open. They moved to the Trackers page as they were (2026-11-09), where they
-// follow that page's date range and the trackers its chart shows, and the
-// Dashboard's tracker dropdown, which filtered nothing else, went. Cross-seed
-// effectiveness followed on 2026-11-10, beside the leaderboard again, as it sat
-// before the Dashboard was rebuilt.
+// The Trackers page's cards and the tracker detail popup.
+//
+// The Dashboard's upload panels moved here on 2026-11-09 and Cross-seed
+// effectiveness on 2026-11-10. On 2026-11-13 three of them went into the
+// page's chart and table: Upload activity's stacked bars are the chart's
+// Uploaded > Daily view, and Upload by tracker and Top trackers by disk space
+// repeated the table's Uploaded, Yield and Seeding columns. Seeded only here
+// and the health card took their places.
 
 // ── Cross-seed effectiveness ──────────────────────────────────────────────────
 // SEED_COLORS[0] = orphaned (0 trackers), [1] = 1 tracker, [2] = 2, etc.
@@ -124,94 +125,30 @@ export function CrossSeedCard({ stats, onNavigate }) {
         <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Disk space by seed count</div>
         <CrossSeedBar segments={stats.segments} totalSize={stats.total_size} onNavigate={onNavigate} />
       </div>
+      <SharedPairs pairs={stats.pairs} totalSize={stats.total_size} />
     </div>
   )
 }
 
-// ── Upload activity tooltip ───────────────────────────────────────────────────
-export function UploadActivityTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null
-  const items = payload.filter(p => p.value > 0)
-  const total = payload.reduce((s, p) => s + (p.value || 0), 0)
+// The tracker pairs that seed the most of the same library (2026-11-13).
+function SharedPairs({ pairs, totalSize }) {
+  const rows = (pairs || []).slice(0, 5)
+  if (!rows.length) return null
   return (
-    <div style={{ background: '#151515', border: '1px solid #2a2a2a', borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', minWidth: 160 }}>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 6 }}>{fmtChartDate(label)}</div>
-      {items.map(p => (
-        <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 3 }}>
-          <div style={{ width: 8, height: 8, borderRadius: 2, background: p.fill, flexShrink: 0 }} />
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: '#ebebeb', flex: 1 }}>{p.name}</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{formatBytes(p.value)}</span>
-        </div>
-      ))}
-      {items.length > 1 && (
-        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Total</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 700, color: '#ebebeb' }}>{formatBytes(total)}</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-export function RoundedStackedBar({ x, y, width, height, fill, allTrackers, host, payload }) {
-  if (!height || height <= 0) return null
-  const r = 3
-  // Determine if this segment is the topmost non-zero segment for this day
-  const idx = allTrackers.indexOf(host)
-  const isTop = allTrackers.slice(idx + 1).every(t => !(payload[t] > 0))
-  if (isTop) {
-    return (
-      <path
-        d={`M${x},${y + r} a${r},${r} 0 0 1 ${r},-${r} h${width - 2 * r} a${r},${r} 0 0 1 ${r},${r} v${height - r} h-${width} Z`}
-        fill={fill}
-      />
-    )
-  }
-  return <rect x={x} y={y} width={width} height={height} fill={fill} />
-}
-
-
-// ── Tracker leaderboard ───────────────────────────────────────────────────────
-export function TrackerLeaderboard({ trackerStats, onTrackerDetail }) {
-  if (!trackerStats || trackerStats.length === 0) return null
-
-  const top3 = trackerStats.slice(0, 3)
-  const maxSize = top3[0]?.size || 1
-
-  const medals = ['🥇', '🥈', '🥉']
-  const colors = ['var(--yellow)', 'var(--text-dim)', '#cd7f32']
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {top3.map((t, i) => {
-        const barPct = (t.size / maxSize) * 100
-        return (
-          <button
-            key={t.name}
-            onClick={() => onTrackerDetail(t.name)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '10px 12px', borderRadius: 8,
-              background: 'var(--surface2)', border: '1px solid var(--border)',
-              cursor: 'pointer', textAlign: 'left', width: '100%',
-              transition: 'border-color 0.15s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = colors[i]}
-            onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
-          >
-            <span style={{ fontSize: 16, flexShrink: 0 }}>{medals[i]}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{t.name}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', flexShrink: 0 }}>{t.count} files · {formatBytes(t.size)}</span>
-              </div>
-              <div style={{ height: 4, background: 'var(--surface3)', borderRadius: 99, overflow: 'hidden' }}>
-                <div style={{ width: barPct + '%', height: '100%', background: colors[i], borderRadius: 99 }} />
-              </div>
-            </div>
-          </button>
-        )
-      })}
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <div style={{ ...SECTION_LABEL, marginBottom: 8 }}>Seeded together most</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {rows.map(p => (
+          <div key={p.trackers.join('+')} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
+            <span style={{ ...READOUT, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              {p.trackers[0]}<span style={{ color: 'var(--text-dim)' }}> + </span>{p.trackers[1]}
+            </span>
+            <span style={{ ...READOUT, flexShrink: 0 }}>
+              {formatBytes(p.size)}{totalSize > 0 ? ` · ${((p.size / totalSize) * 100).toFixed(0)}%` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -437,10 +374,17 @@ export function TrackerDetailModal({ trackerName, trackerStats, uploadStats, onN
   )
 }
 
-// ── The three panels ──────────────────────────────────────────────────────────
-// `trackers` is the trackers to show (the Trackers page's chart picks) and
-// `colorFor` the page's own hue for each, so a bar here is its chart line's
-// colour. Each panel says so when the picks leave it nothing to draw.
+// ── Seeded only here ──────────────────────────────────────────────────────────
+// Per tracker, the library it seeds, split by whether any other tracker seeds it
+// too. The solid part is what would lose its last seed if the tracker went; on a
+// hardlinked library that is the tracker's own contribution, not disk it costs,
+// because the files are library either way. Follows the chart's tracker picks,
+// and each bar is its tracker's chart colour. Solid against striped, so the two
+// parts read apart without the colour.
+
+const sharedFill = c => ({
+  background: `repeating-linear-gradient(135deg, ${tint(c, 75)} 0 2px, transparent 2px 4.5px), ${tint(c, 22)}`,
+})
 
 function NoneSelected() {
   return (
@@ -450,152 +394,133 @@ function NoneSelected() {
   )
 }
 
-const TABLE_HEAD = {
-  padding: '4px 8px', color: 'var(--text-dim)', fontWeight: 600,
-  fontFamily: 'var(--sans)', letterSpacing: 0, fontSize: 'var(--font-sm)', textTransform: 'none',
-  borderBottom: '1px solid var(--border)',
-}
-
 function TrackerLink({ name, onClick }) {
   return (
     <button
-      onClick={onClick}
+      onClick={onClick} title={`${name}: details`}
       onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)' }}
       onMouseLeave={e => { e.currentTarget.style.color = 'var(--text)' }}
-      style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%', transition: 'color 0.15s' }}
+      style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, textAlign: 'left', transition: 'color 0.15s' }}
     >{name}</button>
   )
 }
 
-export function TopTrackersCard({ trackerStats, trackers, onTrackerDetail }) {
-  const rows = (trackerStats || []).filter(t => trackers.includes(t.name))
+function Figure({ value, word, onClick, title }) {
+  const [hov, setHov] = useState(false)
   return (
-    <div style={{ ...CARD, padding: '18px 20px', gap: 14 }}>
-      <div style={SECTION_LABEL}>Top trackers by disk space</div>
-      {rows.length === 0 ? <NoneSelected /> : <TrackerLeaderboard trackerStats={rows} onTrackerDetail={onTrackerDetail} />}
-      {rows.length > 3 && (
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {rows.slice(3).map(t => (
-            <Button key={t.name} size="chip" variant="ghost" mono onClick={() => onTrackerDetail(t.name)}>
-              {t.name}
-            </Button>
-          ))}
-        </div>
-      )}
-    </div>
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, whiteSpace: 'nowrap' }}>
+      {onClick ? (
+        <button onClick={onClick} title={title}
+          onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+          style={{ ...READOUT, color: 'var(--text)', fontWeight: 600, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: hov ? 'underline' : 'none', textUnderlineOffset: 3 }}>
+          {value}
+        </button>
+      ) : <span style={{ ...READOUT, color: 'var(--text)', fontWeight: 600 }}>{value}</span>}
+      <span style={CAPTION}>{word}</span>
+    </span>
   )
 }
 
-export function UploadActivityCard({ uploadStats, trackers, colorFor }) {
-  const active = Object.keys(
-    (uploadStats?.daily_uploads || []).reduce((acc, day) => {
-      Object.entries(day.by_tracker || {}).forEach(([h, v]) => { if (v > 0) acc[h] = true })
-      return acc
-    }, {})
-  ).filter(h => trackers.includes(h))
-  const data = (uploadStats?.daily_uploads || []).map(day => {
-    const row = { date: day.date }
-    for (const h of active) row[h] = day.by_tracker[h] || 0
-    return row
-  })
-  return (
-    <div style={{ ...CARD, padding: '18px 20px', gap: 14 }}>
-      <div style={SECTION_LABEL}>Upload activity</div>
-      {trackers.length === 0 ? <NoneSelected /> : (
-        <div style={{ flex: 1, minHeight: 240 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 4, right: 20, left: 4, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" strokeOpacity={0.6} vertical={false} />
-              <XAxis dataKey="date" tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }} tickLine={false} axisLine={false} minTickGap={36} tickFormatter={fmtChartDate} />
-              <YAxis
-                width={44}
-                tick={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fill: 'var(--text-dim)' }}
-                tickLine={false} axisLine={false}
-                tickFormatter={formatBytesCompact}
-              />
-              <Tooltip content={<UploadActivityTooltip />} cursor={{ fill: 'var(--surface2)' }} />
-              {active.map(host => (
-                <Bar
-                  key={host} dataKey={host} stackId="uploads"
-                  fill={colorFor(host)}
-                  maxBarSize={80}
-                  shape={props => <RoundedStackedBar {...props} allTrackers={active} host={host} />}
-                />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-    </div>
-  )
+function PartSwatch({ striped }) {
+  const c = 'var(--text-dim)'
+  return <span style={{ width: 14, height: 8, borderRadius: 2, flexShrink: 0, display: 'inline-block', ...(striped ? sharedFill(c) : { background: c }) }} />
 }
 
-export function UploadByTrackerCard({ uploadStats, trackers, onTrackerDetail }) {
-  const [tab, setTab] = useState('upload')
-  const rows = (uploadStats?.tracker_yields || [])
-    .filter(t => !(t.uploaded === 0 && (t.yield === null || t.yield === 0)))
-    .filter(t => trackers.includes(t.tracker))
-  const uploaded = rows.reduce((s, t) => s + t.uploaded, 0)
-  const seeding  = rows.reduce((s, t) => s + t.seeding_size, 0)
-  const days = uploadStats?.period_days
+export function SeededOnlyHereCard({ trackerStats, trackers, colorFor, onTrackerDetail, onNavigate }) {
+  const rows = (trackerStats || [])
+    .filter(t => trackers.includes(t.name))
+    .sort((a, b) => (b.only_size || 0) - (a.only_size || 0) || b.size - a.size)
+  const max = Math.max(1, ...rows.map(r => r.size))
   return (
     <div style={{ ...CARD, padding: '18px 20px', gap: 14 }}>
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <div style={SECTION_LABEL}>{tab === 'upload' ? 'Upload by tracker' : 'Library yield'}</div>
-          <Segmented label="Panel" value={tab} onChange={setTab}
-            options={[{ value: 'upload', label: 'Upload' }, { value: 'yield', label: 'Yield' }]} />
+        <div style={{ ...SECTION_LABEL, marginBottom: 6 }}>Seeded only here</div>
+        <div style={{ ...CAPTION, lineHeight: 1.5 }}>
+          The library each tracker seeds, and how much of it no other tracker does: what would lose its last seed if the tracker went.
         </div>
-        {tab === 'upload' ? (
-          <>
-            <Hero text={formatBytes(uploaded)} />
-            <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
-              total uploaded · {days} day window
-            </p>
-          </>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <Hero text={seeding > 0 ? (uploaded / seeding * 100).toFixed(1) + '%' : '—'} />
-              <span style={CAPTION}>
-                over {days} day{days !== 1 ? 's' : ''}
-              </span>
-            </div>
-            <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: 8, lineHeight: 1.6 }}>
-              Upload volume relative to seeding size. Higher yield = your disk space is earning more.
-            </p>
-          </>
-        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 10 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, ...CAPTION }}><PartSwatch /> Only this tracker</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, ...CAPTION }}><PartSwatch striped /> Other trackers too</span>
+        </div>
       </div>
-      {trackers.length === 0 ? <NoneSelected /> : rows.length > 0 && (
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)' }}>
-            <thead>
-              <tr>
-                {(tab === 'yield' ? ['Tracker', 'Uploaded', 'Seeding', 'Yield'] : ['Tracker', 'Total Uploaded']).map(h => (
-                  <th key={h} style={{ ...TABLE_HEAD, textAlign: h === 'Tracker' ? 'left' : 'right' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(tab === 'yield' ? rows : [...rows].sort((a, b) => b.uploaded - a.uploaded)).map((t, i) => (
-                <tr key={t.tracker} style={{ background: i % 2 === 0 ? 'var(--surface2)' : 'transparent' }}>
-                  <td style={{ padding: '5px 8px', maxWidth: 120 }}>
-                    <TrackerLink name={t.tracker} onClick={() => onTrackerDetail(t.tracker)} />
-                  </td>
-                  <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.uploaded)}</td>
-                  {tab === 'yield' && <>
-                    <td style={{ padding: '5px 8px', color: 'var(--text-dim)', textAlign: 'right' }}>{formatBytes(t.seeding_size)}</td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: t.yield > 0 ? 600 : 400, color: t.yield > 0 ? 'var(--green)' : 'var(--text-dim)' }}>
-                      {t.yield !== null ? (t.yield * 100).toFixed(1) + '%' : '—'}
-                    </td>
-                  </>}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {rows.length === 0 ? <NoneSelected /> : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {rows.map(t => {
+            const c = colorFor(t.name)
+            const only = t.only_size || 0
+            const shared = Math.max(0, t.size - only)
+            return (
+              <div key={t.name} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, minWidth: 0 }}>
+                  <TrackerLink name={t.name} onClick={() => onTrackerDetail(t.name)} />
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 10, flexShrink: 0 }}>
+                    <Figure value={formatBytes(only)} word="only here"
+                      onClick={only > 0 && onNavigate ? () => onNavigate({ tab: 'media', tracker: t.name, seedCount: 1 }) : undefined}
+                      title={`Media seeded only by ${t.name}`} />
+                    <Figure value={formatBytes(shared)} word="shared" />
+                  </span>
+                </div>
+                <div style={{ height: 8, borderRadius: 3, background: 'var(--surface3)', overflow: 'hidden', display: 'flex' }}>
+                  <div style={{ width: `${(only / max) * 100}%`, background: c }} />
+                  <div style={{ width: `${(shared / max) * 100}%`, ...sharedFill(c) }} />
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Trackers reporting a problem ──────────────────────────────────────────────
+// Only when one is: a tracker refusing its torrents (the client's "not working",
+// with the tracker's own message) or ones it no longer lists (unregistered, the
+// dead seeds Triage clears). Every tracker, whatever the chart shows. The
+// verdict is per torrent, so a cross-seeded file's working sibling can't hide
+// it, as it does on the file records.
+export function TrackerHealthCard({ trackerFileStats, onNavigate }) {
+  const count = s => (s.not_working_count || 0) + (s.unregistered_count || 0)
+  const rows = Object.entries(trackerFileStats || {})
+    .filter(([t, s]) => t !== 'Unknown' && count(s) > 0)
+    .sort(([, a], [, b]) => count(b) - count(a))
+  if (!rows.length) return null
+  return (
+    <div style={{ ...CARD, padding: '16px 20px', gap: 12 }}>
+      <div style={SECTION_LABEL}>Trackers reporting a problem</div>
+      {rows.map(([t, s]) => {
+        const nw = s.not_working_count || 0, un = s.unregistered_count || 0, of = s.torrent_count || 0
+        return (
+          <div key={t} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', marginTop: 6, flexShrink: 0, background: un ? 'var(--red)' : 'var(--yellow)' }} />
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '2px 12px' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>{t}</span>
+                {nw > 0 && (
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+                    <span style={{ ...READOUT, color: 'var(--text)' }}>{nw} of {of}</span>
+                    <span style={CAPTION}>torrents: the tracker isn't working</span>
+                  </span>
+                )}
+                {un > 0 && (
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+                    <span style={{ ...READOUT, color: 'var(--text)' }}>{un}</span>
+                    <span style={CAPTION}>{un === 1 ? 'torrent' : 'torrents'} unregistered</span>
+                  </span>
+                )}
+              </div>
+              {s.health_msg && (
+                <div title="The tracker's message, as the client reports it"
+                  style={{ ...READOUT, lineHeight: 1.5, overflowWrap: 'anywhere' }}>{s.health_msg}</div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              {un > 0 && <Button variant="ghost" onClick={() => onNavigate({ tab: 'triage' })}>Open Triage</Button>}
+              <Button variant="ghost" onClick={() => onNavigate({ tab: 'torrents', tracker: t })}>View torrents</Button>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

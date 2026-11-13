@@ -20,7 +20,7 @@ from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key, content_root,
-    client_save_dirs,
+    client_save_dirs, announce_hosts, TrackerTally,
 )
 
 log = logging.getLogger(__name__)
@@ -121,9 +121,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         try:
             entries = [{'url': t.url, 'status': t.status, 'msg': t.msg}
                        for t in _get_thread_client().torrents_trackers(torrent_hash=torrent.hash)]
-            raw   = [e['url'] for e in entries
-                     if e['url'].startswith('http') or e['url'].startswith('udp')]
-            hosts = [u.split('/')[2] for u in raw if len(u.split('/')) > 2] or ['Unknown']
+            hosts = announce_hosts(e['url'] for e in entries)
             health, msg = classify_tracker_entries(entries)
         except Exception as e:
             log.debug('qbit: tracker listing failed for %s: %s', torrent.hash, e)
@@ -166,6 +164,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     trackers_set         = set()
     tracker_upload       = {}
     tracker_seeding_size = {}
+    tally                = TrackerTally()
     remote_path          = cfg.get('REMOTE_PATH', '')
     local_path           = cfg.get('LOCAL_PATH', '')
 
@@ -174,6 +173,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         if hosts is None:
             report['tracker_failures'] += 1
             hosts = ['Unknown']
+        tally.add(torrent.hash, hosts, health_map.get(torrent.hash))
         seed_secs = int(getattr(torrent, 'seeding_time', 0) or 0)
         if seed_secs > 0:
             seed_byte_secs += (torrent.size or 0) * seed_secs
@@ -299,6 +299,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # '_'-prefixed: every per-tracker loop already skips these.
     tracker_snapshot['_seed_byte_secs'] = seed_byte_secs
     tracker_snapshot['_max_seed_secs']  = max_seed_secs
+    trackers, _ = tally.finish(tracker_snapshot, trackers_set)
     mark_trackers_unanswered(tracker_snapshot, report, len(torrents), 'qbit')
 
     report['file_map_size']    = len(file_map)
@@ -317,7 +318,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
             'completion field. Their files are still claimed (so they do not read '
             'as orphans) but are kept out of duplicate groups and the Triage pile.',
             report['incomplete_torrents'], report['completion_unknown'])
-    return file_map, sorted(trackers_set), tracker_snapshot, report
+    return file_map, trackers, tracker_snapshot, report
 
 
 # ---------------------------------------------------------------------------

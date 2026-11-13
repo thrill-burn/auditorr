@@ -44,15 +44,13 @@ EXEMPTIONS = [
     # "Instrument" number treatment the dashboard is built around.
     ('components/Dashboard.jsx', "fontSize: 42, fontWeight: 500", 1,
      "the health dial's score, the page's largest display figure"),
-    # HeroNumber moved to dashKit.jsx and the leaderboard to TrackerPanels.jsx
-    # when the upload panels went to the Trackers page (2026-11-09); the sites
-    # and their counts are unchanged.
+    # HeroNumber moved to dashKit.jsx when the upload panels went to the
+    # Trackers page (2026-11-09). The leaderboard's medal emoji, the third
+    # exemption, went with the leaderboard (2026-11-13).
     ('components/dashKit.jsx', "fontSize: size, fontWeight: 500", 1,
      "HeroNumber's numeral, a display figure sized by its caller (33px on the cards)"),
     ('components/dashKit.jsx', "fontSize: Math.round(size * 0.55)", 1,
      "HeroNumber's unit caption, proportional to its numeral"),
-    ('components/TrackerPanels.jsx', "{medals[i]}</span>", 1,
-     "the leaderboard's medal emoji is a glyph sized as an icon"),
 ]
 
 _VAR = re.compile(r"""^(['"])var\(--font-([a-z0-9-]+)\)\1$""")

@@ -609,6 +609,7 @@ function AppInner() {
                 key={navKey}
                 files={tab === 'media' ? mediaFiles : torrentFiles}
                 trackers={results?.trackers || []}
+                trackerAliases={results?.tracker_aliases}
                 tab={tab}
                 initialStatus={pendingNav?.status}
                 initialImportFilter={pendingNav?.importFilter}

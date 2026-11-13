@@ -49,7 +49,7 @@ from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_instance_failure, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key,
-    is_part_file_name, content_root, client_save_dirs,
+    is_part_file_name, content_root, client_save_dirs, announce_hosts, TrackerTally,
 )
 
 log = logging.getLogger(__name__)
@@ -179,14 +179,7 @@ def _norm_file(f):
 
 
 def _tracker_hosts(raw_trackers):
-    hosts = []
-    for t in raw_trackers:
-        url = t.get('url') or t.get('announce') or ''
-        if url.startswith('http') or url.startswith('udp'):
-            parts = url.split('/')
-            if len(parts) > 2:
-                hosts.append(parts[2])
-    return hosts or ['Unknown']
+    return announce_hosts(t.get('url') or t.get('announce') or '' for t in raw_trackers)
 
 
 def _torrent_status(state):
@@ -381,7 +374,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
                       seen, seed_totals=None, report=None, unresolved_roots=None,
-                      fallback_roots=None, save_scope=None):
+                      fallback_roots=None, save_scope=None, tally=None):
     """One instance's torrents, folded into the shared maps.
 
     `seen` is the cross-instance bookkeeping, and it is **three sets, not one**
@@ -558,6 +551,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
             seen['regs'].add(reg)
             for h in hosts:
                 tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
+            # Torrent counts and health are per registration too: each is a
+            # torrent the tracker sees, and each has its own announce verdict.
+            if tally is not None:
+                tally.add(th, hosts, health_map.get(th))
 
         # **Bytes de-duplicate by path.** One payload is one set of bytes on
         # disk however many registrations stand on it, so the key is the
@@ -789,6 +786,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     trackers_set         = set()
     tracker_upload       = {}
     tracker_seeding_size = {}
+    tally                = TrackerTally()
     # Cross-instance bookkeeping, one set per unit — see `_process_instance`.
     seen                 = {'regs': set(), 'payloads': set(),
                             'hashes': set(), 'multi': set()}
@@ -802,7 +800,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                               seen, seed_totals, report=report,
+                               seen, seed_totals, report=report, tally=tally,
                                unresolved_roots=unresolved_roots,
                                fallback_roots=fallback_roots, save_scope=save_scope)
             report['instances_ok'] += 1
@@ -829,6 +827,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # '_'-prefixed: every per-tracker loop already skips these.
     tracker_snapshot['_seed_byte_secs'] = seed_totals['byte_secs']
     tracker_snapshot['_max_seed_secs']  = seed_totals['max_secs']
+    trackers, _ = tally.finish(tracker_snapshot, trackers_set)
     mark_trackers_unanswered(tracker_snapshot, report, report['torrent_count'], 'qui')
 
     report['file_map_size'] = len(file_map)
@@ -859,7 +858,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     else:
         log.info('qui: total file_map entries across all instances: %d', len(file_map))
 
-    return file_map, sorted(trackers_set), tracker_snapshot, report
+    return file_map, trackers, tracker_snapshot, report
 
 
 # ---------------------------------------------------------------------------

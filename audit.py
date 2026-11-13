@@ -12,6 +12,7 @@ import unicodedata
 from datetime import datetime, timedelta
 
 import sources
+from sources import canonical_trackers, strip_port
 from arr import VIDEO_EXTENSIONS
 from exclusions import is_excluded, compile_exclusions
 from scripts import dedupe_group_count, dedupe_row
@@ -1665,31 +1666,64 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
 # Upload / yield stats
 # ---------------------------------------------------------------------------
 
-def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
-    """Compute per-tracker upload deltas and yield from stored snapshots.
+def _canon_upload_snapshot(snap, aliases):
+    """A stored upload snapshot, keyed the way the latest scan names trackers.
 
-    Returns None if fewer than 2 snapshots exist (not enough data for deltas).
-    Pass from_date/to_date (ISO date strings) to query a specific range instead of days.
-    `conn` reads through an open transaction — the audit computes its yield
-    summary inside the publish, after writing this scan's own snapshot, which is
-    what keeps the stored figure identical to the pre-Phase-13 ordering.
+    Two folds, both for history written before them. A host stored with its
+    port (`xspeeds.eu:2710`) is the host without it; were both in one snapshot
+    they'd be different torrents, so their sums add. And an alias
+    (`sources.TrackerTally`) folds into its tracker: the same torrents under a
+    second host, so the same sums, and the larger is kept rather than the two
+    added, because an old snapshot's two hosts may have differed by a torrent.
+    A snapshot written since needs neither, and comes back as it was.
     """
-    all_rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
-                                       conn=conn)
-    # A scan that could not fetch some torrents' tracker lists filed their
-    # upload under `Unknown`, so every tracker it touched dips for that scan
-    # and returns on the next. A dip reads as a counter reset and is skipped,
-    # and the return counts in full: one such scan put 3.9 TB on a 94 GB day.
-    # Leaving the scan out of every per-tracker series diffs the scan before
-    # it against the scan after it, so the interval's real upload still counts.
-    # Its `_library` block doesn't depend on trackers, and is kept.
-    rows = [r for r in all_rows if not r['snapshot'].get('_trackers_unanswered')]
-    if len(rows) < 2:
-        return None
+    out = {}
+    for host, data in snap.items():
+        if host.startswith('_') or not isinstance(data, dict):
+            out[host] = data
+            continue
+        h = strip_port(host)
+        prev = out.get(h)
+        if prev is None:
+            out[h] = data
+            continue
+        merged = dict(prev)
+        for k, v in data.items():
+            if isinstance(v, (int, float)) and isinstance(merged.get(k, 0), (int, float)):
+                merged[k] = merged.get(k, 0) + v
+        out[h] = merged
+    for member, keep in (aliases or {}).items():
+        m = out.pop(member, None)
+        if not isinstance(m, dict):
+            continue
+        k = out.get(keep)
+        if not isinstance(k, dict):
+            out[keep] = m
+            continue
+        merged = dict(k)
+        for f, v in m.items():
+            if isinstance(v, (int, float)) and isinstance(merged.get(f, 0), (int, float)):
+                merged[f] = max(merged.get(f, 0), v)
+        out[keep] = merged
+    return out
 
-    # Daily buckets: {date_str: {host: delta_bytes}}
+
+def _stored_tracker_aliases(conn=None):
+    """The latest scan's aliases, which every stored snapshot is read through."""
+    try:
+        return db_get_meta('tracker_aliases', None, conn=conn) or {}
+    except Exception as e:
+        log.debug(f"tracker aliases unreadable, reading snapshots as stored: {e}")
+        return {}
+
+
+def _daily_upload_deltas(rows):
+    """{date: {host: bytes uploaded}} from consecutive snapshots.
+
+    `rows` are canonical (`_canon_upload_snapshot`) and free of
+    `_trackers_unanswered` scans.
+    """
     daily_by_tracker = {}
-
     for i in range(1, len(rows)):
         prev_row = rows[i - 1]
         curr_row = rows[i]
@@ -1704,7 +1738,7 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
             continue
 
         try:
-            t_prev = datetime.fromisoformat(prev_row['taken_at'])
+            datetime.fromisoformat(prev_row['taken_at'])
             t_curr = datetime.fromisoformat(curr_row['taken_at'])
         except ValueError:
             continue
@@ -1722,6 +1756,90 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
             if delta < 0:
                 continue
             bucket[host] = bucket.get(host, 0) + delta
+    return daily_by_tracker
+
+
+def compute_previous_upload(days=30, from_date=None, to_date=None, conn=None):
+    """The window of the same length just before the one asked for: what it
+    uploaded, in total and per tracker, for the Trackers page's "on the 30 days
+    before".
+
+    None for All, and None when the stored history doesn't reach back across the
+    whole earlier window: a comparison with part of a window would read as a drop.
+    """
+    now = datetime.now()
+    try:
+        if from_date:
+            start = datetime.fromisoformat(from_date)
+            if not to_date:
+                end = now
+            elif len(to_date) <= 10:
+                end = datetime.fromisoformat(to_date) + timedelta(days=1)
+            else:
+                end = datetime.fromisoformat(to_date)
+        elif days:
+            end, start = now, now - timedelta(days=days)
+        else:
+            return None
+    except ValueError:
+        return None
+    span = end - start
+    if span.total_seconds() <= 0:
+        return None
+    prev_start = start - span
+    rows = db_get_upload_snapshots(from_date=prev_start.isoformat(), to_date=start.isoformat(),
+                                   conn=conn)
+    aliases = _stored_tracker_aliases(conn)
+    rows = [dict(r, snapshot=_canon_upload_snapshot(r['snapshot'], aliases)) for r in rows]
+    rows = [r for r in rows if not r['snapshot'].get('_trackers_unanswered')]
+    if len(rows) < 2:
+        return None
+    try:
+        if datetime.fromisoformat(rows[0]['taken_at']) - prev_start > timedelta(days=1):
+            return None
+    except ValueError:
+        return None
+    by_tracker = {}
+    for day in _daily_upload_deltas(rows).values():
+        for host, delta in day.items():
+            by_tracker[host] = by_tracker.get(host, 0) + delta
+    return {
+        "from":       prev_start.strftime('%Y-%m-%d'),
+        "to":         (start - timedelta(seconds=1)).strftime('%Y-%m-%d'),
+        "days":       max(1, round(span.total_seconds() / 86400)),
+        "total":      sum(by_tracker.values()),
+        "by_tracker": by_tracker,
+    }
+
+
+def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
+    """Compute per-tracker upload deltas and yield from stored snapshots.
+
+    Returns None if fewer than 2 snapshots exist (not enough data for deltas).
+    Pass from_date/to_date (ISO date strings) to query a specific range instead of days.
+    `conn` reads through an open transaction — the audit computes its yield
+    summary inside the publish, after writing this scan's own snapshot, which is
+    what keeps the stored figure identical to the pre-Phase-13 ordering.
+    """
+    all_rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
+                                       conn=conn)
+    # Every snapshot keyed the way the latest scan names trackers, so a tracker
+    # whose hosts were folded keeps one continuous series.
+    aliases = _stored_tracker_aliases(conn)
+    all_rows = [dict(r, snapshot=_canon_upload_snapshot(r['snapshot'], aliases)) for r in all_rows]
+    # A scan that could not fetch some torrents' tracker lists filed their
+    # upload under `Unknown`, so every tracker it touched dips for that scan
+    # and returns on the next. A dip reads as a counter reset and is skipped,
+    # and the return counts in full: one such scan put 3.9 TB on a 94 GB day.
+    # Leaving the scan out of every per-tracker series diffs the scan before
+    # it against the scan after it, so the interval's real upload still counts.
+    # Its `_library` block doesn't depend on trackers, and is kept.
+    rows = [r for r in all_rows if not r['snapshot'].get('_trackers_unanswered')]
+    if len(rows) < 2:
+        return None
+
+    # Daily buckets: {date_str: {host: delta_bytes}}
+    daily_by_tracker = _daily_upload_deltas(rows)
 
     # Build daily_uploads list in date order
     daily_uploads = [
@@ -2080,60 +2198,115 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
 # Pre-computed summary stats (avoid shipping raw file lists on /api/results)
 # ---------------------------------------------------------------------------
 
-def _compute_cross_seed_stats(media_files):
+# Pairs of trackers the Cross-seed effectiveness card lists. A library of N
+# trackers has N(N-1)/2 pairs; past the top few they are noise.
+_CROSS_SEED_PAIRS_KEPT = 6
+
+
+def _compute_cross_seed_stats(media_files, aliases=None):
+    """Library files by how many trackers seed them, and what each tracker seeds.
+
+    Per tracker: `size`/`count` (library it seeds), and `only_size`/`only_count`,
+    the part **no other tracker seeds** — what would lose its last seed if that
+    tracker went. On a hardlinked library that is the tracker's own contribution,
+    not disk it costs: the files are library either way. `pairs` are the tracker
+    pairs that seed the most of the same library.
+
+    `aliases` (`TrackerTally`) folds announce hosts that are one tracker, so a
+    TorrentLeech file is seeded once, not "cross-seeded" on its own two hosts.
+    """
     if not media_files:
         return None
     buckets      = {}
     weighted_sum = 0
     total_size   = 0
     tracker_map  = {}
+    pairs        = {}
+    # Every number here is a function of a file's tracker set and its size, and
+    # a library has a few hundred distinct sets, so the per-file pass only sums
+    # by the record's own tuple and the sets are read once each afterwards. The
+    # pass it replaced looped each file's trackers; this one is faster than it
+    # with the pairs and the folding added (2026-11-13, Linux, 500K files).
+    combos = {}
     for f in media_files:
-        real_trackers = [t for t in (f.get('trackers') or []) if t != 'None']
+        key = tuple(f.get('trackers') or ())
+        c = combos.get(key)
+        if c is None:
+            combos[key] = [f['size'], 1]
+        else:
+            c[0] += f['size']
+            c[1] += 1
+    for raw, (size, files) in combos.items():
+        real_trackers = canonical_trackers(raw, aliases)
         n = len(real_trackers)
-        buckets[n]    = buckets.get(n, 0) + f['size']
-        weighted_sum += f['size'] * n
-        total_size   += f['size']
+        buckets[n]    = buckets.get(n, 0) + size
+        weighted_sum += size * n
+        total_size   += size
         for t in real_trackers:
-            if t not in tracker_map:
-                tracker_map[t] = {'name': t, 'size': 0, 'count': 0}
-            tracker_map[t]['size']  += f['size']
-            tracker_map[t]['count'] += 1
+            m = tracker_map.get(t)
+            if m is None:
+                m = tracker_map[t] = {'name': t, 'size': 0, 'count': 0, 'only_size': 0, 'only_count': 0}
+            m['size']  += size
+            m['count'] += files
+            if n == 1:
+                m['only_size']  += size
+                m['only_count'] += files
+        if n > 1:
+            ordered = sorted(real_trackers)
+            for i in range(n - 1):
+                for j in range(i + 1, n):
+                    key = (ordered[i], ordered[j])
+                    pairs[key] = pairs.get(key, 0) + size
     multiplier   = weighted_sum / total_size if total_size > 0 else 0
     max_count    = max(buckets.keys()) if buckets else 0
     segments     = [{'count': i, 'size': buckets.get(i, 0)} for i in range(max_count + 1)]
     tracker_stats = sorted(tracker_map.values(), key=lambda x: -x['size'])
+    top_pairs = sorted(pairs.items(), key=lambda kv: -kv[1])[:_CROSS_SEED_PAIRS_KEPT]
     return {
         'multiplier':    multiplier,
         'segments':      segments,
         'total_size':    total_size,
         'tracker_stats': tracker_stats,
+        'pairs':         [{'trackers': list(k), 'size': v} for k, v in top_pairs],
     }
 
 
-def _compute_tracker_file_stats(torrent_files):
-    stats = {}
+_TRACKER_FILE_FIELDS = ('seeding_count', 'seeding_size', 'orphaned_count', 'orphaned_size',
+                        'not_imported_count', 'not_imported_size')
+
+
+def _compute_tracker_file_stats(torrent_files, aliases=None):
+    """Per tracker: seeding, orphaned and not-imported files and bytes.
+
+    Summed by each record's tracker tuple, then spread to the trackers once per
+    distinct tuple (see `_compute_cross_seed_stats`), with `aliases` folded there.
+    """
+    combos = {}
     for f in torrent_files:
         if f.get('excluded'):
             continue
-        for t in (f.get('trackers') or []):
-            if t == 'None':
-                continue
-            if t not in stats:
-                stats[t] = {
-                    'seeding_count': 0, 'seeding_size': 0,
-                    'orphaned_count': 0, 'orphaned_size': 0,
-                    'not_imported_count': 0, 'not_imported_size': 0,
-                }
-            s = stats[t]
-            if f['status'] == 'Seeding':
-                s['seeding_count'] += 1
-                s['seeding_size']  += f['size']
-            elif f['status'] == 'Orphaned':
-                s['orphaned_count'] += 1
-                s['orphaned_size']  += f['size']
-            if not f.get('imported') and f['status'] != 'Orphaned' and not f.get('sidecar'):
-                s['not_imported_count'] += 1
-                s['not_imported_size']  += f['size']
+        key = tuple(f.get('trackers') or ())
+        s = combos.get(key)
+        if s is None:
+            s = combos[key] = [0, 0, 0, 0, 0, 0]
+        status = f['status']
+        if status == 'Seeding':
+            s[0] += 1
+            s[1] += f['size']
+        elif status == 'Orphaned':
+            s[2] += 1
+            s[3] += f['size']
+        if not f.get('imported') and status != 'Orphaned' and not f.get('sidecar'):
+            s[4] += 1
+            s[5] += f['size']
+    stats = {}
+    for raw, s in combos.items():
+        for t in canonical_trackers(raw, aliases):
+            st = stats.get(t)
+            if st is None:
+                st = stats[t] = dict.fromkeys(_TRACKER_FILE_FIELDS, 0)
+            for k, v in zip(_TRACKER_FILE_FIELDS, s):
+                st[k] += v
     return stats
 
 
@@ -2880,8 +3053,24 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg,
                                                     extra_details=_extra_details,
                                                     history_sink=staged_history.append)
-        cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
-        tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
+        # Announce hosts that are one tracker (`sources.TrackerTally`): folded
+        # out of every per-tracker number, kept in the file records.
+        tracker_aliases    = tracker_snapshot.get('_aliases') or {}
+        cross_seed_stats   = _compute_cross_seed_stats(media_files_data, tracker_aliases)
+        tracker_file_stats = _compute_tracker_file_stats(torrent_files_data, tracker_aliases)
+        # The source's per-tracker torrent counts and announce health, for the
+        # Trackers page's Torrents column and its health card.
+        for host, snap in tracker_snapshot.items():
+            if host.startswith('_') or not isinstance(snap, dict) or 'torrents' not in snap:
+                continue
+            fs = tracker_file_stats.get(host)
+            if fs is None:
+                continue
+            fs['torrent_count']      = snap.get('torrents', 0)
+            fs['not_working_count']  = snap.get('not_working', 0)
+            fs['unregistered_count'] = snap.get('unregistered', 0)
+            if snap.get('msg'):
+                fs['health_msg'] = snap['msg']
         not_imported_paths = _not_imported_paths(torrent_files_data)
         if cross_seed_stats:
             dashboard_stats['cross_seed_stats'] = cross_seed_stats
@@ -2891,6 +3080,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             "status":             "ok",
             "dashboard":          dashboard_stats,
             "tracker_file_stats": tracker_file_stats,
+            "tracker_aliases":    tracker_aliases,
             "not_imported_paths": not_imported_paths,
         }
         # The upload snapshot, augmented with per-tracker file health stats so
@@ -2903,6 +3093,11 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         upload_snapshot = None
         try:
             aug = {k: (dict(v) if isinstance(v, dict) else v) for k, v in tracker_snapshot.items()}
+            # The counts are history worth keeping; the tracker's message is the
+            # page's, and one per tracker per scan would only grow the table.
+            for v in aug.values():
+                if isinstance(v, dict):
+                    v.pop('msg', None)
             for tracker, fstats in tracker_file_stats.items():
                 if tracker not in aug:
                     aug[tracker] = {'uploaded': 0, 'seeding_size': 0}
@@ -3062,6 +3257,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # whether every stored piece came from one scan.
         try:
             with db_publish() as pub:
+                # Before the snapshot: the yield summary below reads the stored
+                # series through these, and so does every later range.
+                db_set_meta('tracker_aliases', tracker_aliases, conn=pub)
                 if upload_snapshot is not None:
                     db_save_upload_snapshot(upload_snapshot,
                                             source=cfg.get('TORRENT_SOURCE', 'qbit'), conn=pub)

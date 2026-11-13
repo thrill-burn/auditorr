@@ -1,47 +1,39 @@
 import React, { useState } from 'react'
 import { Checkbox, Button } from './workflows/shared'
-import { formatBytes, tint } from '../utils'
+import { tint } from '../utils'
 
 // Comparison table — doubles as the chart's legend and tracker selector.
 // Whole-row click toggles a tracker's line; the colored checkbox mirrors the
-// series color; metric columns are sort buttons; value cells in the navigable
-// metrics (Seeding / Orphaned / Not Imported) deep-link into a filtered
-// Torrents view — same UI, no extra buttons.
+// series color; column headers are sort buttons; a column with `nav` makes its
+// value cells drill-downs into File Explorer — same UI, no extra buttons.
+//
+// Columns are { key, label, title?, color?, metric?, value(s) → number|null,
+// display(s) → string, nav?(tracker) → action }. `metric` ties a column to the
+// chart metric of the same key, which tints it while that metric is drawn.
+// Two are table-only (2026-11-13): Seeded only here and Torrents.
 
-// Resolve a metric's numeric value + display for a tracker's scalar stats.
-function cellData(s, m) {
-  if (m.key === 'yield') {
-    const frac = s.yield
-    const pct = frac == null ? null : frac * 100
-    return { raw: pct, display: frac == null ? '—' : pct.toFixed(1) + '%', zero: frac == null || frac === 0 }
-  }
-  const field = m.key === 'seeding' ? 'seeding_size'
-              : m.key === 'uploaded' ? 'uploaded'
-              : m.key === 'orphaned' ? 'orphaned_size'
-              : 'not_imported_size'
-  const raw = s[field] || 0
-  return { raw, display: formatBytes(raw), zero: raw === 0 }
-}
-
-function ValueCell({ stats, m, isActive, on, tracker, onNavigate }) {
+function ValueCell({ stats, col, isActive, on, tracker, onNavigate }) {
   const [hov, setHov] = useState(false)
-  const { raw, display, zero } = cellData(stats, m)
-  const navigable = !!m.nav && raw > 0 && onNavigate
-  const click = navigable ? (e) => { e.stopPropagation(); onNavigate({ tab: 'torrents', tracker, ...m.nav }) } : undefined
+  const raw = col.value(stats)
+  const display = col.display(stats)
+  const zero = raw == null || raw === 0
+  const navigable = !!col.nav && raw > 0 && onNavigate
+  const click = navigable ? (e) => { e.stopPropagation(); onNavigate(col.nav(tracker)) } : undefined
+  const hue = col.color || 'var(--accent)'
   return (
     <div
       onClick={click}
       onMouseEnter={navigable ? () => setHov(true) : undefined}
       onMouseLeave={navigable ? () => setHov(false) : undefined}
-      title={navigable ? `View ${tracker} ${m.label.toLowerCase()} in Torrents` : undefined}
+      title={navigable ? col.navTitle(tracker) : undefined}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 12px', height: '100%',
-        background: isActive ? tint(m.color, 5) : 'transparent', opacity: on ? 1 : 0.4,
+        background: isActive ? tint(hue, 5) : 'transparent', opacity: on ? 1 : 0.4,
         cursor: navigable ? 'pointer' : 'default',
       }}>
       <span style={{
         fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', fontWeight: isActive ? 700 : 500,
-        color: navigable && hov ? m.color : zero ? 'var(--text-faint)' : isActive ? 'var(--text)' : 'var(--text-dim)',
+        color: navigable && hov ? hue : zero ? 'var(--text-faint)' : isActive ? 'var(--text)' : 'var(--text-dim)',
         textDecoration: navigable && hov ? 'underline' : 'none', textUnderlineOffset: 3,
         transition: 'color 0.1s',
       }}>{display}</span>
@@ -49,25 +41,33 @@ function ValueCell({ stats, m, isActive, on, tracker, onNavigate }) {
   )
 }
 
+// A tracker whose torrents the tracker is refusing, or has dropped: a status
+// dot beside its name, spelled out in the dot's title and in the health card.
+function healthOf(s) {
+  if (s.unregistered_count > 0) return { color: 'var(--red)', text: `${s.unregistered_count} torrent${s.unregistered_count === 1 ? '' : 's'} unregistered` }
+  if (s.not_working_count > 0) return { color: 'var(--yellow)', text: `${s.not_working_count} of ${s.torrent_count} torrents: tracker not working` + (s.health_msg ? ` — ${s.health_msg}` : '') }
+  return null
+}
+
 export default function CompareTable({
-  rows, statsMap, metrics, metricKey, colorFor,
+  rows, statsMap, columns, metricKey, colorFor,
   visible, onToggle, onSolo, onToggleAll,
   hovered, onHover, sortKey, sortDir, onSort, onNavigate,
 }) {
-  const grid = `230px repeat(${metrics.length}, 1fr)`
+  const grid = `230px repeat(${columns.length}, minmax(0, 1fr))`
   const allOn = rows.length > 0 && visible.length === rows.length
   const someOn = visible.length > 0 && !allOn
 
-  const Th = ({ m }) => {
-    const active = sortKey === m.key
+  const Th = ({ col }) => {
+    const active = sortKey === col.key
     return (
-      <button onClick={() => onSort(m.key)} title={`Sort by ${m.label}`} style={{
+      <button onClick={() => onSort(col.key)} title={col.title || `Sort by ${col.label}`} style={{
         display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, width: '100%',
-        background: metricKey === m.key ? tint(m.color, 8) : 'none', border: 'none', cursor: 'pointer',
+        background: col.metric && metricKey === col.metric ? tint(col.color, 8) : 'none', border: 'none', cursor: 'pointer',
         padding: '0 12px', height: '100%', fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)',
-        color: active ? 'var(--text)' : 'var(--text-dim)', fontWeight: active ? 700 : 500,
+        color: active ? 'var(--text)' : 'var(--text-dim)', fontWeight: active ? 700 : 500, whiteSpace: 'nowrap',
       }}>
-        {m.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
+        {col.label}{active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}
       </button>
     )
   }
@@ -80,7 +80,7 @@ export default function CompareTable({
           <Checkbox checked={allOn} indeterminate={someOn} onChange={onToggleAll} />
           <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 500, color: 'var(--text-dim)' }}>Tracker</span>
         </div>
-        {metrics.map(m => <Th key={m.key} m={m} />)}
+        {columns.map(c => <Th key={c.key} col={c} />)}
       </div>
 
       {/* rows */}
@@ -89,6 +89,7 @@ export default function CompareTable({
         const on = visible.includes(t)
         const emph = hovered === t
         const c = colorFor(t)
+        const health = healthOf(stats)
         return (
           <div key={t}
             onMouseEnter={() => onHover(t)} onMouseLeave={() => onHover(null)}
@@ -107,18 +108,20 @@ export default function CompareTable({
               }}>
                 {on && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#0b0b0c" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>}
               </span>
-              <span style={{
+              <span title={t} style={{
                 fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 600, color: on ? 'var(--text)' : 'var(--text-dim)',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: on ? 1 : 0.55,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: on ? 1 : 0.55, minWidth: 0,
               }}>{t}</span>
+              {health && (
+                <span title={health.text} style={{ width: 7, height: 7, borderRadius: '50%', background: health.color, flexShrink: 0 }} />
+              )}
               {emph && (
                 <Button size="chip" variant="subtle" title="Show only this tracker" style={{ marginLeft: 'auto' }}
                   onClick={(e) => { e.stopPropagation(); onSolo(t) }}>only</Button>
               )}
             </div>
-            {/* value cells */}
-            {metrics.map(m => (
-              <ValueCell key={m.key} stats={stats} m={m} isActive={metricKey === m.key} on={on} tracker={t} onNavigate={onNavigate} />
+            {columns.map(col => (
+              <ValueCell key={col.key} stats={stats} col={col} isActive={!!col.metric && metricKey === col.metric} on={on} tracker={t} onNavigate={onNavigate} />
             ))}
           </div>
         )

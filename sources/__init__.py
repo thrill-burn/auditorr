@@ -685,6 +685,162 @@ def classify_tracker_entries(entries):
     return 'unknown', ''
 
 
+# ---------------------------------------------------------------------------
+# Tracker identity — a host, without its port, once per torrent
+# ---------------------------------------------------------------------------
+
+_PORT = re.compile(r':\d+$')
+
+
+def strip_port(host):
+    """`xspeeds.eu:2710` → `xspeeds.eu`. An IPv6 literal keeps its brackets.
+
+    Also applied to the host keys of stored upload snapshots, so a tracker whose
+    history was filed under `host:port` keeps that history.
+    """
+    if not host or ':' not in host:
+        return host
+    if host.startswith('['):
+        end = host.find(']')
+        return host[:end + 1] if end != -1 else host
+    return _PORT.sub('', host)
+
+
+def announce_hosts(urls):
+    """The distinct tracker hosts a torrent announces to, in announce order.
+
+    `['Unknown']` when it lists no http/udp tracker (the DHT/PeX/LSD rows are
+    not URLs). **Distinct** because every per-tracker sum adds a torrent once
+    for each host here: one host listed twice (an http and an https announce,
+    two tiers) counted its upload twice.
+    """
+    hosts = []
+    for url in urls:
+        if not url or not url.startswith(('http', 'udp')):
+            continue
+        parts = url.split('/', 3)
+        if len(parts) < 3:
+            continue
+        host = parts[2]
+        if '@' in host:
+            host = host.rsplit('@', 1)[-1]
+        if ':' in host:
+            host = strip_port(host)
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts or ['Unknown']
+
+
+_MASK64 = (1 << 64) - 1
+
+
+class TrackerTally:
+    """Per-tracker torrent counts and health for one scan, and the announce
+    hosts that are one tracker.
+
+    **Aliases.** TorrentLeech's torrents announce to two hosts
+    (`tracker.torrentleech.org` and `tracker.tleechreload.org`), and every
+    per-tracker number counted it as two trackers: two rows, its upload twice in
+    the library total, and each of its files "cross-seeded" on itself. Hosts
+    that are on exactly the same torrents, two or more of them, are one tracker.
+    Different trackers can't pass that test: a cross-seed is a second torrent,
+    so two trackers seeding the same files still have different torrent sets.
+    The name kept is the host the torrents list first most often (the tracker's
+    primary announce), then the shorter, then the alphabetical first.
+
+    The aliases fold **statistics only**. A file record's `trackers` keeps every
+    host, because the workflows match a host to an *arr indexer by name
+    (`arr.tracker_matches_indexer`) and either host may be the one that matches.
+
+    The set test is a signature (count, and the xor and the sum of each hash's
+    64-bit `hash()`), not a set of hashes per host, so the tally is a few
+    scalars per tracker whatever the library's size. `hash()` of a str differs
+    between processes and is only ever compared within one scan.
+    """
+
+    def __init__(self):
+        self._sig   = {}
+        self._first = {}
+        self.stats  = {}
+
+    def add(self, torrent_hash, hosts, health):
+        """One registration: its hosts (from `announce_hosts`) and its
+        `classify_tracker_entries` verdict, `(health, msg)`."""
+        k = hash(torrent_hash) & _MASK64
+        verdict, msg = health or ('unknown', '')
+        for i, h in enumerate(hosts):
+            if h == 'Unknown':
+                continue
+            s = self._sig.get(h)
+            if s is None:
+                s = self._sig[h] = [0, 0, 0]
+            s[0] += 1
+            s[1] ^= k
+            s[2] = (s[2] + k) & _MASK64
+            if i == 0:
+                self._first[h] = self._first.get(h, 0) + 1
+            st = self.stats.get(h)
+            if st is None:
+                st = self.stats[h] = {'torrents': 0, 'not_working': 0, 'unregistered': 0}
+            st['torrents'] += 1
+            if verdict in ('not_working', 'unregistered'):
+                st[verdict] += 1
+                # The first message the client gave, for the Trackers page. Off
+                # the client, like a file record's `tracker_msg`; never reaches
+                # the debug report, which counts trackers and names none.
+                if verdict == 'not_working' and msg and 'msg' not in st:
+                    st['msg'] = msg[:300]
+
+    def aliases(self):
+        """{host: the tracker it is} for every host folded into another."""
+        groups = {}
+        for h, (n, x, s) in self._sig.items():
+            if n >= 2:
+                groups.setdefault((n, x, s), []).append(h)
+        out = {}
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            keep = min(members, key=lambda h: (-self._first.get(h, 0), len(h), h))
+            for h in members:
+                if h != keep:
+                    out[h] = keep
+        return out
+
+    def finish(self, snapshot, trackers):
+        """Write the counts into the upload snapshot, fold the aliases out of it,
+        and return `(sorted tracker names, aliases)`.
+
+        A folded host's sums are its tracker's (the same torrents, each added
+        once), so it is dropped, never added. `_aliases` rides the snapshot as a
+        record of what was folded; '_'-prefixed, so every per-tracker loop skips it.
+        """
+        aliases = self.aliases()
+        for h, st in self.stats.items():
+            if isinstance(snapshot.get(h), dict):
+                snapshot[h].update(st)
+        for h in aliases:
+            snapshot.pop(h, None)
+        if aliases:
+            snapshot['_aliases'] = aliases
+        return sorted({aliases.get(t, t) for t in trackers}), aliases
+
+
+def canonical_trackers(trackers, aliases):
+    """A record's trackers as statistics count them: 'None' dropped, each alias
+    folded into its tracker, each tracker once."""
+    if not aliases:
+        return [t for t in (trackers or ()) if t != 'None']
+    out = []
+    for t in trackers or ():
+        if t == 'None':
+            continue
+        t = aliases.get(t, t)
+        if t not in out:
+            out.append(t)
+    return out
+
+
 # Imports come after SourceConnectionError so backends can import it without
 # triggering a circular-import error (the name is already bound by the time
 # Python starts importing the sub-modules).

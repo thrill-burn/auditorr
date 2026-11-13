@@ -107,8 +107,16 @@ function ArrSearchButton({ service, color, state, onClick }) {
 // A dot before a filter option's label, the size the old chips drew it.
 const optDot = color => <Dot color={color} size={6} />
 
-function seedCountValue(file) {
-  return (file.trackers || []).filter(t => t !== 'None').length
+// How many trackers seed a file. `aliases` ({host: tracker}, the scan's
+// `tracker_aliases`) folds announce hosts that are one tracker, TorrentLeech's
+// two, so a file seeded once counts once, as on the Trackers page's seed-count
+// bar. Most files hold no alias, and they take the old count's path.
+function seedCountValue(file, aliases) {
+  const ts = file.trackers || []
+  if (aliases && ts.some(t => aliases[t])) {
+    return new Set(ts.filter(t => t !== 'None').map(t => aliases[t] || t)).size
+  }
+  return ts.filter(t => t !== 'None').length
 }
 
 function seedCountMatches(selected, count) {
@@ -696,7 +704,8 @@ const STATUS_FILTERS = [
   { id: 'Orphaned', label: 'Orphaned', color: 'var(--yellow)' },
 ]
 
-export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, revealPath }) {
+export default function FileExplorer({ files, trackers, trackerAliases, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, revealPath }) {
+  const aliases = trackerAliases && Object.keys(trackerAliases).length ? trackerAliases : null
   trackers = trackers || []
 
   const [sonarrConfigured,      setSonarrConfigured]      = useState(false)
@@ -785,7 +794,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       (trackerInc.length === 0 || trackerInc.some(t => (f.trackers||[]).includes(t))) &&
       (trackerExc.length === 0 || !trackerExc.some(t => (f.trackers||[]).includes(t)))
 
-    const scMatch = seedCountMatches(seedCount, seedCountValue(f))
+    const scMatch = seedCountMatches(seedCount, seedCountValue(f, aliases))
 
     const nMatch = !nameLower || f.path.toLowerCase().includes(nameLower)
 
@@ -793,7 +802,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     const szMax = sizeMaxBytes === null || f.size <= sizeMaxBytes
 
     return sMatch && dMatch && eMatch && iMatch && tMatch && scMatch && nMatch && szMin && szMax
-  }), [files, statusFilter, dupFilter, exclFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
+  }), [files, statusFilter, dupFilter, exclFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes, aliases])
 
   const sortedFiltered = useMemo(() => {
     if (sortBy === 'size') return [...filtered].sort((a, b) => b.size - a.size)
@@ -837,7 +846,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     const counts = new Map()
     for (const f of files || []) {
       if (exclFilter !== 'any' && (f.excluded === true) !== (exclFilter === 'only')) continue
-      const n = seedCountValue(f)
+      const n = seedCountValue(f, aliases)
       const bucket = n >= 5 ? '5plus' : n
       counts.set(bucket, (counts.get(bucket) || 0) + 1)
     }
@@ -850,7 +859,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       options.push({ value: '5plus', label: '5x+', count: counts.get('5plus') || 0 })
     }
     return options
-  }, [files, exclFilter, seedCount])
+  }, [files, exclFilter, seedCount, aliases])
 
   const exportCSV = () => {
     const rows = ['RelativePath,Size,Status,Imported,Trackers,LinkedPaths,DuplicatePaths',

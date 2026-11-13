@@ -206,6 +206,12 @@ def test_a_single_instance_install_answers_exactly_what_it_answered():
         os.path.join(SP1, 'Other.Film/o.mkv'): (OTHER, 1, 'Paused'),
     }
     assert trackers == ['t.example']
+    # The Trackers page's per-tracker counts (2026-11-13) are additions.
+    tally = ('torrents', 'not_working', 'unregistered', 'msg')
+    assert {k: snapshot['t.example'][k] for k in tally if k in snapshot['t.example']} == {
+        'torrents': 2, 'not_working': 0, 'unregistered': 0}
+    snapshot = {h: ({k: v for k, v in s.items() if k not in tally} if isinstance(s, dict) else s)
+                for h, s in snapshot.items()}
     assert snapshot == {'t.example': {'uploaded': 59, 'seeding_size': 1000},
                         '_instance_count': 1,
                         '_seed_byte_secs': 1000 * 100 + 300 * 40, '_max_seed_secs': 100}

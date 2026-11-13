@@ -1,27 +1,38 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import DatePicker from './DatePicker'
 import { RangePresets } from './FilterBar'
-import MultiLineChart from './MultiLineChart'
+import TrackerChart from './TrackerChart'
 import CompareTable from './CompareTable'
 import { api } from '../api'
+import { formatBytes } from '../utils'
 import { Segmented } from './workflows/shared'
-import { CrossSeedCard, TopTrackersCard, UploadActivityCard, UploadByTrackerCard, TrackerDetailModal } from './TrackerPanels'
+import { CAPTION, TrendPill, Hero } from './dashKit'
+import { CrossSeedCard, SeededOnlyHereCard, TrackerHealthCard, TrackerDetailModal } from './TrackerPanels'
 
 // Categorical series palette — one stable hue per tracker. Color IS the data
 // here: this is the one place auditorr spends hue freely (a chart series).
-const TRACKER_COLORS = ['#f57c00', '#5b9bd9', '#46b56a', '#a78bd0', '#c99a2e', '#e5604d', '#9aa0a8']
+// The first seven are the ones the page has always used; the last three were
+// added 2026-11-13, because an eighth tracker took the first one's orange.
+// Assigned in name order, so a tracker keeps its colour as sizes change.
+const TRACKER_COLORS = ['#f57c00', '#5b9bd9', '#46b56a', '#a78bd0', '#c99a2e', '#e5604d', '#9aa0a8', '#3fb8af', '#d46aa8', '#b3c24a']
 
-// Metric = a chart series spec + a table column. `nav` maps a metric to the
-// matching filtered Torrents view (null = no file view for that metric, so its
-// value cells aren't drill-downs).
+// A chart metric, and the views it can be drawn in. `optional` metrics leave
+// the switch and the table while every tracker reads zero over the range: on a
+// healthy library Orphaned and Not Imported were two flat lines and two
+// columns of "0 B".
 const METRICS = [
-  { key: 'seeding',      label: 'Seeding',      color: 'var(--green)',  unit: 'bytes', baseline: false, nav: { status: 'Seeding' } },
-  { key: 'uploaded',     label: 'Uploaded',     color: 'var(--blue)',   unit: 'bytes', baseline: true,  nav: null },
-  { key: 'yield',        label: 'Yield %',      color: 'var(--accent)', unit: 'pct',   baseline: false, nav: null },
-  { key: 'orphaned',     label: 'Orphaned',     color: 'var(--yellow)', unit: 'bytes', baseline: true,  nav: { status: 'Orphaned' } },
-  { key: 'not_imported', label: 'Not Imported', color: 'var(--red)',    unit: 'bytes', baseline: true,  nav: { importFilter: 'notImported' } },
+  { key: 'seeding',      label: 'Seeding',      color: 'var(--green)',
+    views: [{ value: 'change', label: 'Change' }, { value: 'size', label: 'Size' }] },
+  { key: 'uploaded',     label: 'Uploaded',     color: 'var(--blue)',
+    views: [{ value: 'daily', label: 'Daily' }, { value: 'total', label: 'Running total' }] },
+  { key: 'yield',        label: 'Yield %',      color: 'var(--accent)' },
+  { key: 'orphaned',     label: 'Orphaned',     color: 'var(--yellow)', optional: true },
+  { key: 'not_imported', label: 'Not Imported', color: 'var(--red)',    optional: true },
 ]
 const metricBy = (k) => METRICS.find(m => m.key === k)
+
+// Rolling yield's window, in points (a point is a day with a scan).
+const YIELD_WINDOW = 7
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const fmtDate = (ymd) => { const p = String(ymd).split('-'); return p.length === 3 ? `${MONTHS[+p[1] - 1]} ${+p[2]}` : ymd }
@@ -33,14 +44,14 @@ function initialDateFrom(timeRange) {
   return d.toISOString().slice(0, 10)
 }
 
-// Build per-tracker daily history for every metric over the loaded snapshots.
-// Replaces the prototype's synthesized buildSeries() with the real data layer:
-//   daily_uploads        → per-tracker uploaded bytes / day
-//   daily_tracker_stats  → per-tracker seeding/orphaned/not_imported point-in-time
-//   yield                → daily uploaded ÷ daily seeding
+// Per-tracker daily history for every metric and view over the loaded snapshots:
+//   daily_uploads        → uploaded bytes / day (Daily), and its running sum
+//   daily_tracker_stats  → seeding / orphaned / not_imported, point-in-time;
+//                          Seeding's Change is each day less the range's first
+//   yield                → the last YIELD_WINDOW days' upload ÷ that day's seeding
 // Point-in-time metrics carry forward across gap days; uploaded gaps are 0.
 function buildHistory(uploadStats, trackers) {
-  if (!uploadStats) return { dates: [], labels: [], seriesByMetric: {} }
+  if (!uploadStats) return { dates: [], labels: [], series: {} }
   const dailyUploads = uploadStats.daily_uploads || []
   const dailyStats   = uploadStats.daily_tracker_stats || []
 
@@ -52,39 +63,121 @@ function buildHistory(uploadStats, trackers) {
   const upByDate = {}; dailyUploads.forEach(d => { upByDate[d.date] = d.by_tracker || {} })
   const ptByDate = {}; dailyStats.forEach(d => { ptByDate[d.date] = d.by_tracker || {} })
 
-  const seriesByMetric = { seeding: {}, uploaded: {}, yield: {}, orphaned: {}, not_imported: {} }
+  const series = { 'seeding:size': {}, 'seeding:change': {}, 'uploaded:daily': {}, 'uploaded:total': {},
+                   yield: {}, orphaned: {}, not_imported: {} }
   for (const t of trackers) {
-    let lastSeed = 0, lastOrph = 0, lastNI = 0
-    const seeding = [], uploaded = [], yld = [], orphaned = [], notImported = []
-    for (const date of dates) {
+    let lastSeed = 0, lastOrph = 0, lastNI = 0, run = 0
+    const seeding = [], uploaded = [], total = [], yld = [], orphaned = [], notImported = []
+    dates.forEach((date, i) => {
       const up = upByDate[date]?.[t] || 0
       const pt = ptByDate[date]?.[t]
       if (pt) { lastSeed = pt.seeding_size || 0; lastOrph = pt.orphaned_size || 0; lastNI = pt.not_imported_size || 0 }
-      uploaded.push(up)
-      seeding.push(lastSeed)
-      orphaned.push(lastOrph)
-      notImported.push(lastNI)
-      yld.push(lastSeed > 0 ? (up / lastSeed) * 100 : 0)
-    }
-    seriesByMetric.seeding[t]      = seeding
-    seriesByMetric.uploaded[t]     = uploaded
-    seriesByMetric.yield[t]        = yld
-    seriesByMetric.orphaned[t]     = orphaned
-    seriesByMetric.not_imported[t] = notImported
+      run += up
+      uploaded.push(up); total.push(run)
+      seeding.push(lastSeed); orphaned.push(lastOrph); notImported.push(lastNI)
+      let win = 0
+      for (let k = Math.max(0, i - YIELD_WINDOW + 1); k <= i; k++) win += uploaded[k]
+      yld.push(lastSeed > 0 ? (win / lastSeed) * 100 : 0)
+    })
+    const first = seeding.length ? seeding[0] : 0
+    series['seeding:size'][t]   = seeding
+    series['seeding:change'][t] = seeding.map(v => v - first)
+    series['uploaded:daily'][t] = uploaded
+    series['uploaded:total'][t] = total
+    series.yield[t]             = yld
+    series.orphaned[t]          = orphaned
+    series.not_imported[t]      = notImported
   }
-  return { dates, labels: dates.map(fmtDate), seriesByMetric }
+  return { dates, labels: dates.map(fmtDate), series }
 }
 
-// ── Metric switcher ──────────────────────────────────────────────────────────
-// One of five, so the shared track. The square swatch is the metric's chart
-// colour, kept square so it reads as a series key rather than a status dot.
-function MetricSwitch({ value, onChange }) {
+// How each metric and view is drawn.
+function drawSpec(metric, view) {
+  if (metric === 'uploaded') return view === 'total'
+    ? { key: 'uploaded:total', kind: 'line', unit: 'bytes', baseline: true }
+    : { key: 'uploaded:daily', kind: 'stack', unit: 'bytes', baseline: true }
+  if (metric === 'seeding') return view === 'size'
+    ? { key: 'seeding:size', kind: 'line', unit: 'bytes' }
+    : { key: 'seeding:change', kind: 'line', unit: 'bytes', signed: true }
+  if (metric === 'yield') return { key: 'yield', kind: 'line', unit: 'pct', baseline: true }
+  return { key: metric, kind: 'line', unit: 'bytes', baseline: true }
+}
+
+const pct = v => (v == null ? '—' : (v * 100).toFixed(1) + '%')
+const count = v => (v ? v.toLocaleString() : '0')
+
+// The table's columns. `metric` ties one to the chart metric it shades.
+const COLUMNS = [
+  { key: 'seeding', label: 'Seeding', metric: 'seeding', color: 'var(--green)',
+    value: s => s.seeding_size || 0, display: s => formatBytes(s.seeding_size || 0),
+    nav: t => ({ tab: 'torrents', tracker: t, status: 'Seeding' }), navTitle: t => `View ${t} seeding in Torrents` },
+  { key: 'only', label: 'Seeded only here', title: 'Library this tracker seeds and no other tracker does',
+    value: s => s.only_size ?? null, display: s => (s.only_size == null ? '—' : formatBytes(s.only_size)),
+    nav: t => ({ tab: 'media', tracker: t, seedCount: 1 }), navTitle: t => `View media seeded only by ${t}` },
+  { key: 'uploaded', label: 'Uploaded', metric: 'uploaded', color: 'var(--blue)',
+    value: s => s.uploaded || 0, display: s => formatBytes(s.uploaded || 0) },
+  { key: 'yield', label: 'Yield %', metric: 'yield', color: 'var(--accent)', title: 'Uploaded in the range ÷ seeding now',
+    value: s => (s.yield == null ? null : s.yield), display: s => pct(s.yield) },
+  { key: 'torrents', label: 'Torrents', title: 'Torrents the client has on this tracker',
+    value: s => s.torrent_count ?? null, display: s => (s.torrent_count == null ? '—' : count(s.torrent_count)) },
+  { key: 'orphaned', label: 'Orphaned', metric: 'orphaned', color: 'var(--yellow)', optional: true,
+    value: s => s.orphaned_size || 0, display: s => formatBytes(s.orphaned_size || 0),
+    nav: t => ({ tab: 'torrents', tracker: t, status: 'Orphaned' }), navTitle: t => `View ${t} orphaned in Torrents` },
+  { key: 'not_imported', label: 'Not Imported', metric: 'not_imported', color: 'var(--red)', optional: true,
+    value: s => s.not_imported_size || 0, display: s => formatBytes(s.not_imported_size || 0),
+    nav: t => ({ tab: 'torrents', tracker: t, importFilter: 'notImported' }), navTitle: t => `View ${t} not imported in Torrents` },
+]
+
+// ── The chart's readout ──────────────────────────────────────────────────────
+// The figure the chart is about, over the trackers on it. Uploaded's carries
+// the comparison with the window before (Upload by tracker's total, moved here
+// when the card went).
+function Readout({ metric, view, uploadStats, statsMap, visible, history }) {
+  const days = uploadStats?.period_days
+  const sum = f => visible.reduce((s, t) => s + (f(statsMap[t] || {}) || 0), 0)
+  let figure = null, caption = null, extra = null
+  if (metric === 'uploaded') {
+    const up = sum(s => s.uploaded)
+    figure = formatBytes(up)
+    caption = days ? `uploaded in ${days} day${days === 1 ? '' : 's'}` : 'uploaded'
+    const prev = uploadStats?.previous
+    if (prev) {
+      const before = visible.reduce((s, t) => s + (prev.by_tracker?.[t] || 0), 0)
+      if (before > 0) {
+        const d = (up - before) / before
+        const n = prev.days
+        const detail = `${formatBytes(before)} on ${prev.from} to ${prev.to}`
+        extra = Math.abs(d) < 0.01
+          ? <TrendPill trend={{ sentiment: 'neutral', detail }} label={`about the same as the ${n} days before`} />
+          : <TrendPill trend={{ sentiment: d > 0 ? 'good' : 'bad', detail }} icon={d > 0 ? '▲' : '▼'}
+              label={`${Math.abs(d * 100).toFixed(0)}% ${d > 0 ? 'more' : 'less'} than the ${n} days before`} />
+      }
+    }
+  } else if (metric === 'seeding') {
+    figure = formatBytes(sum(s => s.seeding_size))
+    caption = 'seeding now, counted once for each tracker'
+    const ch = history.series['seeding:change']
+    if (ch && history.dates.length > 1) {
+      const delta = visible.reduce((s, t) => s + ((ch[t] || []).slice(-1)[0] || 0), 0)
+      extra = <span style={CAPTION}>{delta === 0 ? 'no change' : `${delta > 0 ? '+' : '−'}${formatBytes(Math.abs(delta))}`} since {history.labels[0]}</span>
+    }
+  } else if (metric === 'yield') {
+    const seed = sum(s => s.seeding_size), up = sum(s => s.uploaded)
+    figure = seed > 0 ? (up / seed * 100).toFixed(1) + '%' : '—'
+    caption = `yield over ${days || 0} day${days === 1 ? '' : 's'}: uploaded ÷ seeding`
+    extra = <span style={CAPTION}>Each point is the yield of the {YIELD_WINDOW} days up to it</span>
+  } else {
+    figure = formatBytes(sum(s => (metric === 'orphaned' ? s.orphaned_size : s.not_imported_size)))
+    caption = metric === 'orphaned' ? 'orphaned now' : 'not imported now'
+  }
   return (
-    <Segmented size="lg" label="Metric" value={value} onChange={onChange}
-      options={METRICS.map(m => ({
-        value: m.key, label: m.label,
-        icon: <span style={{ width: 7, height: 7, borderRadius: 2, background: m.color, flexShrink: 0 }} />,
-      }))} />
+    <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '6px 14px', marginBottom: 14 }}>
+      <Hero text={figure} />
+      <span style={{ ...CAPTION, fontSize: 'var(--font-base)' }}>{caption}</span>
+      {/* TrendPill pins itself to the top of a flex row; this wrapper is the
+          row's item, so the pill sits on the caption's baseline. */}
+      {extra && <span style={{ display: 'inline-flex', alignSelf: 'baseline' }}>{extra}</span>}
+    </div>
   )
 }
 
@@ -96,6 +189,7 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
   const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(30))
   const [dateTo,      setDateTo]      = useState('')
   const [metricKey,   setMetricKey]   = useState('uploaded')
+  const [views,       setViews]       = useState({ uploaded: 'daily', seeding: 'change' })
   const [visible,     setVisible]     = useState(() => allTrackers.slice())
   const [hovered,     setHovered]     = useState(null)
   const [sortKey,     setSortKey]     = useState('seeding')
@@ -112,60 +206,71 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
   // (poll refreshes produce the same trackerKey, so user toggles are preserved).
   useEffect(() => { setVisible(allTrackers.slice()) }, [trackerKey])
 
-  const { labels, seriesByMetric } = useMemo(
-    () => buildHistory(uploadStats, allTrackers),
-    [uploadStats, trackerKey],
-  )
+  const history = useMemo(() => buildHistory(uploadStats, allTrackers), [uploadStats, trackerKey])
 
-  // Per-tracker scalars for the table: file stats + period uploaded/yield.
+  // Per-tracker scalars for the table: file stats, the source's torrent counts
+  // and health, the library each seeds alone, and the period's upload/yield.
   const statsMap = useMemo(() => {
     const yields = {}
     for (const ty of (uploadStats?.tracker_yields || [])) yields[ty.tracker] = ty
+    const lib = {}
+    for (const ts of (crossSeedStats?.tracker_stats || [])) lib[ts.name] = ts
     const m = {}
     for (const t of allTrackers) {
       const fs = trackerFileStats?.[t] || {}
       const ty = yields[t] || {}
+      const ls = lib[t]
       m[t] = {
+        ...fs,
         seeding_size: fs.seeding_size || 0,
         orphaned_size: fs.orphaned_size || 0,
         not_imported_size: fs.not_imported_size || 0,
+        // Absent before the scan that first counts it: a dash, not a zero.
+        only_size: ls && ls.only_size != null ? ls.only_size : (ls ? null : 0),
         uploaded: ty.uploaded || 0,
         yield: ty.yield != null ? ty.yield : null,
       }
     }
     return m
-  }, [trackerFileStats, uploadStats, trackerKey])
+  }, [trackerFileStats, crossSeedStats, uploadStats, trackerKey])
 
-  const sortValue = (t, key) => {
-    const s = statsMap[t] || {}
-    if (key === 'seeding')      return s.seeding_size || 0
-    if (key === 'uploaded')     return s.uploaded || 0
-    if (key === 'yield')        return s.yield ?? -1
-    if (key === 'orphaned')     return s.orphaned_size || 0
-    if (key === 'not_imported') return s.not_imported_size || 0
-    return 0
-  }
+  // An optional metric shows while any tracker has any of it, now or in the range.
+  const shown = useMemo(() => {
+    const has = k => allTrackers.some(t => {
+      const s = statsMap[t] || {}
+      if ((k === 'orphaned' ? s.orphaned_size : s.not_imported_size) > 0) return true
+      return (history.series[k]?.[t] || []).some(v => v > 0)
+    })
+    return Object.fromEntries(METRICS.map(m => [m.key, !m.optional || has(m.key)]))
+  }, [statsMap, history, trackerKey])
+  const metrics = METRICS.filter(m => shown[m.key])
+  const columns = COLUMNS.filter(c => !c.optional || shown[c.key])
+  const activeMetric = shown[metricKey] ? metricKey : 'uploaded'
+  const activeSort = columns.some(c => c.key === sortKey) ? sortKey : 'seeding'
 
-  const sortedRows = useMemo(() => allTrackers.slice().sort((a, b) => {
-    const va = sortValue(a, sortKey), vb = sortValue(b, sortKey)
-    return sortDir === 'asc' ? va - vb : vb - va
-  }), [trackerKey, sortKey, sortDir, statsMap])
+  const sortedRows = useMemo(() => {
+    const col = COLUMNS.find(c => c.key === activeSort)
+    const val = t => { const v = col.value(statsMap[t] || {}); return v == null ? -1 : v }
+    return allTrackers.slice().sort((a, b) => sortDir === 'asc' ? val(a) - val(b) : val(b) - val(a))
+  }, [trackerKey, activeSort, sortDir, statsMap])
 
   const colorFor = (t) => TRACKER_COLORS[Math.max(0, allTrackers.indexOf(t)) % TRACKER_COLORS.length]
 
-  const metric = metricBy(metricKey)
+  const metric = metricBy(activeMetric)
+  const view = views[activeMetric] || metric.views?.[0]?.value
+  const spec = drawSpec(activeMetric, view)
   const chartSeries = sortedRows.map(t => ({
     name: t, color: colorFor(t), visible: visible.includes(t),
-    values: seriesByMetric[metricKey]?.[t] || [],
+    values: history.series[spec.key]?.[t] || [],
   }))
 
   const toggle    = (t) => setVisible(v => v.includes(t) ? v.filter(x => x !== t) : [...v, t])
   const solo      = (t) => setVisible(v => (v.length === 1 && v[0] === t) ? allTrackers.slice() : [t])
   const toggleAll = () => setVisible(v => v.length === allTrackers.length ? [] : allTrackers.slice())
-  const sortBy    = (k) => { if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortKey(k); setSortDir('desc') } }
+  const sortBy    = (k) => { if (activeSort === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc'); else { setSortKey(k); setSortDir('desc') } }
 
   const visCount = visible.length
-  const hasHistory = labels.length > 0
+  const hasHistory = history.labels.length > 0
 
   // Presets drive the same dateFrom/dateTo state as the pickers, so the two
   // controls stay in sync. A preset sets From = today−Nd (To cleared); "All"
@@ -194,15 +299,31 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
 
       {/* Chart card */}
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
-          <MetricSwitch value={metricKey} onChange={setMetricKey} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {/* The square swatch is the metric's colour, kept square so it
+                reads as a series key rather than a status dot. */}
+            <Segmented size="lg" label="Metric" value={activeMetric} onChange={setMetricKey}
+              options={metrics.map(m => ({
+                value: m.key, label: m.label,
+                icon: <span style={{ width: 7, height: 7, borderRadius: 2, background: m.color, flexShrink: 0 }} />,
+              }))} />
+            {metric.views && (
+              <Segmented size="lg" label="View" value={view}
+                onChange={v => setViews(s => ({ ...s, [activeMetric]: v }))} options={metric.views} />
+            )}
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: visCount ? 'var(--green)' : 'var(--text-faint)' }} />
-            <span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{visCount}</span> of {allTrackers.length} trackers on chart</span>
+            <span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)', fontWeight: 600 }}>{visCount}</span> of <span style={{ fontFamily: 'var(--mono)' }}>{allTrackers.length}</span> trackers on chart</span>
           </div>
         </div>
+        {hasHistory && (
+          <Readout metric={activeMetric} view={view} uploadStats={uploadStats} statsMap={statsMap} visible={visible} history={history} />
+        )}
         <div style={{ position: 'relative' }}>
-          <MultiLineChart series={chartSeries} dates={labels} unit={metric.unit} baseline={metric.baseline} hovered={hovered} />
+          <TrackerChart series={chartSeries} dates={history.labels} kind={spec.kind} unit={spec.unit}
+            signed={!!spec.signed} baseline={!!spec.baseline} hovered={hovered} />
           {!hasHistory && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
               <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>Trend data will appear after a few audits</span>
@@ -213,28 +334,22 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
 
       {/* Comparison table (legend + selector) */}
       <CompareTable
-        rows={sortedRows} statsMap={statsMap} metrics={METRICS} metricKey={metricKey} colorFor={colorFor}
+        rows={sortedRows} statsMap={statsMap} columns={columns} metricKey={activeMetric} colorFor={colorFor}
         visible={visible} onToggle={toggle} onSolo={solo} onToggleAll={toggleAll}
-        hovered={hovered} onHover={setHovered} sortKey={sortKey} sortDir={sortDir} onSort={sortBy}
+        hovered={hovered} onHover={setHovered} sortKey={activeSort} sortDir={sortDir} onSort={sortBy}
         onNavigate={onNavigate}
       />
 
-      {/* The Dashboard's upload panels, moved here as they were (2026-11-09).
-          They follow this page's date range and the trackers on its chart, and
-          their bars take each tracker's chart colour. Cross-seed effectiveness
-          came after them (2026-11-10) and sits beside the leaderboard, as the
-          two did on the Dashboard before it was rebuilt; it's library-wide. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
-        <UploadActivityCard uploadStats={uploadStats} trackers={visible} colorFor={colorFor} />
-        <UploadByTrackerCard uploadStats={uploadStats} trackers={visible} onTrackerDetail={setTrackerDetail} />
-      </div>
-      {crossSeedStats ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 }}>
+      <TrackerHealthCard trackerFileStats={trackerFileStats} onNavigate={onNavigate} />
+
+      {/* Seeded only here follows the chart's tracker picks and takes each
+          tracker's chart colour; Cross-seed effectiveness is library-wide. */}
+      {crossSeedStats && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 520px), 1fr))', gap: 16 }}>
+          <SeededOnlyHereCard trackerStats={crossSeedStats.tracker_stats} trackers={visible} colorFor={colorFor}
+            onTrackerDetail={setTrackerDetail} onNavigate={onNavigate} />
           <CrossSeedCard stats={crossSeedStats} onNavigate={onNavigate} />
-          <TopTrackersCard trackerStats={crossSeedStats.tracker_stats} trackers={visible} onTrackerDetail={setTrackerDetail} />
         </div>
-      ) : (
-        <TopTrackersCard trackerStats={null} trackers={visible} onTrackerDetail={setTrackerDetail} />
       )}
 
       {trackerDetail && (

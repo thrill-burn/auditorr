@@ -43,7 +43,7 @@ from state import (
     get_state, set_state, try_start_scanning,
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, compute_previous_upload, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path
 from arr import _test_arr_connection, arr_rescan, arr_search, arr_title_for_folder, fetch_arr_poster, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
@@ -841,7 +841,7 @@ def handle_config():
                     # cross_seed_stats is added by the audit, not process_health_metrics —
                     # recompute it here so the config-save dashboard refresh doesn't drop
                     # the Cross-Seed Effectiveness / Tracker Leaderboard panels.
-                    cs_stats = _compute_cross_seed_stats(media_files)
+                    cs_stats = _compute_cross_seed_stats(media_files, curr.get('tracker_aliases'))
                     if cs_stats:
                         new_dashboard['cross_seed_stats'] = cs_stats
                     curr['dashboard'] = new_dashboard
@@ -1764,6 +1764,7 @@ def actions_radarr_search():
 def get_upload_stats():
     from_date = request.args.get('from') or None
     to_date   = request.args.get('to')   or None
+    days      = 30
     if from_date or to_date:
         stats = compute_upload_stats(from_date=from_date, to_date=to_date)
     else:
@@ -1773,6 +1774,14 @@ def get_upload_stats():
         stats = compute_upload_stats(days)
     if stats is None:
         return jsonify({"status": "pending", "message": "Not enough data yet. Upload stats require at least 2 audits."})
+    # The equal window before this one, for the Trackers page's comparison. A
+    # To with no From is open at the start, so it has no window before it.
+    try:
+        stats['previous'] = (compute_previous_upload(days, from_date=from_date, to_date=to_date)
+                             if from_date or not to_date else None)
+    except Exception as e:
+        log.warning(f"Previous upload window failed: {e}")
+        stats['previous'] = None
     return jsonify(stats)
 
 
