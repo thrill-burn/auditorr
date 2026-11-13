@@ -478,6 +478,8 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   const mountedRef   = useRef(true)
   const watchPollRef = useRef(null)
   const operationRef = useRef(null)   // this confirmation's operation id (S09)
+  const pmRef        = useRef(null)   // step 1's textarea
+  const focusPmRef   = useRef(false)  // set by "Trump another": focus it once it mounts
   useEffect(() => () => { mountedRef.current = false; clearTimeout(watchPollRef.current) }, [])
 
   useEffect(() => {
@@ -508,9 +510,20 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
     setPmText(''); setOldTitles([]); setNewTitle(''); setParsed(false)
     setIndexer(''); setPicks(null); setSelected({}); setGroup(null)
     setSearch(null); setConflict(null); setChosenRelease(null); setError(null); setResult(null)
-    setOnlyCopy(null); setQueued(null); setWatch(null); clearTimeout(watchPollRef.current)
+    setAmbiguity(null); setOnlyCopy(null); setQueued(null); setWatch(null); clearTimeout(watchPollRef.current)
     operationRef.current = null
   }, [])
+
+  // The same reset from the foot of step 5, where a finished swap leaves the
+  // user, so a run of PMs doesn't mean scrolling back to the header each time.
+  // The import panel keeps following the last grab.
+  const trumpAnother = () => { focusPmRef.current = true; reset() }
+  useEffect(() => {
+    if (parsed || !focusPmRef.current || !pmRef.current) return
+    focusPmRef.current = false
+    pmRef.current.focus({ preventScroll: true })
+    pmRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [parsed])
 
   const handleParse = async () => {
     setBusy('parse'); setError(null)
@@ -724,6 +737,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           {!parsed ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <textarea
+                ref={pmRef}
                 value={pmText} onChange={e => setPmText(e.target.value)}
                 placeholder={SAMPLE_PM}
                 rows={7}
@@ -969,6 +983,13 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                 {result.watch_job_id
                   ? 'auditorr follows the download into Sonarr/Radarr — it is in the import panel, bottom right — and re-audits once the import lands.'
                   : result.removed > 0 ? 'The watchdog picks up the change and re-audits.' : null}
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <Button variant="primary" onClick={trumpAnother}>
+                  {result.grabbed === false || result.removal_error
+                    || (result.stages || []).some(s => s.status === 'failed')
+                    ? '↺ Start over' : 'Trump another →'}
+                </Button>
               </div>
             </div>
           ) : step5 && (

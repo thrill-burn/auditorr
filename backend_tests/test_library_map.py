@@ -202,6 +202,43 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
         self.assertEqual(got['v1']['library|m/Old|']['by'], [5, 0, 0, 0, 0, 0, 0])
 
 
+class BiggestGapsTests(unittest.TestCase):
+    """The Biggest gaps card: every workflow's biggest is on it, which by size
+    alone a library's Backfill titles crowded out (2026-11-10), and it reads
+    by size, which leading with each workflow's biggest didn't (2026-11-12:
+    132.9, 48.4, 46.4, 9.3, 7.2, then 108.8 GB)."""
+    SCRIPT = r"""
+const R = await import(process.argv[1])
+const GB = 1e9
+const by = (s, b) => { const a = [0, 0, 0, 0, 0, 0, 0]; a[s] = b; return a }
+const titles = [[0, 'Big show', 10, ...by(1, 133 * GB)], [0, 'Pottery', 10, ...by(1, 109 * GB)],
+  [0, 'Another', 10, ...by(1, 100 * GB)], [0, 'Oldboy', 1, ...by(6, 48 * GB)], [1, 'GoodFellas', 1, ...by(4, 46 * GB)],
+  [2, 'The.Conversation', 3, ...by(2, 9 * GB)], [2, 'Slow.Horses.S04E01', 1, ...by(3, 7 * GB)]]
+const m = R.modelFromRow({ version: 2, folders: [['library', 'television'], ['library', 'movies'], ['torrents', 'radarr']], titles, folded: [] })
+console.log(JSON.stringify(R.biggestGaps(m, 6).map(g => [R.shortName(g.t), g.state, g.bytes])))
+"""
+
+    def test_every_workflow_is_on_it_and_it_reads_by_size(self):
+        import shutil, subprocess
+        from pathlib import Path
+        node = shutil.which('node')
+        if not node:
+            if os.environ.get('CI'):
+                self.fail('node is needed to run the library map rules and is on GitHub runners')
+            self.skipTest('node is not installed')
+        out = subprocess.run([node, '--input-type=module', '-e', self.SCRIPT, Path(StateRuleParityTests.RULES).as_uri()],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        got = json.loads(out.stdout.strip().splitlines()[-1])
+        sizes = [b for _, _, b in got]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        # Every state with a gap is on it (not seeded, orphaned, not imported,
+        # dead seed, copies); the third Backfill title isn't, though it's bigger
+        # than four of them.
+        self.assertEqual({s for _, s, _ in got}, {1, 2, 3, 4, 6})
+        self.assertEqual([n for n, _, _ in got], ['Big show', 'Pottery', 'Oldboy', 'GoodFellas', 'The.Conversation', 'Slow.Horses.S04E01'])
+
+
 class SharedSizeTests(unittest.TestCase):
     def test_a_library_file_whose_torrent_twin_is_excluded_is_not_held_twice(self):
         """The box: one disc rip linked into the library and excluded on the

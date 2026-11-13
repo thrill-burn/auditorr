@@ -18,6 +18,13 @@ a small root is a box among the other's folders, not a column the map's
 height; and at the user's two screens every gap is drawn big enough to see and
 click.
 
+Rule 4 (2026-11-12) is the shape, which an area floor can't hold: beside 300
+big orphans the not-imported block was a 2px strip and dropped, and zoomed
+into the torrent folder a 47 MB orphan that was 56x19 on the whole map became
+a 201x2 line. So this also holds, zoomed in as well as whole and beside a big
+pile: no folder holding a gap is dropped or a sliver, no title holding one is,
+every gap is drawn and clickable, and what rule 4 adds goes to gaps alone.
+
 The rules are React-free JavaScript, so this runs them under node on a made-up
 library shaped like the box's. It is one of five tests that read frontend files,
 beside test_type_scale.py, test_tint_idiom.py, test_module_names.py and
@@ -80,9 +87,21 @@ const big = R.modelFromRow({ version: 1, folders, folded: [], titles: [
   ...library.map(([fi, name, n, ...by]) => [fi, name, n, ...by.map((b, s) => (s === 1 || s === 4 ? 0 : b))]),
   [0, 'Big gap', 10, 2000 * GB, 1500 * GB, 0, 0, 0, 0], t(5, 'Big.Orphan', 2, 2500 * GB)] })
 
+// Rule 4's case: 300 big orphans (50 MB to 60 GB) beside two not-imported
+// episodes, whose block squarify made a 2px strip, and the small orphan in
+// `model` beside a 10 GB one, a line when zoomed into the torrent folder.
+// Nothing else in the torrent folder: a download or a copy beside the
+// episodes' block shares its strip and hides the bug.
+const pile = []
+for (let i = 0; i < 300; i++) pile.push(t(5, `Big.Orphan.${i}.1080p-GRP`, 2, Math.exp(Math.log(50 * MB) + rnd() * Math.log(1200)) ))
+pile.push(t(4, 'Other.S02E05.1080p-GRP', 3, 4.2 * GB), t(4, 'Other.S02E06.1080p-GRP', 3, 4.2 * GB))
+const piled = R.modelFromRow({ version: 1, folders, titles: [...library, ...pile], folded: [] })
+
 const views = {
   whole: model, torrents: R.zoomModel(model, { root: 'torrents' }),
+  orphaned: R.zoomModel(model, { root: 'torrents', folder: `state:${R.ORPHANED}` }),
   flooded, 'flooded torrents': R.zoomModel(flooded, { root: 'torrents' }),
+  piled, 'piled torrents': R.zoomModel(piled, { root: 'torrents' }),
 }
 const screens = [[1110, 611], [2230, 820], [400, 300]]
 for (const [vname, m] of Object.entries(views)) {
@@ -145,29 +164,63 @@ for (const [vname, m] of Object.entries(views)) {
     let count = 0
     for (const t of L.titles) for (const s of R.PROBLEM) if (t.eby[s] > t.by[s]) count++
     ok(L.raised === count, `${at}: raised says ${L.raised}, the layout raised ${count}`)
+
+    // Rule 4: what it adds goes to gaps alone, on top of rules 1-3, and no
+    // folder or title holding a gap is left a sliver, or dropped.
+    const added = new Map()
+    for (const [t, s, x] of L.thickened) {
+      ok(isGap(s) && t.by[s] > 0 && x > 0, `${at}: rule 4 added to ${t.name}'s ${R.STATES[s].name}`)
+      added.set(k(t, s), (added.get(k(t, s)) || 0) + x)
+    }
+    const before = new Map()
+    for (const r of m.roots) for (const f of r.folders) for (const t of f.titles) before.set(`${t.root}\u0000${t.name}`, A.eby.get(t))
+    let drawn = 0, thick = 0
+    for (const t of L.titles) {
+      const e0 = before.get(`${t.root}\u0000${t.name}`)
+      t.by.forEach((b, s) => ok(close(t.eby[s], e0[s] + (added.get(k(t, s)) || 0)), `${at}: ${t.name}'s ${R.STATES[s].name} moved past rules 1-4`))
+      drawn += sum(t.eby)
+    }
+    for (const x of added.values()) thick += x
+    const holds = x => R.PROBLEM.some(s => x.by[s] > 0)
+    ok(!L.tiny.some(x => x.titles && holds(x)), `${at}: a folder holding a gap was dropped`)
+    for (const f of L.folders) if (holds(f)) ok(Math.min(f.w, f.h) >= R.STRIPE_PX * 0.999, `${at}: folder ${f.name}, holding a gap, is ${f.w.toFixed(1)}x${f.h.toFixed(1)}`)
+    for (const t of L.titles) if (holds(t)) ok(Math.min(t.w, t.h) >= R.POINT_PX * Math.sqrt(A.cut) * 0.999, `${at}: ${t.name}, holding a gap, is ${t.w.toFixed(1)}x${t.h.toFixed(1)}`)
+    // A few slivers' room, never a weighting.
+    if (W > 1000) ok(thick <= 0.03 * drawn, `${at}: rule 4 took ${(thick / drawn * 100).toFixed(1)}% of the map`)
   }
 }
 ok(raised > 0, 'no gap was ever raised: the floor went unexercised')
 
 // The bug this exists for: at the user's two screens every gap is drawn, big
-// enough to see its pattern and point at, the torrent folder included.
+// enough to see its pattern and point at, the torrent folder included, on the
+// whole map and zoomed in, and beside a big pile of another workflow's (rule 4).
 for (const [W, H] of [[1110, 611], [2230, 820]]) {
+  for (const vname of ['whole', 'torrents', 'orphaned', 'piled', 'piled torrents']) {
+    const m = views[vname], at = `${vname}, ${W}x${H}`
+    const L = R.layoutMap(m, W, H, 'titles')
+    // A pile past the budget shrinks every floor together (rule 3), the
+    // stripes too; a sliver is still no sliver at that scale.
+    const scale = Math.sqrt(R.mapSizes(m, W, H).cut)
+    const gaps = new Set()
+    for (const l of L.leaves) {
+      if (!isGap(l.s)) continue
+      gaps.add(`${l.T.root}\u0000${l.T.name}\u0000${l.s}`)
+      ok(Math.min(l.w, l.h) >= R.STRIPE_PX * 0.75 * scale, `${at}: ${l.T.name}'s ${R.STATES[l.s].name} drawn ${l.w.toFixed(1)}x${l.h.toFixed(1)}`)
+      // A gap you can see is a target of its own: a click on it opens its
+      // workflow, never zooms into a folder too narrow for its heading.
+      ok(R.headingAt(L, l.x + l.w / 2, l.y + l.h / 2) === null, `${at}: ${l.T.name}'s ${R.STATES[l.s].name} is taken by a heading`)
+    }
+    let want = 0
+    for (const r of m.roots) for (const f of r.folders) for (const t of f.titles) want += R.PROBLEM.filter(s => t.by[s] > 0).length
+    ok(gaps.size === want, `${at}: ${gaps.size} of ${want} gaps drawn`)
+    // The pile's case by name: Triage's block beside it is drawn whole.
+    let red = 0
+    for (const r of m.roots) for (const f of r.folders) for (const t of f.titles) if (t.by[R.NOT_IMPORTED] > 0) red++
+    ok(L.leaves.filter(l => l.s === R.NOT_IMPORTED).length === red, `${at}: not all ${red} not-imported releases drawn`)
+    ok(red === (vname === 'orphaned' ? 0 : vname.startsWith('piled') ? 2 : 3), `${at}: ${red} not-imported releases in the case`)
+  }
   const L = R.layoutMap(model, W, H, 'titles')
   ok(!L.tiny.some(t => t.name === 'Torrent folder'), `${W}x${H}: the torrent folder was dropped`)
-  const red = L.leaves.filter(l => l.s === R.NOT_IMPORTED)
-  ok(red.length === 3, `${W}x${H}: ${red.length} of 3 not-imported releases drawn`)
-  const gaps = new Set()
-  for (const l of L.leaves) {
-    if (!isGap(l.s)) continue
-    gaps.add(`${l.T.root}\u0000${l.T.name}\u0000${l.s}`)
-    ok(Math.min(l.w, l.h) >= R.STRIPE_PX * 0.75, `${W}x${H}: ${l.T.name}'s ${R.STATES[l.s].name} drawn ${l.w.toFixed(1)}×${l.h.toFixed(1)}`)
-    // A gap you can see is a target of its own: a click on it opens its
-    // workflow, never zooms into a folder too narrow for its heading.
-    ok(R.headingAt(L, l.x + l.w / 2, l.y + l.h / 2) === null, `${W}x${H}: ${l.T.name}'s ${R.STATES[l.s].name} is taken by a heading`)
-  }
-  let want = 0
-  for (const r of model.roots) for (const f of r.folders) for (const t of f.titles) want += R.PROBLEM.filter(s => t.by[s] > 0).length
-  ok(gaps.size === want, `${W}x${H}: ${gaps.size} of ${want} gaps drawn`)
   // And it costs the rest little: the torrent folder is a box among the
   // library's folders, not a column the map's height (the user: "the torrent
   // folder is too tall?") nor an eighth of the map as Attention drew it.

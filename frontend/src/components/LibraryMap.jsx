@@ -511,6 +511,8 @@ function headingText(h, target, zoomingOut) {
 const STATUS_WORD = { continuing: 'Continuing', ended: 'Ended', upcoming: 'Upcoming', deleted: 'Deleted',
                       released: 'Released', announced: 'Announced', inCinemas: 'In cinemas', tba: 'TBA' }
 const squash = s => String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+// 121 → "2h 1m", 120 → "2h" (it read "2h 0m"), 45 → "45m".
+export const runtimeText = m => [Math.floor(m / 60) && `${Math.floor(m / 60)}h`, m % 60 && `${m % 60}m`].filter(Boolean).join(' ')
 function arrLine(info, name) {
   if (!info) return ''
   if (info.found === null) return `Couldn't ask ${(info.unreachable || []).join(' or ') || 'Sonarr or Radarr'}`
@@ -520,7 +522,7 @@ function arrLine(info, name) {
   if (info.year) parts.push(String(info.year))
   if (info.status) parts.push(STATUS_WORD[info.status] || info.status)
   if (info.service === 'sonarr' && info.seasons != null) parts.push(`${info.seasons} season${info.seasons !== 1 ? 's' : ''}`)
-  if (info.service === 'radarr' && info.runtime > 0) parts.push(`${Math.floor(info.runtime / 60) ? Math.floor(info.runtime / 60) + 'h ' : ''}${info.runtime % 60}m`)
+  if (info.service === 'radarr' && info.runtime > 0) parts.push(runtimeText(info.runtime))
   if (info.network) parts.push(info.network)
   return parts.join(' · ')
 }
@@ -615,13 +617,21 @@ function zoomLabel(model, zoom) {
 
 const HOVER_NAME = { title: ITEM_TITLE, words: ITEM_TITLE, mono: MONO_TITLE }
 
-// The idle strip's word on scale: the map is to scale except for the gaps it
-// raised ("Sizing" in the rules), and says how many, since those are the only
-// tiles that aren't their size. Nothing raised, nothing said.
+// The idle strip's word on scale, beside its figures: the map is to scale
+// except for the gaps it raised ("Sizing" in the rules), and says how many,
+// since those are the only tiles that aren't their size. Nothing raised,
+// nothing said. It shared one line with two other notes, which a laptop cut off.
 function scaleNote(raised) {
   if (!(raised > 0)) return null
-  return `Drawn to scale, except ${raised.toLocaleString()} gap${raised !== 1 ? 's' : ''} too small to see, drawn larger so ${raised !== 1 ? 'they show' : 'it shows'}.`
+  return `To scale, except ${raised.toLocaleString()} small gap${raised !== 1 ? 's' : ''} drawn larger`
 }
+// The folders too small to draw, the first few by name.
+function tinyNote(tiny) {
+  if (!tiny.length) return null
+  const names = tiny.map(t => t.name || '(top level)')
+  return `Too small to draw: ${names.slice(0, 3).join(', ')}${names.length > 3 ? ` and ${names.length - 3} more` : ''}.`
+}
+const sameTiny = (a, b) => a.length === b.length && a.every((t, i) => t.name === b[i].name)
 
 export default function LibraryMap({ details, onNavigate, row, rowModel, focus, mediaFiles, torrentFiles, ensureFilesLoaded }) {
   const [detail, setDetail] = useState('titles')     // Titles by default, every visit (the user's call)
@@ -633,6 +643,10 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   const [zoom, setZoom] = useState(null)             // null = the whole map; ephemeral, like the detail switch
   const [highlight, setHighlight] = useState(null)   // a state lit from the legend; ephemeral
   const [showFree, setShowFree] = useState(storedFree)
+  // What the drawn layout raised and dropped, for the strip. Kept as state,
+  // set when the map draws: read off layoutRef during the render, it was the
+  // layout before, so a zoom said "41 gaps drawn larger" from the whole map.
+  const [drawnInfo, setDrawnInfo] = useState({ raised: 0, tiny: [] })
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const layoutRef = useRef(null)
@@ -696,8 +710,10 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
   useLayoutEffect(() => {
     if (!shown || !width || !canvasRef.current) return
     const t0 = performance.now()
-    layoutRef.current = draw(canvasRef.current, shown, width, height, drawn, highlight)
+    const L = draw(canvasRef.current, shown, width, height, drawn, highlight)
+    layoutRef.current = L
     drawMs.current = performance.now() - t0
+    setDrawnInfo(d => (d.raised === L.raised && sameTiny(d.tiny, L.tiny) ? d : { raised: L.raised, tiny: L.tiny }))
     setHover(null)
   }, [shown, width, height, drawn, themeTick, highlight])
 
@@ -783,7 +799,9 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
       && (t.root !== 'torrents' || x.by[s] > 0))
     const lf = box && layoutRef.current.leaves.find(l => l.T === box && l.s === s)
     const leaf = { s, T: t, bytes: t.v, boost: lf?.boost }
-    setHover({ box: box || null, leaf, text: hoverText(leaf, 'titles') })
+    const text = hoverText(leaf, 'titles')
+    // A gap outside the zoom has no tile to outline, so the strip says why.
+    setHover({ box: box || null, leaf, text: !box && activeZoom ? { ...text, drawn: 'Outside this zoom' } : text })
   }, [focus])
 
   const stats = totals ? [
@@ -793,8 +811,6 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
     ['Not linked', `${totals.none.toLocaleString()} titles`],
     ['Files', totals.files.toLocaleString()],
   ] : []
-  const tiny = layoutRef.current?.tiny || []
-
   return (
     <div style={{ ...CARD, padding: '18px 20px 16px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px 12px', marginBottom: 10 }}>
@@ -814,7 +830,8 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
           {detail === 'files' && !filesReady && (
             <span style={{ ...CAPTION, display: 'inline-flex', alignItems: 'center', gap: 6 }}><Spinner size={10} /> Loading file lists…</span>
           )}
-          {free.length > 0 && (
+          {/* No switches before the first scan that writes a map: there's nothing to switch. */}
+          {row !== null && free.length > 0 && (
             // WinDirStat's <Free Space>, off unless asked for: it takes the
             // library's room, so fewer titles carry a name.
             <Button size="sm" variant={showFree ? 'secondary' : 'ghost'} pressed={showFree} onClick={toggleFree}
@@ -822,8 +839,10 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
               Free space
             </Button>
           )}
-          <Segmented label="Map detail" value={detail} onChange={setDetail}
-            options={[{ value: 'titles', label: 'Titles' }, { value: 'files', label: 'Files' }]} />
+          {row !== null && (
+            <Segmented label="Map detail" value={detail} onChange={setDetail}
+              options={[{ value: 'titles', label: 'Titles' }, { value: 'files', label: 'Files' }]} />
+          )}
         </div>
       </div>
 
@@ -874,9 +893,11 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
       {/* The detail strip (2026-11-10): one height whatever it shows, so the
           card never moves under the pointer. See "The detail strip" above. */}
       {model && model.roots.length > 0 && (() => {
-        const tinyNote = tiny.length > 0 ? `Too small to draw: ${tiny.map(t => t.name || '(top level)').join(', ')}` : null
-        const scale = scaleNote(layoutRef.current?.raised)
-        const shownBytes = shown ? shown.roots.filter(r => !r.free).reduce((a, r) => a + r.v, 0) : 0
+        const tooSmall = tinyNote(drawnInfo.tiny)
+        const scale = scaleNote(drawnInfo.raised)
+        // What's drawn, from its folders: a zoomed root keeps the whole root's
+        // size for its heading, so its `v` said 17.2 TB over 7.1 TB of movies.
+        const shownBytes = shown ? shown.roots.filter(r => !r.free).reduce((a, r) => a + r.folders.reduce((b, f) => b + f.v, 0), 0) : 0
         const d = hover?.text || (lit ? {
           thumb: { icon: 'map' }, s: highlight, prefix: '', name: `Highlighting ${STATES[highlight].name.toLowerCase()}`, kind: 'words',
           context: zoomCrumb ? `In ${zoomCrumb.text}` : null,
@@ -885,12 +906,12 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
         } : zoomCrumb ? {
           thumb: { icon: 'folder' }, s: null, prefix: '', name: `${shownTitles.toLocaleString()} title${shownTitles !== 1 ? 's' : ''} in ${zoomCrumb.text}`, kind: 'words',
           context: 'Click a tile to open its workflow, or the heading to zoom out.',
-          facts: formatBytes(shownBytes), note: [scale, tinyNote].filter(Boolean).join(' ') || null,
+          facts: formatBytes(shownBytes), drawn: scale, note: tooSmall,
         } : {
           thumb: { icon: 'map' }, s: null, prefix: '', name: 'Hover a tile for its details', kind: 'words',
           context: "Click a tile to open its workflow, or a folder's name to zoom in.",
-          facts: `${totals.titles.toLocaleString()} titles · ${formatBytes(shownBytes)}`,
-          note: [!model.roots.some(r => r.name === 'torrents') && "Your torrent folder is all linked, so it's drawn once, in the library.", scale, tinyNote].filter(Boolean).join(' ') || null,
+          facts: `${totals.titles.toLocaleString()} titles · ${formatBytes(shownBytes)}`, drawn: scale,
+          note: [!model.roots.some(r => r.name === 'torrents') && "Your torrent folder is all linked, so it's drawn in the library.", tooSmall].filter(Boolean).join(' ') || null,
         })
         const context = d.rel ? arrLine(arr.info, d.name) : d.context
         const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
@@ -911,13 +932,13 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
                 // The figures, and beside them in words how much larger the tile is drawn.
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
                   <span style={{ ...READOUT, ...ellipsis, flex: '0 1 auto' }}>{d.facts}</span>
-                  {d.drawn && <span style={{ ...CAPTION, ...ellipsis, flex: '0 10 auto' }}>{d.drawn}</span>}
+                  {d.drawn && <span style={{ ...CAPTION, ...ellipsis, flex: '0 10 auto' }} title={d.drawn}>{d.drawn}</span>}
                 </span>
               )}
               <StateBar by={d.by} />
               {d.action
                 ? <span style={{ ...CAPTION, ...ellipsis, color: 'var(--accent)' }}>{d.action}</span>
-                : d.note && <span style={{ ...CAPTION, ...ellipsis }}>{d.note}</span>}
+                : d.note && <span style={{ ...CAPTION, ...ellipsis }} title={d.note}>{d.note}</span>}
             </div>
           </div>
         )
@@ -945,8 +966,8 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
 }
 
 // ── Biggest gaps ─────────────────────────────────────────────────────────────
-// The titles with the most bytes for a workflow, the biggest of each workflow
-// first (2026-11-10), from the stored scan whatever the map's Titles/Files
+// The titles with the most bytes for a workflow, each workflow's biggest always
+// among them (2026-11-10), shown by size (2026-11-12), from the stored scan whatever the map's Titles/Files
 // switch says. A card of its own since 2026-11-10, left
 // of Last scan; it was a wrapped row of buttons under the map. Its headline is
 // what the map's "To act on" stat said, since the list is the top of that total.

@@ -950,7 +950,9 @@ through it:
    panel at the bottom right, like a Backfill grab — and re-audits once it
    actually imports. Every step is reported: if the grab succeeds and the
    removal doesn't, you're told the replacement is on its way and the old
-   torrents are still in your client.
+   torrents are still in your client. **Trump another** under the result takes
+   you back to an empty PM box for the next one, while Import Jobs keeps
+   following the last grab.
 
 ### What the confirm step tells you
 

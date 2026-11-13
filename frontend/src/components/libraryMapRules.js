@@ -224,9 +224,11 @@ export function modelTotals(model) {
 }
 
 // The titles with the most bytes for a workflow — "Biggest gaps". The biggest
-// of each workflow leads, then the rest by size (2026-11-10): by size alone a
-// library's Backfill titles filled the list, and on the box the first Triage
-// row was 43rd.
+// of each workflow is always on it (2026-11-10): by size alone a library's
+// Backfill titles filled the list, and on the box the first Triage row was
+// 43rd. The rest fill it by size, and the list is shown by size (2026-11-12):
+// leading with each workflow's biggest read 132.9, 48.4, 46.4, 9.3, 7.2, 108.8
+// GB, which looked unsorted.
 export function biggestGaps(model, n = 6) {
   const out = []
   for (const r of model.roots) for (const f of r.folders) for (const t of f.titles) {
@@ -243,7 +245,7 @@ export function biggestGaps(model, n = 6) {
   const all = [...seen.values()].sort((a, b) => b.bytes - a.bytes)
   const lead = []
   for (const g of all) if (!lead.some(x => x.state === g.state)) lead.push(g)
-  return [...lead, ...all.filter(g => !lead.includes(g))].slice(0, n)
+  return [...lead, ...all.filter(g => !lead.includes(g))].slice(0, n).sort((a, b) => b.bytes - a.bytes)
 }
 
 export function worstState(by) {
@@ -350,6 +352,19 @@ export const ROOT_GAP = 6, GAP = 3, ROOT_HEAD = 22, HEAD = 18
 //    is its gaps', shared equally, never what else the root holds.
 // 3. Floors take at most FLOOR_BUDGET of the canvas. Past that they shrink
 //    together, never below their bytes, and a zoom gives them room again.
+// 4. A gap gets the shape its floor assumed, not just the area (2026-11-12).
+//    Rule 1 sets an area and squarify sets the shape, and a small item beside
+//    much bigger ones gets a strip as long as their side, however much area
+//    it has. Beside 300 big orphans, the not-imported block was 2px across
+//    and dropped, so Triage had rows the map didn't draw again; zoomed into
+//    the torrent folder, a 47 MB orphan that was 56×19 on the whole map was a
+//    201×2 line under the 9 GB release beside it. So the layout is checked: a
+//    folder holding a gap is no sliver inside its border, nor is a title
+//    holding one (less strict as rule 3 cuts the floors), and one that is
+//    gets the room it lacks from its gaps alone, shared equally, and is laid
+//    out again (fitShapes, below). Not counted in the budget, since a whole
+//    workflow's block is what it saves; it took at most 1.2% of the map in
+//    the cases measured, and 0.3% on the box (its two test folders).
 //
 // Only a gap is raised, so every tile that needs nothing is drawn at one scale,
 // its bytes'. What the raises take comes from all of them in proportion, so
@@ -407,7 +422,7 @@ export function mapSizes(model, W, H) {
     }
   }
   const floored = []
-  let S = sums(model, eby)
+  let S = sums(model, eby), cut = 1
   if (gaps.length && S.total > 0 && W > 0 && H > 0) {
     // Rule 1, in pixels: P is what the tiles get of the canvas.
     const P = W * H * drawnShare(model, W, H, { eby, ...S })
@@ -432,7 +447,7 @@ export function mapSizes(model, W, H) {
     // Rule 3: only a gap that ends up raised costs anything. Cutting the floors
     // only lowers T, so no gap the cut leaves raised was not raised before it,
     // and the raised floors' total stays within the budget.
-    let T = drawnTotal(1), cut = 1
+    let T = drawnTotal(1)
     const need = gaps.reduce((a, g) => a + (g.f * T / P > g.t.by[g.s] ? g.f : 0), 0)
     if (need > FLOOR_BUDGET * P) { cut = FLOOR_BUDGET * P / need; T = drawnTotal(cut) }
     for (const g of gaps) {
@@ -469,7 +484,63 @@ export function mapSizes(model, W, H) {
       }
     }
   }
-  return { eby, title: S.title, folder: S.folder, root: S.root, floored, widened, nested, host }
+  return { eby, title: S.title, folder: S.folder, root: S.root, floored, widened, nested, host, cut }
+}
+
+// Rule 4, on the layout being drawn: give each gap too thin to see the room it
+// lacks, and lay out again. The check runs on the drawn layout before its
+// leaves, which are laid out once, on the layout that passes: a map with no
+// sliver costs what it did, and one with a sliver one more layout by titles.
+// (Measured at 200,000 files: a check on a layout of its own cost 15–20%, and
+// laying out every file again on each pass 2–3×.) A sliver is a
+// title under POINT_PX across, too thin to point at, or a folder under
+// STRIPE_PX inside its border (a dropped one hides a whole workflow), and is
+// given FLOOR_PX: a tile rule 1 floored is near FLOOR_PX already (squarify
+// rarely makes it exactly 2:1), and a trigger that close to it chased them,
+// moving one under as it lifted another. Area grows with thickness when the
+// length stays put, as it does for a strip, so that's the estimate, aimed a
+// little past (THICK_OVER) because the room grows the map and shrinks
+// everything, the tile included. `thickened` lists each [title, state, room].
+const THICK_PASSES = 3, THICK_OVER = 1.08, THICK_MAX = 64
+const holdsGap = by => PROBLEM.some(s => by[s] > 0)
+function fitShapes(model, W, H, detail, A) {
+  const thickened = []
+  const k = Math.sqrt(A.cut), titleThin = POINT_PX * k, titleWant = FLOOR_PX * k * THICK_OVER
+  for (let pass = 0; ; pass++) {
+    // Checked by titles; the leaves (all the files, in Files) are laid out
+    // once, on the layout that passes.
+    const L = place(model, W, H, 'shapes', A)
+    L.thickened = thickened
+    const done = () => { addLeaves(L, detail); return L }
+    if (pass === THICK_PASSES) return done()
+    // Each ask is a room in drawn bytes, shared equally by the gaps it names.
+    const asks = []
+    const gapsOf = ts => ts.flatMap(t => PROBLEM.filter(s => t.by[s] > 0).map(s => [t, s]))
+    const inThin = new Set()
+    // A folder: L.folders are drawn inside their border, a dropped one (in
+    // `tiny`) is its outer box.
+    const drawnF = new Set(L.folders)
+    for (const f of [...L.folders, ...L.tiny.filter(x => x.titles)]) {
+      const across = Math.min(f.w, f.h) + (drawnF.has(f) ? GAP : 0)
+      if (across - GAP >= STRIPE_PX || !f.titles.some(t => holdsGap(t.by))) continue
+      asks.push([f.a * (Math.min(THICK_MAX, (FLOOR_PX * THICK_OVER + GAP) / Math.max(across, 0.5)) - 1), gapsOf(f.titles)])
+      for (const t of f.titles) inThin.add(A.eby.get(t))
+    }
+    for (const t of L.titles) {
+      const across = Math.min(t.w, t.h)
+      if (across >= titleThin || inThin.has(t.eby) || !holdsGap(t.by)) continue
+      asks.push([t.a * (Math.min(THICK_MAX, titleWant / Math.max(across, 0.5)) - 1), gapsOf([t])])
+    }
+    if (!asks.length) return done()
+    for (const [room, parts] of asks) {
+      for (const [t, s] of parts) {
+        const add = room / parts.length
+        ;(t.eby || A.eby.get(t))[s] += add
+        thickened.push([t, s, add])
+      }
+    }
+    Object.assign(A, sums(model, A.eby))
+  }
 }
 
 // A title's name as its tile and the Biggest gaps row show it: a torrent
@@ -487,7 +558,7 @@ export function shortName(t) {
 // Each leaf's `boost` is how many times larger than its bytes it's drawn: 1
 // for everything but a raised gap.
 export function layoutMap(model, W, H, detail) {
-  const L = place(model, W, H, detail, mapSizes(model, W, H))
+  const L = fitShapes(model, W, H, detail, mapSizes(model, W, H))
   L.raised = 0
   for (const t of L.titles) for (const s of PROBLEM) if (t.eby[s] > t.by[s]) L.raised++
   return L
@@ -526,8 +597,10 @@ function nestedLayout(items, nest, x, y, w, h) {
 }
 
 // The geometry, for drawn sizes `A` (mapSizes, or the bytes alone). A `detail`
-// of null stops at folders. A nested root (Sizing's rule 2) is laid out as one
-// more item among its host's folders, and drawn in that box as a root.
+// of null stops at folders, 'shapes' at titles (rule 4 checks those, and adds
+// the leaves once they pass: leaves), and 'titles' or 'files' lays out the
+// leaves too. A nested root (Sizing's rule 2) is laid out as one more item
+// among its host's folders, and drawn in that box as a root.
 function place(model, W, H, detail, A) {
   const roots = [], folders = [], titles = [], leaves = [], tiny = []
   const nest = A.nested?.name, host = A.host?.name
@@ -549,26 +622,32 @@ function place(model, W, H, detail, A) {
       if (detail == null) continue
       const iy = fhead ? y + HEAD : y, ih = fhead ? h - HEAD : h
       const ts = f.titles.map(t => ({ ...t, a: A.title.get(t), eby: A.eby.get(t) }))
-      for (const t of squarifyWide(ts, x, iy, w, ih, 'a')) {
-        titles.push(t)
-        if (detail === 'files' && t.list) {
-          // A file is drawn at its state's scale within the title.
-          const scale = t.by.map((b, s) => (b > 0 ? t.eby[s] / b : 0))
-          for (const l of squarify(t.list.map(q => ({ ...q, a: q.size * scale[q.s] })), t.x, t.y, t.w, t.h, 'a')) {
-            leaves.push({ x: l.x, y: l.y, w: l.w, h: l.h, s: l.s, T: t, file: l.name, bytes: l.size, boost: scale[l.s] })
-          }
-        } else {
-          for (const p of squarify(t.by.map((v, s) => ({ v, s, a: t.eby[s] })), t.x, t.y, t.w, t.h, 'a')) {
-            leaves.push({ x: p.x, y: p.y, w: p.w, h: p.h, s: p.s, T: t, bytes: p.v, boost: t.eby[p.s] / p.v })
-          }
-        }
-      }
+      for (const t of squarifyWide(ts, x, iy, w, ih, 'a')) titles.push(t)
     }
   }
   const top = model.roots.filter(r => r.name !== nest)
   const size = x => A.root.get(x) + (x.name === host ? A.root.get(A.nested) : 0)
   for (const r of squarify(top.map(x => ({ ...x, a: size(x) })), 0, 0, W, H, 'a')) placeRoot(r, r.x, r.y, r.w, r.h)
-  return { roots, folders, titles, leaves, tiny }
+  const L = { roots, folders, titles, leaves, tiny }
+  if (detail === 'titles' || detail === 'files') addLeaves(L, detail)
+  return L
+}
+
+// Each title's leaves: one per state ('titles') or per file ('files').
+function addLeaves(L, detail) {
+  for (const t of L.titles) {
+    if (detail === 'files' && t.list) {
+      // A file is drawn at its state's scale within the title.
+      const scale = t.by.map((b, s) => (b > 0 ? t.eby[s] / b : 0))
+      for (const l of squarify(t.list.map(q => ({ ...q, a: q.size * scale[q.s] })), t.x, t.y, t.w, t.h, 'a')) {
+        L.leaves.push({ x: l.x, y: l.y, w: l.w, h: l.h, s: l.s, T: t, file: l.name, bytes: l.size, boost: scale[l.s] })
+      }
+    } else {
+      for (const p of squarify(t.by.map((v, s) => ({ v, s, a: t.eby[s] })), t.x, t.y, t.w, t.h, 'a')) {
+        L.leaves.push({ x: p.x, y: p.y, w: p.w, h: p.h, s: p.s, T: t, bytes: p.v, boost: t.eby[p.s] / p.v })
+      }
+    }
+  }
 }
 
 // The leaf under a point, or null.
