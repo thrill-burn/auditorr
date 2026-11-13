@@ -5,7 +5,7 @@ import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker, SearchInput,
   SectionLabel, SectionHeading, Disclosure, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, WorkflowWarning, ArrErrorsWarning,
-  Button, MatchChips, MATCH_COLOR, ITEM_TITLE, MONO_TITLE, tint,
+  Button, MatchChips, MATCH_COLOR, ITEM_TITLE, tint, QualityChip, PickList, PickRow, PickName,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
 } from './shared'
@@ -298,9 +298,11 @@ function sizeDelta(delta) {
 }
 
 // ── Result item ───────────────────────────────────────────────────────────────
-// The releases' columns. There's no Grab column: a release is picked, and the
-// candidate's one Grab button takes the pick (B18).
-const RELEASE_GRID = 'minmax(0,1fr) 100px 62px 72px 40px 90px 40px 44px 84px'
+// A candidate's releases are a pick-one list (the kit's PickList, Trumped's
+// look), and the candidate's one Grab button takes the pick (B18). The picked
+// release is marked in Backfill's own blue.
+const ACCENT = 'var(--blue)'
+const PICK_META = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }
 
 const releaseKey = r => r.guid || r.title
 
@@ -716,89 +718,39 @@ function ResultItem({ item }) {
         </div>
       )}
 
-      {/* Multi-release picker */}
+      {/* Multi-release picker: Trumped's list, in Backfill's blue. Each name
+          whole and wrapped, its readouts under it; the name's link is still
+          its own click. */}
       {found && multi && (
-        <div role="radiogroup" aria-label={`Releases of ${item.arr_title}`}
-          style={{ paddingLeft: 42, paddingRight: 16, paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {/* Column headers */}
-          <div style={{ display: 'grid', gridTemplateColumns: RELEASE_GRID, gap: 8, padding: '2px 10px' }}>
-            {['Title', 'Tracker', 'Size', 'vs file', 'Peers', 'Quality', 'Score', 'HDR', 'Match'].map((h, i) => (
-              <span key={i} style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', fontWeight: 600, letterSpacing: 0, textTransform: 'none',
-                color: 'var(--text-dim)', opacity: 0.75,
-                textAlign: i >= 2 && i <= 6 ? 'right' : 'left',
-              }}>{h}</span>
-            ))}
-          </div>
-          {releases.map(r => {
-            const key     = releaseKey(r)
-            const on      = picked != null && key === releaseKey(picked)
-            const hdrInfo = HDR_STYLE[r.hdr]
-            // The season-pack dialog's pick: the chosen row outlined, the
-            // others plain, the title's link still its own click.
-            return (
-              <div key={key} role="radio" aria-checked={on} tabIndex={locked ? -1 : 0}
-                onClick={() => pick(r)}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(r) } }}
-                style={{
-                  display: 'grid', gridTemplateColumns: RELEASE_GRID,
-                  alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
-                  cursor: locked ? 'default' : 'pointer',
-                  background: on ? tint('var(--accent)', 6) : 'transparent',
-                  border: `1px solid ${on ? tint('var(--accent)', 35) : 'transparent'}`,
-                }}>
-                {r.info_url ? (
-                  <a href={r.info_url} target="_blank" rel="noopener noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    style={{ ...MONO_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: tint('var(--text)', 30), textUnderlineOffset: 2 }}
-                    title={r.title}>
-                    {r.title}
-                  </a>
-                ) : (
-                  <span style={{ ...MONO_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    title={r.title}>
-                    {r.title}
-                  </span>
-                )}
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}
-                  title={r.indexer}>
-                  {r.indexer}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
-                  {formatBytes(r.size)}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', textAlign: 'right', whiteSpace: 'nowrap',
-                  color: MATCH_COLOR[r.match?.size] || 'var(--text-dim)' }}>
-                  {sizeDelta(r.size_delta)}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: r.seeders > 0 ? 'var(--green)' : 'var(--text-dim)', textAlign: 'right' }}>
-                  {r.seeders != null ? `${r.seeders}S` : '—'}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={r.quality_name}>
-                  {r.quality_name || '—'}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
-                  {r.custom_format_score ?? 0}
-                </span>
-                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                  {hdrInfo ? (
-                    <span style={{
-                      fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700,
-                      padding: '2px 5px', borderRadius: 4,
-                      background: hdrInfo.bg, color: hdrInfo.color,
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {r.hdr}
-                    </span>
-                  ) : null}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                  <MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" />
-                </div>
-              </div>
-            )
-          })}
+        <div style={{ padding: '0 16px 12px 42px' }}>
+          <PickList label={`Releases of ${item.arr_title}`} maxHeight="min(60vh, 420px)">
+            {releases.map((r, i) => {
+              const key = releaseKey(r)
+              return (
+                <PickRow key={key} on={picked != null && key === releaseKey(picked)}
+                  onPick={() => pick(r)} color={ACCENT} disabled={locked} last={i === releases.length - 1}>
+                  <PickName name={r.title} href={r.info_url} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+                    <QualityChip label={r.quality_name} hdr={r.hdr} />
+                    <MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" />
+                    {r.indexer && <span style={PICK_META}>{r.indexer}</span>}
+                    {r.seeders != null && (
+                      <span style={{ ...PICK_META, color: r.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{r.seeders}S</span>
+                    )}
+                    <span style={PICK_META}>{formatBytes(r.size)}</span>
+                    {r.size_delta != null && (
+                      <span title="Size against your file" style={{ ...PICK_META, color: MATCH_COLOR[r.match?.size] || 'var(--text-dim)' }}>
+                        {r.size_delta === 0 ? 'exact size' : `${sizeDelta(r.size_delta)} vs file`}
+                      </span>
+                    )}
+                    {!!r.custom_format_score && (
+                      <span title="Custom format score" style={PICK_META}>CF {r.custom_format_score}</span>
+                    )}
+                  </div>
+                </PickRow>
+              )
+            })}
+          </PickList>
         </div>
       )}
     </div>

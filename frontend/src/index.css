@@ -320,6 +320,18 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .map-key:disabled { opacity: 0.55; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .map-key { transition: none; } }
 
+/* PickRow (shared.jsx, 2026-11-12): one row of a pick-one list — Trumped's
+   candidates and replacement releases, Backfill's releases, the season-pack
+   dialog's. The picked row's tint and edge are inline (they take the page's
+   colour), so an unpicked row has no inline background and the hover wash here
+   can reach it. */
+.pick-row { transition: background 0.12s cubic-bezier(.4,0,.2,1); }
+.pick-row:hover:not([aria-checked="true"]):not([aria-disabled="true"]) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.pick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .pick-row { transition: none; } }
+
 /* IconButton / CloseButton (shared.jsx): a quiet square for a line icon — the
    close ×, a collapse chevron. An icon has no font size, which is what retired
    the type guard's two close-× exemptions. */

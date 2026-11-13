@@ -7,7 +7,7 @@ import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   WorkflowPage, WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
   Checkbox, Spinner, SpinKeyframes, Button, Disclosure, QualityChip, MatchChips, MONO_TITLE, tint,
-  regKey, RegistrationWarning, SearchInput,
+  regKey, RegistrationWarning, SearchInput, RadioMark, PickRow, PickList, PickName,
 } from './shared'
 
 const ACCENT = 'var(--green)'
@@ -108,26 +108,16 @@ function CandidateRow({ cand, selected, onSelect }) {
   const name = cand.name || cand.title || ''
   const sub  = cand.tracker || cand.indexer || ''
   return (
-    <div onClick={onSelect} style={{
-      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', cursor: 'pointer',
-      borderBottom: '1px solid var(--border)',
-      background: selected ? tint(ACCENT, 5) : 'transparent',
-      borderLeft: `2px solid ${selected ? ACCENT : 'transparent'}`,
-    }}>
-      <span style={{ width: 13, height: 13, marginTop: 2, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
-        <div style={{ ...MONO_TITLE, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
-          {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
-          <MatchChips match={cand.match} fields={MATCH_FIELDS} />
-          {sub && <span style={{ ...meta, color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{sub}</span>}
-          {cand.seeders != null && <span style={{ ...meta, color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders}S</span>}
-          <span style={meta}>{formatBytes(cand.size)}</span>
-        </div>
+    <PickRow on={selected} onPick={onSelect} color={ACCENT} aside={<ScoreBadge score={cand.match_score} />}>
+      <PickName name={name} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+        {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
+        <MatchChips match={cand.match} fields={MATCH_FIELDS} />
+        {sub && <span style={{ ...meta, color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{sub}</span>}
+        {cand.seeders != null && <span style={{ ...meta, color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders}S</span>}
+        <span style={meta}>{formatBytes(cand.size)}</span>
       </div>
-      <ScoreBadge score={cand.match_score} />
-    </div>
+    </PickRow>
   )
 }
 
@@ -138,7 +128,7 @@ function NoneRow({ selected, onSelect, label }) {
       background: selected ? 'var(--surface3)' : 'transparent',
       borderLeft: `2px solid ${selected ? 'var(--text-dim)' : 'transparent'}`,
     }}>
-      <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? 'var(--text-dim)' : 'var(--border2)'}`, background: selected ? 'var(--text-dim)' : 'transparent' }} />
+      <RadioMark on={selected} color="var(--text-dim)" />
       <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{label}</span>
     </div>
   )
@@ -163,7 +153,7 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
       boxShadow: 'var(--elev-1)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ width: 14, height: 14, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
+        <RadioMark on={selected} color={ACCENT} size={14} />
         <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Grab this one</span>
         <span style={{ fontSize: 'var(--font-sm)', color: where.color }}>· {where.text}</span>
       </div>
@@ -191,7 +181,7 @@ const LIST_HEADER = {
   background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
 }
 
-function CandidateList({ rows, keyOf, chosenKey, onChoose, indexer, othersLabel, isTail, tailLabel, noneLabel, filterLabel }) {
+function CandidateList({ label, rows, keyOf, chosenKey, onChoose, indexer, othersLabel, isTail, tailLabel, noneLabel, filterLabel }) {
   const [filter, setFilter] = useState('')
   const q = filter.trim().toLowerCase()
   const text = r => `${r.name || r.title || ''} ${r.tracker || r.indexer || ''}`.toLowerCase()
@@ -211,30 +201,27 @@ function CandidateList({ rows, keyOf, chosenKey, onChoose, indexer, othersLabel,
           {q && <span style={meta}>{shown.length} of {rows.length}</span>}
         </div>
       )}
-      <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-        <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-          {sections.map(([label, rs]) => (
-            <React.Fragment key={label || 'all'}>
-              {label && <div style={LIST_HEADER}>{label} · {rs.length}</div>}
-              {rs.map(r => (
-                <CandidateRow key={keyOf(r)} cand={r}
-                  selected={chosenKey != null && chosenKey === keyOf(r)}
-                  onSelect={() => onChoose(r)} />
-              ))}
-            </React.Fragment>
-          ))}
-          {q && !shown.length && (
-            <div style={{ padding: '8px 12px', fontSize: 'var(--font-base)', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
-              Nothing matches “{filter.trim()}”.
-            </div>
-          )}
-        </div>
-        {noneLabel && (
-          <NoneRow label={noneLabel}
-            selected={chosenKey == null}
-            onSelect={() => onChoose(null)} />
+      <PickList label={label} footer={noneLabel && (
+        <NoneRow label={noneLabel}
+          selected={chosenKey == null}
+          onSelect={() => onChoose(null)} />
+      )}>
+        {sections.map(([heading, rs]) => (
+          <React.Fragment key={heading || 'all'}>
+            {heading && <div style={LIST_HEADER}>{heading} · {rs.length}</div>}
+            {rs.map(r => (
+              <CandidateRow key={keyOf(r)} cand={r}
+                selected={chosenKey != null && chosenKey === keyOf(r)}
+                onSelect={() => onChoose(r)} />
+            ))}
+          </React.Fragment>
+        ))}
+        {q && !shown.length && (
+          <div style={{ padding: '8px 12px', fontSize: 'var(--font-base)', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
+            Nothing matches “{filter.trim()}”.
+          </div>
         )}
-      </div>
+      </PickList>
     </div>
   )
 }
@@ -814,7 +801,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   ) : (
                     <>
                       <PickNote pick={p} chosenKey={selected[i]} indexer={indexer} />
-                      <CandidateList rows={p.candidates} keyOf={regKey} indexer={indexer}
+                      <CandidateList label={`Torrents for ${p.title}`} rows={p.candidates} keyOf={regKey} indexer={indexer}
                         chosenKey={selected[i]}
                         onChoose={c => setSelected(s => ({ ...s, [i]: c ? regKey(c) : null }))}
                         othersLabel="other trackers"
@@ -937,7 +924,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                     </Disclosure>
                   )}
                   {showOthers && (
-                    <CandidateList rows={others} keyOf={r => r.guid} indexer={indexer}
+                    <CandidateList label="Other releases" rows={others} keyOf={r => r.guid} indexer={indexer}
                       chosenKey={chosenRelease?.guid} onChoose={setChosenRelease}
                       othersLabel="other indexers"
                       isTail={r => r.trumped} tailLabel="named like a release being removed"
