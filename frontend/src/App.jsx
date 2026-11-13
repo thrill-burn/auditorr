@@ -622,7 +622,6 @@ function AppInner() {
                 trackerFileStats={results?.tracker_file_stats || {}}
                 crossSeedStats={results?.dashboard?.cross_seed_stats || null}
                 onNavigate={handleNavigate}
-                timeRange={timeRange}
                 allTrackers={allTrackers}
               />
             )}

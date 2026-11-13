@@ -417,6 +417,14 @@ function MetricCard({ label, value, sub, pts, desc, color, trend, actionRows, on
 // tracker dropdown, which filtered only them, went. Cross-seed effectiveness
 // followed them on 2026-11-10, beside the leaderboard it used to sit with, and
 // Biggest gaps left the map for a card of its own, left of Last scan.
+//
+// The 7d/30d/90d/All range lives on the Score history card (2026-11-13) and
+// drives that chart and the dial's "vs Nd ago" only. It used to be a row of its
+// own above everything, also driving the four cards' trend pills, New in the
+// library and the Trackers page's opening range, which a control on one card
+// would change unseen; those now read TREND_DAYS.
+const TREND_DAYS = 30
+
 export default function Dashboard({ data, changes, onNavigate, isRefreshing, onScript, timeRange, setTimeRange, onReveal, onScan, mediaFiles, torrentFiles, ensureFilesLoaded }) {
   const toast = useToast()
   const [uploadStats, setUploadStats] = useState(null)
@@ -426,11 +434,13 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const mapModel = useMemo(() => (mapRow ? modelFromRow(mapRow) : null), [mapRow])
   const [mapFocus, setMapFocus] = useState(null)
 
+  // A fixed window, not the chart's range: the range selector sits on the
+  // Score history card, so it owns only that card and the dial's delta beside it.
   useEffect(() => {
-    api.uploadStats(timeRange).then(d => {
+    api.uploadStats(TREND_DAYS).then(d => {
       if (!d.status) setUploadStats(d)
     }).catch(() => {})
-  }, [timeRange])
+  }, [])
 
   if (!data) return <DashboardSkeleton />
 
@@ -584,12 +594,6 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   return (
     <div className="fade-in page-frame" style={{ padding: '24px 32px 64px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-      {/* Time range presets — the score history, the trend pills and New in
-          the library follow it. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <RangePresets isActive={v => timeRange === v} onSelect={setTimeRange} />
-      </div>
-
       {/* Changes since last scan */}
       {changes?.changes && (
         <ChangesPanel
@@ -642,13 +646,16 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       {/* Row 1: dial + chart */}
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '20px 20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <span style={{ ...SECTION_LABEL, width: '100%' }}>Library health</span>
+          {/* As tall as the range control beside Score history's label, so the
+              two cards' labels sit on one line. */}
+          <span style={{ ...SECTION_LABEL, width: '100%', display: 'flex', alignItems: 'center', minHeight: 'var(--control-h)' }}>Library health</span>
           <HealthDial score={score} status={status} smartTrend={smartTrend} color={c} />
         </div>
 
         <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, boxShadow: 'var(--elev-1)', padding: '20px 20px 14px', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ marginBottom: 18 }}>
-            <span style={{ ...SECTION_LABEL, display: 'block' }}>Score history</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px 12px', minHeight: 'var(--control-h)', marginBottom: 12 }}>
+            <span style={SECTION_LABEL}>Score history</span>
+            <RangePresets size="sm" isActive={v => timeRange === v} onSelect={setTimeRange} />
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -683,7 +690,7 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
         <BiggestGapsCard row={mapRow} model={mapModel} onNavigate={onNavigate} onHighlight={setMapFocus} />
         <LastScanCard id="last-scan-card" scanReport={scanReport} details={det} savedAt={current.timestamp} onScan={onScan} />
-        <NewInLibraryCard uploadStats={uploadStats} timeRange={timeRange} onNavigate={onNavigate} />
+        <NewInLibraryCard uploadStats={uploadStats} timeRange={TREND_DAYS} onNavigate={onNavigate} />
       </div>
     </div>
   )

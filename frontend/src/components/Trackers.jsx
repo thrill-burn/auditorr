@@ -88,10 +88,12 @@ function MetricSwitch({ value, onChange }) {
   )
 }
 
-export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers, timeRange, onNavigate }) {
+// Opens on the last 30 days. It used to open on the Dashboard's range, which is
+// now Score history's own control.
+export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers, onNavigate }) {
   const [uploadStats, setUploadStats] = useState(null)
   const [trackerDetail, setTrackerDetail] = useState(null)
-  const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(timeRange))
+  const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(30))
   const [dateTo,      setDateTo]      = useState('')
   const [metricKey,   setMetricKey]   = useState('uploaded')
   const [visible,     setVisible]     = useState(() => allTrackers.slice())
