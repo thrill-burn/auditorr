@@ -60,28 +60,42 @@ function toRgb(c) {
 const mix = (a, b, t) => a.map((v, i) => v * t + b[i] * (1 - t))
 const rgb = c => `rgb(${c.map(Math.round).join(',')})`
 
-// How each theme shades its tiles (2026-11-10): `lift` and `shade` are the
-// white and black mixed into the cushion's lit and shaded corners, `ink` the
-// pattern's white. Dark shades toward its black card, which reads as gloss.
-// Light did the same and pushed every grey tile's far corner to L* 50, as dark
-// as the blue (53) it's meant to set off, so light lifts instead. Its stripes
-// were 55% white, twice dark's contrast on the deeper light colours; 30%
-// matches it. The user's pick from .internal/preview/maptheme.mjs's shots.
+// Frosted panes (2026-11-13, the user's pick from .internal/preview/mapglass.mjs's
+// shots, replacing WinDirStat's cushion on every tile): each title is one
+// rounded pane of smoked glass, lit by one rule at every size. `sheen` is the
+// light down the pane (top colour, where it fades out, bottom colour), `edge`
+// its hairline, `top` its lit top edge, `seam` the line between leaves inside
+// it (a title's states, or its files in Files), `ink` the pattern's white.
+// The cushion lit a corner of every tile down to 2px, and hundreds of them
+// were the speckle the user called "a bunch of grey squares with spectral
+// highlights". A first pass lit only panes 26px across, which on the 1440
+// screen was 8% of movies; the user: "it should be cohesive and consistent".
 const LOOK = {
-  dark:  { lift: 0.2, shade: 0.35, ink: 0.34 },
-  light: { lift: 0.4, shade: 0.1, ink: 0.3 },
+  dark:  { sheen: { top: [255, 255, 255, 0.075], mid: 0.55, bottom: [0, 0, 0, 0.12] }, edge: 'rgba(255,255,255,0.06)',
+           top: 'rgba(255,255,255,0.15)', seam: 'rgba(0,0,0,0.35)', ink: 0.26 },
+  light: { sheen: { top: [255, 255, 255, 0.55], mid: 0.5, bottom: [0, 0, 0, 0.05] }, edge: 'rgba(0,0,0,0.085)',
+           top: 'rgba(255,255,255,0.95)', seam: 'rgba(0,0,0,0.1)', ink: 0.34 },
 }
+const rgba = (c, a) => `rgba(${c.join(',')},${a})`
 
 function palette() {
   const dim = toRgb(cssVar('--text-dim'))
   const light = document.documentElement.getAttribute('data-theme') === 'light'
   const k = LOOK[light ? 'light' : 'dark']
+  // Linked is the pane's own grey; Other quieter still; a workflow state is
+  // its card colour mixed --map-mix into Linked (index.css).
+  const linked = toRgb(cssVar('--map-pane-linked'))
+  const m = (parseFloat(cssVar('--map-mix')) || 74) / 100
+  const state = name => mix(toRgb(cssVar(name)), linked, m)
   return {
     surface: cssVar('--surface'), band: cssVar('--surface2'), text: cssVar('--text'), dim: cssVar('--text-dim'),
-    // Linked is the neutral bulk; Other quieter still (index.css).
-    c: [toRgb(cssVar('--map-linked')), toRgb(cssVar('--blue')), toRgb(cssVar('--yellow')), toRgb(cssVar('--red')),
-        toRgb(cssVar('--purple')), toRgb(cssVar('--map-other')), toRgb(cssVar('--red'))],
-    lift: k.lift, shade: k.shade,
+    c: [linked, state('--blue'), state('--yellow'), state('--red'), state('--purple'),
+        toRgb(cssVar('--map-pane-other')), state('--red')],
+    // The sheen as an overlay (over leaves and patterns), and per state as the
+    // three colours it makes on a plain pane, so one opaque gradient fills it.
+    sheen: [rgba(k.sheen.top.slice(0, 3), k.sheen.top[3]), k.sheen.mid, rgba(k.sheen.bottom.slice(0, 3), k.sheen.bottom[3])],
+    lit: c => [rgb(mix(k.sheen.top.slice(0, 3), c, k.sheen.top[3])), rgb(c), rgb(mix(k.sheen.bottom.slice(0, 3), c, k.sheen.bottom[3]))],
+    edge: k.edge, top: k.top, seam: k.seam,
     ink: `rgba(255,255,255,${k.ink})`,
     // Free space's sparse hatch: the dim text colour, faint.
     hatch: `rgba(${dim.map(Math.round).join(',')},${light ? 0.28 : 0.22})`,
@@ -90,11 +104,11 @@ function palette() {
   }
 }
 
-// The same patterns in CSS, for the legend's swatches.
+// The same patterns in CSS, for the legend's swatches, on the panes' fills.
 const PATTERN_INK = 'color-mix(in srgb, white 45%, transparent)'
-const SWATCH_VAR = { linked: 'var(--map-linked)', other: 'var(--map-other)' }
+const SWATCH_VAR = { linked: 'var(--map-pane-linked)', other: 'var(--map-pane-other)' }
 export function swatchStyle(s) {
-  const c = SWATCH_VAR[STATES[s].color] || `var(--${STATES[s].color})`
+  const c = SWATCH_VAR[STATES[s].color] || `color-mix(in srgb, var(--${STATES[s].color}) var(--map-mix), var(--map-pane-linked))`
   const w = PATTERN_INK
   switch (STATES[s].pattern) {
     case 'slash': return { background: `repeating-linear-gradient(135deg, ${c} 0 2px, ${w} 2px 3.5px), ${c}` }
@@ -105,8 +119,10 @@ export function swatchStyle(s) {
     default:      return { background: c }
   }
 }
+// The pane's hairline too: Linked's pane is a step off the card in both themes.
+const SWATCH_EDGE = 'inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent)'
 function Swatch({ s }) {
-  return <span style={{ width: 9, height: 9, borderRadius: 2, flexShrink: 0, display: 'inline-block', ...swatchStyle(s) }} />
+  return <span style={{ width: 9, height: 9, borderRadius: 2, flexShrink: 0, display: 'inline-block', ...swatchStyle(s), boxShadow: SWATCH_EDGE }} />
 }
 
 // ── Drawing ──────────────────────────────────────────────────────────────────
@@ -159,19 +175,83 @@ function pattern(ctx, l, kind, ink) {
   ctx.restore()
 }
 
-function tile(ctx, l, P) {
-  const base = P.c[l.s]
-  if (l.w >= 2 && l.h >= 2) {
-    // A WinDirStat cushion: lit from the upper left, falling off to the far corner.
-    const g = ctx.createRadialGradient(l.x + l.w * 0.3, l.y + l.h * 0.25, 0, l.x + l.w * 0.45, l.y + l.h * 0.45, Math.max(l.w, l.h) * 0.85)
-    g.addColorStop(0, rgb(mix([255, 255, 255], base, P.lift)))
-    g.addColorStop(0.5, rgb(base))
-    g.addColorStop(1, rgb(mix([0, 0, 0], base, P.shade)))
-    ctx.fillStyle = g
-  } else ctx.fillStyle = rgb(base)
-  ctx.fillRect(l.x, l.y, l.w, l.h)
-  const kind = STATES[l.s].pattern
-  if (kind && l.w >= 4 && l.h >= 4) pattern(ctx, l, kind, P.ink)
+// A title's pane: its box less a gap, with rounded corners. Only the corner
+// (up to 3px, an eighth of the short side) and the gap (up to 1.5px, a sixth)
+// scale with the pane, so a field of small titles reads as small panes, not
+// pills, and every title takes the same light.
+const PANE_R = 3, PANE_GAP = 1.5
+function paneOf(t) {
+  const side = Math.min(t.w, t.h), g = Math.min(PANE_GAP, side / 6)
+  return { x: t.x + g / 2, y: t.y + g / 2, w: t.w - g, h: t.h - g, r: Math.min(PANE_R, side / 8) }
+}
+// Under half a pixel a corner draws as square, so a plain rect is the same and cheaper.
+function roundPath(ctx, x, y, w, h, r) {
+  const k = Math.min(r, w / 3, h / 3)
+  ctx.beginPath()
+  if (k < 0.5) ctx.rect(x, y, w, h); else ctx.roundRect(x, y, w, h, k)
+}
+
+const sheenOf = (ctx, p, P) => {
+  const g = ctx.createLinearGradient(0, p.y, 0, p.y + p.h)
+  g.addColorStop(0, P.sheen[0]); g.addColorStop(P.sheen[1], 'rgba(255,255,255,0)'); g.addColorStop(1, P.sheen[2])
+  return g
+}
+// A pane's fill and light. Its edges are stroked for every pane at once
+// (`paneEdges`): one path per kind of line, not two strokes per title.
+function pane(ctx, t, leaves, P) {
+  const p = paneOf(t)
+  if (p.w <= 0 || p.h <= 0) return null
+  // One plain leaf (most titles: Linked and nothing else) fills the pane's
+  // own path once, its colour and sheen as one opaque gradient, with no clip
+  // to set up and tear down. The same pixels as the sheen over the colour:
+  // both are straight lines between the same three colours.
+  if (leaves.length === 1 && !STATES[leaves[0].s].pattern) {
+    const [top, mid, bottom] = P.lit[leaves[0].s]
+    const g = ctx.createLinearGradient(0, p.y, 0, p.y + p.h)
+    g.addColorStop(0, top); g.addColorStop(P.sheen[1], mid); g.addColorStop(1, bottom)
+    roundPath(ctx, p.x, p.y, p.w, p.h, p.r)
+    ctx.fillStyle = g; ctx.fill()
+    return p
+  }
+  ctx.save()
+  roundPath(ctx, p.x, p.y, p.w, p.h, p.r); ctx.clip()
+  for (const l of leaves) {
+    ctx.fillStyle = rgb(P.c[l.s]); ctx.fillRect(l.x, l.y, l.w, l.h)
+    const kind = STATES[l.s].pattern
+    if (kind && l.w >= 4 && l.h >= 4) pattern(ctx, l, kind, P.ink)
+  }
+  // Leaves inside the pane part with a seam on their inner edges: a title's
+  // states, and in Files its files, which the cushion used to tell apart.
+  if (leaves.length > 1) {
+    ctx.beginPath()
+    for (const l of leaves) {
+      if (l.x > p.x + 1) { ctx.moveTo(l.x + 0.5, l.y); ctx.lineTo(l.x + 0.5, l.y + l.h) }
+      if (l.y > p.y + 1) { ctx.moveTo(l.x, l.y + 0.5); ctx.lineTo(l.x + l.w, l.y + 0.5) }
+    }
+    ctx.strokeStyle = P.seam; ctx.lineWidth = 1; ctx.stroke()
+  }
+  ctx.fillStyle = sheenOf(ctx, p, P); ctx.fillRect(p.x, p.y, p.w, p.h)
+  ctx.restore()
+  return p
+}
+// Every pane's hairline, then every lit top edge. Panes never overlap (a gap
+// parts them), so one stroke each draws what a stroke per pane did.
+function paneEdges(ctx, panes, P) {
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (const p of panes) {
+    if (p.w <= 1 || p.h <= 1) continue
+    const k = Math.min(p.r - 0.5, (p.w - 1) / 3, (p.h - 1) / 3)
+    if (k < 0.5) ctx.rect(p.x + 0.5, p.y + 0.5, p.w - 1, p.h - 1); else ctx.roundRect(p.x + 0.5, p.y + 0.5, p.w - 1, p.h - 1, k)
+  }
+  ctx.strokeStyle = P.edge; ctx.stroke()
+  ctx.beginPath()
+  for (const p of panes) {
+    if (p.w <= 1 || p.h <= 1) continue
+    const r = Math.min(p.r, p.w / 3)
+    ctx.moveTo(p.x + r, p.y + 0.5); ctx.lineTo(p.x + p.w - r, p.y + 0.5)
+  }
+  ctx.strokeStyle = P.top; ctx.stroke()
 }
 
 function pctLinked(by) {
@@ -254,7 +334,8 @@ function draw(canvas, model, W, H, detail, highlight = null) {
     if (ctx.measureText(size).width <= r.w - 4 - lw) ctx.fillText(size, r.x + 2 + lw, r.y + ROOT_HEAD / 2)
   }
   for (const f of L.folders) {
-    ctx.fillStyle = P.band; ctx.fillRect(f.x, f.y, f.w, f.h)
+    ctx.fillStyle = P.band
+    ctx.beginPath(); ctx.roundRect(f.x, f.y, f.w, f.h, Math.max(0, Math.min(4, f.w / 3, f.h / 3))); ctx.fill()
     if (!f.head) continue
     // A torrent block is named for its state and the workflow that acts on it,
     // which are words (Geist); a library folder's name is off the disk (mono).
@@ -275,23 +356,41 @@ function draw(canvas, model, W, H, detail, highlight = null) {
           `  ${b.slice(0, 2).join(' · ')}`, `  ${b[0] || ''}`], room) })()
     ctx.fillStyle = P.dim; ctx.fillText(rest, f.x + 6 + nameW, f.y + HEAD / 2 + 0.5)
   }
-  for (const l of L.leaves) tile(ctx, l, P)
+  const leavesOf = new Map()
+  for (const l of L.leaves) { const a = leavesOf.get(l.T); if (a) a.push(l); else leavesOf.set(l.T, [l]) }
+  P.lit = P.c.map(P.lit)
+  const panes = []
+  for (const t of L.titles) { const p = pane(ctx, t, leavesOf.get(t) || [], P); if (p) panes.push(p) }
+  paneEdges(ctx, panes, P)
   for (const r of L.roots) if (r.free) freeTile(ctx, r, P)
+  // The fade covers each faded leaf inside its pane's shape, its edges with it,
+  // so the gaps and corners stay the card's.
+  // A title with nothing lit fades whole, every such pane in one path and one
+  // fill (panes never overlap); only a title with both is clipped to its pane.
   if (highlight != null) {
     ctx.save(); ctx.globalAlpha = FADE; ctx.fillStyle = P.surface
-    for (const l of L.leaves) if (l.s !== highlight) ctx.fillRect(l.x, l.y, l.w, l.h)
+    const whole = new Path2D()
+    for (const t of L.titles) {
+      const ls = leavesOf.get(t)
+      if (!ls) continue
+      const lit = ls.filter(l => l.s === highlight).length
+      if (lit === ls.length) continue
+      const p = paneOf(t)
+      if (p.w <= 0 || p.h <= 0) continue
+      const k = Math.min(p.r, p.w / 3, p.h / 3)
+      if (!lit) { if (k < 0.5) whole.rect(p.x, p.y, p.w, p.h); else whole.roundRect(p.x, p.y, p.w, p.h, k); continue }
+      ctx.save(); roundPath(ctx, p.x, p.y, p.w, p.h, p.r); ctx.clip()
+      for (const l of ls) if (l.s !== highlight) ctx.fillRect(l.x, l.y, l.w, l.h)
+      ctx.restore()
+    }
+    ctx.fill(whole)
     ctx.restore()
   }
-  // Titles part with a 1px line of the card, so a title reads as one block.
-  ctx.strokeStyle = P.surface; ctx.lineWidth = 1
-  for (const t of L.titles) if (t.w > 3 && t.h > 3) ctx.strokeRect(t.x + 0.5, t.y + 0.5, t.w - 1, t.h - 1)
   ctx.textBaseline = 'top'
   const faded = labelOn(mix(toRgb(P.surface), [128, 128, 128], 0.85))
   // Under a highlight, a label over a faded leaf is set against the card, not
   // the leaf's colour.
   const inkOf = s => (highlight != null && s !== highlight ? faded : labelOn(P.c[s]))
-  const leavesOf = new Map()
-  for (const l of L.leaves) { const a = leavesOf.get(l.T); if (a) a.push(l); else leavesOf.set(l.T, [l]) }
   for (const t of L.titles) {
     if (t.w < 24 || t.h < 18) continue
     // A library title is one auditorr knows (Geist); a torrent's is a release name (mono).
@@ -600,7 +699,7 @@ function StateBar({ by }) {
   if (!total || by.filter(Boolean).length < 2) return null
   return (
     <div style={{ display: 'flex', gap: 1, width: 240, maxWidth: '100%', height: 6, borderRadius: 2, overflow: 'hidden' }} aria-hidden="true">
-      {by.map((b, s) => (b > 0 ? <span key={s} style={{ flex: `${b} 0 0`, minWidth: 2, ...swatchStyle(s) }} /> : null))}
+      {by.map((b, s) => (b > 0 ? <span key={s} style={{ flex: `${b} 0 0`, minWidth: 2, ...swatchStyle(s), boxShadow: SWATCH_EDGE }} /> : null))}
     </div>
   )
 }
@@ -871,7 +970,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
           {hover?.box && hover.outline !== false && (
             <div style={{
               position: 'absolute', pointerEvents: 'none', left: hover.box.x, top: hover.box.y,
-              width: hover.box.w, height: hover.box.h, border: '2px solid var(--text)', borderRadius: 2,
+              width: hover.box.w, height: hover.box.h, border: '2px solid var(--text)', borderRadius: 3,
               boxShadow: '0 0 0 1px var(--surface)',
             }} />
           )}

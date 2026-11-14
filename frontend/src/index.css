@@ -51,13 +51,19 @@
      the same step light mode's white takes above its own track. */
   --seg-on:    #2a2e33;
   --seg-edge:  #3a3f46;
-  /* The library map's two neutral states: linked bytes (the bulk) and Other.
-     The four workflow states are the cards' --blue, --yellow, --red and
-     --purple. Plain hex, because the canvas reads them and can't read a
-     color-mix(). Dark's are --text-dim mixed into --surface3 at 42% and 18%,
-     the cool slate that suits its blue. */
+  /* Linked as a chart series: New in the library's bars. --text-dim mixed
+     into --surface3 at 42%, the cool slate that suits its blue. */
   --map-linked: #55595e;
-  --map-other:  #34383c;
+  /* The library map's panes (2026-11-13, "Frosted panes", the user's pick):
+     Linked and Other step down toward the card so the healthy bulk recedes
+     (L* 38 -> 19), and a workflow state is its card colour (--blue, --yellow,
+     --red, --purple) mixed --map-mix into Linked's pane. Plain hex, because
+     the canvas reads them and can't read a color-mix(). Not --map-linked:
+     at the pane's grey, New in the library's bars would all but vanish in
+     light mode. */
+  --map-pane-linked: #2c2e31;
+  --map-pane-other:  #1c1e21;
+  --map-mix: 74%;
 }
 
 [data-theme="light"] {
@@ -85,10 +91,13 @@
   --seg-edge:  #ceccc7;
   /* Neutral greys with no hue (2026-11-10, the user's pick from a preview):
      mixed from the stone --text-dim like dark's, they read as putty beside
-     the sky blue. Lighter than dark's mix too: here more ink is darker, and
-     at 42% Linked was most of the map's weight. */
+     the sky blue. */
   --map-linked: #c3c3c3;
-  --map-other:  #d8d8d8;
+  /* The panes lift toward the white card as dark's sink toward its black
+     (L* 79 -> 91): --map-linked mixed 42% and 22% into white. */
+  --map-pane-linked: #e6e6e6;
+  --map-pane-other:  #f2f2f2;
+  --map-mix: 72%;
 }
 
 html, body, #root {
