@@ -54,15 +54,18 @@
   /* Linked as a chart series: New in the library's bars. --text-dim mixed
      into --surface3 at 42%, the cool slate that suits its blue. */
   --map-linked: #55595e;
-  /* The library map's panes (2026-11-13, "Frosted panes", the user's pick):
-     Linked and Other step down toward the card so the healthy bulk recedes
-     (L* 38 -> 19), and a workflow state is its card colour (--blue, --yellow,
-     --red, --purple) mixed --map-mix into Linked's pane. Plain hex, because
-     the canvas reads them and can't read a color-mix(). Not --map-linked:
-     at the pane's grey, New in the library's bars would all but vanish in
-     light mode. */
-  --map-pane-linked: #2c2e31;
-  --map-pane-other:  #1c1e21;
+  /* The library map (2026-11-13, "Frosted panes", then "clear glass, solid
+     states", the user's picks): --map-tray is what a folder's titles sit on,
+     and Linked's and Other's panes are clear glass, the tray itself, so the
+     glass is only the glint LibraryMap.jsx's LOOK draws on it (the user: "a
+     glint or shine on the background and does not overwhelm the
+     background"). A workflow state is its card colour (--blue, --yellow,
+     --red, --purple) mixed --map-mix into the pane. Plain hex, because the
+     canvas reads them and can't read a color-mix(). Not --map-linked: New in
+     the library's bars would vanish at the tray's colour. */
+  --map-tray:        #16181b;
+  --map-pane-linked: #16181b;
+  --map-pane-other:  #16181b;
   --map-mix: 74%;
 }
 
@@ -93,10 +96,13 @@
      mixed from the stone --text-dim like dark's, they read as putty beside
      the sky blue. */
   --map-linked: #c3c3c3;
-  /* The panes lift toward the white card as dark's sink toward its black
-     (L* 79 -> 91): --map-linked mixed 42% and 22% into white. */
-  --map-pane-linked: #e6e6e6;
-  --map-pane-other:  #f2f2f2;
+  /* Light's titles sit on the white card, not the grey --surface2 tray: on
+     the tray its clear panes read as white keys, where dark's tray is nearly
+     its card (L* 8 against 5). Its glint is LOOK.light's, at 45% of the
+     first build's (the user's pick from .internal/preview/mapglass.mjs). */
+  --map-tray:        #ffffff;
+  --map-pane-linked: #ffffff;
+  --map-pane-other:  #ffffff;
   --map-mix: 72%;
 }
 

@@ -22,7 +22,7 @@ const TRACKER_COLORS = ['#f57c00', '#5b9bd9', '#46b56a', '#a78bd0', '#c99a2e', '
 // columns of "0 B".
 const METRICS = [
   { key: 'seeding',      label: 'Seeding size', color: 'var(--green)',
-    views: [{ value: 'size', label: 'Size' }, { value: 'change', label: 'Change' }] },
+    views: [{ value: 'change', label: 'Change' }, { value: 'size', label: 'Size' }] },
   { key: 'uploaded',     label: 'Uploaded',     color: 'var(--blue)',
     views: [{ value: 'daily', label: 'Daily' }, { value: 'total', label: 'Running total' }] },
   { key: 'yield',        label: 'Yield %',      color: 'var(--accent)' },
@@ -199,10 +199,13 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
   const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(30))
   const [dateTo,      setDateTo]      = useState('')
   const [metricKey,   setMetricKey]   = useState('uploaded')
-  // Seeding size opens on Size, the table's figure. It opened on Change, which
-  // starts at 0 and climbs in GB, and read as a running total of upload: then
-  // a torrent removed or replaced looked like upload going backwards (2026-11-13).
-  const [views,       setViews]       = useState({ uploaded: 'daily', seeding: 'size' })
+  // The view picked for the metric on screen; null is its default, the first
+  // it lists (Seeding size: Change, the user's call, 2026-11-13). Switching
+  // metric drops the pick: each metric used to remember its own, so Uploaded
+  // came back as Running total's line after a visit to Seeding size, and only
+  // a reload brought the bars back (2026-11-13).
+  const [viewPick,    setViewPick]    = useState(null)
+  const pickMetric = (k) => { setMetricKey(k); setViewPick(null) }
   const [visible,     setVisible]     = useState(() => allTrackers.slice())
   const [hovered,     setHovered]     = useState(null)
   const [sortKey,     setSortKey]     = useState('seeding')
@@ -270,7 +273,7 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
   const colorFor = (t) => TRACKER_COLORS[Math.max(0, allTrackers.indexOf(t)) % TRACKER_COLORS.length]
 
   const metric = metricBy(activeMetric)
-  const view = views[activeMetric] || metric.views?.[0]?.value
+  const view = metric.views?.some(v => v.value === viewPick) ? viewPick : metric.views?.[0]?.value
   const spec = drawSpec(activeMetric, view)
   const chartSeries = sortedRows.map(t => ({
     name: t, color: colorFor(t), visible: visible.includes(t),
@@ -316,14 +319,14 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             {/* The square swatch is the metric's colour, kept square so it
                 reads as a series key rather than a status dot. */}
-            <Segmented size="lg" label="Metric" value={activeMetric} onChange={setMetricKey}
+            <Segmented size="lg" label="Metric" value={activeMetric} onChange={pickMetric}
               options={metrics.map(m => ({
                 value: m.key, label: m.label,
                 icon: <span style={{ width: 7, height: 7, borderRadius: 2, background: m.color, flexShrink: 0 }} />,
               }))} />
             {metric.views && (
               <Segmented size="lg" label="View" value={view}
-                onChange={v => setViews(s => ({ ...s, [activeMetric]: v }))} options={metric.views} />
+                onChange={setViewPick} options={metric.views} />
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>

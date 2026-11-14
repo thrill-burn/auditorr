@@ -70,11 +70,15 @@ const rgb = c => `rgb(${c.map(Math.round).join(',')})`
 // were the speckle the user called "a bunch of grey squares with spectral
 // highlights". A first pass lit only panes 26px across, which on the 1440
 // screen was 8% of movies; the user: "it should be cohesive and consistent".
+// The glass is clear (index.css: a pane is its tray's colour), so this is all
+// that makes it glass: "a glint or shine on the background". Light's glint is
+// 45% of the first build's (sheen 55% → 25%, hairline 8.5% → 6.5%), on the
+// white card: at full strength its panes read as raised white keys.
 const LOOK = {
   dark:  { sheen: { top: [255, 255, 255, 0.075], mid: 0.55, bottom: [0, 0, 0, 0.12] }, edge: 'rgba(255,255,255,0.06)',
            top: 'rgba(255,255,255,0.15)', seam: 'rgba(0,0,0,0.35)', ink: 0.26 },
-  light: { sheen: { top: [255, 255, 255, 0.55], mid: 0.5, bottom: [0, 0, 0, 0.05] }, edge: 'rgba(0,0,0,0.085)',
-           top: 'rgba(255,255,255,0.95)', seam: 'rgba(0,0,0,0.1)', ink: 0.34 },
+  light: { sheen: { top: [255, 255, 255, 0.25], mid: 0.5, bottom: [0, 0, 0, 0.03] }, edge: 'rgba(0,0,0,0.065)',
+           top: 'rgba(255,255,255,0.85)', seam: 'rgba(0,0,0,0.1)', ink: 0.34 },
 }
 const rgba = (c, a) => `rgba(${c.join(',')},${a})`
 
@@ -82,13 +86,15 @@ function palette() {
   const dim = toRgb(cssVar('--text-dim'))
   const light = document.documentElement.getAttribute('data-theme') === 'light'
   const k = LOOK[light ? 'light' : 'dark']
-  // Linked is the pane's own grey; Other quieter still; a workflow state is
+  // Linked and Other are clear panes, the tray's colour; a workflow state is
   // its card colour mixed --map-mix into Linked (index.css).
   const linked = toRgb(cssVar('--map-pane-linked'))
   const m = (parseFloat(cssVar('--map-mix')) || 74) / 100
   const state = name => mix(toRgb(cssVar(name)), linked, m)
   return {
-    surface: cssVar('--surface'), band: cssVar('--surface2'), text: cssVar('--text'), dim: cssVar('--text-dim'),
+    // `band` stays --surface2 for free space's tile; `tray` is under the titles.
+    surface: cssVar('--surface'), band: cssVar('--surface2'), tray: cssVar('--map-tray') || cssVar('--surface2'),
+    text: cssVar('--text'), dim: cssVar('--text-dim'),
     c: [linked, state('--blue'), state('--yellow'), state('--red'), state('--purple'),
         toRgb(cssVar('--map-pane-other')), state('--red')],
     // The sheen as an overlay (over leaves and patterns), and per state as the
@@ -334,7 +340,7 @@ function draw(canvas, model, W, H, detail, highlight = null) {
     if (ctx.measureText(size).width <= r.w - 4 - lw) ctx.fillText(size, r.x + 2 + lw, r.y + ROOT_HEAD / 2)
   }
   for (const f of L.folders) {
-    ctx.fillStyle = P.band
+    ctx.fillStyle = P.tray
     ctx.beginPath(); ctx.roundRect(f.x, f.y, f.w, f.h, Math.max(0, Math.min(4, f.w / 3, f.h / 3))); ctx.fill()
     if (!f.head) continue
     // A torrent block is named for its state and the workflow that acts on it,
