@@ -4,7 +4,7 @@ import { formatBytes } from '../utils'
 import { Button, Segmented, Spinner, useAuditComplete, ITEM_TITLE, MONO_TITLE } from './workflows/shared'
 import { SECTION_LABEL, CARD, CAPTION, READOUT, Hero, TrendPill } from './dashKit'
 import {
-  STATES, PROBLEM, LEGEND, LINKED, ORPHANED, NOT_IMPORTED, COPY, OTHER, DEAD_SEED, ROOT_HEAD, HEAD, worstState,
+  STATES, PROBLEM, LEGEND, LINKED, ORPHANED, NOT_IMPORTED, COPY, OTHER, DEAD_SEED, UNMANAGED, ROOT_HEAD, HEAD, worstState,
   modelFromFiles, modelTotals, biggestGaps, navFor, layoutMap, leafAt,
   zoomModel, zoomOut, headingTarget, headingAt, freeAt, freeRoots, shortName,
 } from './libraryMapRules'
@@ -16,7 +16,8 @@ import {
 // is drawn at the smallest size that shows (libraryMapRules.js, "Sizing"); the
 // figures stay bytes.
 // Each of those four also has its own pattern (stripes, dots, back-stripes,
-// cross-hatch): the user is colorblind, and a colour alone isn't a difference.
+// zigzag): the user is colorblind, and a colour alone isn't a difference.
+// Unmanaged (2026-11-14) is no workflow's, so it's a plain grey, no pattern.
 // The rules, the layout and the click targets are in libraryMapRules.js.
 //
 // Titles by default, from the scan's stored row (`/api/library_map`, a few KB).
@@ -41,6 +42,7 @@ export function useLibraryMapRow() {
 
 const LABEL = {
   [LINKED]: '', 1: 'not seeded', 2: 'orphaned', 3: 'not imported', 4: 'copies', 5: 'other', [DEAD_SEED]: 'dead seed',
+  [UNMANAGED]: 'unmanaged',
 }
 
 // ── Colours, read from the live theme ────────────────────────────────────────
@@ -96,7 +98,7 @@ function palette() {
     surface: cssVar('--surface'), band: cssVar('--surface2'), tray: cssVar('--map-tray') || cssVar('--surface2'),
     text: cssVar('--text'), dim: cssVar('--text-dim'),
     c: [linked, state('--blue'), state('--yellow'), state('--red'), state('--purple'),
-        toRgb(cssVar('--map-pane-other')), state('--red')],
+        toRgb(cssVar('--map-pane-other')), state('--red'), toRgb(cssVar('--map-unmanaged'))],
     // The sheen as an overlay (over leaves and patterns), and per state as the
     // three colours it makes on a plain pane, so one opaque gradient fills it.
     sheen: [rgba(k.sheen.top.slice(0, 3), k.sheen.top[3]), k.sheen.mid, rgba(k.sheen.bottom.slice(0, 3), k.sheen.bottom[3])],
@@ -112,7 +114,9 @@ function palette() {
 
 // The same patterns in CSS, for the legend's swatches, on the panes' fills.
 const PATTERN_INK = 'color-mix(in srgb, white 45%, transparent)'
-const SWATCH_VAR = { linked: 'var(--map-pane-linked)', other: 'var(--map-pane-other)' }
+const SWATCH_VAR = { linked: 'var(--map-pane-linked)', other: 'var(--map-pane-other)', unmanaged: 'var(--map-unmanaged)' }
+// Copies' zigzag as a tile, the canvas's rows at its 6px pitch (CSS has no zigzag gradient).
+const ZIG_TILE = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Cpath d='M0 4.4L1.5 1.6L3 4.4L4.5 1.6L6 4.4' fill='none' stroke='white' stroke-opacity='.45' stroke-width='1.3'/%3E%3C/svg%3E") 0 0 / 6px 6px`
 export function swatchStyle(s) {
   const c = SWATCH_VAR[STATES[s].color] || `color-mix(in srgb, var(--${STATES[s].color}) var(--map-mix), var(--map-pane-linked))`
   const w = PATTERN_INK
@@ -120,7 +124,7 @@ export function swatchStyle(s) {
     case 'slash': return { background: `repeating-linear-gradient(135deg, ${c} 0 2px, ${w} 2px 3.5px), ${c}` }
     case 'back':  return { background: `repeating-linear-gradient(45deg, ${c} 0 2px, ${w} 2px 3.5px), ${c}` }
     case 'dots':  return { background: `radial-gradient(${w} 0.9px, transparent 1.2px) 0 0 / 4px 4px, ${c}` }
-    case 'cross': return { background: `repeating-linear-gradient(45deg, transparent 0 2.5px, ${w} 2.5px 3.5px), repeating-linear-gradient(135deg, transparent 0 2.5px, ${w} 2.5px 3.5px), ${c}` }
+    case 'zig':   return { background: `${ZIG_TILE}, ${c}` }
     case 'rows':  return { background: `repeating-linear-gradient(0deg, ${c} 0 2px, ${w} 2px 3.5px), ${c}` }
     default:      return { background: c }
   }
@@ -167,9 +171,17 @@ function pattern(ctx, l, kind, ink) {
   ctx.beginPath(); ctx.rect(l.x, l.y, l.w, l.h); ctx.clip()
   ctx.strokeStyle = ink; ctx.fillStyle = ink; ctx.lineWidth = 1.5
   ctx.beginPath()
-  const step = kind === 'cross' ? 7 : 6
-  if (kind === 'slash' || kind === 'cross') for (let i = -l.h; i < l.w; i += step) { ctx.moveTo(l.x + i, l.y + l.h); ctx.lineTo(l.x + i + l.h, l.y) }
-  if (kind === 'back' || kind === 'cross') for (let i = -l.h; i < l.w; i += step) { ctx.moveTo(l.x + i, l.y); ctx.lineTo(l.x + i + l.h, l.y + l.h) }
+  if (kind === 'slash') for (let i = -l.h; i < l.w; i += 6) { ctx.moveTo(l.x + i, l.y + l.h); ctx.lineTo(l.x + i + l.h, l.y) }
+  if (kind === 'back') for (let i = -l.h; i < l.w; i += 6) { ctx.moveTo(l.x + i, l.y); ctx.lineTo(l.x + i + l.h, l.y + l.h) }
+  // Copies' zigzag (2026-11-14): rows of a line that turns every 3px, so it
+  // shares no stroke with Not seeded's diagonal, a dead seed's rows or a seam.
+  if (kind === 'zig') {
+    ctx.lineWidth = 1.3
+    for (let y = l.y + 3; y < l.y + l.h + 2; y += 6) {
+      ctx.moveTo(l.x - 3, y + 1.4)
+      for (let x = l.x - 3, up = true; x < l.x + l.w + 3; x += 3, up = !up) ctx.lineTo(x + 3, y + (up ? -1.4 : 1.4))
+    }
+  }
   // A dead seed's rows: level, so no diagonal reads as one.
   if (kind === 'rows') for (let y = l.y + 3; y < l.y + l.h; y += 5) { ctx.moveTo(l.x, y); ctx.lineTo(l.x + l.w, y) }
   if (kind === 'dots') {
@@ -271,6 +283,7 @@ function breakdown(by) {
   const parts = []
   if (by[LINKED] || by[DEAD_SEED]) parts.push(`${pctLinked(by)}% linked`)
   for (const s of PROBLEM) if (by[s]) parts.push(`${formatBytes(by[s])} ${LABEL[s]}`)
+  if (by[UNMANAGED]) parts.push(`${formatBytes(by[UNMANAGED])} ${LABEL[UNMANAGED]}`)
   return parts
 }
 
@@ -540,6 +553,7 @@ function actionFor(nav, t) {
   const wf = STATES.find(x => x.tab === nav.tab)?.workflow || nav.tab
   if (nav.tab === 'dedupe') return `Click to open ${wf} →`
   if (nav.tab === 'backfill') return 'Click to search for this title in Backfill →'
+  if (nav.tab === 'media') return 'Click to see its files in Media →'
   return `Click to open ${wf} on this ${t.root === 'library' ? 'title' : 'release'} →`
 }
 
@@ -559,7 +573,8 @@ function hoverText(leaf, mode) {
   const lib = t.root === 'library'
   // A library title's linked part opens the title's own problem, so a click
   // anywhere on a title that needs something goes to the workflow for it.
-  const nav = navFor(leaf.s, t) || (lib && !t.folded ? navFor(worstState(t.by), t) : null)
+  // One that needs nothing but holds unmanaged files opens Media on them.
+  const nav = navFor(leaf.s, t) || (lib && !t.folded ? navFor(worstState(t.by), t) || navFor(t.by[UNMANAGED] ? UNMANAGED : LINKED, t) : null)
   const base = { s: leaf.s, nav, action: actionFor(nav, t),
                  drawn: drawnNote(leaf, mode !== 'files' && lib && t.by.filter(Boolean).length > 1),
                  note: nav ? null : (lib ? 'Every file here is linked: nothing to do' : null) }
@@ -578,7 +593,8 @@ function hoverText(leaf, mode) {
   const files = `${(t.files || 0).toLocaleString()} file${t.files !== 1 ? 's' : ''}`
   if (lib) {
     const facts = [formatBytes(t.v), files, ...(t.by[LINKED] || t.by[DEAD_SEED] ? [`${pctLinked(t.by)}% linked`] : []),
-      ...PROBLEM.filter(s => t.by[s]).map(s => `${formatBytes(t.by[s])} ${LABEL[s]} (${STATES[s].workflow})`)].join(' · ')
+      ...PROBLEM.filter(s => t.by[s]).map(s => `${formatBytes(t.by[s])} ${LABEL[s]} (${STATES[s].workflow})`),
+      ...(t.by[UNMANAGED] ? [`${formatBytes(t.by[UNMANAGED])} ${LABEL[UNMANAGED]} (in no arr)`] : [])].join(' · ')
     return { ...base, thumb, rel, prefix: t.folded ? '' : t.folder || '', name: t.name,
              kind: t.folded ? 'words' : 'title', context: t.folded ? 'Titles too small to draw, as one tile' : null,
              facts, by: t.by }

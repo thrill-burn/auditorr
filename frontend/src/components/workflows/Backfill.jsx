@@ -1145,12 +1145,23 @@ export default function Backfill({ onNavigate, initialUnder }) {
           extra="Everything affected is missing from the candidates and folders below."
         />
 
+        {/* Why a map click found nothing sits here, in the banner that names
+            the folder. It was a line under the disabled Generate button, a
+            scroll below the fold, so it read as the page silently falling back
+            to the full settings. */}
         {under && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 8, background: tint('var(--blue)', 6), border: `1px solid ${tint('var(--blue)', 19)}` }}>
-            <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.5, minWidth: 0 }}>
-              From the library map: only <span style={{ fontFamily: 'var(--mono)' }}>{under}</span>
-              {!loading && <span style={{ color: 'var(--text-dim)' }}> · {availableCount.toLocaleString()} candidate{availableCount !== 1 ? 's' : ''}</span>}
-            </span>
+            <div style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.5, minWidth: 0, overflowWrap: 'anywhere' }}>
+              <div>
+                From the library map: only <span style={{ fontFamily: 'var(--mono)' }}>{under}</span>
+                {!loading && <span style={{ color: 'var(--text-dim)' }}> · <span style={{ fontFamily: 'var(--mono)' }}>{availableCount.toLocaleString()}</span> candidate{availableCount !== 1 ? 's' : ''}</span>}
+              </div>
+              {!loading && availableCount === 0 && (
+                <div style={{ marginTop: 4 }}>
+                  Nothing here to search: Sonarr and Radarr manage none of its unseeded files, or they're excluded. Backfill can only search for what an arr manages.
+                </div>
+              )}
+            </div>
             <Button size="sm" variant="ghost" onClick={() => setUnder(null)} style={{ marginLeft: 'auto' }}>Show everything</Button>
           </div>
         )}
@@ -1279,11 +1290,10 @@ export default function Backfill({ onNavigate, initialUnder }) {
               <Button variant="primary" onClick={handleGenerate} disabled={availableCount === 0}>
                 Generate {willSearch > 0 ? `${willSearch} ` : ''}Releases →
               </Button>
-              {availableCount === 0 && (
+              {/* A map run says why in its banner at the top. */}
+              {availableCount === 0 && !under && (
                 <div style={{ marginTop: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
-                  {under
-                    ? <>Nothing under <span style={{ fontFamily: 'var(--mono)' }}>{under}</span> to search: Sonarr and Radarr manage none of its unseeded files, or they're excluded. Backfill can only search for what an arr manages.</>
-                    : 'No resolved candidates — check that Radarr/Sonarr is configured.'}
+                  No resolved candidates — check that Radarr/Sonarr is configured.
                 </div>
               )}
             </div>

@@ -704,7 +704,7 @@ const STATUS_FILTERS = [
   { id: 'Orphaned', label: 'Orphaned', color: 'var(--yellow)' },
 ]
 
-export default function FileExplorer({ files, trackers, trackerAliases, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, revealPath }) {
+export default function FileExplorer({ files, trackers, trackerAliases, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, initialQuery, revealPath }) {
   const aliases = trackerAliases && Object.keys(trackerAliases).length ? trackerAliases : null
   trackers = trackers || []
 
@@ -740,8 +740,10 @@ export default function FileExplorer({ files, trackers, trackerAliases, tab, ini
   const [userFlat, setUserFlat] = useState(() => localStorage.getItem('auditorr_view_flat') === '1')
   const [sortBy, setSortBy] = useState('name')
 
-  // Raw name query drives the input; debounced value drives filtering
-  const [nameQuery, setNameQuery] = useState('')
+  // Raw name query drives the input; debounced value drives filtering. A
+  // library map Unmanaged tile opens here on its folder (`initialQuery`, the
+  // title's library-relative path), which the path match below finds.
+  const [nameQuery, setNameQuery] = useState(initialQuery || '')
   const debouncedNameQuery = useDebounce(nameQuery, 150)
 
   useEffect(() => {

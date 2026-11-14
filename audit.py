@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 import sources
 from sources import canonical_trackers, strip_port
-from arr import VIDEO_EXTENSIONS
+from arr import VIDEO_EXTENSIONS, fetch_arr_managed_paths, media_path_key
 from exclusions import is_excluded, compile_exclusions
 from scripts import dedupe_group_count, dedupe_row
 from media_server_exclusions import expand_exclusion_patterns
@@ -731,7 +731,11 @@ def _dedupe_paths(tree_paths):
 
 
 def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map,
-                      compiled_exclusions=None, unverified=None):
+                      compiled_exclusions=None, unverified=None, unmanaged=None, counts=None):
+    """`unmanaged`: `unmanaged_test`'s answer for one library path, when the arrs
+    gave a whole one. Each unseeded library record it says no arr holds is
+    stamped `unmanaged`, here, in the loop that builds the records, so the
+    stamp costs no pass of its own; `counts['unmanaged']` says how many."""
     if unverified:
         # Normalised once here as well as in `unverified_spec`: every comparison
         # below is against `_match_key` paths, and a root spelled any other way
@@ -828,6 +832,12 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
             extra = _dedupe_paths(info['media_paths'])
             if extra:
                 record["dedupe_paths"] = extra
+        # Unseeded as the map reads it (`_map_state_media`); a linked file,
+        # most of a library, leaves at the first test.
+        elif (unmanaged is not None and not info['torrent_paths'] and not record['excluded']
+              and unmanaged(record['path'])):
+            record['unmanaged'] = True
+            counts['unmanaged'] += 1
         media_files_data.append(record)
     # Before the whole-torrent stamps, which read it.
     _mark_sidecars(torrent_files_data, sidecar_candidates)
@@ -1304,7 +1314,7 @@ def _library_shape(scoring_media):
 # instead, from the lists the recompute already holds.)
 SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
                      'cleanup_unchecked_count', 'empty_folder_count', 'empty_folders_unknown',
-                     'disk_space')
+                     'disk_space', 'unmanaged_check', 'unmanaged_count')
 
 
 # ---------------------------------------------------------------------------
@@ -1325,8 +1335,16 @@ SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
 # side link, and the file turns Not seeded for Backfill. It was drawn Linked,
 # which looked healthy, and Triage's rows were on no tile. Appended last, so a
 # version 1 row's six sums keep their places.
-MAP_LINKED, MAP_UNSEEDED, MAP_ORPHANED, MAP_NOT_IMPORTED, MAP_COPY, MAP_OTHER, MAP_DEAD_SEED = range(7)
-MAP_STATES = 7
+#
+# **Unmanaged is a library state** (2026-11-14): a library file that isn't
+# seeded and that no arr holds (`stamp_unmanaged`, the scan's stamp). It was
+# drawn Not seeded, and a click opened Backfill on nothing: on the box a 720p
+# copy of The Gruffalo's Child beside Radarr's own folder, a Sonarr folder whose
+# 72 episodes Sonarr tracks none of, a film's extras. No workflow acts on it,
+# so it's in no workflow's colour and no gap total. Appended last, so a
+# version 2 row's seven sums keep their places.
+MAP_LINKED, MAP_UNSEEDED, MAP_ORPHANED, MAP_NOT_IMPORTED, MAP_COPY, MAP_OTHER, MAP_DEAD_SEED, MAP_UNMANAGED = range(8)
+MAP_STATES = 8
 # Titles kept by name, largest first. The rest fold into one tile per folder:
 # a title under a pixel draws nothing, and the row stays small on a library
 # with tens of thousands of titles.
@@ -1339,7 +1357,59 @@ def _map_state_media(f, dead=None):
         return MAP_DEAD_SEED if dead and f.get('file_id') in dead else MAP_LINKED
     if f.get('duplicate_paths'):
         return MAP_COPY
-    return MAP_UNSEEDED
+    return MAP_UNMANAGED if f.get('unmanaged') else MAP_UNSEEDED
+
+
+def stamp_unmanaged(media_files, media_root, managed):
+    """Stamp `unmanaged: True` on each unseeded library file no arr holds; the count.
+
+    Unseeded as the map reads it (`_map_state_media`): not excluded, no link,
+    no copy. `managed` is `arr.fetch_arr_managed_paths`' `ManagedPaths`, matched on
+    `arr.media_path_key` of the file's full path, which is Backfill's own test,
+    so a video stamped here is exactly one Backfill can't search, and one left
+    Not seeded is one it can. **Anything else follows its folder**: no arr
+    lists a subtitle, a poster or an .nfo, so one is unmanaged only where no
+    arr holds a file beside it. Matched alone, every sidecar of a Radarr movie
+    would have been a grey sliver saying it was in no arr. Sparse: a file that
+    isn't stamped has no key, so the record costs nothing more. Never called
+    without a whole answer from every arr (R1). The scan stamps in
+    `_assemble_records`, by the same `unmanaged_test`.
+    """
+    unmanaged = unmanaged_test(managed, media_root)
+    n = 0
+    for f in media_files:
+        if f.get('linked_paths') or f.get('duplicate_paths') or f.get('excluded'):
+            continue
+        if unmanaged(f.get('path') or ''):
+            f['unmanaged'] = True
+            n += 1
+    return n
+
+
+def unmanaged_test(managed, media_root):
+    """`unmanaged(path)` for a library path: does no arr hold it? (`stamp_unmanaged`)
+
+    A video by its own path, anything else by its folder. The key is
+    `media_path_key` of the full path, Backfill's; for a path the walk wrote
+    (`os.path.relpath`'s, already normal, no backslash) that's the normalised
+    root and the path joined, so it's built without `normpath`: at 650,000
+    files that was half the stamp's time. Anything else takes the long way.
+    """
+    root = media_path_key(media_root)
+    prefix = '' if root == '.' else (root if root.endswith('/') else root + '/')
+
+    def unmanaged(rel):
+        if rel and rel[0] != '/' and '\\' not in rel:
+            key = prefix + rel
+        else:
+            key = media_path_key(rel if os.path.isabs(rel) else os.path.join(media_root, rel))
+        # The extension as `splitext` reads it for any real file name, without
+        # its Python-level loop.
+        dot = key.rfind('.')
+        if dot > key.rfind('/') + 1 and key[dot:].lower() in VIDEO_EXTENSIONS:
+            return key not in managed
+        return not managed.holds_folder_of(key)
+    return unmanaged
 
 
 def _map_state_torrent(f):
@@ -1391,17 +1461,19 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
     """The library map's compact row: `{version, folders, titles, folded}`.
 
     * `folders` — `[root, name]`, root `library` or `torrents`.
-    * `titles`  — `[folder index, name, files, b0 … b6]`, one byte sum per state
+    * `titles`  — `[folder index, name, files, b0 … b7]`, one byte sum per state
       (`MAP_*`), the `titles_max` largest. A library title holding a dead seed
       adds the dead torrent's own folder (`category/release`) last, which is
       what Triage's search matches: its rows are torrents, named as the client
       names them, never as the library does.
-    * `folded`  — `[folder index, titles, files, b0 … b6]`, every other title of
+    * `folded`  — `[folder index, titles, files, b0 … b7]`, every other title of
       that folder in one.
 
-    Version 2 (2026-11-11) added the seventh state, MAP_DEAD_SEED; a version 1
-    row has six sums and no search, and the frontend reads both. `dead` is
-    `dead_seed_keys`' answer, worked out here when not given.
+    Version 3 (2026-11-14) added the eighth state, MAP_UNMANAGED, read off the
+    scan's `unmanaged` stamp; version 2 (2026-11-11) the seventh, MAP_DEAD_SEED.
+    A version 2 row has seven sums and a version 1 row six and no search, and
+    the frontend reads all three. `dead` is `dead_seed_keys`' answer, worked out
+    here when not given.
 
     Excluded files are left out, as the score leaves them out. Holds names, so it
     is its own file_results row, served by `/api/library_map` and never part of
@@ -1433,10 +1505,12 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
         key = path[:j] if j > 0 else path
         row = lib.get(key)
         if row is None:
-            row = lib[key] = [0, 0, 0, 0, 0, 0, 0, 0]   # files, then MAP_STATES sums
+            row = lib[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]   # files, then MAP_STATES sums
         row[0] += 1
-        # 1 + MAP_LINKED / MAP_COPY / MAP_UNSEEDED, as `_map_state_media`.
-        row[1 if f.get('linked_paths') else (5 if f.get('duplicate_paths') else 2)] += f.get('size') or 0
+        # 1 + MAP_LINKED / MAP_COPY / MAP_UNMANAGED / MAP_UNSEEDED, as
+        # `_map_state_media`. The stamp is read only on an unseeded file.
+        row[1 if f.get('linked_paths') else (5 if f.get('duplicate_paths')
+                                             else (8 if f.get('unmanaged') else 2))] += f.get('size') or 0
     if dead:
         # One membership test a record, in a comprehension; the rest runs on
         # the few it finds.
@@ -1462,7 +1536,7 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
         key = path[:j] if j > 0 else path
         row = tor.get(key)
         if row is None:
-            row = tor[key] = [0, 0, 0, 0, 0, 0, 0, 0]
+            row = tor[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
         row[0] += 1
         row[1 + _map_state_torrent(f)] += f.get('size') or 0
     # Sorted in place, largest first, without a second copy of either dict.
@@ -1489,7 +1563,7 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
             agg[0] += 1
             for i, v in enumerate(row):
                 agg[1 + i] += v
-    return {'version': 2, 'folders': folders, 'titles': out,
+    return {'version': 3, 'folders': folders, 'titles': out,
             'folded': [[fi, *agg] for fi, agg in sorted(folded.items())]}
 
 
@@ -2910,6 +2984,38 @@ def _record_source_anomaly(anomaly, trigger, cfg, scan_start, persist=True):
     set_state(status_message=msg, last_scan_status="error", anomaly_code=anomaly['code'])
 
 
+# How long a scan waits, once its walks are done, for the arrs' answer to the
+# Unmanaged stamp. Past it the stamp is skipped (`unreachable`): a slow arr
+# mustn't hold up a scan, and its files stay Not seeded, as they were drawn
+# before the stamp existed.
+_ARR_PATHS_WAIT = 60
+
+
+def _ask_arrs_meanwhile(cfg):
+    """Start `arr.fetch_arr_managed_paths` on a thread; return `(answer, still_asking)`.
+
+    The scan asks while it walks the disk: on the box the arrs answer in 0.6 s
+    and a scan takes 3, so the stamp costs it no time unless the arrs are
+    slower than both walks. `answer()` waits up to `_ARR_PATHS_WAIT` and is
+    `(None, 'unreachable')` past it or on any failure.
+    """
+    box = {}
+
+    def run():
+        try:
+            box['answer'] = fetch_arr_managed_paths(cfg)
+        except Exception as e:
+            log.warning("Could not ask the arrs which files they hold: %s", type(e).__name__)
+
+    t = threading.Thread(target=run, daemon=True, name='audit-arr-paths')
+    t.start()
+
+    def answer():
+        t.join(_ARR_PATHS_WAIT)
+        return box.get('answer') or (None, 'unreachable')
+    return answer, t.is_alive
+
+
 def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
@@ -2933,6 +3039,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     threading.Thread(target=_memory_sampler, args=(sampler_stop,), daemon=True,
                      name="audit-memory-sampler").start()
     try:
+        # The arrs' file paths, for the library map's Unmanaged stamp, asked
+        # while the disk is walked.
+        arr_answer, arr_asking = _ask_arrs_meanwhile(cfg)
         # Save roots of listings that failed with nothing found on disk — in
         # memory only, never on the persisted report (see `unverified_spec`).
         unresolved_roots = []
@@ -3004,11 +3113,25 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         del qbit_file_map
         _enter_phase("post", "Detecting duplicates...")
         duplicate_map = _build_duplicate_map(inode_map)
+        # The library map's Unmanaged state: unseeded files no arr holds,
+        # stamped as the records are built. Only on a whole answer from every
+        # arr; otherwise nothing is stamped and those files stay Not seeded
+        # (R1), which Last scan says.
+        if arr_asking():
+            _enter_phase("post", "Asking Sonarr and Radarr which files they hold...")
+        managed, unmanaged_check = arr_answer()
+        if unmanaged_check == 'unreachable':
+            log.info("Audit: Sonarr/Radarr didn't all answer, so no library file is marked unmanaged this scan")
+        stamp_counts = {'unmanaged': 0}
         _enter_phase("post", "Assembling file records...")
         _unverified = unverified_spec(source_report, unresolved_roots)
         torrent_files_data, media_files_data = _assemble_records(
             torrent_key_order, media_key_order, inode_map, duplicate_map,
-            compiled_exclusions=compiled_excl, unverified=_unverified)
+            compiled_exclusions=compiled_excl, unverified=_unverified,
+            unmanaged=unmanaged_test(managed, cfg.get('MEDIA_PATH', '')) if managed is not None else None,
+            counts=stamp_counts)
+        del managed
+        unmanaged_count = stamp_counts['unmanaged']
         del torrent_key_order, media_key_order, inode_map, duplicate_map
         if _unverified:
             log.warning("Audit: %d orphaned file(s) marked unverified — the client could not "
@@ -3045,6 +3168,11 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             'empty_folders_unknown': empty_dirs is None,
             # The library map's free space: two system calls, counts only.
             'disk_space': disk_space(cfg.get('LOCAL_PATH', ''), cfg.get('MEDIA_PATH', '')),
+            # The Unmanaged stamp, and whether the arrs answered for it
+            # ('ok', 'none' with no arr configured, 'unreachable'). Last scan
+            # says so when they didn't.
+            'unmanaged_check': unmanaged_check,
+            'unmanaged_count': unmanaged_count,
         }
         # The history point is staged rather than written: it joins the publish
         # below, because the hourly/daily series accumulates and a point left

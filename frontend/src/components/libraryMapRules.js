@@ -25,20 +25,35 @@
 // sums keep their places; LEGEND and PROBLEM put it in the cards' order.
 // Triage's red, so it differs from Not imported by pattern (horizontal rows)
 // and by name, never by colour alone.
-export const LINKED = 0, UNSEEDED = 1, ORPHANED = 2, NOT_IMPORTED = 3, COPY = 4, OTHER = 5, DEAD_SEED = 6
+//
+// **Unmanaged is a library state** (2026-11-14): a file that isn't seeded and
+// that no arr holds (`audit.stamp_unmanaged`, the scan's `unmanaged` stamp).
+// It was drawn Not seeded, and its click opened Backfill on nothing. No
+// workflow acts on it, so it's not in PROBLEM (no gap total, no floor, not on
+// Biggest gaps) and has no pattern, since a pattern here means a workflow acts
+// on the tile: a plain grey fill (`--map-unmanaged`), the user's pick, which
+// sets it apart from the clear Linked panes. A click opens Media on it.
+//
+// **Copies is a zigzag** (2026-11-14, the user's pick). Its cross-hatch held
+// Not seeded's diagonal, and in dark --purple was as light as --blue, so the
+// two read as one for red-green colour blindness (simulated ΔE 2.1); dark's
+// purple is lighter now too (index.css). The zigzag shares no line with any
+// other state.
+export const LINKED = 0, UNSEEDED = 1, ORPHANED = 2, NOT_IMPORTED = 3, COPY = 4, OTHER = 5, DEAD_SEED = 6, UNMANAGED = 7
 
 export const STATES = [
-  { name: 'Linked',       workflow: null,       tab: null,       color: 'linked', pattern: null },
-  { name: 'Not seeded',   workflow: 'Backfill', tab: 'backfill', color: 'blue',   pattern: 'slash' },
-  { name: 'Orphaned',     workflow: 'Cleanup',  tab: 'cleanup',  color: 'yellow', pattern: 'dots' },
-  { name: 'Not imported', workflow: 'Triage',   tab: 'triage',   color: 'red',    pattern: 'back' },
-  { name: 'Copies',       workflow: 'Dedupe',   tab: 'dedupe',   color: 'purple', pattern: 'cross' },
-  { name: 'Other',        workflow: null,       tab: null,       color: 'other',  pattern: null },
-  { name: 'Dead seed',    workflow: 'Triage',   tab: 'triage',   color: 'red',    pattern: 'rows' },
+  { name: 'Linked',       workflow: null,       tab: null,       color: 'linked',    pattern: null },
+  { name: 'Not seeded',   workflow: 'Backfill', tab: 'backfill', color: 'blue',      pattern: 'slash' },
+  { name: 'Orphaned',     workflow: 'Cleanup',  tab: 'cleanup',  color: 'yellow',    pattern: 'dots' },
+  { name: 'Not imported', workflow: 'Triage',   tab: 'triage',   color: 'red',       pattern: 'back' },
+  { name: 'Copies',       workflow: 'Dedupe',   tab: 'dedupe',   color: 'purple',    pattern: 'zig' },
+  { name: 'Other',        workflow: null,       tab: null,       color: 'other',     pattern: null },
+  { name: 'Dead seed',    workflow: 'Triage',   tab: 'triage',   color: 'red',       pattern: 'rows' },
+  { name: 'Unmanaged',    workflow: null,       tab: null,       color: 'unmanaged', pattern: null },
 ]
 export const PROBLEM = [UNSEEDED, ORPHANED, NOT_IMPORTED, DEAD_SEED, COPY]
-// The legend's entries, in the cards' order (Other has none).
-export const LEGEND = [LINKED, UNSEEDED, ORPHANED, NOT_IMPORTED, DEAD_SEED, COPY]
+// The legend's entries, in the cards' order, then Unmanaged (Other has none).
+export const LEGEND = [LINKED, UNSEEDED, ORPHANED, NOT_IMPORTED, DEAD_SEED, COPY, UNMANAGED]
 const N_STATES = STATES.length
 // The torrent root's blocks, in the cards' order.
 const TORRENT_GROUPS = [ORPHANED, NOT_IMPORTED, COPY, OTHER]
@@ -48,7 +63,7 @@ const TORRENT_GROUPS = [ORPHANED, NOT_IMPORTED, COPY, OTHER]
 export function stateOfMedia(f, dead) {
   if (f.linked_paths?.length) return dead && dead.has(f.file_id) ? DEAD_SEED : LINKED
   if (f.duplicate_paths?.length) return COPY
-  return UNSEEDED
+  return f.unmanaged ? UNMANAGED : UNSEEDED
 }
 
 // `audit._is_dead_seed_torrent`: imported, not orphaned, and its tracker has
@@ -86,12 +101,12 @@ export function titleOf(path) {
   return [parts[0], parts[1]]
 }
 
-const zeros = () => [0, 0, 0, 0, 0, 0, 0]
+const zeros = () => [0, 0, 0, 0, 0, 0, 0, 0]
 const sum = a => a.reduce((x, y) => x + y, 0)
 
 // ── The model ────────────────────────────────────────────────────────────────
 // { roots: [{ name, folders: [{ name, state?, titles: [title] }] }] }
-// title: { name, folder, root, rel, by: [7 sums], v, files: n, list?: [{name, size, s}], folded?, search? }
+// title: { name, folder, root, rel, by: [8 sums], v, files: n, list?: [{name, size, s}], folded?, search? }
 // `rel` is the root-relative folder a click scopes a workflow to; `search` a
 // library title's dead torrent's folder, which Triage's search matches.
 
@@ -129,10 +144,11 @@ const relOf = (folder, title) => (folder ? `${folder}/${title}` : title)
 
 // From the scan's stored row: {version, folders: [[root, name]], titles: [...], folded: [...]}.
 // Version 1 has six sums; version 2 (2026-11-11) seven, and a dead seed's
-// search after them.
+// search after them; version 3 (2026-11-14) eight, Unmanaged last.
 export function modelFromRow(row) {
   const lib = {}, tor = []
-  const n = (row.version || 1) >= 2 ? N_STATES : 6
+  const v = row.version || 1
+  const n = v >= 3 ? N_STATES : v >= 2 ? 7 : 6
   const sums = rest => { const by = zeros(); for (let s = 0; s < n; s++) by[s] = rest[s] || 0; return by }
   const libFolder = name => (lib[name] ||= { name, titles: [] })
   for (const [fi, name, files, ...rest] of row.titles || []) {
@@ -213,8 +229,9 @@ export function modelTotals(model) {
       if (bad) problemKeys.add(`${r.name}\u0000${t.rel}`)
       if (r.name !== 'library') continue
       titles += 1
-      // A dead seed is still linked: what Fully/Partly/Not linked count.
-      if (!(t.by[UNSEEDED] > 0) && !(t.by[COPY] > 0)) full += 1
+      // A dead seed is still linked: what Fully/Partly/Not linked count. An
+      // unmanaged file isn't.
+      if (!(t.by[UNSEEDED] > 0) && !(t.by[COPY] > 0) && !(t.by[UNMANAGED] > 0)) full += 1
       else if (t.by[LINKED] > 0 || t.by[DEAD_SEED] > 0) partly += 1
       else none += 1
     }
@@ -261,6 +278,10 @@ export function worstState(by) {
 // torrent's folder (`search`), and opens Triage whole when a row didn't carry
 // one (a folded tile, a version 1 row).
 export function navFor(state, title) {
+  // Unmanaged opens Media filtered to the title's folder (`search`), which no
+  // workflow can act on but the user can look at: add it to an arr, or delete
+  // a spare copy.
+  if (state === UNMANAGED) return title.root === 'library' && !title.folded ? { tab: 'media', search: title.rel } : null
   const tab = STATES[state]?.tab
   if (!tab) return null
   if (tab === 'backfill') return title.root === 'library' ? { tab, under: title.rel } : null

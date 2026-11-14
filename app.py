@@ -44,7 +44,7 @@ from state import (
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
 from audit import run_audit_process, process_health_metrics, compute_upload_stats, compute_previous_upload, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path
-from arr import _test_arr_connection, arr_rescan, arr_search, arr_title_for_folder, fetch_arr_poster, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
+from arr import _test_arr_connection, arr_rescan, arr_search, arr_title_for_folder, fetch_arr_poster, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, media_path_key, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
 from exclusions import reads_bracket_as_glob
@@ -6046,8 +6046,9 @@ def _resolve_backfill(cfg):
     arr_media, arr_errors, arr_roots = fetch_arr_media_index_with_roots(cfg)
     media_root = cfg.get('MEDIA_PATH', '')
 
-    def _norm(p):
-        return os.path.normpath(str(p or '')).replace('\\', '/')
+    # The scan's Unmanaged stamp keys on the same (`arr.media_path_key`), so
+    # the map's Not seeded is exactly what this can search.
+    _norm = media_path_key
 
     arr_index = {}
     for item in arr_media:

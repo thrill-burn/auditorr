@@ -112,6 +112,10 @@ export function LastScanCard({ id, scanReport, details, savedAt, onScan }) {
     ...('empty_folders_unknown' in d ? [['Empty folders', d.empty_folders_unknown
       ? <span title="The client's save folders didn't load, so Cleanup offers no empty folder rather than guess at one."><Warn>not looked for</Warn></span>
       : `${(d.empty_folder_count || 0).toLocaleString()} found`]] : []),
+    // The library map's Unmanaged files (2026-11-14). No row with no arr configured.
+    ...(d.unmanaged_check === 'ok' || d.unmanaged_check === 'unreachable' ? [['Unmanaged', d.unmanaged_check === 'ok'
+      ? `${plural(d.unmanaged_count || 0, 'file')} not in Sonarr or Radarr`
+      : <span title="Sonarr or Radarr didn't answer, so the library map shows the files they don't hold as Not seeded rather than guess."><Warn>not looked for</Warn></span>]] : []),
     ...(d.cleanup_unchecked_count > 0 ? [['Unchecked', <Warn>{plural(d.cleanup_unchecked_count, 'folder')} whose file list didn't load</Warn>]] : []),
   ] : []
   const runs = runsLine(sr?.runs_30d)

@@ -42,10 +42,10 @@ def _torrent(path, size=GB, status='Seeding', imported=False, linked=False, **ex
 
 
 def _titles(row):
-    """`{(root, folder, title): [files, b0 … b6]}` from a stored row (a dead
+    """`{(root, folder, title): [files, b0 … b7]}` from a stored row (a dead
     seed's Triage search, when a title carries one, is left off)."""
     folders = row['folders']
-    return {(folders[t[0]][0], folders[t[0]][1], t[1]): t[2:10] for t in row['titles']}
+    return {(folders[t[0]][0], folders[t[0]][1], t[1]): t[2:11] for t in row['titles']}
 
 
 class LibraryMapRowTests(unittest.TestCase):
@@ -59,13 +59,13 @@ class LibraryMapRowTests(unittest.TestCase):
              _torrent('radarr/Waiting/w.nfo', sidecar=True),
              _torrent('radarr/Busy/b.mkv', incomplete=True)])
         t = _titles(row)
-        self.assertEqual(t[('library', 'television', 'Show')], [2, GB, GB, 0, 0, 0, 0, 0])
-        self.assertEqual(t[('library', 'movies', 'Film (2020)')], [1, 0, 0, 0, 0, GB, 0, 0])
-        self.assertEqual(t[('torrents', 'radarr', 'Gone')], [1, 0, 0, GB, 0, 0, 0, 0])
+        self.assertEqual(t[('library', 'television', 'Show')], [2, GB, GB, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(t[('library', 'movies', 'Film (2020)')], [1, 0, 0, 0, 0, GB, 0, 0, 0])
+        self.assertEqual(t[('torrents', 'radarr', 'Gone')], [1, 0, 0, GB, 0, 0, 0, 0, 0])
         # A sidecar of an imported torrent isn't "not imported" (T19), and a
         # download in progress is nobody's yet (T4): both Other.
-        self.assertEqual(t[('torrents', 'radarr', 'Waiting')], [2, 0, 0, 0, GB, 0, GB, 0])
-        self.assertEqual(t[('torrents', 'radarr', 'Busy')], [1, 0, 0, 0, 0, 0, GB, 0])
+        self.assertEqual(t[('torrents', 'radarr', 'Waiting')], [2, 0, 0, 0, GB, 0, GB, 0, 0])
+        self.assertEqual(t[('torrents', 'radarr', 'Busy')], [1, 0, 0, 0, 0, 0, GB, 0, 0])
 
     def test_linked_bytes_count_once_in_the_library(self):
         """The torrent-tree side of a linked file is the same inode the library
@@ -85,10 +85,10 @@ class LibraryMapRowTests(unittest.TestCase):
                        imported=True, linked=True, file_id='1:7', tracker_health='unregistered',
                        tracker_msg='Torrent has been deleted.')
         row = audit.library_map_row([lib], [tor])
-        self.assertEqual(row['version'], 2)
+        self.assertEqual(row['version'], 3)
         [entry] = row['titles']
-        self.assertEqual(entry[2:10], [1, 0, 0, 0, 0, 0, 0, 21 * GB])
-        self.assertEqual(entry[10], 'radarr/Jackie.Brown.1997.1080p.BluRay-SA89')
+        self.assertEqual(entry[2:11], [1, 0, 0, 0, 0, 0, 0, 21 * GB, 0])
+        self.assertEqual(entry[11], 'radarr/Jackie.Brown.1997.1080p.BluRay-SA89')
         # Its torrent side is still the same inode, drawn once, in the library.
         self.assertEqual(list(_titles(row)), [('library', 'movies', 'Jackie Brown (1997)')])
 
@@ -106,8 +106,8 @@ class LibraryMapRowTests(unittest.TestCase):
         ]
         row = audit.library_map_row(media, torrents)
         for entry in row['titles']:
-            self.assertEqual(len(entry), 10, entry)
-            self.assertEqual(entry[2:10], [1, GB, 0, 0, 0, 0, 0, 0])
+            self.assertEqual(len(entry), 11, entry)
+            self.assertEqual(entry[2:11], [1, GB, 0, 0, 0, 0, 0, 0, 0])
 
     def test_excluded_files_are_left_out(self):
         row = audit.library_map_row([_media('tv/Show/e1.nfo', excluded=True)], [])
@@ -124,7 +124,7 @@ class LibraryMapRowTests(unittest.TestCase):
         self.assertEqual([t[1] for t in row['titles']], ['T0', 'T1'])     # largest kept
         [[fi, n_titles, n_files, *by]] = row['folded']
         self.assertEqual((row['folders'][fi], n_titles, n_files), (['library', 'movies'], 3, 3))
-        self.assertEqual(by, [0, (8 + 7 + 6) * GB, 0, 0, 0, 0, 0])
+        self.assertEqual(by, [0, (8 + 7 + 6) * GB, 0, 0, 0, 0, 0, 0])
 
     def test_the_row_is_stored_and_served_as_written(self):
         stored = audit.library_map_row([_media('tv/Show/e1.mkv')], [])
@@ -152,14 +152,16 @@ const dump = m => {
   const out = {}
   for (const r of m.roots) for (const f of r.folders) for (const t of f.titles) {
     const k = `${t.root}|${t.root === 'library' ? t.rel : t.name}|${f.state ?? ''}`
-    out[k] = { by: t.by, search: t.search || null, nav: R.navFor(R.worstState(t.by), t) }
+    out[k] = { by: t.by, search: t.search || null, nav: R.navFor(R.worstState(t.by), t), unmanaged_nav: R.navFor(R.UNMANAGED, t) }
   }
   return out
 }
 const fm = R.modelFromFiles(media, torrents), rm = R.modelFromRow(row)
 console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTotals(rm),
   legend: R.LEGEND.map(x => R.STATES[x].name), v1: dump(R.modelFromRow({ version: 1, folders: [['library', 'm']],
-  titles: [[0, 'Old', 1, 5, 0, 0, 0, 0, 0]], folded: [] })) }))
+  titles: [[0, 'Old', 1, 5, 0, 0, 0, 0, 0]], folded: [] })),
+  v2: dump(R.modelFromRow({ version: 2, folders: [['library', 'm']],
+  titles: [[0, 'Old', 1, 5, 0, 0, 0, 0, 0, 3, 'radarr/Old-GRP']], folded: [] })) }))
 """
 
     def test_both_languages_draw_a_dead_seed_the_same(self):
@@ -173,7 +175,9 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
         media = [dict(_media('movies/Jackie Brown (1997)/Jackie.Brown.mkv', size=21 * GB, linked=True), file_id='1:7'),
                  dict(_media('movies/Up (2009)/up.mkv', size=3 * GB, linked=True), file_id='1:8'),
                  dict(_media('movies/Up (2009)/up.en.srt', size=1000), file_id='1:9'),
-                 dict(_media('tv/Show/e1.mkv', size=2 * GB, linked=True), file_id='1:10')]
+                 dict(_media('tv/Show/e1.mkv', size=2 * GB, linked=True), file_id='1:10'),
+                 dict(_media('kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA/g.mkv', size=682 * 10 ** 6),
+                      file_id='1:11', unmanaged=True)]
         torrents = [
             _torrent('radarr/Jackie.Brown.1997.1080p-SA89/Jackie.Brown.mkv', size=21 * GB, imported=True, linked=True,
                      file_id='1:7', tracker_health='unregistered', tracker_msg='Torrent has been deleted.'),
@@ -190,16 +194,29 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
         got = json.loads(out.stdout.strip().splitlines()[-1])
         self.assertEqual(got['files'], got['row'])
         jackie = got['row']['library|movies/Jackie Brown (1997)|']
-        self.assertEqual(jackie['by'], [0, 0, 0, 0, 0, 0, 21 * GB])
+        self.assertEqual(jackie['by'], [0, 0, 0, 0, 0, 0, 21 * GB, 0])
         self.assertEqual(jackie['search'], 'radarr/Jackie.Brown.1997.1080p-SA89')
         self.assertEqual(jackie['nav'], {'tab': 'triage', 'search': 'radarr/Jackie.Brown.1997.1080p-SA89'})
         # An excluded dead torrent isn't a dead seed: its library file is Linked.
         self.assertEqual(got['row']['library|tv/Show|']['by'][0], 2 * GB)
         # A dead seed is still linked: Jackie Brown counts as fully linked.
         self.assertEqual((got['totals']['full'], got['totals']['partly']), (2, 1))
-        self.assertEqual(got['legend'], ['Linked', 'Not seeded', 'Orphaned', 'Not imported', 'Dead seed', 'Copies'])
-        # A version 1 row still reads, its six sums in place and the seventh 0.
-        self.assertEqual(got['v1']['library|m/Old|']['by'], [5, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(got['legend'], ['Linked', 'Not seeded', 'Orphaned', 'Not imported', 'Dead seed', 'Copies',
+                                         'Unmanaged'])
+        # A version 1 row still reads, its six sums in place and the rest 0.
+        self.assertEqual(got['v1']['library|m/Old|']['by'], [5, 0, 0, 0, 0, 0, 0, 0])
+        # An unmanaged file: its own state, and a click opens Media on its folder.
+        stray = got['row']['library|kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA|']
+        self.assertEqual(stray['by'], [0, 0, 0, 0, 0, 0, 0, 682 * 10 ** 6])
+        self.assertEqual(stray['unmanaged_nav'], {'tab': 'media', 'search': 'kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA'})
+        # It isn't linked, so its title isn't fully linked; it isn't a workflow's
+        # gap, so the titles with one are still Jackie Brown, Up's subtitle and
+        # the waiting torrent, and its bytes are in no gap total.
+        self.assertEqual(got['totals']['none'], 1)
+        self.assertEqual(got['totals']['problemTitles'], 3)
+        self.assertEqual(got['totals']['problem'], 21 * GB + 1000 + GB)
+        # A version 2 row still reads, its seven sums in place and Unmanaged 0.
+        self.assertEqual(got['v2']['library|m/Old|']['by'], [5, 0, 0, 0, 0, 0, 3, 0])
 
 
 class BiggestGapsTests(unittest.TestCase):

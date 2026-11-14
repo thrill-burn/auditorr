@@ -5,6 +5,8 @@ import logging
 import time
 import functools
 import posixpath
+from array import array
+from bisect import bisect_left
 import unicodedata
 from types import MappingProxyType
 import urllib.request
@@ -235,6 +237,145 @@ def fetch_arr_media_index_result(cfg, force=False):
     """
     snap = _arr_media_index_snapshot(cfg, force)
     return snap[1], list(snap[2])
+
+
+def media_path_key(path):
+    """A file path as the media index is matched on: normalised, forward slashes.
+
+    Backfill's lookup (`app._resolve_backfill`) and the scan's Unmanaged stamp
+    (`audit.stamp_unmanaged`) both key on this, so a video the map calls
+    Unmanaged is exactly one Backfill can't search, and a video it calls
+    Not seeded is one Backfill can.
+    """
+    return os.path.normpath(str(path or '')).replace('\\', '/')
+
+
+class ManagedPaths:
+    """Every file the arrs hold, and every folder holding one, as hashes.
+
+    By `media_path_key`, so `key in paths` is Backfill's own test, and
+    `paths.has_dir(folder)` answers for a sidecar. **Hashes, not strings**: at
+    348,000 arr files the strings were 57.9 MB held through the scan's peak
+    (`.internal/dash_bench/unmanaged.py`); a sorted array of 64-bit hashes is
+    8 bytes a file. Python's string hash, so it's only compared within the
+    process that built it. A collision (vanishingly rare at 64 bits) reads a
+    file as held, so it stays Not seeded, as the map drew it before.
+    Built with `add_key` then `freeze`, or from `keys` in one go.
+
+    **A lookup bisects a bucket, not the array.** The scan asks once per
+    unseeded library file, and a bisect of 348,000 boxes an int at each of its
+    19 steps: +0.083 s at 650,000 files. `_HashIndex` keeps where each value of
+    a hash's top 16 bits starts (256 KB), so a lookup bisects about five.
+    """
+    __slots__ = ('_files', '_dirs', '_n')
+
+    def __init__(self, keys=None):
+        self._files, self._dirs, self._n = array('q'), set(), 0
+        if keys is not None:
+            for k in keys:
+                self.add_key(k)
+            self.freeze()
+
+    def add_key(self, key):
+        self._files.append(hash(key))
+        self._dirs.add(hash(key.rpartition('/')[0]))
+
+    def freeze(self):
+        self._n = len(self._files)
+        self._files = _HashIndex(self._files)
+        self._dirs = _HashIndex(self._dirs)
+
+    def __contains__(self, key):
+        return self._files.has(hash(key))
+
+    def has_dir(self, folder):
+        return self._dirs.has(hash(folder))
+
+    def holds_folder_of(self, key):
+        """Does an arr hold a file in the folder `key` (a `media_path_key`) is in?"""
+        return self._dirs.has(hash(key.rpartition('/')[0]))
+
+    def __len__(self):
+        return self._n
+
+
+class _HashIndex:
+    """Sorted 64-bit hashes, and where each value of their top 16 bits starts."""
+    __slots__ = ('_h', '_at')
+    _SHIFT, _BUCKETS = 48, 1 << 16
+
+    def __init__(self, hashes):
+        self._h = h = array('q', sorted(hashes))
+        at = array('i', bytes(4 * (self._BUCKETS + 1)))
+        b = 0
+        for i, v in enumerate(h):
+            top = (v >> self._SHIFT) + (self._BUCKETS >> 1)
+            while b <= top:
+                at[b] = i
+                b += 1
+        while b <= self._BUCKETS:
+            at[b] = len(h)
+            b += 1
+        self._at = at
+
+    def has(self, v):
+        top = (v >> self._SHIFT) + (self._BUCKETS >> 1)
+        hi = self._at[top + 1]
+        i = bisect_left(self._h, v, self._at[top], hi)
+        return i < hi and self._h[i] == v
+
+
+def fetch_arr_managed_paths(cfg):
+    """`(paths, check)`: every file the configured arrs hold, as `ManagedPaths`.
+
+    For the library map's Unmanaged state (2026-11-14): a library file that
+    isn't seeded and that no arr holds. `check` says whether the answer is
+    whole enough to call anything that:
+
+    * `'ok'`: every instance answered in full.
+    * `'none'`: no arr is configured. `paths` is None, since with no arr
+      there's nothing to tell a file apart from, and the map draws it as it did.
+    * `'unreachable'`: an instance failed, answered in part, or the
+      configuration couldn't be read. `paths` is None: a file of an instance
+      that didn't answer would read as one no arr holds (R1).
+
+    **It never builds the media index's rows.** A row is about a kilobyte, so
+    at 348,000 files the index is hundreds of MB, and the cache keeps the last
+    one; a scan that filled it would hold that for every install that never
+    opens Backfill or Triage. A fresh snapshot one of them left is read (no
+    arr call); otherwise each instance's paths go straight into the hashes,
+    a Sonarr series at a time (`_fetch_*_media`'s `sink`), mapped to local
+    paths as the index maps them.
+    """
+    try:
+        conns = normalize_arr_connections(cfg)
+    except Exception as e:
+        log.warning("Could not read the arr connections: %s", type(e).__name__)
+        return None, 'unreachable'
+    if not conns:
+        return None, 'none'
+    snap = _arr_media_index_cache.get('snapshot')
+    if snap is not None and (time.monotonic() - snap[0]) < _ARR_MEDIA_INDEX_TTL:
+        if snap[2]:
+            return None, 'unreachable'
+        return ManagedPaths(media_path_key(r['path']) for r in snap[1] if r.get('path')), 'ok'
+    paths = ManagedPaths()
+    for conn in conns:
+        arr_root = conn.get('media_path', '')
+        local_root = conn.get('local_media_path', '') or cfg.get('MEDIA_PATH', '')
+
+        def sink(path, arr_root=arr_root, local_root=local_root):
+            paths.add_key(media_path_key(_replace_path_prefix(path, arr_root, local_root)))
+        try:
+            fetch = _fetch_radarr_media if conn['service'] == 'radarr' else _fetch_sonarr_media
+            _rows, partial = fetch(conn, sink=sink)
+        except Exception as e:
+            log.warning("Could not ask %s which files it holds: %s", conn['id'], type(e).__name__)
+            return None, 'unreachable'
+        if partial:
+            return None, 'unreachable'
+    paths.freeze()
+    return paths, 'ok'
 
 
 def fetch_arr_media_index_with_roots(cfg, force=False):
@@ -2030,18 +2171,24 @@ def _path_norm(path):
     return str(path or '').replace('\\', '/').replace('//', '/')
 
 
-def _fetch_radarr_media(conn):
+def _fetch_radarr_media(conn, sink=None):
     """(rows, partial) — Radarr needs one call, so `partial` is always None.
 
     The tuple exists for symmetry with `_fetch_sonarr_media`, which needs one
     call per series and therefore has a third outcome between "worked" and
     "raised": some of the library came back.
+
+    With `sink`, each file's path goes to it as it's read and `rows` is empty:
+    the scan's Unmanaged stamp wants paths alone (`fetch_arr_managed_paths`).
     """
     rows = []
     for movie in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie', timeout=_ARR_LIST_TIMEOUT):
         movie_file = movie.get('movieFile') or {}
         path = movie_file.get('path')
         if not path:
+            continue
+        if sink is not None:
+            sink(path)
             continue
         q_outer = movie_file.get('quality') or {}
         q_inner = q_outer.get('quality') or {}
@@ -2069,8 +2216,11 @@ def _fetch_radarr_media(conn):
     return rows, None
 
 
-def _fetch_sonarr_media(conn):
+def _fetch_sonarr_media(conn, sink=None):
     """(rows, partial) — episode-file records for one Sonarr instance.
+
+    With `sink`, each file's path goes to it a series at a time and `rows` is
+    empty, as `_fetch_radarr_media`'s does.
 
     `partial` is None when every series was read, else
     `{'failed': n, 'total': m}`. One unreachable series must not discard the
@@ -2091,6 +2241,8 @@ def _fetch_sonarr_media(conn):
 
     def _fetch_episode_files(series, series_id):
         episode_files = _arr_get(base_url, api_key, f'/api/v3/episodefile?seriesId={series_id}')
+        if sink is not None:
+            return [f['path'] for f in episode_files if f.get('path')]
         rows = []
         for episode_file in episode_files:
             path = episode_file.get('path')
@@ -2134,7 +2286,12 @@ def _fetch_sonarr_media(conn):
         futures = {executor.submit(_fetch_episode_files, s, sid): sid for s, sid in valid_series}
         for future in as_completed(futures):
             try:
-                all_rows.extend(future.result())
+                got = future.result()
+                if sink is not None:
+                    for path in got:
+                        sink(path)
+                else:
+                    all_rows.extend(got)
             except Exception as e:
                 # One unreachable series must not discard the instance. Sonarr
                 # needs a call per series where Radarr needs one in total, so

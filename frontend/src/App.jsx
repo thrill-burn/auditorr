@@ -615,6 +615,8 @@ function AppInner() {
                 initialImportFilter={pendingNav?.importFilter}
                 initialTracker={pendingNav?.tracker}
                 initialSeedCount={pendingNav?.seedCount}
+                // The library map's Unmanaged tiles open Media on their folder.
+                initialQuery={pendingNav?.search}
                 revealPath={revealPath}
               />
             )}

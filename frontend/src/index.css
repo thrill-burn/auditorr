@@ -18,7 +18,12 @@
   --red:       #e5604d;
   --blue:      #5b9bd9;
   --cyan:      #55b6c2;
-  --purple:    #a78bd0;
+  /* Lighter than it was (#a78bd0, 2026-11-14, the user's pick): it was as
+     light as --blue (L* 63 and 62), so Dedupe's purple and Backfill's blue
+     differed by hue alone and read as one colour to red-green colour
+     blindness (simulated ΔE 2.1 on the map, 2.7 in New in the library).
+     Now a step lighter than --blue as well. Light's is already darker. */
+  --purple:    #cfbdf3;
   --neutral:   #353a40;
   --mono:      'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans:      'Geist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -67,6 +72,10 @@
   --map-pane-linked: #16181b;
   --map-pane-other:  #16181b;
   --map-mix: 74%;
+  /* Unmanaged (2026-11-14): unseeded and in no arr. No workflow acts on it,
+     so no workflow's colour and no pattern: a plain grey, the user's pick,
+     a step below the states' lightness and well off the clear panes. */
+  --map-unmanaged: #62676d;
 }
 
 [data-theme="light"] {
@@ -104,6 +113,7 @@
   --map-pane-linked: #ffffff;
   --map-pane-other:  #ffffff;
   --map-mix: 72%;
+  --map-unmanaged: #b4b4b4;
 }
 
 html, body, #root {
