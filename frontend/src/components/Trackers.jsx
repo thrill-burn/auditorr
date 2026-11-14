@@ -21,8 +21,8 @@ const TRACKER_COLORS = ['#f57c00', '#5b9bd9', '#46b56a', '#a78bd0', '#c99a2e', '
 // healthy library Orphaned and Not Imported were two flat lines and two
 // columns of "0 B".
 const METRICS = [
-  { key: 'seeding',      label: 'Seeding',      color: 'var(--green)',
-    views: [{ value: 'change', label: 'Change' }, { value: 'size', label: 'Size' }] },
+  { key: 'seeding',      label: 'Seeding size', color: 'var(--green)',
+    views: [{ value: 'size', label: 'Size' }, { value: 'change', label: 'Change' }] },
   { key: 'uploaded',     label: 'Uploaded',     color: 'var(--blue)',
     views: [{ value: 'daily', label: 'Daily' }, { value: 'total', label: 'Running total' }] },
   { key: 'yield',        label: 'Yield %',      color: 'var(--accent)' },
@@ -103,12 +103,22 @@ function drawSpec(metric, view) {
   return { key: metric, kind: 'line', unit: 'bytes', baseline: true }
 }
 
+// What a line view's end labels are, over their column: the table's figure,
+// or what this view shows instead of it.
+function labelTitle(key, first) {
+  if (key === 'seeding:size') return 'Seeding size now'
+  if (key === 'seeding:change') return first ? `Change since ${first}` : 'Change'
+  if (key === 'uploaded:total') return 'Uploaded in range'
+  if (key === 'yield') return `Yield, last ${YIELD_WINDOW} days`
+  return 'Now'
+}
+
 const pct = v => (v == null ? '—' : (v * 100).toFixed(1) + '%')
 const count = v => (v ? v.toLocaleString() : '0')
 
 // The table's columns. `metric` ties one to the chart metric it shades.
 const COLUMNS = [
-  { key: 'seeding', label: 'Seeding', metric: 'seeding', color: 'var(--green)',
+  { key: 'seeding', label: 'Seeding size', metric: 'seeding', color: 'var(--green)',
     value: s => s.seeding_size || 0, display: s => formatBytes(s.seeding_size || 0),
     nav: t => ({ tab: 'torrents', tracker: t, status: 'Seeding' }), navTitle: t => `View ${t} seeding in Torrents` },
   { key: 'only', label: 'Seeded only here', title: 'Library this tracker seeds and no other tracker does',
@@ -155,11 +165,11 @@ function Readout({ metric, view, uploadStats, statsMap, visible, history }) {
     }
   } else if (metric === 'seeding') {
     figure = formatBytes(sum(s => s.seeding_size))
-    caption = 'seeding now, counted once for each tracker'
+    caption = 'of torrents seeding now, counted once for each tracker'
     const ch = history.series['seeding:change']
     if (ch && history.dates.length > 1) {
       const delta = visible.reduce((s, t) => s + ((ch[t] || []).slice(-1)[0] || 0), 0)
-      extra = <span style={CAPTION}>{delta === 0 ? 'no change' : `${delta > 0 ? '+' : '−'}${formatBytes(Math.abs(delta))}`} since {history.labels[0]}</span>
+      extra = <span style={CAPTION}>{delta === 0 ? 'no change' : `${delta > 0 ? '+' : '−'}${formatBytes(Math.abs(delta))}`} since {history.labels[0]}: torrents added, less those removed or replaced</span>
     }
   } else if (metric === 'yield') {
     const seed = sum(s => s.seeding_size), up = sum(s => s.uploaded)
@@ -189,7 +199,10 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
   const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(30))
   const [dateTo,      setDateTo]      = useState('')
   const [metricKey,   setMetricKey]   = useState('uploaded')
-  const [views,       setViews]       = useState({ uploaded: 'daily', seeding: 'change' })
+  // Seeding size opens on Size, the table's figure. It opened on Change, which
+  // starts at 0 and climbs in GB, and read as a running total of upload: then
+  // a torrent removed or replaced looked like upload going backwards (2026-11-13).
+  const [views,       setViews]       = useState({ uploaded: 'daily', seeding: 'size' })
   const [visible,     setVisible]     = useState(() => allTrackers.slice())
   const [hovered,     setHovered]     = useState(null)
   const [sortKey,     setSortKey]     = useState('seeding')
@@ -323,7 +336,8 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
         )}
         <div style={{ position: 'relative' }}>
           <TrackerChart series={chartSeries} dates={history.labels} kind={spec.kind} unit={spec.unit}
-            signed={!!spec.signed} baseline={!!spec.baseline} hovered={hovered} />
+            signed={!!spec.signed} baseline={!!spec.baseline} hovered={hovered}
+            labelTitle={labelTitle(spec.key, history.labels[0])} />
           {!hasHistory && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
               <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>Trend data will appear after a few audits</span>

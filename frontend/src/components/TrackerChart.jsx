@@ -61,16 +61,6 @@ export function fmtValue(v, unit, signed) {
   return sign(v, signed) + formatBytes(Math.abs(v))
 }
 
-// The end-of-line labels' value: short, so the column stays narrow.
-function fmtShort(v, unit, signed) {
-  if (unit === 'pct') return sign(v, signed) + Math.abs(v).toFixed(1) + '%'
-  if (!v) return '0'
-  const a = Math.abs(v)
-  const i = Math.max(0, Math.min(UNITS.length - 1, Math.floor(Math.log(a) / Math.log(K))))
-  const n = a / Math.pow(K, i)
-  return sign(v, signed) + (n >= 100 ? Math.round(n) : n.toFixed(1)) + UNITS[i]
-}
-
 const LABEL_GAP = 14
 
 // Spread labels apart vertically, keeping each as near its line as it can.
@@ -87,7 +77,7 @@ function spread(items, top, bottom) {
 }
 
 export default function TrackerChart({
-  series, dates, kind = 'line', unit, signed = false, baseline = false, height = 320, hovered,
+  series, dates, kind = 'line', unit, signed = false, baseline = false, height = 320, hovered, labelTitle,
 }) {
   const ref = useRef(null)
   const [w, setW] = useState(900)
@@ -108,11 +98,13 @@ export default function TrackerChart({
   const vis = series.filter(s => s.visible && s.values.length)
   const stack = kind === 'stack'
   const labelled = !stack && vis.length > 0 && N > 0
-  const gL = 52, gT = 14, gB = 28
-  // The label column fits the longest name it shows (value ~56px + name at
-  // ~6.7px a character), within bounds, so a full host stays readable.
+  const gL = 52, gT = labelled && labelTitle ? 24 : 14, gB = 28
+  // The label column fits the longest name it shows (a value as the table
+  // writes it, "803.0 GB", ~70px, then the name at ~6.7px a character), within
+  // bounds, so a full host stays readable. `labelTitle` heads it: what the
+  // values are, since a view's (a change, a 7-day yield) isn't the table's.
   const longest = labelled ? Math.max(...vis.map(s => s.name.length)) : 0
-  const gR = labelled ? Math.round(Math.min(250, Math.max(120, 66 + longest * 6.7, w * 0.08))) : 24
+  const gR = labelled ? Math.round(Math.min(280, Math.max(140, 84 + longest * 6.7, w * 0.08))) : 24
   const plotW = Math.max(10, w - gL - gR), plotH = height - gT - gB
 
   // Day totals for the bars; the domain over what's drawn.
@@ -172,7 +164,7 @@ export default function TrackerChart({
         return { s, v, y: y(Number.isFinite(v) ? v : 0) }
       }), gT + 4, gT + plotH)
     : []
-  const nameChars = Math.max(6, Math.floor((gR - 62) / 6.7))
+  const nameChars = Math.max(6, Math.floor((gR - 84) / 6.7))
   const clip = (n) => (n.length > nameChars ? n.slice(0, nameChars - 1) + '…' : n)
 
   return (
@@ -236,12 +228,15 @@ export default function TrackerChart({
                 <g key={l.s.name} opacity={op}>
                   <path d={`M${x0},${l.y} L${x0 + 5},${l.y} L${lx - 3},${l.ly}`} fill="none" stroke={l.s.color} strokeWidth="1.2" />
                   <text x={lx} y={l.ly + 3.5} fontFamily="var(--mono)" style={{ fontSize: 'var(--font-sm)' }}>
-                    <tspan fill="var(--text)" fontWeight="600">{fmtShort(Number.isFinite(l.v) ? l.v : 0, unit, signed)}</tspan>
+                    <tspan fill="var(--text)" fontWeight="600">{fmtValue(Number.isFinite(l.v) ? l.v : 0, unit, signed)}</tspan>
                     <tspan fill="var(--text-dim)" dx="7">{clip(l.s.name)}</tspan>
                   </text>
                 </g>
               )
             })}
+            {labels.length > 0 && labelTitle && (
+              <text x={gL + plotW + 10} y={gT - 2} fontFamily="var(--sans)" style={{ fontSize: 'var(--font-sm)' }} fill="var(--text-dim)">{labelTitle}</text>
+            )}
           </>
         )}
         <rect x={gL} y={gT} width={plotW} height={plotH} fill="transparent"
