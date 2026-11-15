@@ -36,6 +36,10 @@ Upgrading needs no configuration changes. The library map and *New in the librar
 - **A scan that refused to save said "Audit complete".** The message at the bottom right and the browser notification treated a refusal as a success, because only some error messages were recognised. Every scan that didn't finish now shows as an error.
 - **Cleanup never offered empty folders with qui.** qui changed how it answers for your client's settings in October, and auditorr read the new answer as one it couldn't use, so every scan since skipped empty folders, with nothing logged and only a short note on Cleanup. auditorr now reads both forms, and logs a line if neither fits.
 
+### Improvements
+
+- **Scans are faster and need less than half the memory on a large library.** Saving the file lists was the slowest step of a scan and its memory peak. On a 650,000-file test library that step took about 15 seconds and lifted memory use from 1.2 GB to 2.9 GB; it now takes about 2 seconds and adds almost nothing. What's saved is byte for byte what was saved before, so nothing needs a rescan and nothing downstream changes.
+
 ## v1.8.3 — 2026-11-07
 
 Upgrading needs no configuration changes. If you're on 1.8.2, upgrade: it can keep a CPU core busy on a library with a few thousand folders or more.
