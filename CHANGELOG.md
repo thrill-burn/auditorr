@@ -38,7 +38,11 @@ Upgrading needs no configuration changes. The library map and *New in the librar
 
 ### Improvements
 
-- **Scans are faster and need less than half the memory on a large library.** Saving the file lists was the slowest step of a scan and its memory peak. On a 650,000-file test library that step took about 15 seconds and lifted memory use from 1.2 GB to 2.9 GB; it now takes about 2 seconds and adds almost nothing. What's saved is byte for byte what was saved before, so nothing needs a rescan and nothing downstream changes.
+- **Scans are faster and need less than half the memory on a large library.** On a 650,000-file test library a scan went from about 39 seconds to about 21, and its peak memory use from 2.9 GB to 1.3 GB. What's saved is byte for byte what was saved before, so nothing needs a rescan and nothing downstream changes.
+  - Saving the file lists was the slowest step of a scan and its memory peak. On the test library it took about 15 seconds and lifted memory use from 1.2 GB to 2.9 GB; it now takes about 2 seconds and adds almost nothing.
+  - Python's memory housekeeping also made about twenty full passes over every file record during a scan, and none of them could free anything until the scan was over. Those passes now wait for the end of the scan, which takes about 4 seconds off the test scan.
+  - Reading the torrent and library folders does less work per file. Each file's path inside its folder used to be worked out from scratch, and is now worked out once per folder. The progress count is updated every 128 files, not after every file, and is exact when each folder finishes; the progress bar looks the same.
+  - The list of files your torrent client reported is let go once the torrent folder has been read, rather than held while the library folder is read too. That's about 200 MB less in use for that part of the scan on the test library.
 
 ## v1.8.3 — 2026-11-07
 

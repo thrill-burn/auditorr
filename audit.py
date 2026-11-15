@@ -205,13 +205,18 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     stack[-1][0] if stack[-1][0].endswith(('/', os.sep)) else stack[-1][0] + os.sep):
                 _settle(stack.pop())
             stack.append([root, len(dirs), 0, bool(files), []])
+        rel_root = None
         for filename in files:
             full_path = os.path.join(root, filename)
             try:
                 st       = os.stat(full_path)
                 file_key = (st.st_dev, st.st_ino)
                 size     = st.st_size
-                rel_path = os.path.relpath(full_path, base_path)
+                # `relpath` of a file is its folder's, plus its name: worked
+                # out once per folder, not once per file.
+                if rel_root is None:
+                    rel_root = os.path.relpath(root, base_path)
+                rel_path = filename if rel_root == os.curdir else os.path.join(rel_root, filename)
                 excluded = (compiled_exclusions.match(full_path, rel_path, filename)
                             if compiled_exclusions is not None
                             else is_excluded(full_path, rel_path, filename, exclusion_patterns))
@@ -323,7 +328,9 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 total_ref[0] += 1
                 if total_ref[0] % 500 == 0:
                     set_state(total_files=total_ref[0])
-            update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
+            if not scanned & 127:
+                update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
+    update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
     walk['stat_errors'] = stat_errors
     if track_empty:
         while stack:
@@ -3016,6 +3023,18 @@ def _ask_arrs_meanwhile(cfg):
     return answer, t.is_alive
 
 
+# SCAN SC3. The cyclic collector's third threshold for the length of a scan. A
+# scan builds millions of containers that all live until it ends, and every
+# full collection walks all of them and frees nothing: 22 passes and about 5 s
+# of a 40 s scan at 650,000 files. With the third threshold this high, full
+# passes wait for the `gc.collect()` the scan already ends with. The first two
+# are left as they are, so young collections carry on, for request threads too.
+# The setting is the process's, so `run_audit_process` puts the old one back in
+# its `finally`. Re-measure if the image leaves Python 3.12: the collector
+# differs between versions.
+SCAN_GC_FULL_THRESHOLD = 1_000_000
+
+
 def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
@@ -3038,6 +3057,12 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     sampler_stop = threading.Event()
     threading.Thread(target=_memory_sampler, args=(sampler_stop,), daemon=True,
                      name="audit-memory-sampler").start()
+    # SCAN SC3. Full collections wait for the scan's end; see
+    # SCAN_GC_FULL_THRESHOLD. The last statement before the `try`, so nothing
+    # can raise between raising the threshold and the `finally` that puts the
+    # process's own back.
+    gc_thresholds = gc.get_threshold()
+    gc.set_threshold(gc_thresholds[0], gc_thresholds[1], SCAN_GC_FULL_THRESHOLD)
     try:
         # The arrs' file paths, for the library map's Unmanaged stamp, asked
         # while the disk is walked.
@@ -3096,9 +3121,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         accepted.append(_guard_filesystem(
             'torrents', filesystem['torrents'], reference, trigger,
             file_map_size=int(source_report.get('file_map_size') or 0)))
+        # SCAN SC5. Only the torrent walk reads the client's file map: the two
+        # guards above read the report's counts, and the media walk asks the
+        # client nothing. Released here (~200 MB at 650K files), not after
+        # the media walk, which is handed no map. Past this line the name is
+        # unbound until the `finally` assigns it, and the MemoryError handler's
+        # `del` expects that.
+        del qbit_file_map
         _enter_phase("disk", "Scanning media directory...")
         media_key_order, _, media_errors, oldest_media_mtime = _walk_directory(
-            cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
+            cfg.get('MEDIA_PATH',''), 'Media', inode_map, None, scanned, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl, walk_report=filesystem['media'])
         # The media root's checks: after its walk, before the assemble phase and
@@ -3108,9 +3140,6 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # persisted and reaches /api/debug/report.
         source_report['filesystem'] = filesystem
         stat_errors = torrent_errors + media_errors
-        # The source file map is only consulted during the walks — release it
-        # (~300 MB at 650K files) before the memory-heavy assemble/save phases.
-        del qbit_file_map
         _enter_phase("post", "Detecting duplicates...")
         duplicate_map = _build_duplicate_map(inode_map)
         # The library map's Unmanaged state: unseeded files no arr holds,
@@ -3576,6 +3605,12 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         torrent_key_order = media_key_order = None
         torrent_files_data = media_files_data = None
         result = not_imported_paths = None
+        # SCAN SC3. The process's own thresholds come back here, whichever way
+        # the scan ended, and only here: after the names above are dropped and
+        # straight before the collection below. Put back any earlier, the full
+        # pass the scan held off would run at the next young collection, over
+        # structures that are still alive.
+        gc.set_threshold(*gc_thresholds)
         try:
             rss_before = process_rss_mb()
             gc.collect()
