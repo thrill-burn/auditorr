@@ -2167,6 +2167,23 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
     return changes if has_changes else None
 
 
+_DIFF_LISTS = ('newly_orphaned', 'newly_imported', 'new_duplicates', 'resolved_duplicates',
+               'new_files', 'removed_files')
+
+
+def _merge_tab_diffs(media, torrents, prev_score, dashboard):
+    """One change-log entry from the two trees' diffs, as one call over both
+    gives it: each list the library's entries then the torrent tree's, 50 in
+    all, and nothing when neither tree changed."""
+    if media is None and torrents is None:
+        return None
+    out = {k: ((media or {}).get(k) or []) + ((torrents or {}).get(k) or []) for k in _DIFF_LISTS}
+    out = {k: v[:50] for k, v in out.items()}
+    cs = (dashboard or {}).get('score')
+    out['score_delta'] = round(cs - prev_score, 1) if prev_score is not None and cs is not None else None
+    return {k: out[k] for k in _DIFF_LISTS + ('score_delta',)}
+
+
 def compute_diff(prev_snap, curr_snap):
     """Diff two full snapshots. Thin wrapper over the signature-based diff,
     kept for callers/tests that hold both snapshots in memory."""
@@ -3292,30 +3309,43 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         _ns_prev = db_get_meta('ns_progress')
         diff = None
         try:
-            prev_sigs = {
-                'media':    db_load_file_signatures('media'),
-                'torrents': db_load_file_signatures('torrents'),
-            }
+            # One tree's previous signatures at a time: each map is a string
+            # per file of the last scan, held beside this scan's records. The
+            # torrent tree goes first because the shovel count reads it too;
+            # the entries are still listed library first, as they always were.
+            prev_torrents = db_load_file_signatures('torrents')
             ns_resolved = count_pile_resolved(
-                prev_sigs['torrents'], torrent_files_data,
+                prev_torrents, torrent_files_data,
                 prev_dead_regs=(_ns_prev or {}).get('last_dead_regs'))
-            if prev_sigs['media'] or prev_sigs['torrents']:
-                curr_snap = {
-                    "media_files": media_files_data, "torrent_files": torrent_files_data,
-                    "dashboard":   dashboard_stats,
-                }
+            had_torrents = bool(prev_torrents)
+            new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
+            torrent_root = _norm_abs(cfg.get('LOCAL_PATH', '')) if cfg.get('LOCAL_PATH') else None
+            diff_torrents = None
+            if had_torrents:
+                diff_torrents = compute_diff_from_signatures(
+                    {'torrents': prev_torrents},
+                    {"torrent_files": torrent_files_data, "dashboard": dashboard_stats})
+            prev_torrents = None
+            prev_media = db_load_file_signatures('media')
+            had_media = bool(prev_media)
+            if had_media or had_torrents:
                 prev_score = (db_load_results().get('dashboard') or {}).get('score')
-                new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
-                diff = compute_diff_from_signatures(
-                    prev_sigs, curr_snap, prev_score=prev_score, new_media=new_media,
-                    torrent_root=_norm_abs(cfg.get('LOCAL_PATH', '')) if cfg.get('LOCAL_PATH') else None)
+                diff_media = compute_diff_from_signatures(
+                    {'media': prev_media},
+                    {"media_files": media_files_data, "dashboard": dashboard_stats},
+                    prev_score=prev_score, new_media=new_media, torrent_root=torrent_root)
+                prev_media = None
+                if not had_torrents:
+                    diff_torrents = compute_diff_from_signatures(
+                        {'torrents': {}},
+                        {"torrent_files": torrent_files_data, "dashboard": dashboard_stats})
+                diff = _merge_tab_diffs(diff_media, diff_torrents, prev_score, dashboard_stats)
                 # The New in the library card's series rides the upload snapshot,
                 # so the dashboard's range applies to it like every other series.
                 # Only a scan that compared its library against a previous one
                 # counts, so a gap reads as "not counted", never as zero.
-                if upload_snapshot is not None and prev_sigs['media']:
+                if upload_snapshot is not None and had_media:
                     upload_snapshot.setdefault('_library', {})['new_media'] = new_media
-                del prev_sigs, curr_snap
             else:
                 log.info("No previous file signatures stored — change log skipped this run, "
                          "resumes on the next audit.")

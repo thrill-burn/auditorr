@@ -360,13 +360,17 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
         )
         fi_resp.raise_for_status()
         raw_files = _unwrap(fi_resp.json())
-        files = [_norm_file(f) for f in raw_files]
+        # Only each file's name and priority are read again (by `_norm_file`'s
+        # rules), so only they are kept: a dict per file, for every torrent,
+        # was held until the file map was built (SCAN D3).
+        files = ([f.get('name') or f.get('path') or '' for f in raw_files],
+                 [f.get('priority') for f in raw_files])
         files_ok = True
-        if not files and raw_files is not None:
+        if not raw_files and raw_files is not None:
             log.debug('qui: files endpoint returned empty list for %s', torrent_hash)
     except Exception as e:
         log.debug('qui: files endpoint failed for %s: %s', torrent_hash, e)
-        files, files_ok = [], False
+        files, files_ok = ([], []), False
 
     return hosts, health, files, files_ok
 
@@ -425,7 +429,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     th, hosts, health, files, files_ok = future.result()
                 except Exception:
                     th    = _norm_torrent(futures[future])['hash']
-                    hosts, health, files, files_ok = None, ('unknown', ''), [], False
+                    hosts, health, files, files_ok = None, ('unknown', ''), ([], []), False
                 if th:
                     tracker_map[th] = hosts
                     health_map[th]  = health
@@ -446,7 +450,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     if th:
                         tracker_map.setdefault(th, None)
                         health_map.setdefault(th, ('unknown', ''))
-                        files_map.setdefault(th, [])
+                        files_map.setdefault(th, ([], []))
                         failed_listings.add(th)
                         timed_out += 1
             log.warning('qui: timed out after %ds fetching per-torrent data for instance '
@@ -466,18 +470,21 @@ def _process_instance(session, base, inst, remote_path, local_path,
     # `complete` has no default on purpose: the safe-looking one (True) is the
     # unsafe one, so a call site that forgets it must fail loudly rather than
     # quietly declare an unfinished payload whole.
+    # `health` and `health_msg` are the torrent's, read once per torrent in the
+    # loop below, like `th`.
     def _add_entry(full_path, status, hosts, category, complete):
-        health, health_msg = health_map.get(th, ('unknown', ''))
-        entry = file_map.setdefault(full_path, {
-            'status':        status,
-            'trackers':      set(),
-            'hash':          th,
-            'instance_id':   inst_id,
-            'instance_name': inst_name,
-            'category':      category or '',
-            'tracker_health': health,
-            'tracker_msg':    health_msg,
-        })
+        entry = file_map.get(full_path)
+        if entry is None:
+            entry = file_map[full_path] = {
+                'status':        status,
+                'trackers':      set(),
+                'hash':          th,
+                'instance_id':   inst_id,
+                'instance_name': inst_name,
+                'category':      category or '',
+                'tracker_health': health,
+                'tracker_msg':    health_msg,
+            }
         entry['trackers'].update(hosts)
         # Sparse and sticky in the cautious direction — see the matching note
         # in _qbit.py. Absence means complete, so the flag costs memory only
@@ -513,6 +520,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
         th = nt['hash']
         if not th:
             continue
+        health, health_msg = health_map.get(th, ('unknown', ''))
         hosts  = tracker_map.get(th)
         if hosts is None:
             if report is not None:
@@ -584,7 +592,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
         # path the walk can never match.
         content_path  = remap_path(nt['content_path'], remote_path, local_path)
 
-        torrent_files = files_map.get(th, [])
+        names, prios = files_map.get(th, ((), ()))
 
         listing_failed = th in failed_listings
 
@@ -595,8 +603,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
         # torrent holds nothing, and the payload is enumerated from disk — at
         # content_path while it is still downloading, at save_path/name once it
         # has finished — rather than left to default to 'Orphaned'.
-        file_names = [f['name'] for f in torrent_files] if torrent_files else None
-        priorities = [f.get('priority') for f in torrent_files] if torrent_files else None
+        file_names = names if names else None
+        priorities = prios if names else None
         full_paths = torrent_claimed_paths(
             save_path, nt['name'], content_path, file_names, complete,
             torrent_hash=th, priorities=priorities)
