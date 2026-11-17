@@ -17,6 +17,10 @@ Two things changed, and neither may change an answer:
    they try is a spelling of the folder followed by the name, so a rule is cut
    at its last `/`; a `contains:` needle holding a `/` can span the two, so it,
    and a path glob that doesn't end in a plain name, is still tried whole.
+4. A glob the regex still answers (a star in the middle: the presets'
+   `*-fanart*.jpg`) is skipped for a name ending in none of those globs'
+   literal tails (SCAN SC14), so a video, a subtitle or a folder never reaches
+   it. One glob with no tail turns the skip off.
 
 An exclusion verdict is on every record, so it reaches every list and count.
 Each rule set below is answered three ways for every path: the short way, the
@@ -25,6 +29,7 @@ refuses) and `is_excluded`, the second implementation. The strings are spelled
 with `/` whatever the platform, so Windows runs the short way too.
 """
 
+import fnmatch
 import itertools
 import os
 import pathlib
@@ -33,6 +38,7 @@ import random
 import pytest
 
 from audit import _walk_directory
+import exclusions as exclusions_module
 from exclusions import compile_exclusions, is_excluded
 from media_server_exclusions import (
     DISC_RIP_EXCLUSION_PRESETS,
@@ -59,6 +65,10 @@ RULESETS = {
             '/mnt/user/data/torrents/books/**', 'tv/Show/', 'a*b', '?x', '[ab]*', '*]',
             'fan*', '*.JPG', 'x*', '*y', '*.*.bak']},
     'odd globs': {'EXCLUSION_PATTERNS': ['*a', 'a*', 'a*a', '?', '*[', ']*', '*.', '.*']},
+    # SC14: every glob the regex answers has a literal tail, so the skip is on.
+    'mid-star globs': {'EXCLUSION_PATTERNS': [
+        'fanart*.jpg', '*-fanart*.jpg', 'back*drop?.png', 'a*b[cd].tbn', '*x*y.webp',
+        'Sample*.mkv', '*S01*.mkv', 'th?mb*.JPG', '*[]]*.nfo']},
     # SC13: every kind of rule the whole-path branch reads. Needles inside a
     # folder, inside a name and across the two (`/x`, `/.`, `show/s`); path
     # globs ending in a plain name and ones that don't; brackets around the
@@ -296,3 +306,83 @@ def test_the_walk_spells_its_paths_the_short_ways_way(tmp_path):
     assert sorted(rel for rel, excluded in stored.items() if excluded) == [
         '@eaDir/x.mkv', 'movies/Film/Sample/film-sample.mkv', 'tv/Show/Show-poster.jpg',
         'tv/Show/Subs/e1.en.srt']
+
+
+# ── SC14: a glob the regex answers is skipped for a name that can't end its way ──
+
+@pytest.mark.parametrize('glob, tail', [
+    ('fanart*.jpg', '.jpg'), ('*-fanart*.jpg', '.jpg'), ('a?b', 'b'), ('*b?c', 'c'),
+    ('x[ab]', ''), ('*', ''), ('a*', ''), ('[!a]c', 'c'), ('a[b', 'b'), ('a]b*c.d', 'c.d'),
+    ('*x*y.webp', 'y.webp'), ('[]x]*.tbn', '.tbn'), ('?', '')])
+def test_a_globs_literal_tail(glob, tail):
+    assert exclusions_module._literal_tail(glob) == tail
+    # Every name the glob matches ends with it.
+    for name in ('fanart-1.jpg', 'xx-fanart.jpg', 'ab', 'axb', 'zbqc', 'xa', 'bc', 'a[b',
+                 'a]bQc.d', 'xQy.webp', ']x.tbn', 'q', 'a.mkv'):
+        if fnmatch.fnmatchcase(name, glob):
+            assert name.endswith(tail), (glob, name)
+
+
+def _ends_rule(q):
+    """A `*literal` or `literal*` glob, answered by `endswith`/`startswith`."""
+    return len(q) > 1 and ((q[0] == '*' and not exclusions_module._has_glob(q[1:]))
+                           or (q[-1] == '*' and not exclusions_module._has_glob(q[:-1])))
+
+
+def test_a_mid_star_glob_is_skipped_only_for_a_name_it_cant_match():
+    """`_glob_hit` against the one regex, over rule sets of globs the regex
+    answers (none `*literal` or `literal*`), most of them with a literal tail and
+    names that often end in one, so the skip is taken and missed both ways."""
+    rnd = random.Random(14)
+    heads = ['fanart', '-fanart', 'back', 'a', 'x?', '[ab]', '[!x]', '']
+    tails = ['.jpg', '.jpeg', '.png', 'g', 'pg', '.tbn', 'y.webp', '?.png', '[ab].tbn', '*', '']
+    checked = gated = ungated = 0
+    wrong = []
+    for _ in range(300):
+        globs = []
+        for _ in range(rnd.randint(1, 8)):
+            g = rnd.choice(heads) + '*' + rnd.choice(['', 'mid', '-', '?']) + rnd.choice(tails)
+            globs.append(g)
+        if rnd.random() < 0.6:              # mostly every glob with a tail, so the skip is on
+            globs = [g for g in globs if exclusions_module._literal_tail(g) or _ends_rule(g)]
+        if not globs:
+            continue
+        matcher = compile_exclusions(globs)
+        if matcher._glob_rest_rx is None:
+            continue
+        on = matcher._glob_rest_tails is not None
+        assert on == all(exclusions_module._literal_tail(q) for q in map(os.path.normcase, globs)
+                         if not _ends_rule(q))
+        gated += on
+        ungated += not on
+        for _ in range(200):
+            name = (rnd.choice(heads + ['Show.S01E01', 'poster', '']) + rnd.choice(['', 'mid', '-x'])
+                    + rnd.choice(tails + ['.mkv', '.srt', '', '.JPG']))
+            checked += 1
+            if bool(matcher._seg_glob_rx.match(os.path.normcase(name))) != matcher._glob_hit(name):
+                wrong.append((globs, name))
+    assert checked > 40_000 and gated > 100 and ungated > 30
+    assert not wrong, f'{len(wrong)} of {checked} differ, first: {wrong[:5]!r}'
+
+
+def test_the_box_s_art_globs_are_skipped_for_a_video():
+    """Under the presets every glob the regex answers has a tail, so a video,
+    a subtitle and a folder's name never reach it, and an image still does."""
+    matcher = compile_exclusions(expand_exclusion_patterns(RULESETS['the box']))
+    assert matcher._glob_rest_rx is not None and matcher._glob_rest_tails is not None
+
+    class _Watched:
+        def __init__(self, rx):
+            self.rx, self.asked = rx, []
+
+        def match(self, s):
+            self.asked.append(s)
+            return self.rx.match(s)
+    watched = _Watched(matcher._glob_rest_rx)
+    matcher._glob_rest_rx = watched
+    for name in ('Show.S01E01.mkv', 'Show.S01E01.en.srt', 'Season 01', 'clip.mp4'):
+        assert matcher._glob_hit(name) is False
+    assert watched.asked == []
+    assert matcher._glob_hit('backdrop2.jpg') is True
+    assert matcher._glob_hit('summer.jpg') is False
+    assert len(watched.asked) == 2

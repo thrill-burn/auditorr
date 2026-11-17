@@ -68,6 +68,7 @@ class CompiledExclusions:
         "_glob_suffix_tails",
         "_glob_prefixes",
         "_glob_rest_rx",
+        "_glob_rest_tails",
         "_dir_memo",
         "_name_needles",
         "_slash_needles",
@@ -199,6 +200,13 @@ class CompiledExclusions:
         self._glob_prefixes = tuple(prefixes)
         self._glob_rest_rx = (
             re.compile("|".join(f"(?:{fnmatch.translate(p)})" for p in rest)) if rest else None)
+        # Every name a glob matches ends in the glob's literal tail (`_literal_tail`),
+        # so a name ending in none of the tails can't match the regex and skips it:
+        # under the presets' art globs (`*-fanart*.jpg`) that's every video,
+        # subtitle and folder. One glob with no tail (`*.mkv*`, `[0-9]`) turns
+        # this off, and the regex answers every name as before.
+        tails = [_literal_tail(p) for p in rest]
+        self._glob_rest_tails = tuple(dict.fromkeys(tails)) if rest and all(tails) else None
         # The last folder asked about and its answer: `(full dir, rel dir, hit,
         # names, prefixes)`, the last two from `_folder_paths`.
         self._dir_memo = (None, None, False, None, None)
@@ -293,7 +301,13 @@ class CompiledExclusions:
             return True
         if self._glob_prefixes and s.startswith(self._glob_prefixes):
             return True
-        return self._glob_rest_rx is not None and self._glob_rest_rx.match(s) is not None
+        rx = self._glob_rest_rx
+        if rx is None:
+            return False
+        tails = self._glob_rest_tails
+        if tails is not None and not s.endswith(tails):
+            return False
+        return rx.match(s) is not None
 
     def match(self, full_path, rel_path, filename):
         """Return True when the file matches any compiled exclusion rule."""
@@ -622,6 +636,16 @@ def _matches_prefix(prefix, candidates):
 
 def _has_glob(pattern):
     return any(ch in pattern for ch in "*?[]")
+
+
+def _literal_tail(glob):
+    """The text after a glob's last `*`, `?`, `[` or `]`: every name the glob
+    matches ends with it, `''` when the glob ends in one of them.
+
+    The text holds none of the four, so it is outside any `[...]` class and
+    fnmatch reads it literally; an unclosed `[`, which fnmatch also reads
+    literally, only makes the tail shorter than it could be."""
+    return glob[max(glob.rfind(c) for c in "*?[]") + 1:]
 
 
 def _norm(path):

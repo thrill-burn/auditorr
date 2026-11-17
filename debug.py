@@ -269,9 +269,47 @@ def process_rss_mb():
     return round(kb / 1024) if kb is not None else None
 
 
+# SCAN SC7. A scan restarts the kernel's high-water mark (`reset_peak_rss`), so
+# what VmHWM reads afterwards is the scan's peak, not the process's. The highest
+# value read before each reset is kept here, so the process's own peak survives.
+_CLEAR_REFS = '/proc/self/clear_refs'
+_hwm_lock = threading.RLock()   # re-entrant: a test holds it across a reset
+_hwm_before_reset_kb = 0
+
+
 def process_peak_rss_mb():
+    """The process's peak RSS since it started, across every scan's reset."""
+    with _hwm_lock:
+        kb = _proc_status_kb('VmHWM')
+        if kb is None:
+            return None
+        return round(max(kb, _hwm_before_reset_kb) / 1024)
+
+
+def peak_rss_since_reset_mb():
+    """The kernel's VmHWM as it reads: the peak RSS since `reset_peak_rss`
+    last succeeded, or since the process started if it never has."""
     kb = _proc_status_kb('VmHWM')
     return round(kb / 1024) if kb is not None else None
+
+
+def reset_peak_rss():
+    """Restart the kernel's VmHWM from the current RSS (Linux 4.0's `5` to
+    `/proc/self/clear_refs`), keeping what it read for `process_peak_rss_mb`.
+    False where it can't be done: no /proc, or a /proc that won't take the write.
+    """
+    global _hwm_before_reset_kb
+    with _hwm_lock:
+        kb = _proc_status_kb('VmHWM')
+        if kb is None:
+            return False
+        _hwm_before_reset_kb = max(_hwm_before_reset_kb, kb)
+        try:
+            with open(_CLEAR_REFS, 'w') as f:
+                f.write('5')
+        except OSError:
+            return False
+        return True
 
 
 def _read_int_file(path):

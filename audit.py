@@ -31,7 +31,8 @@ from db import (
 )
 import rounds
 from state import get_state, set_state, update_progress
-from debug import process_rss_mb, container_memory, host_available_mb, malloc_trim
+from debug import (process_rss_mb, container_memory, host_available_mb, malloc_trim,
+                   reset_peak_rss, peak_rss_since_reset_mb)
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +86,12 @@ _UNLISTABLE_SHALLOW_DEPTH = 2
 # An empty folder changed this recently may be about to be filled — a download
 # starting, a move in progress — so it isn't offered (C27). qui's default.
 EMPTY_DIR_GRACE_SECS = 600
+
+
+# An inode no torrent claims has no trackers: one shared empty value, not an
+# empty set per inode (216 bytes each, SCAN SC9). A claim replaces it with a set
+# of its own, built as `set().update` built it, so its order is the same.
+_NO_TRACKERS = frozenset()
 
 
 def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None, walk_report=None, empty_dirs=None, protected_dirs=None):
@@ -234,12 +241,17 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 # torrent is gone is not claimed, and is an ordinary orphan.
                 if qbit_info is not None and not excluded and sources.is_part_file_name(filename):
                     excluded = True
-                inode_map.setdefault(file_key, {
-                    'trackers': set(), 'status': 'Orphaned',
+                # SCAN SC9: the entry is the walk's peak, alive with every
+                # record, so it carries nothing it doesn't need. `key` is the
+                # inode's one key tuple, which every path of it appends to the
+                # key order in place of its own fresh one; `unreg_claimants` is
+                # made only for an inode that has one.
+                info = inode_map.setdefault(file_key, {
+                    'key': file_key,
+                    'trackers': _NO_TRACKERS, 'status': 'Orphaned',
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
                     'instance_id': None, 'instance_name': None,
                     'tracker_health': 'unknown', 'tracker_msg': '',
-                    'unreg_claimants': {},
                     'size': 0,
                     'torrent_rel_path': None, 'torrent_excluded': False,
                     'media_rel_path': None, 'media_excluded': False,
@@ -272,7 +284,10 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         info['torrent_rel_path'] = rel_path
                         info['torrent_excluded'] = excluded
                     if qbit_info:
-                        info['trackers'].update(qbit_info['trackers'])
+                        if info['trackers'] is _NO_TRACKERS:
+                            info['trackers'] = set(qbit_info['trackers'])
+                        else:
+                            info['trackers'].update(qbit_info['trackers'])
                         info['category'] = qbit_info.get('category', '') or info.get('category', '')
                         # Cross-seeds via distinct hardlinks share an inode but
                         # have distinct paths, so each is a separate qbit_file_map
@@ -290,8 +305,9 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                             info['tracker_msg']    = qbit_info.get('tracker_msg', '')
                         # Union unregistered claimants across every path of this
                         # inode so a dead cross-seed sibling survives the merge.
-                        for h, c in (qbit_info.get('unreg_claimants') or {}).items():
-                            info['unreg_claimants'][h] = c
+                        unreg = qbit_info.get('unreg_claimants')
+                        if unreg:
+                            info.setdefault('unreg_claimants', {}).update(unreg)
                         # Completion (R2). Sparse — absent means complete, which
                         # is almost every record, and an extra key on every
                         # inode_map entry is the RAM hotspot this walk is
@@ -318,7 +334,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         if not excluded and st.st_mtime > 0 and (
                                 oldest_mtime is None or st.st_mtime < oldest_mtime):
                             oldest_mtime = st.st_mtime
-                key_order.append(file_key)
+                key_order.append(info['key'])
             except Exception as e:
                 log.warning(f"Could not stat {full_path}: {e}")
                 stat_errors += 1
@@ -750,15 +766,17 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         unverified = {'all': bool(unverified.get('all')),
                       'roots': [_match_key(r) for r in (unverified.get('roots') or []) if r]}
     torrent_files_data, sidecar_candidates = [], []
-    seen_torrent_keys = set()
+    # An inode emitted is marked on its own entry, which has room for the key
+    # (SCAN SC9), not in a set of every key: `torrent_record` (the record, read
+    # by the library loop below) and `media_done`. So this marks the inode map
+    # it's given, and is called once per map, as the scan does.
     for file_key in torrent_key_order:
         # Cross-seeded files share an inode across multiple torrent directories.
         # Only emit one entry per unique inode so the file browser and health
         # metrics don't count the same physical file N times (once per cross-seed).
-        if file_key in seen_torrent_keys:
-            continue
-        seen_torrent_keys.add(file_key)
         info    = inode_map[file_key]
+        if 'torrent_record' in info:
+            continue
         file_id = f"{file_key[0]}:{file_key[1]}"
         # Unregistered cross-seed claimants other than the kept (healthiest) one:
         # dead torrent registrations whose payload is still alive on this inode.
@@ -817,20 +835,22 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         # nothing: a library with nothing to stamp never pays for a second walk.
         if not imported and _is_sidecar_candidate(record):
             sidecar_candidates.append(record)
+        info['torrent_record'] = record
         torrent_files_data.append(record)
     media_files_data = []
-    seen_media_keys = set()
     for file_key in media_key_order:
-        if file_key in seen_media_keys:
-            continue
-        seen_media_keys.add(file_key)
         info    = inode_map[file_key]
-        file_id = f"{file_key[0]}:{file_key[1]}"
+        if 'media_done' in info:
+            continue
+        info['media_done'] = True
+        # A linked inode's torrent record holds an equal `file_id` and
+        # `trackers`: the library record takes the same objects (SCAN SC9).
+        twin = info.get('torrent_record')
         record = {
             "path": info['media_rel_path'], "size": info['size'], "inode": file_key[1],
-            "file_id": file_id,
+            "file_id": twin['file_id'] if twin else f"{file_key[0]}:{file_key[1]}",
             "status": info['status'], "imported": True,
-            "trackers": list(info['trackers']) or ["None"],
+            "trackers": twin['trackers'] if twin else (list(info['trackers']) or ["None"]),
             "linked_paths": info['torrent_paths'],
             "duplicate_paths": duplicate_map.get(file_key, []),
             "excluded": info['media_excluded'],
@@ -2197,7 +2217,7 @@ def compute_diff(prev_snap, curr_snap):
     return compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
 
 
-def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
+def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None, dead_regs=None):
     """Count items that genuinely left the Triage pile since the last scan.
 
     This is the Next steps shovel counter (`ns_progress['shoveled']`), and it
@@ -2248,7 +2268,9 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
 
     # ── Dead registrations, by hash ──────────────────────────────────────────
     if prev_dead_regs:
-        resolved += len(set(prev_dead_regs) - dead_registration_hashes(torrent_files))
+        if dead_regs is None:
+            dead_regs = dead_registration_hashes(torrent_files)
+        resolved += len(set(prev_dead_regs) - dead_regs)
 
     # ── File records, by path ────────────────────────────────────────────────
     if not prev_torrent_sigs:
@@ -2852,8 +2874,12 @@ def _memory_sampler(stop_event, interval=20):
             with _marker_lock:
                 marker = db_get_meta('scan_marker')
                 if marker:
+                    # The scan's own peak so far where the kernel keeps it (SC7),
+                    # so a scan killed mid-way leaves it for its aborted row.
+                    peak = (peak_rss_since_reset_mb() if marker.get('peak_from_kernel')
+                            else None) or rss
                     marker['last_rss_mb']    = rss
-                    marker['peak_rss_mb']    = max(rss, marker.get('peak_rss_mb') or 0)
+                    marker['peak_rss_mb']    = max(peak, marker.get('peak_rss_mb') or 0)
                     marker['last_sample_at'] = datetime.now().isoformat(timespec='seconds')
                     db_set_meta('scan_marker', marker)
         except Exception:
@@ -2879,11 +2905,21 @@ def _memory_sampler(stop_event, interval=20):
 
 
 def _scan_peak_rss():
-    """Best-effort per-scan peak RSS: the sampler folds highs into the scan
-    marker every 20s; fall back to the current reading. Persisted onto the
-    audit_runs row so peak-per-scan trends survive across days of history."""
+    """The scan's peak RSS, persisted onto its audit_runs row.
+
+    SCAN SC7: the kernel's VmHWM, which `run_audit_process` restarts as the scan
+    begins (`peak_from_kernel` on the marker says it did), so it holds the real
+    peak. It used to be the highest of the sampler's readings, one every 20 s,
+    so a scan under 20 s stored its RSS at save time and a longer one whichever
+    reading came nearest its peak. That stays the answer where the reset can't
+    be made (not Linux, a /proc that won't take the write)."""
     try:
-        return (db_get_meta('scan_marker') or {}).get('peak_rss_mb') or process_rss_mb()
+        marker = db_get_meta('scan_marker') or {}
+        if marker.get('peak_from_kernel'):
+            peak = peak_rss_since_reset_mb()
+            if peak:
+                return peak
+        return marker.get('peak_rss_mb') or process_rss_mb()
     except Exception:
         return None
 
@@ -3062,12 +3098,15 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
               status_message="Connecting to torrent source...", last_scan_status="running",
               phase="connecting", phase_history=[], anomaly_code=None)
+    # SCAN SC7: the kernel's peak, restarted here, is the scan's own.
+    peak_from_kernel = reset_peak_rss()
     try:
         db_set_meta('scan_marker', {
             'started_at': datetime.now().isoformat(timespec='seconds'),
             'trigger':    trigger,
             'pid':        os.getpid(),
             'phase':      'Connecting to torrent source...',
+            'peak_from_kernel': peak_from_kernel,
         })
     except Exception as e:
         log.warning(f"Could not write scan marker: {e}")
@@ -3194,6 +3233,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # walk's own stat calls. Age is stored, not the timestamp — the ladder
         # wants "how long have you had this", and a stored age cannot drift into
         # the future if the clock moves.
+        # The compact Dedupe row's two lists, which the badge's count reads too:
+        # one pass over every record, not two (SCAN SC11).
+        dedupe_lists = dedupe_row(torrent_files_data, media_files_data)
         _extra_details = {
             'seed_byte_secs': tracker_snapshot.get('_seed_byte_secs', 0),
             'max_seed_secs':  tracker_snapshot.get('_max_seed_secs', 0),
@@ -3204,7 +3246,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # number. `duplicate_count` counts files and feeds the health score,
             # the change log, Singleton and Clone Hunter, so it stays as it is;
             # the badge reads this and falls back to it where absent.
-            'dedupe_group_count': dedupe_group_count(torrent_files_data, media_files_data, cfg),
+            'dedupe_group_count': dedupe_group_count(dedupe_lists['torrents'], dedupe_lists['media'], cfg),
             # Cleanup's "couldn't check inside these folders" notice (C26). The
             # count rides the details, which reach the debug report; the folder
             # names ride `cleanup_folders`, which doesn't.
@@ -3307,6 +3349,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # the previous scan's hash set, and the progress pass below needs the
         # same record to latch against.
         _ns_prev = db_get_meta('ns_progress')
+        # This scan's dead registrations, read by the shovel count and the
+        # progress pass both; worked out once (SCAN SC11).
+        dead_regs = None
         diff = None
         try:
             # One tree's previous signatures at a time: each map is a string
@@ -3314,9 +3359,10 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # torrent tree goes first because the shovel count reads it too;
             # the entries are still listed library first, as they always were.
             prev_torrents = db_load_file_signatures('torrents')
+            dead_regs = dead_registration_hashes(torrent_files_data)
             ns_resolved = count_pile_resolved(
                 prev_torrents, torrent_files_data,
-                prev_dead_regs=(_ns_prev or {}).get('last_dead_regs'))
+                prev_dead_regs=(_ns_prev or {}).get('last_dead_regs'), dead_regs=dead_regs)
             had_torrents = bool(prev_torrents)
             new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
             torrent_root = _norm_abs(cfg.get('LOCAL_PATH', '')) if cfg.get('LOCAL_PATH') else None
@@ -3372,7 +3418,8 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # rounds.history_from_runs.
             _ns_next = rounds.update_progress(
                 _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
-                dead_regs=dead_registration_hashes(torrent_files_data),
+                dead_regs=(dead_regs if dead_regs is not None
+                           else dead_registration_hashes(torrent_files_data)),
                 runs=_ns_runs)
         except Exception as e:
             log.warning(f"Could not compute Next steps progress: {e}")
@@ -3425,7 +3472,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # Compact Dedupe working set (R6, Phase 14): the page and the script
             # read this, never both full lists. References, keyed by tree.
             ('dedupe',   db_prepare_file_results(
-                dedupe_row(torrent_files_data, media_files_data))),
+                dedupe_lists)),
             # The dashboard's library map: per-title byte sums by state, both
             # trees. Names, so its own row, served by /api/library_map.
             ('library_map', db_prepare_file_results(
