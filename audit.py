@@ -32,7 +32,7 @@ from db import (
 import rounds
 from state import get_state, set_state, update_progress
 from debug import (process_rss_mb, container_memory, host_available_mb, malloc_trim,
-                   reset_peak_rss, peak_rss_since_reset_mb)
+                   reset_peak_rss, peak_rss_since_reset_mb, rss_and_peak_mb)
 
 log = logging.getLogger(__name__)
 
@@ -2838,16 +2838,40 @@ def filesystem_plausibility(root, block, reference, file_map_size=0):
 _marker_lock = threading.Lock()
 
 
+def _phase_memory(kernel):
+    """`(rss_mb, hwm_mb)` as a phase begins. `hwm_mb` is the kernel's peak since
+    the scan's reset, read with RSS in one pass of /proc (`rss_and_peak_mb`),
+    or None where the reset was refused (`peak_source` 'sampled'): there VmHWM
+    is the process's peak, not the scan's."""
+    return rss_and_peak_mb() if kernel else (process_rss_mb(), None)
+
+
+def _phase_entry(message, t, rss, hwm):
+    """One `phase_history` entry, as the phase begins (for the debug report's
+    field testers, 2026-11-16).
+
+    `t` is seconds since the scan started (`scan_clock`, monotonic) to 0.01 s,
+    so a phase's length is the next entry's `t` less its own; `at` is the wall
+    clock to the second, kept for anything that reads it. `rss_mb` is RSS now
+    and `hwm_mb` the scan's peak so far (`_phase_memory`), so the phase that
+    raised the peak is the one after which `hwm_mb` jumps.
+    """
+    return {'message': message, 'rss_mb': rss,
+            'at': datetime.now().isoformat(timespec='seconds'), 't': t, 'hwm_mb': hwm}
+
+
 def _enter_phase(phase, message):
     """Advance the scan to a new phase: update state, log RSS, and persist the
     scan marker so a process killed mid-scan (OOM, container restart) leaves
     evidence of exactly where it died for the next boot to report."""
-    rss = process_rss_mb()
+    now = time.monotonic()
+    state = get_state()
+    clock = state.get('scan_clock')
+    rss, hwm = _phase_memory(state.get('peak_source') == 'kernel')
     set_state(status_message=message, phase=phase)
     log.info(f"Audit: {message}" + (f" (rss={rss} MB)" if rss is not None else ""))
-    hist = (get_state().get('phase_history') or []) + [{
-        'message': message, 'rss_mb': rss, 'at': datetime.now().isoformat(timespec='seconds'),
-    }]
+    hist = (state.get('phase_history') or []) + [_phase_entry(
+        message, round(now - clock, 2) if clock is not None else None, rss, hwm)]
     set_state(phase_history=hist[-30:])
     try:
         with _marker_lock:
@@ -3058,21 +3082,40 @@ def _ask_arrs_meanwhile(cfg):
     and a scan takes 3, so the stamp costs it no time unless the arrs are
     slower than both walks. `answer()` waits up to `_ARR_PATHS_WAIT` and is
     `(None, 'unreachable')` past it or on any failure.
+
+    `answer(timing)` also fills `timing` with how the ask went, for the debug
+    report's `arr_ask` (2026-11-16): `secs` the arrs took (None if still
+    asking when the scan gave up), `files` in the answer (None without one),
+    `check`, `waited_secs` the scan waited for it, and `timed_out`. Sonarr is a
+    request per series, so a library of thousands of series can near the
+    cap, and the box's arrs answer too fast to show it.
     """
     box = {}
 
     def run():
+        start, got = time.monotonic(), None
         try:
-            box['answer'] = fetch_arr_managed_paths(cfg)
+            got = fetch_arr_managed_paths(cfg)
         except Exception as e:
             log.warning("Could not ask the arrs which files they hold: %s", type(e).__name__)
+        # One assignment, so `answer()` reads the answer and its time together.
+        box['done'] = (got, time.monotonic() - start)
 
     t = threading.Thread(target=run, daemon=True, name='audit-arr-paths')
     t.start()
 
-    def answer():
+    def answer(timing=None):
+        start = time.monotonic()
         t.join(_ARR_PATHS_WAIT)
-        return box.get('answer') or (None, 'unreachable')
+        waited = time.monotonic() - start
+        done = box.get('done')
+        managed, check = (done and done[0]) or (None, 'unreachable')
+        if timing is not None:
+            timing.update(secs=round(done[1], 2) if done else None,
+                          files=len(managed) if managed is not None else None,
+                          check=check, waited_secs=round(waited, 2),
+                          timed_out=done is None and t.is_alive())
+        return managed, check
     return answer, t.is_alive
 
 
@@ -3095,11 +3138,23 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     if trigger is None:
         trigger = get_state().get('trigger', 'manual')
     scan_start = time.time()
+    # The phase history's clock (`t`), read with `scan_start` so the last
+    # phase runs to `last_scan_duration`. Monotonic: a clock step can't make a
+    # phase read negative.
+    scan_clock = time.monotonic()
+    # SCAN SC7: the kernel's peak, restarted here, is the scan's own. Before
+    # the scan's first state write, which says whether it was (`peak_source`:
+    # where the reset is refused, the stored peak is the sampler's).
+    peak_from_kernel = reset_peak_rss()
+    # The listing is the history's first phase, at t 0. Seeded here rather
+    # than through `_enter_phase`, which writes the scan marker: the marker's
+    # first write is the one below.
+    rss, hwm = _phase_memory(peak_from_kernel)
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
               status_message="Connecting to torrent source...", last_scan_status="running",
-              phase="connecting", phase_history=[], anomaly_code=None)
-    # SCAN SC7: the kernel's peak, restarted here, is the scan's own.
-    peak_from_kernel = reset_peak_rss()
+              phase="connecting", anomaly_code=None, arr_ask=None,
+              peak_source='kernel' if peak_from_kernel else 'sampled', scan_clock=scan_clock,
+              phase_history=[_phase_entry("Connecting to torrent source...", 0.0, rss, hwm)])
     try:
         db_set_meta('scan_marker', {
             'started_at': datetime.now().isoformat(timespec='seconds'),
@@ -3204,7 +3259,14 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # (R1), which Last scan says.
         if arr_asking():
             _enter_phase("post", "Asking Sonarr and Radarr which files they hold...")
-        managed, unmanaged_check = arr_answer()
+        # How long the arrs took, for the debug report: counts and seconds
+        # only, never an instance's name or address.
+        arr_ask = {}
+        managed, unmanaged_check = arr_answer(arr_ask)
+        set_state(arr_ask=arr_ask)
+        log.info("Audit: Sonarr/Radarr file list: check=%s files=%s secs=%s waited_secs=%s "
+                 "timed_out=%s", arr_ask['check'], arr_ask['files'], arr_ask['secs'],
+                 arr_ask['waited_secs'], arr_ask['timed_out'])
         if unmanaged_check == 'unreachable':
             log.info("Audit: Sonarr/Radarr didn't all answer, so no library file is marked unmanaged this scan")
         stamp_counts = {'unmanaged': 0}

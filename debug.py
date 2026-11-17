@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from db import (DATA_DIR, DB_FILE, DEFAULT_CONFIG, SCORE_WEIGHT_KEYS,
                 score_weight_points,
                 db_load_config, db_load_results, db_get_meta, db_set_meta)
+from scripts import filesystem_types
 from state import get_state
 
 log = logging.getLogger(__name__)
@@ -291,6 +292,34 @@ def peak_rss_since_reset_mb():
     last succeeded, or since the process started if it never has."""
     kb = _proc_status_kb('VmHWM')
     return round(kb / 1024) if kb is not None else None
+
+
+_PROC_STATUS = '/proc/self/status'
+
+
+def rss_and_peak_mb():
+    """`(rss_mb, peak_mb)`: `process_rss_mb()` and `peak_rss_since_reset_mb()`
+    from **one** read of /proc/self/status, Nones without it.
+
+    For a scan's phase history, which wants both as each phase begins. The two
+    calls read the file twice, and the second read was the whole cost of the
+    history's `hwm_mb`: +15.6 us a phase (`.internal/debug_report_bench/`).
+    The two lines are adjacent, so one read stops where the old one did.
+    """
+    want, kb = ('VmRSS', 'VmHWM'), {}
+    try:
+        with open(_PROC_STATUS) as f:
+            for line in f:
+                key, _, rest = line.partition(':')
+                if key in want:
+                    kb[key] = int(rest.split()[0])
+                    if len(kb) == 2:
+                        break
+    except (OSError, ValueError, IndexError):
+        return None, None
+    rss, hwm = kb.get('VmRSS'), kb.get('VmHWM')
+    return (round(rss / 1024) if rss is not None else None,
+            round(hwm / 1024) if hwm is not None else None)
 
 
 def reset_peak_rss():
@@ -716,6 +745,25 @@ def _recent_runs_sanitized(limit=20):
         return [], {}
 
 
+# A commit is cut to this many characters: enough to name it, and under the 24
+# at which `_TOKEN_RE` reads a hex string as a token (a full SHA is 40).
+_COMMIT_CHARS = 12
+
+
+def build_info():
+    """`{commit, ref}`: which build this is, from the image's build args.
+
+    The release and `:experimental` both report `APP_VERSION`, so a field
+    tester's before and after reports read as the same version without this.
+    CI passes the commit and the branch or tag (`.github/workflows/docker.yml`,
+    the Dockerfile's last `ARG`s). Either is None when its variable is unset or
+    empty: `python app.py`, or a `docker build` made by hand.
+    """
+    commit = (os.environ.get('AUDITORR_COMMIT') or '').strip()
+    ref = (os.environ.get('AUDITORR_REF') or '').strip()
+    return {'commit': commit[:_COMMIT_CHARS] or None, 'ref': ref or None}
+
+
 def build_debug_report(version):
     state = get_state()
     cfg = db_load_config()
@@ -724,10 +772,17 @@ def build_debug_report(version):
         '_readme': (
             'auditorr debug report. Credentials are omitted; hosts, IPs and API '
             'tokens are redacted; media file/folder names are replaced with '
-            'stable 6-char hashes (~abc123) so they can be correlated but not read.'
+            'stable 6-char hashes (~abc123) so they can be correlated but not read. '
+            'build: the commit (first 12 characters) and the branch or tag the '
+            'image was built from, which tells two images of one app_version '
+            'apart; null in a build not made by the project\'s CI. '
+            'runtime.filesystems: the filesystem type each root is stored on '
+            '(the type only, never the mount or its source), as the container '
+            'sees it; null where it can\'t be read or a root isn\'t configured.'
         ),
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'app_version':  version,
+        'build':        build_info(),
         'runtime': {
             'python':            sys.version.split()[0],
             'platform':          platform.platform(),
@@ -745,6 +800,9 @@ def build_debug_report(version):
             'thread_count':      threading.active_count(),
             'thread_names':      sorted(t.name for t in threading.enumerate())[:40],
             'inotify':           inotify_watch_stats(),
+            # The type only, never the mount point or its source.
+            'filesystems':       filesystem_types({'torrents': cfg.get('LOCAL_PATH'),
+                                                   'media': cfg.get('MEDIA_PATH')}),
             'data_dir_set':      bool(os.environ.get('DATA_DIR')),
             'auth_enabled':      bool(os.environ.get('AUDITORR_SECRET', '').strip()),
             'auth_strict':       os.environ.get(
@@ -754,10 +812,42 @@ def build_debug_report(version):
         },
         'config': _sanitized_config(cfg),
         'scan_state': {
+            '_readme': (
+                'peak_source: where the last scan\'s peak_rss_mb (audit_history) '
+                'came from; null before this process\'s first scan. kernel: the '
+                'kernel\'s high-water mark, restarted as the scan began, so it is '
+                'the scan\'s true peak. sampled: the kernel refused the restart, '
+                'so it is the highest of readings taken every 20 s (RSS at save '
+                'time for a scan shorter than that) and can be well under the '
+                'true peak. audit_history rows written by 1.8.3 and earlier, or by '
+                'a build before e1a48cd, are always sampled. '
+                'phase_history (and crash_evidence.last_scan_phases, the same list '
+                'kept across a restart): one entry as each phase of the scan '
+                'began, starting with asking the torrent client for its torrents. '
+                't: seconds since the scan '
+                'started, to 0.01; a phase lasts until the next entry\'s t, and the '
+                'last until last_scan_duration, which includes the clean-up after '
+                'the save. rss_mb: memory in use as the phase began. hwm_mb: the '
+                'scan\'s peak memory so far, as the phase began (null when '
+                'peak_source is sampled), so the phase that raised the peak is the '
+                'one after which hwm_mb jumps, and the last phase raised it if the '
+                'run\'s peak_rss_mb is above the last hwm_mb. at: the wall clock, '
+                'to the second. '
+                'arr_ask: the last scan asks Sonarr and Radarr which files they '
+                'hold (for the library map\'s Unmanaged state) while it reads the '
+                'disk; null if the scan stopped before reading the answer. secs: '
+                'how long they took to answer, null if still answering when the '
+                'scan gave up. files: how many files they hold, null without a '
+                'whole answer. check: ok, unreachable (one failed, answered in part '
+                'or was too slow) or none (none configured). waited_secs: how long '
+                'the scan waited for them after reading the disk, 0 when the answer '
+                'was already in. timed_out: the scan gave up after 60 s.'
+            ),
             **{k: state.get(k) for k in (
                 'is_scanning', 'progress', 'phase', 'last_audit_time',
                 'total_files', 'scanned_files', 'last_scan_status',
-                'trigger', 'next_scan_in', 'last_scan_duration',
+                'trigger', 'next_scan_in', 'last_scan_duration', 'peak_source',
+                'arr_ask',
             )},
             'status_message': sanitize_text(state.get('status_message')),
             'phase_history':  [

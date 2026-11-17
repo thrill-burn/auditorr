@@ -85,3 +85,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Which build this is, for /api/debug/report's `build`: the commit,
+          # and the branch or tag (experimental, main, v1.8.4). The release and
+          # :experimental carry the same version number, so this is what tells
+          # a tester's two reports apart.
+          build-args: |
+            AUDITORR_COMMIT=${{ github.sha }}
+            AUDITORR_REF=${{ github.ref_name }}

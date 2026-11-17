@@ -334,6 +334,25 @@ def _mount_of(path, mounts):
     return fstype
 
 
+def filesystem_types(roots, path=None):
+    """`{name: fstype | None}`: the filesystem each root in `roots` (a name to
+    its configured path) is stored on, for the debug report's
+    `runtime.filesystems` (2026-11-16). A walk's speed depends on it (Unraid's
+    `fuse.shfs`, ZFS, NFS, SMB), and a field tester's report didn't say.
+
+    `read_mountinfo` and `_mount_of`, as Dedupe reads them: the deepest mount
+    holding the path, on whole segments, the later of two lines for one mount
+    point. **The type only**: a mount point is a path, and a mount's source can
+    name a host (`nas:/export/media`). None for a root that isn't configured,
+    and for every root where mountinfo can't be read (not Linux). Read once per
+    call, when the report is built, never during a scan.
+    """
+    mounts = read_mountinfo(path)
+    return {name: (_mount_of(_abs(p), mounts) if mounts is not None and (p or '').strip()
+                   else None)
+            for name, p in roots.items()}
+
+
 def _classify(group, mounts):
     """`status`, `reason`, `selectable` and `facts` for one group.
 

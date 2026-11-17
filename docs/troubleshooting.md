@@ -585,7 +585,9 @@ http://your-host:8677/api/debug/report
 ```
 
 It includes runtime and memory stats, sanitized configuration, scan state and
-crash evidence, recent audit runs, and the last few hundred log lines.
+crash evidence, recent audit runs, and the last few hundred log lines. It also
+names the build it came from (the commit and the branch or tag), so a report
+from the `experimental` image can't be mistaken for one from a release.
 
 It deliberately does **not** include credentials. Hostnames, IP addresses and
 API tokens are redacted, and your media file and folder names are replaced with
