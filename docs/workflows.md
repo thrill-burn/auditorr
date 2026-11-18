@@ -129,8 +129,8 @@ the indexer pickers either.
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
 While a search runs and after it, the line under its heading lists the filters
-it used, for example *Filters: your file's quality or better · also seeding on
-Aither*. Only what narrows the search is listed (a row left on *All* or *Any*
+it used, for example *Filters: your file's quality or better · also seeding on*
+followed by the tracker you chose. Only what narrows the search is listed (a row left on *All* or *Any*
 isn't), and a search with no filters has no line. It's the search's own record,
 so it's right even for a search you come back to later or one started in
 another tab.
@@ -150,12 +150,25 @@ hide the 1080p release a 1080p show needs. To change any of that, click **New
 Search**: the settings open on the same title, with **Show everything** to go
 back to the whole library, and what you change there is for that search only;
 the filters and search depth you keep for the whole library stay as they were.
-If there's nothing to search, the settings open instead and say why: Sonarr and
-Radarr manage none of that folder's unseeded files (a rip, a file in no series
-or movie folder), or they're excluded. If another search is still running,
-Backfill shows that one and says so, since only one runs at a time. Yellow, red and purple tiles open Cleanup, Triage and Dedupe
-the same way; Cleanup and Triage start with that release's folder in their
-search.
+If there's nothing to search, Backfill says so at the top of the page, under
+the title's name, and opens the settings: Sonarr and Radarr manage none of that
+folder's unseeded files, or they're excluded. If another search is still
+running, Backfill shows that one and says so, since only one runs at a time.
+
+Yellow, red and purple tiles open Cleanup, Triage and Dedupe the same way;
+Cleanup and Triage start with that release's folder in their search.
+
+**Unmanaged files aren't blue.** A library file that isn't seeded and that
+neither Sonarr nor Radarr holds is drawn in plain grey and named *Unmanaged*:
+an old copy of a movie in a folder of its own beside the one Radarr has, a show
+folder whose episodes Sonarr never imported, a film's extras. Backfill can only
+search for what an arr manages, so clicking one opens Media on that folder
+instead, where you can add it to Sonarr or Radarr or delete a spare copy.
+Subtitles, posters and other files no arr lists count as unmanaged only when no
+file beside them is in an arr. Each scan asks Sonarr and Radarr which files they
+hold while it reads your folders; if any of them doesn't answer, nothing is
+marked unmanaged on that scan, those files stay blue, and the Dashboard's *Last
+scan* card says so.
 
 ### Season packs and single episodes
 

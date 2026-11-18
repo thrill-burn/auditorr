@@ -76,7 +76,7 @@ class LibraryMapRowTests(unittest.TestCase):
         self.assertEqual(list(_titles(row)), [('library', 'tv', 'Show')])
 
     def test_a_dead_seed_is_drawn_on_its_library_file_with_its_torrent_to_search(self):
-        """The box's Jackie Brown: a library file linked to a torrent Aither has
+        """The box's Jackie Brown: a library file linked to a torrent Arvel has
         deleted. Its bytes are the library file's, so the dead seed is a library
         state, joined by inode; the title carries the dead torrent's own folder,
         which is what Triage's search matches."""

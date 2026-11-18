@@ -192,7 +192,7 @@ const MAP_DEPTH = 10
 // ── Why a row is empty (B16) ──────────────────────────────────────────────────
 // From the run's own counts (`app._backfill_empty`). The row said "No releases
 // found" whatever happened, so a Resolution chip left on 2160p read the same as
-// a tracker with nothing: on the box, Aither had both 1080p packs of a season.
+// a tracker with nothing: on the box, one tracker had both 1080p packs of a season.
 function plural(n, word) {
   return `${n.toLocaleString()} ${word}${n !== 1 ? 's' : ''}`
 }

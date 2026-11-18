@@ -693,7 +693,7 @@ _PORT = re.compile(r':\d+$')
 
 
 def strip_port(host):
-    """`xspeeds.eu:2710` → `xspeeds.eu`. An IPv6 literal keeps its brackets.
+    """`tracker.example:2710` → `tracker.example`. An IPv6 literal keeps its brackets.
 
     Also applied to the host keys of stored upload snapshots, so a tracker whose
     history was filed under `host:port` keeps that history.
@@ -738,8 +738,8 @@ class TrackerTally:
     """Per-tracker torrent counts and health for one scan, and the announce
     hosts that are one tracker.
 
-    **Aliases.** TorrentLeech's torrents announce to two hosts
-    (`tracker.torrentleech.org` and `tracker.tleechreload.org`), and every
+    **Aliases.** Some trackers' torrents announce to two hosts (for example
+    `tracker.example` and `tracker-mirror.example`), and every
     per-tracker number counted it as two trackers: two rows, its upload twice in
     the library total, and each of its files "cross-seeded" on itself. Hosts
     that are on exactly the same torrents, two or more of them, are one tracker.

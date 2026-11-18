@@ -162,7 +162,7 @@ def _member(resp, seed, h):
     return next(m for m in resp.get_json()['groups'][_k(seed)] if m['hash'] == h)
 
 
-ROWS3 = [_row('aaa', tracker='aither.cc'), _row('bbb', tracker='blutopia.cc'), _row('ccc', tracker='hawke.uno')]
+ROWS3 = [_row('aaa', tracker='arvel.test'), _row('bbb', tracker='bramble.test'), _row('ccc', tracker='hadley.test')]
 SHARED3 = {'aaa': [MKV], 'bbb': [MKV], 'ccc': [MKV]}
 
 

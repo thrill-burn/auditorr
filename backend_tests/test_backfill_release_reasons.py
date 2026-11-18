@@ -2,12 +2,12 @@
 offers another title's release (BACKFILL B16, 2026-11-11).
 
 The report: searching *Miss Fisher's Murder Mysteries* gave nothing, though
-Aither had both 1080p packs of every season. Measured on the box:
+Arvel had both 1080p packs of every season. Measured on the box:
 
 * **The Resolution chip was left on 2160p** from an earlier run, so both packs
   were filtered out, and the row said "No releases found", exactly what an empty
   tracker says. A run from the library map used those stored chips too.
-* **Sonarr listed 100 releases of other shows above them.** seedpool answers a
+* **Sonarr listed 100 releases of other shows above them.** sorrel answers a
   season search with its latest uploads, and Sonarr maps each one it can to a
   series in the library (*Stick S02E03* for a Miss Fisher S02 search). A grab
   posts only the guid, so grabbing that row downloads Stick.
@@ -38,7 +38,7 @@ _RES = {'Bluray-2160p': 2160, 'Bluray-1080p': 1080, 'Bluray-1080p Remux': 1080,
         'WEBDL-1080p': 1080, 'WEBDL-720p': 720, 'Unknown': 0}
 
 
-def _release(guid, quality='Bluray-1080p', indexer='Aither', title=None, **fields):
+def _release(guid, quality='Bluray-1080p', indexer='Arvel', title=None, **fields):
     """A raw `/api/v3/release` row. Extra keyword fields are the arr's own, verbatim."""
     row = {'title': title or f'Film.2020.{guid}.x264-GRP', 'indexer': indexer, 'indexerId': 1,
            'guid': guid, 'size': 8_000_000_000, 'seeders': 5, 'customFormatScore': 0,
@@ -163,7 +163,7 @@ def test_the_users_case_a_2160p_chip_says_it_hid_the_1080p_releases():
 
 
 def test_an_empty_row_names_the_indexer_strategy():
-    result = _generate([_release('tl', indexer='TorrentLeech')], seeding_on=['Aither'])
+    result = _generate([_release('tl', indexer='Tovey')], seeding_on=['Arvel'])
     empty = result['empty']
     assert result['status'] == 'not_found'
     assert empty['indexers'] == 1 and empty['quality'] == 0

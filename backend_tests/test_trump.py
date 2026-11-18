@@ -17,11 +17,11 @@ class TrumpReplacementRankingTests(unittest.TestCase):
 
     NEW = "Apocalypse Now 1979 Theatrical REPACK 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
     OLD = "Apocalypse Now 1979 Theatrical 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
-    PM  = "Aither (API) (Prowlarr)"
+    PM  = "Arvel (API) (Prowlarr)"
 
     def test_the_exact_release_on_the_pm_tracker_leads_whatever_the_seeders(self):
-        rels = [{'guid': 'b', 'title': self.NEW, 'indexer': 'Blutopia', 'seeders': 90},
-                {'guid': 'a', 'title': self.NEW.replace(' ', '.'), 'indexer': 'Aither', 'seeders': 3}]
+        rels = [{'guid': 'b', 'title': self.NEW, 'indexer': 'Bramble', 'seeders': 90},
+                {'guid': 'a', 'title': self.NEW.replace(' ', '.'), 'indexer': 'Arvel', 'seeders': 3}]
         release, cands = rank_trump_replacements(rels, self.NEW, self.PM)
         self.assertEqual(release['guid'], 'a')
         self.assertEqual([c['guid'] for c in cands], ['a', 'b'])
@@ -34,8 +34,8 @@ class TrumpReplacementRankingTests(unittest.TestCase):
         which the endpoint always sends — that put the cached original last."""
         self.assertEqual(score_release_match(self.NEW, self.OLD)[0],
                          score_release_match(self.NEW, self.NEW)[0])
-        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Aither', 'seeders': 200},
-                {'guid': 'new', 'title': self.NEW, 'indexer': 'Blutopia', 'seeders': 5}]
+        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Arvel', 'seeders': 200},
+                {'guid': 'new', 'title': self.NEW, 'indexer': 'Bramble', 'seeders': 5}]
         release, cands = rank_trump_replacements(rels, self.NEW, self.PM, [self.OLD])
         self.assertEqual(release['guid'], 'new')
         self.assertEqual([c['guid'] for c in cands], ['new', 'old'])
@@ -46,8 +46,8 @@ class TrumpReplacementRankingTests(unittest.TestCase):
         """Not knowing the old names, the cached original is just a release on
         the PM's tracker — so another tracker's exact copy is offered, not
         chosen: pre-selecting it would give up the PM's freeleech."""
-        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Aither', 'seeders': 200},
-                {'guid': 'new', 'title': self.NEW, 'indexer': 'Blutopia', 'seeders': 5}]
+        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Arvel', 'seeders': 200},
+                {'guid': 'new', 'title': self.NEW, 'indexer': 'Bramble', 'seeders': 5}]
         release, cands = rank_trump_replacements(rels, self.NEW, self.PM)
         self.assertIsNone(release)
         self.assertEqual(len(cands), 2)
@@ -60,7 +60,7 @@ class TrumpReplacementRankingTests(unittest.TestCase):
         self.assertFalse(any(c['pm_tracker'] for c in cands))
 
     def test_no_exact_release_means_nothing_is_preselected(self):
-        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Aither', 'seeders': 1}]
+        rels = [{'guid': 'old', 'title': self.OLD, 'indexer': 'Arvel', 'seeders': 1}]
         release, cands = rank_trump_replacements(rels, self.NEW, self.PM)
         self.assertIsNone(release)
         self.assertEqual([c['guid'] for c in cands], ['old'])
@@ -73,7 +73,7 @@ class TrumpReleaseBrowseTests(unittest.TestCase):
 
     NEW = 'Only Yesterday AKA Omoide Poro Poro 1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu'
     OLD = 'Only Yesterday AKA Omoide Poro Poro 1991 1080p BluRay Dual-Audio Opus 2.0 AV1-TiZU'
-    PM  = 'Aither (API) (Prowlarr)'
+    PM  = 'Arvel (API) (Prowlarr)'
     # What Radarr's search listed for NEW, pasted by the user.
     REAL = '[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv'
 
@@ -128,17 +128,17 @@ class TrumpReleaseBrowseTests(unittest.TestCase):
         field agreeing, and said no exact match."""
         new = 'Mulan 1998 REPACK 1080p UHD BluRay Opus 7.1 HDR x265-NCmt'
         rels = [{'guid': 'a', 'title': 'Mulan.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv',
-                 'indexer': 'Aither (API) (Prowlarr)', 'seeders': 36}]
+                 'indexer': 'Arvel (API) (Prowlarr)', 'seeders': 36}]
         release, cands = rank_trump_replacements(rels, new, self.PM)
         self.assertEqual(release['guid'], 'a')
         self.assertTrue(cands[0]['exact'])
 
     def test_every_release_is_returned_with_the_pm_tracker_first(self):
         rels = [{'guid': f'x{i}', 'title': f'Only.Yesterday.1991.1080p.BluRay.x264-G{i}',
-                 'indexer': 'Blutopia', 'seeders': 100 + i} for i in range(12)]
-        rels += [{'guid': 'kam', 'title': self.REAL, 'indexer': 'Aither', 'seeders': 1},
-                 {'guid': 'junk', 'title': 'Something Else Entirely 2004 DVDRip', 'indexer': 'Blutopia', 'seeders': 0},
-                 {'guid': 'old', 'title': self.OLD.replace(' ', '.'), 'indexer': 'Aither', 'seeders': 50}]
+                 'indexer': 'Bramble', 'seeders': 100 + i} for i in range(12)]
+        rels += [{'guid': 'kam', 'title': self.REAL, 'indexer': 'Arvel', 'seeders': 1},
+                 {'guid': 'junk', 'title': 'Something Else Entirely 2004 DVDRip', 'indexer': 'Bramble', 'seeders': 0},
+                 {'guid': 'old', 'title': self.OLD.replace(' ', '.'), 'indexer': 'Arvel', 'seeders': 50}]
         release, cands = rank_trump_replacements(rels, self.NEW, self.PM, [self.OLD])
         self.assertIsNone(release, 'only an exact name is ever pre-selected')
         self.assertEqual(len(cands), len(rels), 'nothing is cut to a top N or gated out')
@@ -152,21 +152,21 @@ class TrumpReleaseBrowseTests(unittest.TestCase):
     def test_an_exact_copy_elsewhere_waits_behind_the_pm_trackers_own_listing(self):
         """The PM's tracker may list the replacement under its own spelling, so
         its releases come first and another tracker's exact copy is not chosen."""
-        rels = [{'guid': 'else', 'title': self.NEW, 'indexer': 'Blutopia', 'seeders': 90},
-                {'guid': 'kam', 'title': self.REAL, 'indexer': 'Aither', 'seeders': 2}]
+        rels = [{'guid': 'else', 'title': self.NEW, 'indexer': 'Bramble', 'seeders': 90},
+                {'guid': 'kam', 'title': self.REAL, 'indexer': 'Arvel', 'seeders': 2}]
         release, cands = rank_trump_replacements(rels, self.NEW, self.PM, [self.OLD])
         self.assertIsNone(release)
         self.assertEqual([c['guid'] for c in cands], ['kam', 'else'])
 
     def test_an_exact_copy_elsewhere_is_chosen_when_the_pm_tracker_has_nothing(self):
-        rels = [{'guid': 'else', 'title': self.NEW, 'indexer': 'Blutopia', 'seeders': 90}]
+        rels = [{'guid': 'else', 'title': self.NEW, 'indexer': 'Bramble', 'seeders': 90}]
         release, _ = rank_trump_replacements(rels, self.NEW, self.PM, [self.OLD])
         self.assertEqual(release['guid'], 'else')
 
     def test_the_new_name_is_never_marked_trumped(self):
         """A replacement already saved onto the old paths joins the group, and
         its name arrives among the names being removed."""
-        rels = [{'guid': 'new', 'title': self.NEW, 'indexer': 'Aither', 'seeders': 5}]
+        rels = [{'guid': 'new', 'title': self.NEW, 'indexer': 'Arvel', 'seeders': 5}]
         release, cands = rank_trump_replacements(rels, self.NEW, self.PM, [self.OLD, self.NEW])
         self.assertEqual(release['guid'], 'new')
         self.assertFalse(cands[0]['trumped'])
@@ -179,15 +179,15 @@ class TrumpedCandidatesTests(unittest.TestCase):
 
     OLD = 'FROM S04E01 The Arrival 2160p AMZN WEB-DL DDP5.1 H.265-Kitsune'
     NEW = 'FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DDP5.1 H.265-Kitsune'
-    PM  = 'Aither (API) (Prowlarr)'
+    PM  = 'Arvel (API) (Prowlarr)'
 
     @staticmethod
     def _row(h, name, tracker):
         return {'hash': h, 'name': name, 'tracker': tracker}
 
     def test_the_pm_trackers_torrents_lead_whatever_another_scored(self):
-        rows = [self._row('b', self.OLD.replace(' ', '.'), 'blutopia.cc'),
-                self._row('a', 'FROM S04E01 1080p WEB h264-OTHER', 'aither.cc')]
+        rows = [self._row('b', self.OLD.replace(' ', '.'), 'bramble.test'),
+                self._row('a', 'FROM S04E01 1080p WEB h264-OTHER', 'arvel.test')]
         auto, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertGreater(cands[1]['match_score'], cands[0]['match_score'])
         self.assertEqual([c['hash'] for c in cands], ['a', 'b'])
@@ -203,9 +203,9 @@ class TrumpedCandidatesTests(unittest.TestCase):
     def test_a_replacement_in_the_client_is_never_preselected(self):
         """The REPACK scores exactly what the original does, and sits on the PM's
         tracker where it was grabbed — listed first by the client."""
-        rows = [self._row('r', self.NEW.replace(' ', '.'), 'aither.cc'),
-                self._row('o', self.OLD.replace(' ', '.'), 'aither.cc'),
-                self._row('x', self.OLD.replace(' ', '.'), 'blutopia.cc')]
+        rows = [self._row('r', self.NEW.replace(' ', '.'), 'arvel.test'),
+                self._row('o', self.OLD.replace(' ', '.'), 'arvel.test'),
+                self._row('x', self.OLD.replace(' ', '.'), 'bramble.test')]
         self.assertEqual(score_release_match(self.OLD, rows[0]['name'])[0],
                          score_release_match(self.OLD, rows[1]['name'])[0])
         auto, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
@@ -216,22 +216,22 @@ class TrumpedCandidatesTests(unittest.TestCase):
     def test_a_drifted_original_is_chosen_over_the_replacements_superset(self):
         """Only the REPACK holds every word of the PM's old name, so the matcher's
         subset tier alone would pick it."""
-        rows = [self._row('r', self.NEW.replace(' ', '.'), 'aither.cc'),
-                self._row('o', 'FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DD+.5.1.H.265-Kitsune', 'aither.cc')]
+        rows = [self._row('r', self.NEW.replace(' ', '.'), 'arvel.test'),
+                self._row('o', 'FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DD+.5.1.H.265-Kitsune', 'arvel.test')]
         self.assertEqual(match_trumped_torrent(rows, self.OLD)['hash'], 'r')
         auto, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertEqual(auto['hash'], 'o')
         self.assertEqual(cands[-1]['hash'], 'r')
 
     def test_the_exact_name_on_the_pm_tracker_beats_the_same_name_elsewhere(self):
-        rows = [self._row('b', self.OLD, 'blutopia.cc'), self._row('a', self.OLD, 'aither.cc')]
+        rows = [self._row('b', self.OLD, 'bramble.test'), self._row('a', self.OLD, 'arvel.test')]
         auto, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertEqual((auto['hash'], cands[0]['hash']), ('a', 'a'))
         self.assertTrue(cands[0]['exact'])
 
     def test_with_nothing_confident_the_pm_trackers_best_is_offered(self):
-        rows = [self._row('b', 'FROM S04E01 720p HDTV x264-B', 'blutopia.cc'),
-                self._row('a', 'FROM S04E01 1080p WEB h264-A', 'aither.cc')]
+        rows = [self._row('b', 'FROM S04E01 720p HDTV x264-B', 'bramble.test'),
+                self._row('a', 'FROM S04E01 1080p WEB h264-A', 'arvel.test')]
         auto, _ = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertEqual(auto['hash'], 'a')
 
@@ -239,8 +239,8 @@ class TrumpedCandidatesTests(unittest.TestCase):
     OY_NEW = 'Only Yesterday AKA Omoide Poro Poro 1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu'
 
     def test_the_pm_trackers_own_spelling_is_preselected_over_the_exact_name_elsewhere(self):
-        rows = [self._row('s', self.OY_OLD.replace(' ', '.'), 'seedpool.org'),
-                self._row('a', '[TiZU] Only Yesterday (1991) (BD 1080p AV1 Opus)', 'aither.cc')]
+        rows = [self._row('s', self.OY_OLD.replace(' ', '.'), 'sorrel.test'),
+                self._row('a', '[TiZU] Only Yesterday (1991) (BD 1080p AV1 Opus)', 'arvel.test')]
         self.assertIsNone(match_trumped_torrent(rows[1:], self.OY_OLD), 'not a confident match')
         auto, cands = rank_trumped_candidates(rows, self.OY_OLD, self.PM, self.OY_NEW)
         self.assertEqual(auto['hash'], 'a')
@@ -249,8 +249,8 @@ class TrumpedCandidatesTests(unittest.TestCase):
     def test_another_group_on_the_pm_tracker_is_not_preselected_past_the_exact_name(self):
         """It scores 1.0 too — title, year, resolution and source outweigh the
         group — so the old equal-score swap to the PM's tracker picked it."""
-        rows = [self._row('s', self.OY_OLD.replace(' ', '.'), 'seedpool.org'),
-                self._row('h', 'Only.Yesterday.1991.1080p.BluRay.x264-HANDJOB', 'aither.cc')]
+        rows = [self._row('s', self.OY_OLD.replace(' ', '.'), 'sorrel.test'),
+                self._row('h', 'Only.Yesterday.1991.1080p.BluRay.x264-HANDJOB', 'arvel.test')]
         self.assertEqual(score_release_match(self.OY_OLD, rows[1]['name'])[0], 1.0)
         auto, cands = rank_trumped_candidates(rows, self.OY_OLD, self.PM, self.OY_NEW)
         self.assertEqual(auto['hash'], 's')
@@ -259,20 +259,20 @@ class TrumpedCandidatesTests(unittest.TestCase):
     def test_a_third_groups_release_is_not_named_like_the_replacement(self):
         """HANDJOB shares `x264` with the new name and not the old, which on raw
         words alone put it beside the replacement."""
-        rows = [self._row('k', '[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv', 'aither.cc'),
-                self._row('h', 'Only.Yesterday.1991.1080p.BluRay.x264-HANDJOB', 'torrentleech.org'),
-                self._row('t', self.OY_OLD, 'aither.cc')]
+        rows = [self._row('k', '[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv', 'arvel.test'),
+                self._row('h', 'Only.Yesterday.1991.1080p.BluRay.x264-HANDJOB', 'tovey.org'),
+                self._row('t', self.OY_OLD, 'arvel.test')]
         _, cands = rank_trumped_candidates(rows, self.OY_OLD, self.PM, self.OY_NEW)
         self.assertEqual({c['hash']: c['replacement'] for c in cands}, {'k': True, 'h': False, 't': False})
 
     def test_without_a_new_title_or_an_indexer_nothing_is_flagged(self):
-        rows = [self._row('r', self.NEW, 'aither.cc'), self._row('o', self.OLD, 'aither.cc')]
+        rows = [self._row('r', self.NEW, 'arvel.test'), self._row('o', self.OLD, 'arvel.test')]
         auto, cands = rank_trumped_candidates(rows, self.OLD)
         self.assertEqual(auto['hash'], 'o')
         self.assertFalse(any(c['replacement'] or c['pm_tracker'] for c in cands))
 
     def test_a_trump_that_keeps_its_name_flags_nothing(self):
-        rows = [self._row('o', self.OLD, 'aither.cc')]
+        rows = [self._row('o', self.OLD, 'arvel.test')]
         auto, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.OLD)
         self.assertEqual(auto['hash'], 'o')
         self.assertFalse(cands[0]['replacement'])
@@ -522,9 +522,9 @@ class TrumpReleaseMatchTests(unittest.TestCase):
     def setUp(self):
         self.releases = [
             {"title": "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
-             "indexer": "Aither", "seeders": 12},
+             "indexer": "Arvel", "seeders": 12},
             {"title": "Jumanji.1995.2160p.UHD.BluRay.x265-OTHER",
-             "indexer": "Aither", "seeders": 50},
+             "indexer": "Arvel", "seeders": 50},
         ]
 
     def test_exact_title_wins_over_seeders(self):
@@ -548,11 +548,11 @@ class TrumpReleaseMatchTests(unittest.TestCase):
 
     def test_indexer_filter_reconciles_names_like_the_rest_of_the_flow(self):
         """Indexer names are pooled across every arr, so the same tracker can
-        arrive as "Aither (API) (Prowlarr)" and "Aither". Exact lowercase
+        arrive as "Arvel (API) (Prowlarr)" and "Arvel". Exact lowercase
         equality fell through to the any-indexer retry."""
         m = match_trump_release(
             self.releases, "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
-            indexer="Aither (API) (Prowlarr)")
+            indexer="Arvel (API) (Prowlarr)")
         self.assertIsNotNone(m)
 
     def test_no_match_returns_none(self):
@@ -570,24 +570,24 @@ class TrumpReleaseMatchTests(unittest.TestCase):
 
 class TrackerIndexerMatchTests(unittest.TestCase):
     def test_arr_indexer_name_matches_tracker_host(self):
-        self.assertTrue(tracker_matches_indexer("aither.cc", "Aither (API) (Prowlarr)"))
-        self.assertTrue(tracker_matches_indexer("tracker.beyond-hd.me", "Beyond-HD"))
-        self.assertTrue(tracker_matches_indexer("https://hawke.uno/announce", "Hawke.uno (API)"))
+        self.assertTrue(tracker_matches_indexer("arvel.test", "Arvel (API) (Prowlarr)"))
+        self.assertTrue(tracker_matches_indexer("tracker.bexley-hd.test", "Bexley-HD"))
+        self.assertTrue(tracker_matches_indexer("https://hadley.test/announce", "Hadley.test (API)"))
 
     def test_other_trackers_do_not_match(self):
-        self.assertFalse(tracker_matches_indexer("hawke.uno", "Aither (API) (Prowlarr)"))
-        self.assertFalse(tracker_matches_indexer("", "Aither"))
-        self.assertFalse(tracker_matches_indexer("aither.cc", ""))
+        self.assertFalse(tracker_matches_indexer("hadley.test", "Arvel (API) (Prowlarr)"))
+        self.assertFalse(tracker_matches_indexer("", "Arvel"))
+        self.assertFalse(tracker_matches_indexer("arvel.test", ""))
 
     def test_short_names_need_an_exact_key(self):
         # 3-char keys can't match by containment, or 'HD' swallows everything.
-        self.assertFalse(tracker_matches_indexer("hdt.org", "HDTorrents"))
-        self.assertTrue(tracker_matches_indexer("hdt.org", "HDT (API)"))
+        self.assertFalse(tracker_matches_indexer("hdq.test", "HDQuarry"))
+        self.assertTrue(tracker_matches_indexer("hdq.test", "HDQ (API)"))
 
     def test_key_normalization(self):
-        self.assertEqual(indexer_key("Aither (API) (Prowlarr)"), "aither")
-        self.assertEqual(indexer_key("aither.cc"), "aither")
-        self.assertEqual(indexer_key("https://tracker.beyond-hd.me:2053/announce"), "beyondhd")
+        self.assertEqual(indexer_key("Arvel (API) (Prowlarr)"), "arvel")
+        self.assertEqual(indexer_key("arvel.test"), "arvel")
+        self.assertEqual(indexer_key("https://tracker.bexley-hd.test:2053/announce"), "bexleyhd")
 
 
 class AudioCodecTests(unittest.TestCase):
@@ -694,7 +694,7 @@ class RankReleaseMatchesTests(unittest.TestCase):
         self.assertEqual(ranked, [])
 
     def test_year_off_by_one_is_the_same_film(self):
-        # Real trump: the PM says 1938, Aither's API renders the same release as
+        # Real trump: the PM says 1938, Arvel's API renders the same release as
         # 1937 (premiere vs wide-release year) plus a .mkv file-name suffix.
         # Must rank first — flagged 'partial' on year, not disqualified.
         rows = self._rows(

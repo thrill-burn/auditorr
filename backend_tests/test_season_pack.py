@@ -23,7 +23,7 @@ SERIES = {'service': 'sonarr', 'connection_id': 'tv', 'arr_id': 143, 'title': 'S
           'year': 2025, 'title_slug': 'small-prophets', 'has_file': True, 'alt_titles': ['Kleine Propheten']}
 
 
-def _row(name, h, progress=1.0, instance_id=1, tracker='aither.cc'):
+def _row(name, h, progress=1.0, instance_id=1, tracker='arvel.test'):
     return {'reg': f'{instance_id}:{h}', 'hash': h, 'name': name, 'size': 5_000_000_000,
             'save_path': '/data/torrents/tv', 'content_path': f'/data/torrents/tv/{name}',
             'progress': progress, 'completion_on': 1 if progress >= 1.0 else 0,
@@ -163,13 +163,13 @@ class TestReleases:
 
     def test_only_packs_of_this_season_and_the_singles_tracker_leads(self, season):
         releases = [
-            _release('Small.Prophets.S01.1080p.WEB-DL-OTHER', 'SeedPool', 'WEBDL-1080p'),
-            _release('Small.Prophets.S01E03.1080p.WEB-DL-EP', 'Aither', 'WEBDL-1080p', full_season=False),
-            _release('Small.Prophets.S02.1080p.WEB-DL-NEXT', 'Aither', 'WEBDL-1080p', mapped_season=2),
-            _release('Small.Prophets.S01.1080p.iP.WEB-DL-Kitsune', 'Aither', 'WEBDL-1080p'),
+            _release('Small.Prophets.S01.1080p.WEB-DL-OTHER', 'Sorrel', 'WEBDL-1080p'),
+            _release('Small.Prophets.S01E03.1080p.WEB-DL-EP', 'Arvel', 'WEBDL-1080p', full_season=False),
+            _release('Small.Prophets.S02.1080p.WEB-DL-NEXT', 'Arvel', 'WEBDL-1080p', mapped_season=2),
+            _release('Small.Prophets.S01.1080p.iP.WEB-DL-Kitsune', 'Arvel', 'WEBDL-1080p'),
         ]
         with patch.object(app, 'fetch_release_matrix', return_value=releases) as fetch:
-            status, body = _post('/api/workflows/season_pack/releases', season, body={'trackers': ['aither.cc']})
+            status, body = _post('/api/workflows/season_pack/releases', season, body={'trackers': ['arvel.test']})
         assert status == 200
         assert fetch.call_args.kwargs['season_number'] == 1
         assert [r['title'] for r in body['releases']] == [
@@ -178,7 +178,7 @@ class TestReleases:
         assert body['searched'] == 4
 
     def test_each_release_says_how_it_compares_with_the_library(self, season):
-        releases = [_release('Small.Prophets.S01.1080p.BluRay-SbR', 'Aither', 'Bluray-1080p')]
+        releases = [_release('Small.Prophets.S01.1080p.BluRay-SbR', 'Arvel', 'Bluray-1080p')]
         with patch.object(app, 'fetch_release_matrix', return_value=releases):
             _, body = _post('/api/workflows/season_pack/releases', season)
         assert body['releases'][0]['vs_library'] == {'higher': 0, 'same': 4, 'lower': 2, 'unknown': 0}

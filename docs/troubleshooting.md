@@ -590,7 +590,8 @@ names the build it came from (the commit and the branch or tag), so a report
 from the `experimental` image can't be mistaken for one from a release.
 
 It deliberately does **not** include credentials. Hostnames, IP addresses and
-API tokens are redacted, and your media file and folder names are replaced with
+API tokens are redacted, and so are your trackers' names and your indexers'
+names, which become `<tracker>`. Your media file and folder names are replaced with
 stable short hashes — so files can be correlated through the report without
 being readable. Generic structure (`/data/torrents`, `Season 01`, real file
 extensions) is preserved so the report is still useful.

@@ -42,8 +42,8 @@ def _row(h, size=1000, name=NAME, tracker='t1.example', save_path=SP, inst=1):
             'tracker': tracker, 'instance_id': inst, 'instance_name': 'main'}
 
 
-ROWS3 = [_row('aaa', tracker='aither.cc'), _row('bbb', tracker='blutopia.cc'),
-         _row('ccc', tracker='hawke.uno')]
+ROWS3 = [_row('aaa', tracker='arvel.test'), _row('bbb', tracker='bramble.test'),
+         _row('ccc', tracker='hadley.test')]
 SHARED = f'{SP}/{NAME}/j.mkv'
 SHARED3 = {'aaa': [SHARED], 'bbb': [SHARED], 'ccc': [SHARED]}
 
@@ -105,7 +105,7 @@ def tree(tmp_path):
 class TestAlreadyRight:
 
     def test_phase_one_prefers_the_pm_trackers_copy_on_an_equal_score(self):
-        rows = [_row('aaa', tracker='blutopia.cc'), _row('bbb', tracker='aither.cc')]
+        rows = [_row('aaa', tracker='bramble.test'), _row('bbb', tracker='arvel.test')]
         with patch.object(app, 'db_load_config', return_value={}), \
              patch.object(app.sources, 'list_torrents', return_value=rows):
             client = app.app.test_client()
@@ -113,7 +113,7 @@ class TestAlreadyRight:
                                 json={'old_titles': [NAME]}).get_json()
             pm = client.post('/api/workflows/trump/resolve_group',
                              json={'old_titles': [NAME],
-                                   'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+                                   'indexer': 'Arvel (API) (Prowlarr)'}).get_json()
         assert plain['status'] == 'needs_pick'
         # `auto` is a registration key since S05 (these rows sit on instance 1).
         assert plain['picks'][0]['auto'] == app.sources.registration_key(1, 'aaa')
@@ -595,7 +595,7 @@ class TestGrabFirst:
         trumped torrents — a re-upload under the same name — shares their files,
         so removing them with their files would delete it. The group is resolved
         again after the grab, and a group the replacement joined is not removed."""
-        joined = list(ROWS3) + [_row('ddd', tracker='aither.cc')]
+        joined = list(ROWS3) + [_row('ddd', tracker='arvel.test')]
         resp, m = _execute(dict(SWAP), paths=dict(SHARED3, ddd=[SHARED]),
                            listings=[ROWS3, joined])
 
@@ -818,7 +818,7 @@ class TestArrItemFromPaths:
         to the eight best scores, and the old names travel with the request."""
         releases = [{'guid': f'g{i}', 'title': f'Rel.2020.1080p.WEB.x264-G{i}', 'indexer': 'Other',
                      'seeders': i} for i in range(20)]
-        releases.append({'guid': 'old', 'title': 'Rel.2020.2160p.UHD.BluRay-OLD', 'indexer': 'Aither', 'seeders': 9})
+        releases.append({'guid': 'old', 'title': 'Rel.2020.2160p.UHD.BluRay-OLD', 'indexer': 'Arvel', 'seeders': 9})
         matrix = MagicMock(return_value=releases)
         with patch.object(app, 'db_load_config', return_value=dict(tree.cfg)), \
              patch.object(app, 'fetch_arr_all_titles_result', return_value=([], [])), \
@@ -827,7 +827,7 @@ class TestArrItemFromPaths:
              patch.object(app, 'fetch_release_matrix', matrix):
             body = app.app.test_client().post('/api/workflows/trump/search_release', json={
                 'new_title': 'Rel.2020.2160p.UHD.BluRay-NEW', 'group_paths': [tree.linked],
-                'indexer': 'Aither', 'old_titles': ['Rel 2020 2160p UHD BluRay-OLD', 7, '']}).get_json()
+                'indexer': 'Arvel', 'old_titles': ['Rel 2020 2160p UHD BluRay-OLD', 7, '']}).get_json()
         assert body['candidate_count'] == len(body['candidates']) == 21
         assert body['release'] is None
         assert body['candidates'][-1]['guid'] == 'old' and body['candidates'][-1]['trumped'] is True
@@ -841,7 +841,7 @@ class TestArrItemFromPaths:
         new = 'Rel.2020.2160p.UHD.BluRay-NEW'
         raw = [{'guid': 'nzb', 'title': new, 'indexer': 'NZBgeek', 'indexerId': 1,
                 'protocol': 'usenet', 'seeders': None, 'size': 1000},
-               {'guid': 'tor', 'title': 'Rel 2020 2160p UHD BluRay NEW', 'indexer': 'Aither',
+               {'guid': 'tor', 'title': 'Rel 2020 2160p UHD BluRay NEW', 'indexer': 'Arvel',
                 'indexerId': 2, 'protocol': 'torrent', 'seeders': 9, 'size': 1000}]
         cfg = {**tree.cfg, 'ARR_CONNECTIONS': [
             {'id': 'r1', 'service': 'radarr', 'name': 'r1', 'base_url': 'http://r1', 'api_key': 'k'}]}
@@ -885,12 +885,12 @@ class TestPhaseOnePmTrackerFirst:
         This replaced `test_the_pm_tracker_never_outranks_a_better_title_match`,
         which held the opposite — the PM's tracker a tie-break among equal
         scores — and a list cut to eight."""
-        rows = [_row(f'x{i}', name=f'Rel.2020.1080p.WEB-DL-G{i}', tracker='blutopia.cc') for i in range(10)]
-        rows.append(_row('pm', name='Rel 2020 720p HDTV x264-OTHER', tracker='aither.cc'))
+        rows = [_row(f'x{i}', name=f'Rel.2020.1080p.WEB-DL-G{i}', tracker='bramble.test') for i in range(10)]
+        rows.append(_row('pm', name='Rel 2020 720p HDTV x264-OTHER', tracker='arvel.test'))
         with patch.object(app, 'db_load_config', return_value={}), \
              patch.object(app.sources, 'list_torrents', return_value=rows):
             body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
-                'old_titles': [NAME], 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+                'old_titles': [NAME], 'indexer': 'Arvel (API) (Prowlarr)'}).get_json()
         cands = body['picks'][0]['candidates']
         assert len(cands) == 11, 'nothing that clears the title gate is cut'
         assert cands[0]['hash'] == 'pm' and cands[0]['pm_tracker'] is True
@@ -902,13 +902,13 @@ class TestPhaseOnePmTrackerFirst:
         and the old equal-score swap to the PM's tracker picked it."""
         old = 'Rel.2020.1080p.WEB-DL.DDP5.1.H.264-GRP'
         new = 'Rel.2020.REPACK.1080p.WEB-DL.DDP5.1.H.264-GRP'
-        rows = [_row('rep', name=new, tracker='aither.cc'),
-                _row('orig', name=old, tracker='blutopia.cc'),
-                _row('pmorig', name=old, tracker='aither.cc')]
+        rows = [_row('rep', name=new, tracker='arvel.test'),
+                _row('orig', name=old, tracker='bramble.test'),
+                _row('pmorig', name=old, tracker='arvel.test')]
         with patch.object(app, 'db_load_config', return_value={}), \
              patch.object(app.sources, 'list_torrents', return_value=rows):
             body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
-                'old_titles': [old], 'new_title': new, 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+                'old_titles': [old], 'new_title': new, 'indexer': 'Arvel (API) (Prowlarr)'}).get_json()
         pick = body['picks'][0]
         assert pick['auto'] == app.sources.registration_key(1, 'pmorig'), \
             'the replacement was pre-selected for deletion'
@@ -920,12 +920,12 @@ class TestPhaseOnePmTrackerFirst:
         — title, year, resolution and source outweigh the group — so the old
         equal-score swap moved the seed off the exact name onto it."""
         old = 'Rel.2020.1080p.BluRay.DTS.x264-TiZU'
-        rows = [_row('exact', name=old, tracker='seedpool.org'),
-                _row('other', name='Rel.2020.1080p.BluRay.x264-HANDJOB', tracker='aither.cc')]
+        rows = [_row('exact', name=old, tracker='sorrel.test'),
+                _row('other', name='Rel.2020.1080p.BluRay.x264-HANDJOB', tracker='arvel.test')]
         with patch.object(app, 'db_load_config', return_value={}), \
              patch.object(app.sources, 'list_torrents', return_value=rows):
             body = app.app.test_client().post('/api/workflows/trump/resolve_group', json={
-                'old_titles': [old], 'indexer': 'Aither (API) (Prowlarr)'}).get_json()
+                'old_titles': [old], 'indexer': 'Arvel (API) (Prowlarr)'}).get_json()
         pick = body['picks'][0]
         assert {c['hash']: c['match_score'] for c in pick['candidates']} == {'exact': 1.0, 'other': 1.0}
         assert pick['auto'] == app.sources.registration_key(1, 'exact'), \

@@ -12,8 +12,8 @@ def _inode(**over):
         'torrent_rel_path': 'radarr/Movie.mkv', 'size': 100, 'status': 'Seeding',
         'torrent_nlink': 2, 'media_paths': ['/data/media/Movie.mkv'],
         'torrent_paths': ['/data/torrents/radarr/Movie.mkv'],
-        'trackers': {'hawke.uno', 'aither.cc'}, 'torrent_excluded': False,
-        'hash': 'HAWKE', 'category': 'radarr', 'instance_id': 1, 'instance_name': 'main',
+        'trackers': {'hadley.test', 'arvel.test'}, 'torrent_excluded': False,
+        'hash': 'HADLEY', 'category': 'radarr', 'instance_id': 1, 'instance_name': 'main',
         'tracker_health': 'working', 'tracker_msg': '', 'unreg_claimants': {},
     }
     base.update(over)
@@ -44,12 +44,12 @@ class AssembleDeadSiblingsTests(unittest.TestCase):
     def test_dead_sibling_surfaced_when_kept_claimant_alive(self):
         key = (1, 100)
         imap = {key: _inode(unreg_claimants={
-            'AITHER': {'hash': 'AITHER', 'instance_id': 1, 'tracker_msg': 'Torrent has been deleted.'},
+            'ARVEL': {'hash': 'ARVEL', 'instance_id': 1, 'tracker_msg': 'Torrent has been deleted.'},
         })}
         torrents, _ = _assemble_records([key], [], imap, {})
-        self.assertEqual(torrents[0]['hash'], 'HAWKE')          # healthiest kept
+        self.assertEqual(torrents[0]['hash'], 'HADLEY')          # healthiest kept
         self.assertEqual(torrents[0]['dead_siblings'],
-                         [{'hash': 'AITHER', 'instance_id': 1, 'tracker_msg': 'Torrent has been deleted.'}])
+                         [{'hash': 'ARVEL', 'instance_id': 1, 'tracker_msg': 'Torrent has been deleted.'}])
 
     def test_no_dead_siblings_key_when_none(self):
         key = (1, 100)
@@ -60,18 +60,18 @@ class AssembleDeadSiblingsTests(unittest.TestCase):
         # The kept (healthiest) hash must never list itself as a dead sibling.
         key = (1, 100)
         imap = {key: _inode(unreg_claimants={
-            'HAWKE':  {'hash': 'HAWKE',  'instance_id': 1, 'tracker_msg': ''},
-            'AITHER': {'hash': 'AITHER', 'instance_id': 1, 'tracker_msg': 'unregistered'},
+            'HADLEY':  {'hash': 'HADLEY',  'instance_id': 1, 'tracker_msg': ''},
+            'ARVEL': {'hash': 'ARVEL', 'instance_id': 1, 'tracker_msg': 'unregistered'},
         })}
         torrents, _ = _assemble_records([key], [], imap, {})
-        self.assertEqual([s['hash'] for s in torrents[0]['dead_siblings']], ['AITHER'])
+        self.assertEqual([s['hash'] for s in torrents[0]['dead_siblings']], ['ARVEL'])
 
     def test_fully_dead_path_emits_no_dead_siblings(self):
         # When the kept claimant is itself unregistered the whole path is a
         # dead_seed — not a "dead registration with a live payload".
         key = (1, 100)
-        imap = {key: _inode(hash='AITHER', tracker_health='unregistered',
-                            unreg_claimants={'AITHER': {'hash': 'AITHER', 'instance_id': 1, 'tracker_msg': 'x'}})}
+        imap = {key: _inode(hash='ARVEL', tracker_health='unregistered',
+                            unreg_claimants={'ARVEL': {'hash': 'ARVEL', 'instance_id': 1, 'tracker_msg': 'x'}})}
         torrents, _ = _assemble_records([key], [], imap, {})
         self.assertNotIn('dead_siblings', torrents[0])
 
@@ -119,19 +119,19 @@ class PartitionRemovalTests(unittest.TestCase):
         return delete, keep
 
     def test_shared_path_keeps_files(self):
-        # Topology A: dead AITHER + working HAWKE point at the SAME file.
-        rows = [{'hash': 'AITHER', 'size': 100}, {'hash': 'HAWKE', 'size': 100}]
-        paths = {'AITHER': ['/d/Movie.mkv'], 'HAWKE': ['/d/Movie.mkv']}
-        delete, keep = self._run(rows, paths, [{'hash': 'AITHER'}])
-        self.assertEqual(keep, ['AITHER'])
+        # Topology A: dead ARVEL + working HADLEY point at the SAME file.
+        rows = [{'hash': 'ARVEL', 'size': 100}, {'hash': 'HADLEY', 'size': 100}]
+        paths = {'ARVEL': ['/d/Movie.mkv'], 'HADLEY': ['/d/Movie.mkv']}
+        delete, keep = self._run(rows, paths, [{'hash': 'ARVEL'}])
+        self.assertEqual(keep, ['ARVEL'])
         self.assertEqual(delete, [])
 
     def test_distinct_hardlink_deletes_files(self):
         # Topology B: each torrent owns its own hardlink path.
-        rows = [{'hash': 'AITHER', 'size': 100}, {'hash': 'HAWKE', 'size': 100}]
-        paths = {'AITHER': ['/d/a/Movie.mkv'], 'HAWKE': ['/d/h/Movie.mkv']}
-        delete, keep = self._run(rows, paths, [{'hash': 'AITHER'}])
-        self.assertEqual(delete, ['AITHER'])
+        rows = [{'hash': 'ARVEL', 'size': 100}, {'hash': 'HADLEY', 'size': 100}]
+        paths = {'ARVEL': ['/d/a/Movie.mkv'], 'HADLEY': ['/d/h/Movie.mkv']}
+        delete, keep = self._run(rows, paths, [{'hash': 'ARVEL'}])
+        self.assertEqual(delete, ['ARVEL'])
         self.assertEqual(keep, [])
 
     def test_standalone_deletes_files(self):
@@ -143,10 +143,10 @@ class PartitionRemovalTests(unittest.TestCase):
 
     def test_removing_whole_shared_group_deletes_files(self):
         # Both shared-path claimants removed → no survivor → safe to delete.
-        rows = [{'hash': 'AITHER', 'size': 100}, {'hash': 'HAWKE', 'size': 100}]
-        paths = {'AITHER': ['/d/Movie.mkv'], 'HAWKE': ['/d/Movie.mkv']}
-        delete, keep = self._run(rows, paths, [{'hash': 'AITHER'}, {'hash': 'HAWKE'}])
-        self.assertEqual(delete, ['AITHER', 'HAWKE'])
+        rows = [{'hash': 'ARVEL', 'size': 100}, {'hash': 'HADLEY', 'size': 100}]
+        paths = {'ARVEL': ['/d/Movie.mkv'], 'HADLEY': ['/d/Movie.mkv']}
+        delete, keep = self._run(rows, paths, [{'hash': 'ARVEL'}, {'hash': 'HADLEY'}])
+        self.assertEqual(delete, ['ARVEL', 'HADLEY'])
         self.assertEqual(keep, [])
 
 

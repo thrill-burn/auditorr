@@ -24,7 +24,7 @@ ROOT = '/data/media'
 
 def _media(path, size=GB, linked=False, dups=(), excluded=False):
     return {'path': path, 'size': size, 'linked_paths': ['/t/x'] if linked else [],
-            'duplicate_paths': list(dups), 'excluded': excluded, 'trackers': ['aither'] if linked else ['None'],
+            'duplicate_paths': list(dups), 'excluded': excluded, 'trackers': ['arvel'] if linked else ['None'],
             'status': 'Seeding' if linked else 'Orphaned', 'imported': linked}
 
 

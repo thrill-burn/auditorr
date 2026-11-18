@@ -591,7 +591,7 @@ def _release_other_title(release, service, arr_id):
 
     An interactive search for one series or movie returns every result the
     indexers sent back, and an indexer that ignores the query sends its latest
-    uploads instead. On the box, seedpool answered a *Miss Fisher's Murder
+    uploads instead. On the box, one indexer answered a *Miss Fisher's Murder
     Mysteries* season search with 100 releases of other shows, ranked above the
     show's own packs. The arr lists those as rejected, but it lists them.
 
@@ -960,7 +960,7 @@ def match_trump_release(releases, new_title, indexer=''):
     The *indexer* comparison is the one place fuzziness is right, and it is the
     same `tracker_matches_indexer` the rest of the flow uses: indexer names are
     pooled across every arr by `fetch_arr_indexers`, so one tracker can arrive
-    as "Aither (API) (Prowlarr)" on one instance and "Aither" on another, and
+    as "Tracker1 (API) (Prowlarr)" on one instance and "Tracker1" on another, and
     exact equality fell through to the any-indexer retry.
     """
     target = _norm_release_name(new_title)
@@ -1450,9 +1450,9 @@ _TRACKER_HOST_PREFIXES = {'www', 'tracker', 'announce', 'tr', 't', 'private', 's
 def indexer_key(name):
     """Comparable identity for an indexer name or a tracker host.
 
-    The Trumped wizard knows the PM's tracker as an *arr indexer name* ("Aither
-    (API) (Prowlarr)") while client torrents carry a *host* ("aither.cc"); both
-    reduce to 'aither'. Parenthetical suffixes, URL scheme/path/port, announce
+    The Trumped wizard knows the PM's tracker as an *arr indexer name* ("Tracker1
+    (API) (Prowlarr)") while client torrents carry a *host* ("tracker1.example");
+    both reduce to 'tracker1'. Parenthetical suffixes, URL scheme/path/port, announce
     subdomains and punctuation are dropped.
     """
     s = re.sub(r'\([^)]*\)', ' ', str(name or '').strip().lower())

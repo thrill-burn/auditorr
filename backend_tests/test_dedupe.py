@@ -211,9 +211,9 @@ def _imported_partner(lib, size=4096):
 # tree, so `linked_paths` is empty on both records and only the first path of
 # each was on a record before `dedupe_paths`.
 X_A1 = 'torrents/luminarr/Film.2019/Film.mkv'
-X_A2 = 'torrents/darkpeers/Film.2019/Film.mkv'
+X_A2 = 'torrents/dunmore/Film.2019/Film.mkv'
 X_B1 = 'torrents/luminarr/Film.2019.PROPER/Film.mkv'
-X_B2 = 'torrents/darkpeers/Film.2019.PROPER/Film.mkv'
+X_B2 = 'torrents/dunmore/Film.2019.PROPER/Film.mkv'
 
 
 def _cross_seeded_pair(lib, size=4096):

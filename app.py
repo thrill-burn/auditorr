@@ -58,7 +58,7 @@ from debug import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
 
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.9.0"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()
@@ -5992,7 +5992,7 @@ def _backfill_empty(report, rows, in_scope, download_from, seeding_on, quality, 
 
     The row said "No releases found" whatever happened, so a Resolution chip
     left on 2160p from an earlier run read the same as an empty tracker: on the
-    box, Aither had both 1080p packs of a season and the row said none existed
+    box, one tracker had both 1080p packs of a season and the row said none existed
     (BACKFILL B2 recorded the same silence for the Source chip). Counted in the
     order the run filters, each stage over what reached it, and asked for only
     when the row is empty, so a row with releases costs nothing more.

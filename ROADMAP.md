@@ -188,6 +188,15 @@ Every workflow that deletes, hardlinks or replaces a file was reviewed end to en
 - **CPU fix (#29)** — watchdog pinned to 6.0.0; 7.1.0, which 1.8.2's image picked up, could loop at a full core after an inotify queue overflow
 - **Quieter folder watcher** — asks the kernel only for creates, deletes and moves, so seeding reads and download writes no longer reach it
 
+### Shipped in v1.9.0
+- **The Dashboard is about disk and hardlinks** — a squarified library map (one tile per title, coloured and patterned by the workflow that acts on it, linked bytes drawn once, tiny gaps floored so they stay visible and clickable, zoom by folder, a legend that highlights a state), with Biggest gaps, Last scan (the source report, refusals included) and New in the library (linked, copies, not seeded per day) below it; the upload panels moved to Trackers
+- **New map states** — *Dead seed* (a library file linked to a torrent its tracker deleted, opens Triage on that torrent) and *Unmanaged* (unseeded files no arr holds, stamped per scan from the arrs' own paths while the disk is walked, opens Media)
+- **Scan speed and memory** — staging written in batches, full GC passes held to the scan's end, relative paths and exclusion rules worked out once per folder, the client's listings reduced to names and priorities, one tree's previous signatures held at a time, lighter inode entries: a 650,000-file scan 39.4 → 18.6 s and 2,941 → 1,136 MB peak, stored output byte-identical; the stored peak is the kernel's `VmHWM` for the scan
+- **Trackers** — Daily / Running total upload, seeding size change, rolling 7-day yield, named line ends; *Seeded only here*, trackers reporting a problem, top tracker pairs; announce hosts on exactly the same torrents fold into one tracker (history included) and ports drop
+- **Backfill** — a map click searches its folder at your file's quality or better, up to 10; every run lists the filters it used; a *Minimum: your file* floor; releases of another title (or of none) dropped for every caller; an empty row says which filter hid what; one Grab per candidate from a pick list
+- **Debug report for testers** — the image's commit and ref, whether a scan's peak is the kernel's, per-phase timing and peak, how long the arrs took, each root's filesystem type; tracker and indexer names (from the last scan's trackers and Backfill's saved indexers) redacted from every string as the last pass
+- **Fixes** — Dedupe's dark purple separated from Backfill's blue for red-weak vision (Copies is a zigzag); a refused scan no longer toasts "Audit complete"; qui's list-shaped `/preferences` read, so Cleanup offers empty folders again; typeface by kind across the app
+
 ---
 
 ## Future Ideas

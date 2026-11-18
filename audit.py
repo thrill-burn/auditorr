@@ -1771,7 +1771,7 @@ def _canon_upload_snapshot(snap, aliases):
     """A stored upload snapshot, keyed the way the latest scan names trackers.
 
     Two folds, both for history written before them. A host stored with its
-    port (`xspeeds.eu:2710`) is the host without it; were both in one snapshot
+    port (`tracker.example:2710`) is the host without it; were both in one snapshot
     they'd be different torrents, so their sums add. And an alias
     (`sources.TrackerTally`) folds into its tracker: the same torrents under a
     second host, so the same sums, and the larger is kept rather than the two
@@ -2333,7 +2333,7 @@ def _compute_cross_seed_stats(media_files, aliases=None):
     pairs that seed the most of the same library.
 
     `aliases` (`TrackerTally`) folds announce hosts that are one tracker, so a
-    TorrentLeech file is seeded once, not "cross-seeded" on its own two hosts.
+    file on a two-host tracker is seeded once, not "cross-seeded" on itself.
     """
     if not media_files:
         return None

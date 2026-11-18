@@ -649,19 +649,96 @@ def _configured_host_re(cfg):
     return re.compile('|'.join(alts), re.IGNORECASE) if alts else None
 
 
-def _scrub_addresses(obj, host_re):
-    """Redact hosts from every string in the report, keys included. Only the
-    rules that can't mistake something else for a host run here: paths and
-    names are hashed per field, because hashing a whole report would erase
-    the structure it is read by."""
+# Tracker names (2026-11-17). A private tracker's name must never reach a report
+# someone pastes in public: it says which trackers they're on, and most trackers'
+# rules forbid naming them. URLs were already redacted, but a bare host
+# (`tracker.example:2710`) or an indexer's name in an arr's error text ("Unable
+# to connect to indexer Example", "Indexer Example (API) (Prowlarr) is disabled")
+# went through as written, into recent_logs. Like the addresses above, they're
+# redacted from every string as the last step. Read from what's stored, never
+# from the client or an arr: the last scan's trackers and their aliases, and the
+# indexer names saved in Backfill's settings.
+_NO_TRACKER = {'none', 'unknown'}   # the walk's words for "no tracker"
+# A host's first label that is also an ordinary word in a report (`torrents.`,
+# `upload.`) isn't redacted as a word: it would erase the report's own keys and
+# vocabulary. The host itself still goes wherever it appears.
+_COMMON_WORDS = {'torrent', 'torrents', 'tracker', 'trackers', 'media', 'files', 'upload',
+                 'uploads', 'download', 'downloads', 'index', 'indexer', 'public', 'private',
+                 'open', 'free', 'seed', 'seeds', 'share', 'library'}
+
+
+def _known_tracker_names(cfg):
+    """`(hosts, words)`: every tracker host the last scan saw, and the names an
+    indexer for one goes by: each host's own name (its first label past
+    `tracker.` and the like, as `arr.indexer_key` reads it, punctuation kept)
+    and each indexer name in Backfill's settings, whole and without its
+    `(API) (Prowlarr)` suffixes. A word under 4 characters is left out unless
+    it's an indexer's whole name, or 'hd' would go from every line."""
+    from arr import _TRACKER_HOST_PREFIXES
+    hosts, words = set(), set()
+    try:
+        results = db_load_results() or {}
+    except Exception:
+        results = {}
+    aliases = results.get('tracker_aliases') or {}
+    seen = list(results.get('trackers') or []) + list(aliases.keys()) + list(aliases.values())
+    for h in seen:
+        h = str(h or '').strip().lower()
+        if '://' in h:
+            h = h.split('://', 1)[1]
+        h = h.split('/')[0]
+        if h.count(':') == 1:           # a port; an IPv6 literal keeps its colons
+            h = h.split(':')[0]
+        if not h or h in _NO_TRACKER:
+            continue
+        hosts.add(h)
+        labels = [l for l in h.split('.') if l]
+        while len(labels) > 1 and labels[0] in _TRACKER_HOST_PREFIXES:
+            labels.pop(0)
+        if labels and len(labels[0]) >= 4 and labels[0] not in _COMMON_WORDS:
+            words.add(labels[0])
+    for key in ('ACQUIRE_DOWNLOAD_FROM', 'ACQUIRE_SEEDING_ON'):
+        for name in cfg.get(key) or []:
+            name = str(name or '').strip()
+            if len(name) < 2:
+                continue
+            words.add(name)
+            base = re.sub(r'\s*\(.*$', '', name).strip()
+            if len(base) >= 4:
+                words.add(base)
+    return hosts, words
+
+
+def _tracker_name_re(cfg):
+    """One pattern for every tracker name `_known_tracker_names` knows. A host
+    goes wherever it appears, as a configured address does; a name goes as a
+    whole word, in any case. Longest first, so a name inside a longer one
+    (`Example` in `Example (API)`) can't leave the rest behind."""
+    hosts, words = _known_tracker_names(cfg)
+    alts = []
+    if hosts:
+        h = '|'.join(map(re.escape, sorted(hosts, key=len, reverse=True)))
+        alts.append(rf'(?<![\w.-])(?:{h})(?![\w-]|\.[\w-])')
+    if words:
+        w = '|'.join(map(re.escape, sorted(words, key=len, reverse=True)))
+        alts.append(rf'(?<!\w)(?:{w})(?!\w)')
+    return re.compile('|'.join(alts), re.IGNORECASE) if alts else None
+
+
+def _scrub_addresses(obj, host_re, tracker_re=None):
+    """Redact hosts from every string in the report, keys included, and with
+    `tracker_re` every tracker name. Only the rules that can't mistake
+    something else for a host run here: paths and names are hashed per field,
+    because hashing a whole report would erase the structure it is read by."""
     if isinstance(obj, str):
         s = _redact_hosts(obj)
-        return host_re.sub('<host>', s) if host_re else s
+        s = host_re.sub('<host>', s) if host_re else s
+        return tracker_re.sub('<tracker>', s) if tracker_re else s
     if isinstance(obj, dict):
-        return {_scrub_addresses(k, host_re): _scrub_addresses(v, host_re)
+        return {_scrub_addresses(k, host_re, tracker_re): _scrub_addresses(v, host_re, tracker_re)
                 for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [_scrub_addresses(v, host_re) for v in obj]
+        return [_scrub_addresses(v, host_re, tracker_re) for v in obj]
     return obj
 
 
@@ -771,7 +848,8 @@ def build_debug_report(version):
     report = {
         '_readme': (
             'auditorr debug report. Credentials are omitted; hosts, IPs and API '
-            'tokens are redacted; media file/folder names are replaced with '
+            'tokens are redacted, and so are tracker and indexer names '
+            '(<tracker>); media file/folder names are replaced with '
             'stable 6-char hashes (~abc123) so they can be correlated but not read. '
             'build: the commit (first 12 characters) and the branch or tag the '
             'image was built from, which tells two images of one app_version '
@@ -919,4 +997,4 @@ def build_debug_report(version):
             for r in _recent_logs()
         ],
     }
-    return _scrub_addresses(report, _configured_host_re(cfg))
+    return _scrub_addresses(report, _configured_host_re(cfg), _tracker_name_re(cfg))

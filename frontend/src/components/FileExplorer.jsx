@@ -108,8 +108,8 @@ function ArrSearchButton({ service, color, state, onClick }) {
 const optDot = color => <Dot color={color} size={6} />
 
 // How many trackers seed a file. `aliases` ({host: tracker}, the scan's
-// `tracker_aliases`) folds announce hosts that are one tracker, TorrentLeech's
-// two, so a file seeded once counts once, as on the Trackers page's seed-count
+// `tracker_aliases`) folds announce hosts that are one tracker (some trackers
+// announce on two), so a file seeded once counts once, as on the Trackers page's seed-count
 // bar. Most files hold no alias, and they take the old count's path.
 function seedCountValue(file, aliases) {
   const ts = file.trackers || []
