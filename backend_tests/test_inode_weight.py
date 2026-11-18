@@ -103,12 +103,21 @@ def test_a_claim_builds_the_set_and_the_claimants_as_before(library):
     info = _by_name(inode_map)['Show.S01E01.mkv']
 
     # The order `set().update(...)` per path gave, and so the stored list's.
+    # Replayed over the walk's own path order, never a literal one: `os.walk`
+    # lists a folder in the filesystem's order (NTFS alphabetical, ext4 by a
+    # per-filesystem hash, tmpfs newest first), so `a` before `b` held on
+    # Windows and on some CI runners only.
     expected = set()
     for p in info['torrent_paths']:
         expected.update(file_map[p]['trackers'])
     assert list(info['trackers']) == list(expected)
-    assert list(info['unreg_claimants'].items()) == [('D1', {'hash': 'D1', 'n': 2}),
-                                                     ('D2', {'hash': 'D2'})]
+    # Every claimant of every path survives, the later path's entry winning
+    # where both name one, in the order `dict.update` per path gave.
+    expected_unreg = {}
+    for p in info['torrent_paths']:
+        expected_unreg.update(file_map[p].get('unreg_claimants') or {})
+    assert set(info['unreg_claimants']) == {'D1', 'D2'}
+    assert list(info['unreg_claimants'].items()) == list(expected_unreg.items())
     # The inode's set and dict are its own: the client's entries are untouched.
     for p, e in file_map.items():
         assert (e['trackers'], e.get('unreg_claimants') or {}) == before[p]
