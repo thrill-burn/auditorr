@@ -5,8 +5,8 @@ reads as upload.
 consecutive snapshots and skips a negative delta as a counter reset. A scan
 whose tracker calls failed for some torrents filed their upload under `Unknown`:
 their trackers dipped for that scan and returned on the next, and the return
-counted in full. The figures below are the reference box's, 2026-10-11 (GB): a
-startup scan at 12:58 put 3,996 GB on a day that uploaded 94.
+counted in full. The figures below are made up (GB), in the shape of a real case: a
+startup scan put thousands of GB on a day that uploaded under a hundred.
 """
 
 import os
@@ -32,12 +32,12 @@ def _row(at, uploads, unanswered=None, library=None, seeding=1000):
     return {'taken_at': at, 'snapshot': snap, 'source': 'qui'}
 
 
-BEFORE = _row('2026-10-11T07:51:33', {'aither.cc': 10201, 'seedpool.org': 9137})
-# The startup scan: 186 tracker calls failed, and their upload went to Unknown.
-STARTUP = _row('2026-10-11T12:58:22',
-               {'aither.cc': 9139, 'seedpool.org': 6651, 'Unknown': 3897},
-               unanswered=186, library={'total_media_size': 7}, seeding=700)
-AFTER = _row('2026-10-11T18:59:13', {'aither.cc': 10241, 'seedpool.org': 9144})
+BEFORE = _row('2026-03-14T07:10:00', {'arvel.test': 4201, 'sorrel.test': 5137})
+# The startup scan: 120 tracker calls failed, and their upload went to Unknown.
+STARTUP = _row('2026-03-14T12:30:00',
+               {'arvel.test': 3139, 'sorrel.test': 2651, 'Unknown': 1897},
+               unanswered=120, library={'total_media_size': 7}, seeding=700)
+AFTER = _row('2026-03-14T19:00:00', {'arvel.test': 4241, 'sorrel.test': 5144})
 
 
 def _stats(rows):
@@ -50,14 +50,14 @@ class UnansweredTrackerSnapshotTests(unittest.TestCase):
         """Before → after, not zero: the 47 GB really were uploaded."""
         stats = _stats([BEFORE, STARTUP, AFTER])
         [day] = stats['daily_uploads']
-        self.assertEqual(day['by_tracker'], {'aither.cc': 40 * GB, 'seedpool.org': 7 * GB})
+        self.assertEqual(day['by_tracker'], {'arvel.test': 40 * GB, 'sorrel.test': 7 * GB})
         self.assertEqual(stats['total_uploaded'], 47 * GB)
 
     def test_an_unmarked_snapshot_still_counts(self):
         """The rule is the mark, not `Unknown`: a torrent with no tracker URL is
         filed there by a healthy scan too."""
-        healthy = _row('2026-10-11T12:58:22',
-                       {'aither.cc': 10220, 'seedpool.org': 9140, 'Unknown': 5})
+        healthy = _row('2026-03-14T12:30:00',
+                       {'arvel.test': 4220, 'sorrel.test': 5140, 'Unknown': 5})
         stats = _stats([BEFORE, healthy, AFTER])
         self.assertEqual(stats['total_uploaded'], 47 * GB)
         self.assertEqual(len(stats['daily_uploads']), 1)
@@ -67,15 +67,15 @@ class UnansweredTrackerSnapshotTests(unittest.TestCase):
         so as the day's last scan or the latest one it would chart a dip."""
         stats = _stats([BEFORE, AFTER, STARTUP])
         [point] = stats['daily_tracker_stats']
-        self.assertEqual(point['by_tracker']['aither.cc']['seeding_size'], 1000 * GB)
+        self.assertEqual(point['by_tracker']['arvel.test']['seeding_size'], 1000 * GB)
         self.assertEqual({t['tracker']: t['seeding_size'] for t in stats['tracker_yields']},
-                         {'aither.cc': 1000 * GB, 'seedpool.org': 1000 * GB})
+                         {'arvel.test': 1000 * GB, 'sorrel.test': 1000 * GB})
 
     def test_its_library_block_is_kept(self):
         """Hardlinked and duplicate sizes don't depend on a tracker list."""
         stats = _stats([BEFORE, STARTUP, AFTER])
         self.assertEqual(stats['daily_library_stats'],
-                         [{'date': '2026-10-11', 'total_media_size': 7}])
+                         [{'date': '2026-03-14', 'total_media_size': 7}])
 
     def test_fewer_than_two_answered_snapshots_is_no_series(self):
         self.assertIsNone(_stats([BEFORE, STARTUP]))

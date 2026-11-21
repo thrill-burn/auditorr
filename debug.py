@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from db import (DATA_DIR, DB_FILE, DEFAULT_CONFIG, SCORE_WEIGHT_KEYS,
                 score_weight_points,
                 db_load_config, db_load_results, db_get_meta, db_set_meta)
+from scripts import filesystem_types
 from state import get_state
 
 log = logging.getLogger(__name__)
@@ -217,7 +218,7 @@ def sanitize_text(text):
     s = _IP_RE.sub('<ip>', s)
     s = _TOKEN_RE.sub('<token>', s)
     # Quoted spans first — quotes are the only reliable delimiter for paths and
-    # filenames containing spaces ("The Lion King (1994) ... .mkv")
+    # filenames containing spaces ("The Brass Lantern (1994) ... .mkv")
     s = _QUOTED_RE.sub(_sanitize_quoted, s)
     s = _NIX_PATH_RE.sub(lambda m: sanitize_path(m.group(0)), s)
     s = _WIN_PATH_RE.sub(lambda m: sanitize_path(m.group(0)), s)
@@ -269,9 +270,75 @@ def process_rss_mb():
     return round(kb / 1024) if kb is not None else None
 
 
+# SCAN SC7. A scan restarts the kernel's high-water mark (`reset_peak_rss`), so
+# what VmHWM reads afterwards is the scan's peak, not the process's. The highest
+# value read before each reset is kept here, so the process's own peak survives.
+_CLEAR_REFS = '/proc/self/clear_refs'
+_hwm_lock = threading.RLock()   # re-entrant: a test holds it across a reset
+_hwm_before_reset_kb = 0
+
+
 def process_peak_rss_mb():
+    """The process's peak RSS since it started, across every scan's reset."""
+    with _hwm_lock:
+        kb = _proc_status_kb('VmHWM')
+        if kb is None:
+            return None
+        return round(max(kb, _hwm_before_reset_kb) / 1024)
+
+
+def peak_rss_since_reset_mb():
+    """The kernel's VmHWM as it reads: the peak RSS since `reset_peak_rss`
+    last succeeded, or since the process started if it never has."""
     kb = _proc_status_kb('VmHWM')
     return round(kb / 1024) if kb is not None else None
+
+
+_PROC_STATUS = '/proc/self/status'
+
+
+def rss_and_peak_mb():
+    """`(rss_mb, peak_mb)`: `process_rss_mb()` and `peak_rss_since_reset_mb()`
+    from **one** read of /proc/self/status, Nones without it.
+
+    For a scan's phase history, which wants both as each phase begins. The two
+    calls read the file twice, and the second read was the whole cost of the
+    history's `hwm_mb`: +15.6 us a phase (`.internal/debug_report_bench/`).
+    The two lines are adjacent, so one read stops where the old one did.
+    """
+    want, kb = ('VmRSS', 'VmHWM'), {}
+    try:
+        with open(_PROC_STATUS) as f:
+            for line in f:
+                key, _, rest = line.partition(':')
+                if key in want:
+                    kb[key] = int(rest.split()[0])
+                    if len(kb) == 2:
+                        break
+    except (OSError, ValueError, IndexError):
+        return None, None
+    rss, hwm = kb.get('VmRSS'), kb.get('VmHWM')
+    return (round(rss / 1024) if rss is not None else None,
+            round(hwm / 1024) if hwm is not None else None)
+
+
+def reset_peak_rss():
+    """Restart the kernel's VmHWM from the current RSS (Linux 4.0's `5` to
+    `/proc/self/clear_refs`), keeping what it read for `process_peak_rss_mb`.
+    False where it can't be done: no /proc, or a /proc that won't take the write.
+    """
+    global _hwm_before_reset_kb
+    with _hwm_lock:
+        kb = _proc_status_kb('VmHWM')
+        if kb is None:
+            return False
+        _hwm_before_reset_kb = max(_hwm_before_reset_kb, kb)
+        try:
+            with open(_CLEAR_REFS, 'w') as f:
+                f.write('5')
+        except OSError:
+            return False
+        return True
 
 
 def _read_int_file(path):
@@ -582,19 +649,96 @@ def _configured_host_re(cfg):
     return re.compile('|'.join(alts), re.IGNORECASE) if alts else None
 
 
-def _scrub_addresses(obj, host_re):
-    """Redact hosts from every string in the report, keys included. Only the
-    rules that can't mistake something else for a host run here: paths and
-    names are hashed per field, because hashing a whole report would erase
-    the structure it is read by."""
+# Tracker names (2026-11-17). A private tracker's name must never reach a report
+# someone pastes in public: it says which trackers they're on, and most trackers'
+# rules forbid naming them. URLs were already redacted, but a bare host
+# (`tracker.example:2710`) or an indexer's name in an arr's error text ("Unable
+# to connect to indexer Example", "Indexer Example (API) (Prowlarr) is disabled")
+# went through as written, into recent_logs. Like the addresses above, they're
+# redacted from every string as the last step. Read from what's stored, never
+# from the client or an arr: the last scan's trackers and their aliases, and the
+# indexer names saved in Backfill's settings.
+_NO_TRACKER = {'none', 'unknown'}   # the walk's words for "no tracker"
+# A host's first label that is also an ordinary word in a report (`torrents.`,
+# `upload.`) isn't redacted as a word: it would erase the report's own keys and
+# vocabulary. The host itself still goes wherever it appears.
+_COMMON_WORDS = {'torrent', 'torrents', 'tracker', 'trackers', 'media', 'files', 'upload',
+                 'uploads', 'download', 'downloads', 'index', 'indexer', 'public', 'private',
+                 'open', 'free', 'seed', 'seeds', 'share', 'library'}
+
+
+def _known_tracker_names(cfg):
+    """`(hosts, words)`: every tracker host the last scan saw, and the names an
+    indexer for one goes by: each host's own name (its first label past
+    `tracker.` and the like, as `arr.indexer_key` reads it, punctuation kept)
+    and each indexer name in Backfill's settings, whole and without its
+    `(API) (Prowlarr)` suffixes. A word under 4 characters is left out unless
+    it's an indexer's whole name, or 'hd' would go from every line."""
+    from arr import _TRACKER_HOST_PREFIXES
+    hosts, words = set(), set()
+    try:
+        results = db_load_results() or {}
+    except Exception:
+        results = {}
+    aliases = results.get('tracker_aliases') or {}
+    seen = list(results.get('trackers') or []) + list(aliases.keys()) + list(aliases.values())
+    for h in seen:
+        h = str(h or '').strip().lower()
+        if '://' in h:
+            h = h.split('://', 1)[1]
+        h = h.split('/')[0]
+        if h.count(':') == 1:           # a port; an IPv6 literal keeps its colons
+            h = h.split(':')[0]
+        if not h or h in _NO_TRACKER:
+            continue
+        hosts.add(h)
+        labels = [l for l in h.split('.') if l]
+        while len(labels) > 1 and labels[0] in _TRACKER_HOST_PREFIXES:
+            labels.pop(0)
+        if labels and len(labels[0]) >= 4 and labels[0] not in _COMMON_WORDS:
+            words.add(labels[0])
+    for key in ('ACQUIRE_DOWNLOAD_FROM', 'ACQUIRE_SEEDING_ON'):
+        for name in cfg.get(key) or []:
+            name = str(name or '').strip()
+            if len(name) < 2:
+                continue
+            words.add(name)
+            base = re.sub(r'\s*\(.*$', '', name).strip()
+            if len(base) >= 4:
+                words.add(base)
+    return hosts, words
+
+
+def _tracker_name_re(cfg):
+    """One pattern for every tracker name `_known_tracker_names` knows. A host
+    goes wherever it appears, as a configured address does; a name goes as a
+    whole word, in any case. Longest first, so a name inside a longer one
+    (`Example` in `Example (API)`) can't leave the rest behind."""
+    hosts, words = _known_tracker_names(cfg)
+    alts = []
+    if hosts:
+        h = '|'.join(map(re.escape, sorted(hosts, key=len, reverse=True)))
+        alts.append(rf'(?<![\w.-])(?:{h})(?![\w-]|\.[\w-])')
+    if words:
+        w = '|'.join(map(re.escape, sorted(words, key=len, reverse=True)))
+        alts.append(rf'(?<!\w)(?:{w})(?!\w)')
+    return re.compile('|'.join(alts), re.IGNORECASE) if alts else None
+
+
+def _scrub_addresses(obj, host_re, tracker_re=None):
+    """Redact hosts from every string in the report, keys included, and with
+    `tracker_re` every tracker name. Only the rules that can't mistake
+    something else for a host run here: paths and names are hashed per field,
+    because hashing a whole report would erase the structure it is read by."""
     if isinstance(obj, str):
         s = _redact_hosts(obj)
-        return host_re.sub('<host>', s) if host_re else s
+        s = host_re.sub('<host>', s) if host_re else s
+        return tracker_re.sub('<tracker>', s) if tracker_re else s
     if isinstance(obj, dict):
-        return {_scrub_addresses(k, host_re): _scrub_addresses(v, host_re)
+        return {_scrub_addresses(k, host_re, tracker_re): _scrub_addresses(v, host_re, tracker_re)
                 for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [_scrub_addresses(v, host_re) for v in obj]
+        return [_scrub_addresses(v, host_re, tracker_re) for v in obj]
     return obj
 
 
@@ -678,6 +822,25 @@ def _recent_runs_sanitized(limit=20):
         return [], {}
 
 
+# A commit is cut to this many characters: enough to name it, and under the 24
+# at which `_TOKEN_RE` reads a hex string as a token (a full SHA is 40).
+_COMMIT_CHARS = 12
+
+
+def build_info():
+    """`{commit, ref}`: which build this is, from the image's build args.
+
+    The release and `:experimental` both report `APP_VERSION`, so a field
+    tester's before and after reports read as the same version without this.
+    CI passes the commit and the branch or tag (`.github/workflows/docker.yml`,
+    the Dockerfile's last `ARG`s). Either is None when its variable is unset or
+    empty: `python app.py`, or a `docker build` made by hand.
+    """
+    commit = (os.environ.get('AUDITORR_COMMIT') or '').strip()
+    ref = (os.environ.get('AUDITORR_REF') or '').strip()
+    return {'commit': commit[:_COMMIT_CHARS] or None, 'ref': ref or None}
+
+
 def build_debug_report(version):
     state = get_state()
     cfg = db_load_config()
@@ -685,11 +848,19 @@ def build_debug_report(version):
     report = {
         '_readme': (
             'auditorr debug report. Credentials are omitted; hosts, IPs and API '
-            'tokens are redacted; media file/folder names are replaced with '
-            'stable 6-char hashes (~abc123) so they can be correlated but not read.'
+            'tokens are redacted, and so are tracker and indexer names '
+            '(<tracker>); media file/folder names are replaced with '
+            'stable 6-char hashes (~abc123) so they can be correlated but not read. '
+            'build: the commit (first 12 characters) and the branch or tag the '
+            'image was built from, which tells two images of one app_version '
+            'apart; null in a build not made by the project\'s CI. '
+            'runtime.filesystems: the filesystem type each root is stored on '
+            '(the type only, never the mount or its source), as the container '
+            'sees it; null where it can\'t be read or a root isn\'t configured.'
         ),
         'generated_at': datetime.now().isoformat(timespec='seconds'),
         'app_version':  version,
+        'build':        build_info(),
         'runtime': {
             'python':            sys.version.split()[0],
             'platform':          platform.platform(),
@@ -707,6 +878,9 @@ def build_debug_report(version):
             'thread_count':      threading.active_count(),
             'thread_names':      sorted(t.name for t in threading.enumerate())[:40],
             'inotify':           inotify_watch_stats(),
+            # The type only, never the mount point or its source.
+            'filesystems':       filesystem_types({'torrents': cfg.get('LOCAL_PATH'),
+                                                   'media': cfg.get('MEDIA_PATH')}),
             'data_dir_set':      bool(os.environ.get('DATA_DIR')),
             'auth_enabled':      bool(os.environ.get('AUDITORR_SECRET', '').strip()),
             'auth_strict':       os.environ.get(
@@ -716,10 +890,42 @@ def build_debug_report(version):
         },
         'config': _sanitized_config(cfg),
         'scan_state': {
+            '_readme': (
+                'peak_source: where the last scan\'s peak_rss_mb (audit_history) '
+                'came from; null before this process\'s first scan. kernel: the '
+                'kernel\'s high-water mark, restarted as the scan began, so it is '
+                'the scan\'s true peak. sampled: the kernel refused the restart, '
+                'so it is the highest of readings taken every 20 s (RSS at save '
+                'time for a scan shorter than that) and can be well under the '
+                'true peak. audit_history rows written by 1.8.3 and earlier, or by '
+                'a build before e1a48cd, are always sampled. '
+                'phase_history (and crash_evidence.last_scan_phases, the same list '
+                'kept across a restart): one entry as each phase of the scan '
+                'began, starting with asking the torrent client for its torrents. '
+                't: seconds since the scan '
+                'started, to 0.01; a phase lasts until the next entry\'s t, and the '
+                'last until last_scan_duration, which includes the clean-up after '
+                'the save. rss_mb: memory in use as the phase began. hwm_mb: the '
+                'scan\'s peak memory so far, as the phase began (null when '
+                'peak_source is sampled), so the phase that raised the peak is the '
+                'one after which hwm_mb jumps, and the last phase raised it if the '
+                'run\'s peak_rss_mb is above the last hwm_mb. at: the wall clock, '
+                'to the second. '
+                'arr_ask: the last scan asks Sonarr and Radarr which files they '
+                'hold (for the library map\'s Unmanaged state) while it reads the '
+                'disk; null if the scan stopped before reading the answer. secs: '
+                'how long they took to answer, null if still answering when the '
+                'scan gave up. files: how many files they hold, null without a '
+                'whole answer. check: ok, unreachable (one failed, answered in part '
+                'or was too slow) or none (none configured). waited_secs: how long '
+                'the scan waited for them after reading the disk, 0 when the answer '
+                'was already in. timed_out: the scan gave up after 60 s.'
+            ),
             **{k: state.get(k) for k in (
                 'is_scanning', 'progress', 'phase', 'last_audit_time',
                 'total_files', 'scanned_files', 'last_scan_status',
-                'trigger', 'next_scan_in', 'last_scan_duration',
+                'trigger', 'next_scan_in', 'last_scan_duration', 'peak_source',
+                'arr_ask',
             )},
             'status_message': sanitize_text(state.get('status_message')),
             'phase_history':  [
@@ -791,4 +997,4 @@ def build_debug_report(version):
             for r in _recent_logs()
         ],
     }
-    return _scrub_addresses(report, _configured_host_re(cfg))
+    return _scrub_addresses(report, _configured_host_re(cfg), _tracker_name_re(cfg))

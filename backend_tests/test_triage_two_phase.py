@@ -246,7 +246,7 @@ class TriageLibraryTypeGateTests(unittest.TestCase):
     `superseded` with quality_cmp 'same' — which is exactly the condition that
     renders Force import, and force_import_files posts replaceExistingFiles
     against the movie's id. One episode written over a library film, past every
-    rejection spec. Fargo, Hannibal, Dune, Shogun: the collisions are ordinary.
+    rejection spec. Fargo, Hannibal, Westworld, Shogun: the collisions are ordinary.
     """
 
     def test_an_episode_never_matches_a_same_titled_movie(self):
@@ -265,10 +265,10 @@ class TriageLibraryTypeGateTests(unittest.TestCase):
         """The reverse direction — milder, but it points the arr link and the
         'upgrade your library copy' copy at the wrong title."""
         items = _phase1_library(
-            [_rec(hash='MV', path='radarr/Dune (2021)/Dune.2021.2160p.Remux.mkv')],
-            [_media(service='sonarr', title='Dune', year=2021, arr_id=9,
-                    path='/media/tv/Dune/Season 01/Dune.S01E01.mkv',
-                    relative_path='Dune.S01E01.mkv')])
+            [_rec(hash='MV', path='radarr/Tidewater (2021)/Tidewater.2021.2160p.Remux.mkv')],
+            [_media(service='sonarr', title='Tidewater', year=2021, arr_id=9,
+                    path='/media/tv/Tidewater/Season 01/Tidewater.S01E01.mkv',
+                    relative_path='Tidewater.S01E01.mkv')])
         self.assertEqual(items[0]['verdict'], 'not_in_library')
         self.assertIsNone(items[0]['library'])
 
@@ -314,7 +314,7 @@ class TriageAlternateTitleTests(unittest.TestCase):
     """A release named in its original language must find the arr's item.
 
     Field report: a Spanish-language series released as
-    `No.tengo.miedo.S01…` against a Sonarr that stores it as "I'm Not Afraid".
+    `Nadie.duerme.S01…` against a Sonarr that stores it as "Nobody Sleeps".
     The titles match on nothing, so the verdict was `not_in_library` — whose
     copy read "junk can be deleted" — for a series Sonarr was actively managing
     and had already grabbed. The torrent held the only copy of 33 GB, and it
@@ -325,9 +325,9 @@ class TriageAlternateTitleTests(unittest.TestCase):
     """
 
     SONARR = [{'service': 'sonarr', 'connection_id': 'c1', 'arr_id': 12,
-               'title': "I'm Not Afraid", 'title_slug': 'im-not-afraid',
+               'title': "Nobody Sleeps", 'title_slug': 'nobody-sleeps',
                'year': 2025, 'has_file': False,
-               'alt_titles': ['No tengo miedo']}]
+               'alt_titles': ['Nadie duerme']}]
 
     def _verdict(self, path, titles=None):
         items = _phase1_titles([_rec(hash='ES', path=path)],
@@ -336,8 +336,8 @@ class TriageAlternateTitleTests(unittest.TestCase):
 
     def test_original_language_release_is_import_pending_not_unknown(self):
         verdict, item = self._verdict(
-            'tv/No.tengo.miedo.S01.2160p.NF.WEB-DL/'
-            'No.tengo.miedo.S01E01.The.Witch.2160p.NF.WEB-DL.mkv')
+            'tv/Nadie.duerme.S01.2160p.NF.WEB-DL/'
+            'Nadie.duerme.S01E01.The.Visitor.2160p.NF.WEB-DL.mkv')
         self.assertEqual(verdict, 'import_pending')
         # And it resolves to the arr's own item, so Rescan has somewhere to go.
         self.assertEqual(item['library']['service'], 'sonarr')
@@ -345,7 +345,7 @@ class TriageAlternateTitleTests(unittest.TestCase):
 
     def test_the_english_title_still_matches(self):
         verdict, _ = self._verdict(
-            'tv/Im.Not.Afraid.S01E01.2160p.WEB-DL.mkv')
+            'tv/Nobody.Sleeps.S01E01.2160p.WEB-DL.mkv')
         self.assertEqual(verdict, 'import_pending')
 
     def test_without_the_alternate_title_it_is_still_unknown(self):
@@ -353,7 +353,7 @@ class TriageAlternateTitleTests(unittest.TestCase):
         genuinely has never heard of this name."""
         bare = [{**self.SONARR[0], 'alt_titles': []}]
         verdict, item = self._verdict(
-            'tv/No.tengo.miedo.S01E01.2160p.WEB-DL.mkv', titles=bare)
+            'tv/Nadie.duerme.S01E01.2160p.WEB-DL.mkv', titles=bare)
         self.assertEqual(verdict, 'not_in_library')
         self.assertIsNone(item['library'])
 
@@ -365,9 +365,9 @@ class TriageAlternateTitleTests(unittest.TestCase):
 class TitleAliasKeyTests(unittest.TestCase):
     def test_alias_maps_to_the_canonical_keys(self):
         alias = arr.title_alias_keys([
-            {'title': "I'm Not Afraid", 'alt_titles': ['No tengo miedo']}])
-        self.assertIn('no tengo miedo', alias)
-        self.assertTrue(alias['no tengo miedo'] & arr.title_match_keys("I'm Not Afraid"))
+            {'title': "Nobody Sleeps", 'alt_titles': ['Nadie duerme']}])
+        self.assertIn('nadie duerme', alias)
+        self.assertTrue(alias['nadie duerme'] & arr.title_match_keys("Nobody Sleeps"))
 
     def test_a_title_never_aliases_to_itself(self):
         alias = arr.title_alias_keys([

@@ -5,10 +5,13 @@ import logging
 import time
 import functools
 import posixpath
+from array import array
+from bisect import bisect_left
 import unicodedata
 from types import MappingProxyType
 import urllib.request
 import urllib.error
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 log = logging.getLogger(__name__)
@@ -236,6 +239,145 @@ def fetch_arr_media_index_result(cfg, force=False):
     return snap[1], list(snap[2])
 
 
+def media_path_key(path):
+    """A file path as the media index is matched on: normalised, forward slashes.
+
+    Backfill's lookup (`app._resolve_backfill`) and the scan's Unmanaged stamp
+    (`audit.stamp_unmanaged`) both key on this, so a video the map calls
+    Unmanaged is exactly one Backfill can't search, and a video it calls
+    Not seeded is one Backfill can.
+    """
+    return os.path.normpath(str(path or '')).replace('\\', '/')
+
+
+class ManagedPaths:
+    """Every file the arrs hold, and every folder holding one, as hashes.
+
+    By `media_path_key`, so `key in paths` is Backfill's own test, and
+    `paths.has_dir(folder)` answers for a sidecar. **Hashes, not strings**: at
+    348,000 arr files the strings were 57.9 MB held through the scan's peak
+    (`.internal/dash_bench/unmanaged.py`); a sorted array of 64-bit hashes is
+    8 bytes a file. Python's string hash, so it's only compared within the
+    process that built it. A collision (vanishingly rare at 64 bits) reads a
+    file as held, so it stays Not seeded, as the map drew it before.
+    Built with `add_key` then `freeze`, or from `keys` in one go.
+
+    **A lookup bisects a bucket, not the array.** The scan asks once per
+    unseeded library file, and a bisect of 348,000 boxes an int at each of its
+    19 steps: +0.083 s at 650,000 files. `_HashIndex` keeps where each value of
+    a hash's top 16 bits starts (256 KB), so a lookup bisects about five.
+    """
+    __slots__ = ('_files', '_dirs', '_n')
+
+    def __init__(self, keys=None):
+        self._files, self._dirs, self._n = array('q'), set(), 0
+        if keys is not None:
+            for k in keys:
+                self.add_key(k)
+            self.freeze()
+
+    def add_key(self, key):
+        self._files.append(hash(key))
+        self._dirs.add(hash(key.rpartition('/')[0]))
+
+    def freeze(self):
+        self._n = len(self._files)
+        self._files = _HashIndex(self._files)
+        self._dirs = _HashIndex(self._dirs)
+
+    def __contains__(self, key):
+        return self._files.has(hash(key))
+
+    def has_dir(self, folder):
+        return self._dirs.has(hash(folder))
+
+    def holds_folder_of(self, key):
+        """Does an arr hold a file in the folder `key` (a `media_path_key`) is in?"""
+        return self._dirs.has(hash(key.rpartition('/')[0]))
+
+    def __len__(self):
+        return self._n
+
+
+class _HashIndex:
+    """Sorted 64-bit hashes, and where each value of their top 16 bits starts."""
+    __slots__ = ('_h', '_at')
+    _SHIFT, _BUCKETS = 48, 1 << 16
+
+    def __init__(self, hashes):
+        self._h = h = array('q', sorted(hashes))
+        at = array('i', bytes(4 * (self._BUCKETS + 1)))
+        b = 0
+        for i, v in enumerate(h):
+            top = (v >> self._SHIFT) + (self._BUCKETS >> 1)
+            while b <= top:
+                at[b] = i
+                b += 1
+        while b <= self._BUCKETS:
+            at[b] = len(h)
+            b += 1
+        self._at = at
+
+    def has(self, v):
+        top = (v >> self._SHIFT) + (self._BUCKETS >> 1)
+        hi = self._at[top + 1]
+        i = bisect_left(self._h, v, self._at[top], hi)
+        return i < hi and self._h[i] == v
+
+
+def fetch_arr_managed_paths(cfg):
+    """`(paths, check)`: every file the configured arrs hold, as `ManagedPaths`.
+
+    For the library map's Unmanaged state (2026-11-14): a library file that
+    isn't seeded and that no arr holds. `check` says whether the answer is
+    whole enough to call anything that:
+
+    * `'ok'`: every instance answered in full.
+    * `'none'`: no arr is configured. `paths` is None, since with no arr
+      there's nothing to tell a file apart from, and the map draws it as it did.
+    * `'unreachable'`: an instance failed, answered in part, or the
+      configuration couldn't be read. `paths` is None: a file of an instance
+      that didn't answer would read as one no arr holds (R1).
+
+    **It never builds the media index's rows.** A row is about a kilobyte, so
+    at 348,000 files the index is hundreds of MB, and the cache keeps the last
+    one; a scan that filled it would hold that for every install that never
+    opens Backfill or Triage. A fresh snapshot one of them left is read (no
+    arr call); otherwise each instance's paths go straight into the hashes,
+    a Sonarr series at a time (`_fetch_*_media`'s `sink`), mapped to local
+    paths as the index maps them.
+    """
+    try:
+        conns = normalize_arr_connections(cfg)
+    except Exception as e:
+        log.warning("Could not read the arr connections: %s", type(e).__name__)
+        return None, 'unreachable'
+    if not conns:
+        return None, 'none'
+    snap = _arr_media_index_cache.get('snapshot')
+    if snap is not None and (time.monotonic() - snap[0]) < _ARR_MEDIA_INDEX_TTL:
+        if snap[2]:
+            return None, 'unreachable'
+        return ManagedPaths(media_path_key(r['path']) for r in snap[1] if r.get('path')), 'ok'
+    paths = ManagedPaths()
+    for conn in conns:
+        arr_root = conn.get('media_path', '')
+        local_root = conn.get('local_media_path', '') or cfg.get('MEDIA_PATH', '')
+
+        def sink(path, arr_root=arr_root, local_root=local_root):
+            paths.add_key(media_path_key(_replace_path_prefix(path, arr_root, local_root)))
+        try:
+            fetch = _fetch_radarr_media if conn['service'] == 'radarr' else _fetch_sonarr_media
+            _rows, partial = fetch(conn, sink=sink)
+        except Exception as e:
+            log.warning("Could not ask %s which files it holds: %s", conn['id'], type(e).__name__)
+            return None, 'unreachable'
+        if partial:
+            return None, 'unreachable'
+    paths.freeze()
+    return paths, 'ok'
+
+
 def fetch_arr_media_index_with_roots(cfg, force=False):
     """`(rows, errors, roots)` for the media index, **from one snapshot** (S11, B10).
 
@@ -436,7 +578,51 @@ def sonarr_series_episodes(cfg, connection_id, series_id):
             for ep in episodes or [] if ep.get('id') is not None]
 
 
-def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None, file_path=None):
+def _same_arr_id(a, b):
+    """Whether two arr item ids name the same item, whatever type each arrived as."""
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+def _release_other_title(release, service, arr_id):
+    """`'other'`, `'unidentified'` or `None`: why a release isn't one of this item's (B16).
+
+    An interactive search for one series or movie returns every result the
+    indexers sent back, and an indexer that ignores the query sends its latest
+    uploads instead: one indexer answered a season search with a page of other
+    shows' releases, ranked above the show's own packs. The arr lists those as
+    rejected, but it lists them.
+
+    * **`other`: the arr mapped it to another item in the library.** Sonarr's
+      `ReleaseResource.MappedSeriesId = remoteEpisode.Series?.Id`, Radarr's
+      `MappedMovieId = remoteMovie.Movie?.Id`. A grab posts only the guid and
+      indexer, so the arr grabs it **as that other item**: *Other Show S02E03*
+      from this show's row downloads Other Show.
+    * **`unidentified`: the arr mapped it to nothing.** `DownloadAllowed` is a
+      plain bool that both arrs set only once a release has matched a title (a
+      series with episodes, a movie), so it's `false` for an unknown one, and
+      the mapped id is null, which the arrs leave out of the JSON. Its grab
+      can't work from here: with no series, episode or movie id in the body,
+      Sonarr answers 404 "Unable to find matching series and episodes, will
+      need to be manually provided", Radarr "Unable to find matching movie".
+
+    Positive evidence only (R1): a row with neither field, from an arr that
+    doesn't send them, is kept. A release mapped to *this* series whose
+    episodes Sonarr couldn't identify is kept too, because the grab looks the
+    episodes up again.
+    """
+    mapped = release.get('mappedMovieId' if service == 'radarr' else 'mappedSeriesId')
+    if mapped is not None:
+        return None if _same_arr_id(mapped, arr_id) else 'other'
+    if release.get('downloadAllowed') is False:
+        return 'unidentified'
+    return None
+
+
+def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, season_number=None,
+                         file_path=None, report=None):
     """Fetch the interactive release search for a single Arr item.
 
     Returns a list of {title, indexer, seeders, leechers, size, guid} dicts.
@@ -452,6 +638,15 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
     Trumped, a scene release carries the same name on Usenet, so the exact name
     could be pre-selected there, grabbed, and the trumped torrent removed with
     nothing left seeding on the tracker.
+
+    **So are releases of another title, and ones the arr couldn't identify
+    (B16)**, for every caller, because each one grabs by guid alone and the arr
+    grabs a release as whatever it mapped it to (`_release_other_title`).
+
+    `report`, when a dict is passed, is filled with what was left out:
+    `returned` (every release the arr listed), `usenet`, `other_title` and
+    `unidentified`. An out-parameter, like the walk's, so every caller's
+    return value is unchanged; Backfill uses it to say why a row is empty.
     """
     conns = normalize_arr_connections(cfg, service=service)
     conn = next((c for c in conns if c['id'] == connection_id), None)
@@ -469,9 +664,15 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
                 raise ValueError("Could not determine episode ID for Sonarr release search — open in Sonarr directly")
             api_path = f'/api/v3/release?episodeId={episode_id}'
     rows = _arr_get(conn['base_url'], conn['api_key'], api_path, timeout=90)
+    dropped = {'usenet': 0, 'other_title': 0, 'unidentified': 0}
     result = []
     for r in rows:
         if _is_usenet(r.get('protocol')):
+            dropped['usenet'] += 1
+            continue
+        other = _release_other_title(r, service, arr_id)
+        if other:
+            dropped['other_title' if other == 'other' else 'unidentified'] += 1
             continue
         q_outer = r.get('quality') or {}
         q_inner = q_outer.get('quality') or {}
@@ -516,6 +717,8 @@ def fetch_release_matrix(cfg, service, connection_id, arr_id, episode_id=None, s
             'mapped_episode_ids':  [e.get('id') for e in (r.get('mappedEpisodeInfo') or [])
                                     if isinstance(e, dict) and e.get('id') is not None],
         })
+    if report is not None:
+        report.update(dropped, returned=len(rows))
     return result
 
 
@@ -647,7 +850,7 @@ def _release_group_tag(name):
 
     **A leading `[Group]` is read first** — the anime convention, and how an
     indexer often lists a release the PM names scene-style: the PM's
-    `…x264-Kametsu` arrives in Radarr as `[Kametsu] Only Yesterday (BD 1080p…)`.
+    `…x264-Kametsu` arrives in Radarr as `[Kametsu] Late Summer (BD 1080p…)`.
     Read only from the tail, `kametsu` stayed in the title core as a title word,
     and a trailing `[Dual-Audio]` parsed as group `audio`.
     """
@@ -738,7 +941,7 @@ def _norm_release_name(name):
     dropped, dots/underscores to spaces, collapse whitespace, lowercase.
 
     The extension, because an indexer lists a single-file release under its
-    file name: Radarr offered `Mulan.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv`
+    file name: Radarr offered `Peony.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv`
     for a PM naming `… x265-NCmt`, every field agreed, and it was still "no
     exact match" — so the one release the PM named was never pre-selected.
     """
@@ -757,7 +960,7 @@ def match_trump_release(releases, new_title, indexer=''):
     The *indexer* comparison is the one place fuzziness is right, and it is the
     same `tracker_matches_indexer` the rest of the flow uses: indexer names are
     pooled across every arr by `fetch_arr_indexers`, so one tracker can arrive
-    as "Aither (API) (Prowlarr)" on one instance and "Aither" on another, and
+    as "Tracker1 (API) (Prowlarr)" on one instance and "Tracker1" on another, and
     exact equality fell through to the any-indexer retry.
     """
     target = _norm_release_name(new_title)
@@ -781,7 +984,7 @@ def match_trump_release(releases, new_title, indexer=''):
 # title must actually overlap and the year (±1) / episode must agree; only then
 # do resolution/source/group/audio/HDR refine the ranking. Quality agreement alone
 # never makes a match — otherwise two unrelated 1080p WEB-DLs look like siblings
-# (the "Flow 2019" shown for "Obsession 2026" bug). When the real torrent isn't
+# (the "Current 2019" shown for "Fixation 2026" bug). When the real torrent isn't
 # in the client the list comes back empty, which the picker reports honestly,
 # rather than offering a confident wrong answer.
 
@@ -824,7 +1027,7 @@ _QUALITY_NOISE = {
 }
 
 # Articles carry no discriminating power and cause spurious title overlap ("The
-# Matrix" vs "The Thing" share 'the'); dropped from the title core.
+# Jade Fox" vs "The Iron Gate" share 'the'); dropped from the title core.
 _TITLE_STOPWORDS = {'the', 'of', 'a', 'an', 'and'}
 
 # Tokens that are noise regardless of any trailing digits (fused channel layout,
@@ -857,19 +1060,19 @@ def _title_core_tokens(norm, group=''):
     that carries a symbol ("HDR10+", "DD+") would otherwise miss the noise set
     and land in the title core, where it reads as *shared title words* between
     two unrelated releases. One such token is enough to clear the similarity
-    gate — that was the "Weapons 2025 offered for The Drama 2026" bug, where
+    gate — that was the "Shutters 2025 offered for The Quarrel 2026" bug, where
     both names contributed 'hdr10+' and nothing else overlapped. \\W (not
     [^a-z0-9]) so accented title words survive intact.
 
     The noise has to be complete for the *query's* sake as much as the
     candidate's: every junk word left in the PM's core is a word no candidate
-    can share, and the gate is a ratio. `Only Yesterday AKA Omoide Poro Poro
+    can share, and the gate is a ratio. `Late Summer AKA Natsu Hiro Hiro
     1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu` kept `aka`,
-    `dual`, `audio` and `hi10p`, so Radarr's `Only Yesterday 1991 …-Kametsu`
+    `dual`, `audio` and `hi10p`, so Radarr's `Late Summer 1991 …-Kametsu`
     shared 2 of 8 words and failed the gate outright. `aka` is dropped only
     beside other title words, so a film called "AKA" still has a core. The
     candidate's side has its own junk: Radarr's listing of that release,
-    `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv`,
+    `[Kametsu] Late Summer (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv`,
     carried a checksum and `flacx2` as title words.
     """
     out = set()
@@ -888,9 +1091,9 @@ def _title_core_tokens(norm, group=''):
 def _aka_cores(norm, group=''):
     """The title core of each side of an `AKA`, or () when there is none.
 
-    `Spirited Away AKA Sen to Chihiro no Kamikakushi` is two titles, and an
+    `Hidden Forest AKA Mori to Kaze no Utagoe` is two titles, and an
     indexer lists the release under either one. Pooled into one core, the
-    English half shares 2 of 7 words with `Spirited Away 2001 …` and fails a
+    English half shares 2 of 7 words with `Hidden Forest 2001 …` and fails a
     gate the same film should pass on its own.
     """
     parts = _AKA_RE.split(norm)
@@ -999,8 +1202,8 @@ def _score_match_features(q, c):
 
     # Year gate — a declared year off by more than one is a different release
     # (remake). Exactly one year of drift is the same film: premiere year vs
-    # wide-release year renders one movie under either ("Snow White and the
-    # Seven Dwarfs" is 1937 or 1938 depending on who typed it), so PMs, torrent
+    # wide-release year renders one movie under either ("Rose Red and the
+    # Seven Ravens" is 1937 or 1938 depending on who typed it), so PMs, torrent
     # names, and indexer records routinely disagree by one. Same ±1 tolerance
     # `arr_year_ok` applies to Radarr; flagged 'partial' so the user sees the
     # drift. (Both sides here are *release names*, so this is symmetric — unlike
@@ -1178,8 +1381,8 @@ def rank_trump_replacements(releases, new_title, indexer='', old_titles=()):
 
     Nothing is dropped and nothing is cut to a top N. The list used to be the
     eight best scores that cleared the title gate, and a tracker renders names
-    its own way — `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2)
-    [079DB0B4].mkv` for a PM's `Only Yesterday … x264-Kametsu` — so the one
+    its own way — `[Kametsu] Late Summer (1991) (BD 1080p Hi10 FLACx2)
+    [079DB0B4].mkv` for a PM's `Late Summer … x264-Kametsu` — so the one
     release the user had come for
     could be ranked out of sight or gated out entirely, with Radarr listing it.
     A gated-out release has `match_score: None`.
@@ -1247,9 +1450,9 @@ _TRACKER_HOST_PREFIXES = {'www', 'tracker', 'announce', 'tr', 't', 'private', 's
 def indexer_key(name):
     """Comparable identity for an indexer name or a tracker host.
 
-    The Trumped wizard knows the PM's tracker as an *arr indexer name* ("Aither
-    (API) (Prowlarr)") while client torrents carry a *host* ("aither.cc"); both
-    reduce to 'aither'. Parenthetical suffixes, URL scheme/path/port, announce
+    The Trumped wizard knows the PM's tracker as an *arr indexer name* ("Tracker1
+    (API) (Prowlarr)") while client torrents carry a *host* ("tracker1.example");
+    both reduce to 'tracker1'. Parenthetical suffixes, URL scheme/path/port, announce
     subdomains and punctuation are dropped.
     """
     s = re.sub(r'\([^)]*\)', ' ', str(name or '').strip().lower())
@@ -1968,18 +2171,24 @@ def _path_norm(path):
     return str(path or '').replace('\\', '/').replace('//', '/')
 
 
-def _fetch_radarr_media(conn):
+def _fetch_radarr_media(conn, sink=None):
     """(rows, partial) — Radarr needs one call, so `partial` is always None.
 
     The tuple exists for symmetry with `_fetch_sonarr_media`, which needs one
     call per series and therefore has a third outcome between "worked" and
     "raised": some of the library came back.
+
+    With `sink`, each file's path goes to it as it's read and `rows` is empty:
+    the scan's Unmanaged stamp wants paths alone (`fetch_arr_managed_paths`).
     """
     rows = []
     for movie in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/movie', timeout=_ARR_LIST_TIMEOUT):
         movie_file = movie.get('movieFile') or {}
         path = movie_file.get('path')
         if not path:
+            continue
+        if sink is not None:
+            sink(path)
             continue
         q_outer = movie_file.get('quality') or {}
         q_inner = q_outer.get('quality') or {}
@@ -2007,8 +2216,11 @@ def _fetch_radarr_media(conn):
     return rows, None
 
 
-def _fetch_sonarr_media(conn):
+def _fetch_sonarr_media(conn, sink=None):
     """(rows, partial) — episode-file records for one Sonarr instance.
+
+    With `sink`, each file's path goes to it a series at a time and `rows` is
+    empty, as `_fetch_radarr_media`'s does.
 
     `partial` is None when every series was read, else
     `{'failed': n, 'total': m}`. One unreachable series must not discard the
@@ -2029,6 +2241,8 @@ def _fetch_sonarr_media(conn):
 
     def _fetch_episode_files(series, series_id):
         episode_files = _arr_get(base_url, api_key, f'/api/v3/episodefile?seriesId={series_id}')
+        if sink is not None:
+            return [f['path'] for f in episode_files if f.get('path')]
         rows = []
         for episode_file in episode_files:
             path = episode_file.get('path')
@@ -2072,7 +2286,12 @@ def _fetch_sonarr_media(conn):
         futures = {executor.submit(_fetch_episode_files, s, sid): sid for s, sid in valid_series}
         for future in as_completed(futures):
             try:
-                all_rows.extend(future.result())
+                got = future.result()
+                if sink is not None:
+                    for path in got:
+                        sink(path)
+                else:
+                    all_rows.extend(got)
             except Exception as e:
                 # One unreachable series must not discard the instance. Sonarr
                 # needs a call per series where Radarr needs one in total, so
@@ -2176,7 +2395,7 @@ def _parse_year_from_name(name):
 
     Takes the LAST plausible year token so titles that are themselves years
     survive ("2012 2009 1080p" → 2009). Tokens outside 1900..now+2 are
-    ignored, which also skips title numbers like "Blade Runner 2049".
+    ignored, which also skips title numbers like "Orbit Station 2049".
     """
     cutoff = time.gmtime().tm_year + 2
     years = [int(y) for y in re.findall(r'\b((?:19|20)\d{2})\b', name)
@@ -2260,12 +2479,19 @@ def _arr_titles_snapshot(cfg, force=False):
     The media index only contains items that HAVE files — this list is what lets
     Triage distinguish "in the library but never imported" from "not in the
     library at all". Rows are [{service, connection_id, arr_id, title,
-    title_slug, year, has_file, alt_titles}].
+    title_slug, year, has_file, alt_titles, folder, status, runtime, poster}],
+    plus `network` and `season_count` on a series and `studio` on a movie.
 
     `alt_titles` is the arr's own `alternateTitles` — see `title_alias_keys`.
     It rides the listing both services already return, so it costs no extra
     call; it is capped per item because Radarr can carry a translation for
     every region it knows about.
+
+    `folder` (the item's own folder as auditorr sees it, `_arr_item_folder`) and
+    the rest are the library map's title detail (2026-11-10): which series or
+    movie a map tile is, by folder (`arr_title_for_folder`), and what to say
+    about it. `poster` is the arr's own address for the poster (`/MediaCover/…`),
+    never fetched here. They ride the same listing too.
     """
     now = time.monotonic()
     snap = _arr_titles_cache.get('snapshot')
@@ -2286,6 +2512,11 @@ def _arr_titles_snapshot(cfg, force=False):
                         'year':          m.get('year'),
                         'has_file':      bool(m.get('hasFile')),
                         'alt_titles':    _alt_titles(m),
+                        'folder':        _arr_item_folder(conn, cfg, m),
+                        'status':        m.get('status') or '',
+                        'studio':        m.get('studio') or '',
+                        'runtime':       m.get('runtime') or 0,
+                        'poster':        _poster_path(m),
                     })
             else:
                 for s in _arr_get(conn['base_url'], conn['api_key'], '/api/v3/series', timeout=_ARR_LIST_TIMEOUT):
@@ -2299,6 +2530,12 @@ def _arr_titles_snapshot(cfg, force=False):
                         'year':          s.get('year'),
                         'has_file':      (stats.get('episodeFileCount') or 0) > 0,
                         'alt_titles':    _alt_titles(s),
+                        'folder':        _arr_item_folder(conn, cfg, s),
+                        'status':        s.get('status') or '',
+                        'network':       s.get('network') or '',
+                        'season_count':  stats.get('seasonCount'),
+                        'runtime':       s.get('runtime') or 0,
+                        'poster':        _poster_path(s),
                     })
         except Exception as e:
             log.warning("Could not fetch %s titles from %s: %s", conn['service'], conn['id'], e)
@@ -2398,8 +2635,8 @@ def _parse_title_from_filename(filename):
     # For TV shows: strip everything from SxxExx onwards
     name = re.split(r'[Ss]\d{1,2}[Ee]\d{1,2}', name)[0]
     # For movies: strip the release year and everything after — but only a
-    # plausible year (1900..now+2, so "Blade Runner 2049" keeps its number)
-    # and never the leading token (year-titled films like "1917" or "2046")
+    # plausible year (1900..now+2, so "Orbit Station 2049" keeps its number)
+    # and never the leading token (year-titled films like "1917" or "2067")
     cutoff = time.gmtime().tm_year + 2
     for m in re.finditer(r'\b((?:19|20)\d{2})\b', name):
         if m.start() > 0 and 1900 <= int(m.group(1)) <= cutoff:
@@ -2416,7 +2653,7 @@ def _parse_title_from_filename(filename):
         '', name, flags=re.IGNORECASE,
     )
     # Collapse multiple spaces and strip, then drop dangling separators left
-    # by the year/episode splits — "The Lion King (1994)" splits to "The Lion King ("
+    # by the year/episode splits — "The Brass Lantern (1994)" splits to "The Brass Lantern ("
     name = re.sub(r'\s+', ' ', name).strip()
     name = re.sub(r'[\s(\[\-–—]+$', '', name)
     return name
@@ -2431,7 +2668,7 @@ def _normalize_title(title):
 
 
 def _ascii_fold(title):
-    """Strip diacritics so 'Žižek' matches the ASCII 'Zizek' a release name uses."""
+    """Strip diacritics so 'Šárka' matches the ASCII 'Sarka' a release name uses."""
     return unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode()
 
 
@@ -2439,10 +2676,10 @@ def title_match_keys(title):
     """All normalized lookup keys a title should match under.
 
     Scene names handle apostrophes two ways — replaced by a separator
-    (Widow.s.Bay) or dropped entirely (Widows.Bay) — so "Widow's Bay" must
-    index/look up as both 'widow s bay' and 'widows bay'. Diacritics get the
-    same treatment: arr titles keep them ("Žižek!") while release names are
-    ASCII ("zizek"), so an ASCII-folded variant of every key is added too.
+    (Smuggler.s.Cove) or dropped entirely (Smugglers.Cove) — so "Smuggler's Cove"
+    must index/look up as both 'smuggler s cove' and 'smugglers cove'. Diacritics get the
+    same treatment: arr titles keep them ("Šárka!") while release names are
+    ASCII ("sarka"), so an ASCII-folded variant of every key is added too.
     """
     if not title:
         return set()
@@ -2478,8 +2715,8 @@ def title_alias_keys(all_titles):
     Sonarr and Radarr both carry `alternateTitles` — the AKA and translated
     names TheTVDB/TMDB hold for an item — and for non-English content the scene
     release is named in the **original language** while the arr stores the
-    English title. `No.tengo.miedo.S01E01…` against a series Sonarr calls
-    "I'm Not Afraid" matches on nothing, so Triage returned `not_in_library`
+    English title. `Nadie.duerme.S01E01…` against a series Sonarr calls
+    "Nobody Sleeps" matches on nothing, so Triage returned `not_in_library`
     ("no arr has ever heard of this — junk can be deleted") for a series Sonarr
     was actively managing and had already grabbed. That copy invited a delete
     on the only copy of the data.
@@ -2528,13 +2765,13 @@ def arr_year_ok(parsed, row):
 
     Three rules, and each of the three is load-bearing:
 
-    * **A title that *is* a year is not a release year.** "1923", "1883",
-      "1899", "2012" parse their own name as the year, while the arr stores the
-      year the show or film actually came out (1923 → 2022). Skipping the check
+    * **A title that *is* a year is not a release year.** "1917" and
+      "2012" parse their own name as the year, while the arr stores the
+      year the show or film actually came out (2012 → 2009). Skipping the check
       when the token sits inside the parsed title is what stops the gate
       disqualifying the one title it was handed.
     * **Radarr: ±1.** A premiere-vs-wide-release year renders one film either
-      way (Snow White 1937/1938) — the same tolerance `rank_release_matches`
+      way (Rose Red 1937/1938) — the same tolerance `rank_release_matches`
       already applies.
     * **Sonarr: one-sided, and deliberately not ±1.** The arr stores a series'
       *first air* year while a TV release name usually carries the episode's
@@ -2806,6 +3043,86 @@ def _arr_item_folder(conn, cfg, item):
     local_root = conn.get('local_media_path', '') or cfg.get('MEDIA_PATH', '')
     folder = _replace_path_prefix(folder, conn.get('media_path', ''), local_root).rstrip('/')
     return folder if folder.isascii() else unicodedata.normalize('NFC', folder)
+
+
+def _poster_path(item):
+    """The arr's own address for an item's poster (`/MediaCover/1/poster.jpg?…`), or ''."""
+    for im in item.get('images') or []:
+        if str(im.get('coverType') or '').lower() == 'poster' and im.get('url'):
+            return str(im['url'])
+    return ''
+
+
+def arr_title_for_folder(cfg, rel):
+    """The series or movie a library-map title is: `(row, errors)` (2026-11-10).
+
+    `rel` is a folder relative to the library root (`television/Glasshouse`),
+    which is what a map tile is. Matched by folder, like `arr_search` and B15,
+    never by name: a folder's name isn't the arr's title (`Glasshouse` can be Sonarr's
+    `GL4SSHOUSE`). The item whose own folder it is; else the deepest one above it;
+    else the only one below it (a folder of several, say a letter folder, is
+    none). `rel` is only ever compared, never opened.
+
+    `row` is a cached title row (`fetch_arr_all_titles_result`, 120s) or None.
+    `errors` are the instances that didn't answer: with none found, a non-empty
+    list means "couldn't ask", never "not there" (R1).
+    """
+    local = posixpath.normpath(_local_to_abs(_path_norm(rel), cfg.get('MEDIA_PATH', '')))
+    if not local.isascii():
+        local = unicodedata.normalize('NFC', local)
+    rows, errors = fetch_arr_all_titles_result(cfg)
+    above, below = None, []
+    for r in rows:
+        folder = r.get('folder') or ''
+        if not folder:
+            continue
+        if folder == local:
+            return r, errors
+        if local.startswith(folder + '/'):
+            if above is None or len(folder) > len(above['folder']):
+                above = r
+        elif folder.startswith(local + '/'):
+            below.append(r)
+    return (above or (below[0] if len(below) == 1 else None)), errors
+
+
+_POSTER_MAX_BYTES = 2 * 1024 * 1024
+
+
+def fetch_arr_poster(cfg, row):
+    """A title's poster from its own arr, 250px tall: `(bytes, content_type)` or None.
+
+    Asked first at the media-cover route (`/api/v3/mediacover/{id}/poster-250.jpg`,
+    which serves the full poster when the resized one is missing), then at the
+    address the listing gave (`/MediaCover/…`, with its `poster.jpg` asked as
+    `poster-250.jpg`), both with the API key on the **API address**, never the
+    link address (#21). The listing's address is used only as a path on that
+    host: one carrying a scheme or a host of its own is refused, or the arr's
+    key would go wherever it pointed. Decoration, so any failure is None and
+    the map draws initials; a log line names the instance, never an address.
+    """
+    conn = next((c for c in normalize_arr_connections(cfg)
+                 if c['id'] == row.get('connection_id')), None)
+    if not conn or not row.get('arr_id'):
+        return None
+    base = conn['base_url'].rstrip('/')
+    tries = [f"{base}/api/v3/mediacover/{int(row['arr_id'])}/poster-250.jpg"]
+    listed = urllib.parse.urlsplit(row.get('poster') or '')
+    if listed.path and not listed.scheme and not listed.netloc:
+        path = re.sub(r'poster\.jpg$', 'poster-250.jpg', listed.path)
+        tries.append(urllib.parse.urljoin(base + '/', path) + (f"?{listed.query}" if listed.query else ''))
+    for url in tries:
+        try:
+            http_req = urllib.request.Request(url, headers={"X-Api-Key": conn['api_key']})
+            with urllib.request.urlopen(http_req, timeout=8) as resp:
+                ctype = resp.headers.get('Content-Type', '').split(';')[0].strip()
+                data = resp.read(_POSTER_MAX_BYTES + 1)
+            if ctype.startswith('image/') and 0 < len(data) <= _POSTER_MAX_BYTES:
+                return data, ctype
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+    log.debug("No poster from %s for one title", conn['id'])
+    return None
 
 
 def arr_search(cfg, service, file_path):

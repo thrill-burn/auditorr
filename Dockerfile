@@ -27,6 +27,13 @@ COPY --from=frontend-build /build/dist ./frontend/dist
 
 RUN mkdir -p /app/data
 
+# Which build this is, for /api/debug/report's `build` (CI passes both: the
+# commit and the branch or tag). After every RUN, so a new commit rebuilds only
+# this layer and never the pip install above. Empty in a local build.
+ARG AUDITORR_COMMIT=""
+ARG AUDITORR_REF=""
+ENV AUDITORR_COMMIT=$AUDITORR_COMMIT AUDITORR_REF=$AUDITORR_REF
+
 LABEL org.opencontainers.image.title="auditorr"
 LABEL org.opencontainers.image.description="Media library audit tool for qBittorrent + Sonarr/Radarr"
 

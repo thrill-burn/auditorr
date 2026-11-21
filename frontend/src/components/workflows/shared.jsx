@@ -221,11 +221,19 @@ export function IconButton({ onClick, title, pressed, size, children }) {
 // while focused. Mono for paths, sans for titles. size: 'sm' is
 // var(--control-h), 'lg' var(--control-h-lg), as Segmented's. Backfill's was the
 // one hand-copy that drifted: filled and at 70% opacity until typed in.
+// The class a mono field takes when its placeholder is a hint ("paste API key…",
+// "(unchanged — leave blank to keep current)") rather than an example value
+// ("/data/torrents", "http://192.168.1.x:8080"): index.css's .ph-words sets the
+// hint in Geist, while what's typed stays mono. A hint here ends in an ellipsis
+// or opens with a bracket, and an example never does.
+export const placeholderClass = ph => (/(…|\.\.\.)$|^\(/.test(String(ph || '')) ? 'ph-words' : undefined)
+
 export function SearchInput({ value, onChange, placeholder, width = 160, size = 'sm', mono = false }) {
   const [focused, setFocused] = useState(false)
   return (
     <input
       type="text"
+      className="ph-words"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -693,6 +701,74 @@ export function Checkbox({ checked, indeterminate, onChange }) {
   )
 }
 
+// ── Pick one ──────────────────────────────────────────────────────────────────
+// Choosing one release (or torrent) from a list: Trumped's steps 3 and 4,
+// Backfill's releases and the season-pack dialog's. A radio circle, filled in
+// the page's own colour when picked, and the picked row marked by a tint and an
+// edge down its left side, inside a bordered list that scrolls on its own
+// (`PickList`). Trumped's look, which it had alone; Backfill and the season-pack
+// dialog outlined the picked row in a tint of the orange accent instead, which
+// read as a red warning more than a choice (2026-11-12, the user's call).
+export function RadioMark({ on, color = 'var(--accent)', size = 13, style }) {
+  return (
+    <span aria-hidden="true" style={{
+      width: size, height: size, borderRadius: '50%', flexShrink: 0, boxSizing: 'border-box',
+      border: `1.5px solid ${on ? color : 'var(--border2)'}`, background: on ? color : 'transparent',
+      ...style,
+    }} />
+  )
+}
+
+// One row: the radio, then whatever the row says, then `aside` at its right
+// edge (Trumped's match score). `disabled` holds the pick where it is (a grab
+// under way, or made), and the picked row stays marked.
+export function PickRow({ on, onPick, color = 'var(--accent)', disabled = false, last = false, aside, children }) {
+  const pick = () => { if (!disabled) onPick() }
+  return (
+    <div role="radio" aria-checked={on} aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : 0} className="pick-row"
+      onClick={pick}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick() } }}
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px',
+        cursor: disabled ? 'default' : 'pointer',
+        borderBottom: last ? 'none' : '1px solid var(--border)',
+        borderLeft: `2px solid ${on ? color : 'transparent'}`,
+        ...(on ? { background: tint(color, 5) } : null),
+      }}>
+      <RadioMark on={on} color={color} style={{ marginTop: 2 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+      {aside}
+    </div>
+  )
+}
+
+// The list's frame: a bordered box whose rows scroll inside it.
+export function PickList({ label, maxHeight = '60vh', footer, children }) {
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+      <div role="radiogroup" aria-label={label} style={{ maxHeight, overflowY: 'auto' }}>
+        {children}
+      </div>
+      {footer}
+    </div>
+  )
+}
+
+// A release name in a pick row: whole and wrapped, never cut, since it's the
+// thing being vetted. A link to the indexer's page when there is one, which is
+// its own click and doesn't pick the row.
+export function PickName({ name, href }) {
+  const style = { ...MONO_TITLE, display: 'block', lineHeight: 1.45, overflowWrap: 'anywhere' }
+  if (!href) return <div style={style}>{name}</div>
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+      style={{ ...style, textDecoration: 'underline', textDecorationColor: tint('var(--text)', 30), textUnderlineOffset: 2 }}>
+      {name}
+    </a>
+  )
+}
+
 // ── Selection action bar (sticky bottom) ──────────────────────────────────────
 // One line when everything fits. When the buttons outgrow the page width (a big
 // Triage selection offers six or seven), they drop to their own row and wrap
@@ -707,7 +783,7 @@ export function ActionBar({ children, summary }) {
       boxShadow: 'var(--shadow-pop)',
     }}>
       <div title={typeof summary === 'string' ? summary : undefined} style={{
-        flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
+        flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{summary}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 8, minWidth: 0, marginLeft: 'auto' }}>{children}</div>
     </div>
   )
@@ -832,8 +908,8 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
 //              ration-colour rule, and the hairline it always meant to have.
 //   ghost      transparent, dim text: a quiet control beside a louder one.
 //   subtle     a neutral row chip: raised, dim text.
-//   `tone`     any theme colour: its text and hairline, on an 8% wash. Row chips
-//              that carry a hue (Grab, radarr ↗, Dedupe ↗, Failed ↺).
+//   `tone`     any theme colour: its text and hairline, on an 8% wash. Link chips
+//              that carry a hue (radarr ↗, Dedupe ↗).
 //
 // Sizes:
 //   md    every standalone button — action bars, modal footers, page headers,
@@ -841,6 +917,8 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
 //   sm    a small control inside a panel or a sentence (Retry, Select all).
 //   chip  an action inside a row — R8's "action chip", at --font-sm like the
 //         tags it sits beside, so a slot that swaps a chip for a tag keeps its size.
+//         Geist, like every label that's a word (it was mono until 2026-11-10);
+//         `mono` sets a chip whose label is a name, such as a tracker's host.
 //
 // Colours arrive as custom properties and index.css's `.wf-btn` applies them,
 // because an inline `background` would outrank the `:hover` rule. Pass `href`
@@ -859,7 +937,7 @@ export function ConfirmExcludeModal({ patterns, subtitle, note, busy, onCancel, 
 const BUTTON_SIZE = {
   md:   { fontSize: 'var(--font-base)', fontWeight: 600, padding: '8px 16px', borderRadius: 'var(--r)', minHeight: 'var(--control-h-lg)' },
   sm:   { fontSize: 'var(--font-base)', fontWeight: 500, padding: '4px 10px', borderRadius: 'var(--r)', minHeight: 'var(--control-h)' },
-  chip: { fontSize: 'var(--font-sm)', fontWeight: 500, padding: '1px 7px', borderRadius: 'var(--r-sm)', fontFamily: 'var(--mono)' },
+  chip: { fontSize: 'var(--font-sm)', fontWeight: 500, padding: '1px 7px', borderRadius: 'var(--r-sm)' },
 }
 const SQUARE = { md: 'var(--control-h-lg)', sm: 'var(--control-h)' }
 
@@ -875,11 +953,11 @@ const toneLook = c => ({ bg: tint(c, 8), border: tint(c, 30), fg: c, bgHover: ti
 
 export function Button({
   variant = 'secondary', size = 'md', tone, href, target, rel,
-  onClick, disabled, title, ariaLabel, pressed, square = false, style, children,
+  onClick, disabled, title, ariaLabel, pressed, square = false, mono = false, style, children,
 }) {
   const look = tone ? toneLook(tone) : (BUTTON_LOOK[variant] || BUTTON_LOOK.secondary)
   const css = {
-    fontFamily: 'var(--sans)', lineHeight: 1.25, ...(BUTTON_SIZE[size] || BUTTON_SIZE.md),
+    fontFamily: mono ? 'var(--mono)' : 'var(--sans)', lineHeight: 1.25, ...(BUTTON_SIZE[size] || BUTTON_SIZE.md),
     ...(square && SQUARE[size] ? { padding: 0, width: SQUARE[size] } : null),
     '--btn-bg': look.bg, '--btn-border': look.border, '--btn-fg': look.fg,
     '--btn-bg-hover': look.bgHover || look.bg, '--btn-fg-hover': look.fgHover || look.fg,

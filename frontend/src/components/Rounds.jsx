@@ -239,8 +239,9 @@ function Medallion({ l, selected, onSelect }) {
           <Icon name={l.id} size={20} />
         </div>
       </div>
-      {/* The band title is the joke, so it leads; the ladder name stays below
-          in mono so you can still tell which ladder you are looking at. */}
+      {/* The band title is the joke, so it leads; the ladder name stays below,
+          small and dim, so you can still tell which ladder you are looking at.
+          It's a name, so Geist; the figure under it is mono. */}
       <div style={{ textAlign: 'center', minWidth: 0, width: '100%' }}>
         <div title={l.tier_label || `${l.name} — not started`} style={{
           fontSize: 'var(--font-md)', fontWeight: 500, lineHeight: 1.25,
@@ -250,7 +251,7 @@ function Medallion({ l, selected, onSelect }) {
           {l.tier_label || '—'}
         </div>
         <div style={{
-          fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 3,
+          fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 3,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {l.name}
@@ -338,7 +339,7 @@ function LadderDetail({ l, onClose }) {
           )
         })}
       </div>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
         {l.maxed
           ? 'Maxed. There is nothing above this one.'
           : `Next rung ${l.next_n} of ${l.tiers_total} — ${l.next_label} at ${l.next_at_label}.`}
@@ -363,11 +364,11 @@ function RankReadout({ rank }) {
         {points.toLocaleString()}<span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontWeight: 400 }}> pts</span>
       </div>
       <div style={{ marginTop: 6 }}><Track pct={rank.pct} /></div>
-      <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 5 }}>
+      <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 5 }}>
         {rank.next_name
-          ? `${rank.next_name} at ${rank.next_at.toLocaleString()}`
+          ? <>{rank.next_name}<span style={{ fontFamily: 'var(--mono)' }}> at {rank.next_at.toLocaleString()}</span></>
           : 'nothing left to become'}
-        {rank.total_ranks ? ` · rank ${rank.index + 1} of ${rank.total_ranks}` : ''}
+        {rank.total_ranks ? <span style={{ fontFamily: 'var(--mono)' }}> · rank {rank.index + 1} of {rank.total_ranks}</span> : ''}
       </div>
     </div>
   )
@@ -458,8 +459,8 @@ function Prizes({ data }) {
               </span>
               <span style={{ minWidth: 180, display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <span style={{ fontSize: 'var(--font-md)', color: 'var(--text)', fontWeight: 500 }}>{l.next_label}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-                  {l.name} · rung {l.next_n} of {l.tiers_total}
+                <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+                  {l.name}<span style={{ fontFamily: 'var(--mono)' }}> · rung {l.next_n} of {l.tiers_total}</span>
                 </span>
               </span>
               <span style={{ flex: 1, minWidth: 60 }}><Track pct={l.pct} height={3} /></span>
@@ -606,8 +607,9 @@ function Timeline({ data }) {
     return {
       key: `r${i}-${e.id}-${e.n}`, at: e.at, icon: e.id,
       label: t ? t.label : e.id,
-      meta: l ? `${l.name} · rung ${e.n} of ${l.tiers_total}` : `rung ${e.n}`,
-      metaMono: true,
+      meta: l
+        ? <>{l.name}<span style={{ fontFamily: 'var(--mono)' }}> · rung {e.n} of {l.tiers_total}</span></>
+        : <span style={{ fontFamily: 'var(--mono)' }}>rung {e.n}</span>,
       // What the rung actually took. The name is a punchline and the rung
       // number only says where it sits — neither says 25 TB, so a record built
       // from the two answered "when" and never "for what". `terms` rather than
@@ -709,7 +711,6 @@ function Timeline({ data }) {
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{e.label}</span>
                 <span style={{
-                  ...(e.metaMono ? { fontFamily: 'var(--mono)' } : null),
                   fontSize: 'var(--font-sm)', color: 'var(--text-dim)',
                   flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{e.meta}</span>
@@ -853,13 +854,13 @@ function WorkflowCard({ row, onNavigate, compact }) {
         {/* What the workflow does lives on its own page; here it is the name's
             hover text, for whoever is new to the page. */}
         <span title={row.teaching} style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>{row.label}</span>
-        {/* The state as coloured mono text, not an outlined pill (2026-09-23):
+        {/* The state as coloured text, not an outlined pill (2026-09-23):
             a status nothing can click is text — Cleanup's "only copy", File
             Explorer's row tags, Audit History's types — and an outlined shape
-            beside the card's one real button read as a second control. */}
-        <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: meta.color }}>{meta.label}</span>
-        {/* Prose ("Clear once, then watch"), so sans. The state beside it is
-            mono: a status label is closer to data than to a sentence. */}
+            beside the card's one real button read as a second control. It's a
+            word, so Geist (2026-11-10; it was mono, as the pill had been). */}
+        <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: meta.color }}>{meta.label}</span>
+        {/* Prose ("Clear once, then watch"), so sans, like the state beside it. */}
         <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>{row.nature}</span>
       </div>
 
@@ -941,9 +942,9 @@ function WorkflowCard({ row, onNavigate, compact }) {
             <span style={{ fontSize: 'var(--font-md)', fontWeight: 500, color: 'var(--text)' }}>
               Next: {row.next_prize.label}
             </span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+            <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
               {row.next_prize.ladder}
-              {row.next_prize.n ? ` · rung ${row.next_prize.n} of ${row.next_prize.of}` : ''}
+              {row.next_prize.n ? <span style={{ fontFamily: 'var(--mono)' }}> · rung {row.next_prize.n} of {row.next_prize.of}</span> : ''}
             </span>
             <Track pct={row.next_prize.pct} height={3} />
             <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
@@ -1139,7 +1140,7 @@ export default function Rounds({ onNavigate }) {
       {data.stage !== 'setup' && <Timeline data={data} />}
 
       {health?.score != null && (
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
           Library health {health.score} · {health.status} · {data.audits} audit{data.audits === 1 ? '' : 's'} on record
           {data.streak_90 > 0 && ` · ${data.streak_90} day${data.streak_90 === 1 ? '' : 's'} at 90+`}
         </div>

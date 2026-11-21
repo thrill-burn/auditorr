@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api'
 import { tint } from '../utils'
-import { Button, Segmented, Disclosure } from './workflows/shared'
+import { Button, Segmented, Disclosure, placeholderClass } from './workflows/shared'
 
 function DataBrowser({ onSelectMedia, onSelectTorrents }) {
   const [result, setResult] = useState(null)
@@ -11,11 +11,11 @@ function DataBrowser({ onSelectMedia, onSelectTorrents }) {
   }, [])
 
   if (!result) return (
-    <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 6 }}>Browsing /data…</div>
+    <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginTop: 6 }}>Browsing /data…</div>
   )
 
   if (result.missing || result.dirs.length === 0) return (
-    <div style={{ marginTop: 6, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', lineHeight: 1.55 }}>
+    <div style={{ marginTop: 6, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', lineHeight: 1.55 }}>
       {result.missing
         ? <span style={{ color: '#f59e0b' }}>⚠ /data is not mounted or is empty. Check your Docker volume configuration — auditorr expects your data to be mounted at /data.</span>
         : <span style={{ color: 'var(--text-dim)' }}>No subdirectories found in /data.</span>
@@ -50,7 +50,7 @@ function Field({ label, hint, type = 'text', value, onChange, placeholder, style
       <label style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)' }}>{label}</label>
       {hint && <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45 }}>{hint}</span>}
       <input
-        type={type} value={value ?? ''} placeholder={placeholder}
+        type={type} value={value ?? ''} placeholder={placeholder} className={placeholderClass(placeholder)}
         onChange={e => onChange(e.target.value)}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
         style={{
@@ -188,14 +188,14 @@ function Step1({ data, onChange, onNext, onSkip }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: sourceInfo ? 8 : 16 }}>
         <Button onClick={handleTest}>Test Connection</Button>
         {testStatus && (testStatus.loading || !testStatus.ok) && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: testStatus.loading ? 'var(--text-dim)' : 'var(--red)' }}>
             {testStatus.loading ? 'Testing…' : '✗ ' + testStatus.msg}
           </span>
         )}
       </div>
       {sourceInfo && testStatus?.ok && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--green)' }}>
+          <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--green)' }}>
             {isQui
               ? `✓ Connected · qui${sourceInfo.version ? ` v${sourceInfo.version}` : ''} · ${sourceInfo.summary}`
               : `✓ Connected · qBittorrent ${sourceInfo.version || ''}`}
@@ -206,7 +206,7 @@ function Step1({ data, onChange, onNext, onSkip }) {
                 {sourceInfo.skipped.length} skipped
               </Disclosure>
               {quiSkippedOpen && sourceInfo.skipped.map((inst, i) => (
-                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', paddingLeft: 10, lineHeight: 1.6 }}>
+                <div key={i} style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', paddingLeft: 10, lineHeight: 1.6 }}>
                   {inst.name || inst.id}: {inst._skip_reason}
                 </div>
               ))}
@@ -285,8 +285,8 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
               <Button size="sm" onClick={handleFetchSavePath} disabled={!hasHost}>
                 {fetchSavePathStatus === 'loading' ? 'Fetching…' : `Fetch from ${srcLabel}`}
               </Button>
-              {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No torrents found in {srcLabel}</span>}
-              {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ Could not connect</span>}
+              {fetchSavePathStatus === 'empty' && <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>No torrents found in {srcLabel}</span>}
+              {fetchSavePathStatus === 'error'  && <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ Could not connect</span>}
             </>
           )
         })()}
@@ -299,7 +299,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         style={{ marginBottom: 6 }}
       />
       {pathStatus && !pathStatus.loading && !pathStatus.error && (
-        <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: mediaOk ? 'var(--green)' : 'var(--red)' }}>
+        <div style={{ marginBottom: 12, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: mediaOk ? 'var(--green)' : 'var(--red)' }}>
           {mediaOk ? '✓ Path exists' : '✗ ' + (pathStatus.media_path?.message || 'Path not found')}
         </div>
       )}
@@ -311,7 +311,7 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
         style={{ marginBottom: 6 }}
       />
       {pathStatus && !pathStatus.loading && !pathStatus.error && (
-        <div style={{ marginBottom: 12, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: localOk ? 'var(--green)' : 'var(--red)' }}>
+        <div style={{ marginBottom: 12, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: localOk ? 'var(--green)' : 'var(--red)' }}>
           {localOk ? '✓ Path exists' : '✗ ' + (pathStatus.local_path?.message || 'Path not found')}
         </div>
       )}
@@ -332,10 +332,10 @@ function Step2({ data, onChange, onNext, onBack, onSkip, onEarlyStart }) {
           <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Verify these paths are visible inside the container</span>
         )}
         {pathStatus?.loading && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Testing…</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>Testing…</span>
         )}
         {pathStatus?.error && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ {pathStatus.error}</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--red)' }}>✗ {pathStatus.error}</span>
         )}
       </div>
 
@@ -388,7 +388,7 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Button onClick={handleTestSonarr}>Test Sonarr</Button>
             {sonarrStatus && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: sonarrStatus.loading ? 'var(--text-dim)' : sonarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: sonarrStatus.loading ? 'var(--text-dim)' : sonarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                 {sonarrStatus.loading ? 'Testing…' : (sonarrStatus.ok ? '✓ ' : '✗ ') + sonarrStatus.msg}
               </span>
             )}
@@ -402,7 +402,7 @@ function Step3({ data, onChange, onBack, onComplete, onSkip }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Button onClick={handleTestRadarr}>Test Radarr</Button>
             {radarrStatus && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: radarrStatus.loading ? 'var(--text-dim)' : radarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
+              <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: radarrStatus.loading ? 'var(--text-dim)' : radarrStatus.ok ? 'var(--green)' : 'var(--red)' }}>
                 {radarrStatus.loading ? 'Testing…' : (radarrStatus.ok ? '✓ ' : '✗ ') + radarrStatus.msg}
               </span>
             )}
@@ -460,7 +460,7 @@ export default function SetupWizard({ onComplete, onSkip, onEarlyStart }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24 }}>
           <img src="/favicon.ico" alt="" style={{ width: 22, height: 22, opacity: 0.85 }} onError={e => { e.currentTarget.style.display = 'none' }} />
           <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)', letterSpacing: 0.5 }}>auditorr</span>
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginLeft: 4 }}>setup</span>
+          <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginLeft: 4 }}>setup</span>
         </div>
 
         <StepIndicator current={step} />

@@ -4,7 +4,7 @@ import { FixedSizeList } from 'react-window'
 import AutoSizer from 'react-virtualized-auto-sizer'
 import { api } from '../api'
 import { formatBytes, tint } from '../utils'
-import { CHANGE_CATEGORIES } from './changeCategories'
+import { CHANGE_CATEGORIES, ARRIVALS } from './changeCategories'
 import { Button, Segmented, SearchInput, Dot } from './workflows/shared'
 
 function useDebounce(value, delay) {
@@ -25,10 +25,28 @@ const TRIGGER_LABELS = {
 
 const ROW_HEIGHT = 36
 const COL_HEADER_HEIGHT = 28
+// Type is wide enough for an arrival's words ("New · not seeded").
+const COLUMNS = '200px 80px 136px 1fr 72px'
 
 function fmtDate(iso) {
   const d = new Date(iso)
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+function fmtDay(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return `${MONTHS[m - 1]} ${d}, ${y}`
+}
+
+// A run's day as the server wrote it. `ran_at` is the server's local time with
+// no offset, which the browser reads as its own local time, so this is the day
+// the Date column shows and the day the New in the library card counted it on.
+// Parsing a picked day with `new Date('YYYY-MM-DD')` read it as UTC midnight,
+// so away from UTC the filter took in part of the day beside it and left out
+// part of its own.
+function runDay(row) {
+  return String(row.ran_at).slice(0, 10)
 }
 
 function fmtDuration(s) {
@@ -46,7 +64,7 @@ function ChangeRow({ index, style, data }) {
     <div style={{
       ...style,
       display: 'grid',
-      gridTemplateColumns: '200px 80px 120px 1fr 72px',
+      gridTemplateColumns: COLUMNS,
       alignItems: 'center',
       padding: '0 16px',
       borderBottom: '1px solid var(--border)',
@@ -87,8 +105,8 @@ function ChangeRow({ index, style, data }) {
           fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 500, color: 'var(--text)',
           whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 7,
         }}>
-          <span className="ui-status-dot" style={{ width: 6, height: 6, background: row.cat.color }} />
-          {row.cat.label}
+          <span className="ui-status-dot" style={{ width: 6, height: 6, background: row.color }} />
+          {row.label}
         </span>
       </div>
       {/* Path */}
@@ -122,12 +140,14 @@ function ChangeRow({ index, style, data }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function ChangeLog({ onNavigate }) {
+// `initialDay` and `initialCategories` open the page on one day's changes of
+// some kinds: a day's bar on the Dashboard's New in the library card.
+export default function ChangeLog({ onNavigate, initialDay = null, initialCategories = null }) {
   const [entries,   setEntries]   = useState(null)
   const [error,     setError]     = useState(null)
-  const [catFilter, setCatFilter] = useState([]) // selected category keys; empty = all
-  const [dateFrom,  setDateFrom]  = useState('')
-  const [dateTo,    setDateTo]    = useState('')
+  const [catFilter, setCatFilter] = useState(initialCategories || []) // selected category keys; empty = all
+  const [dateFrom,  setDateFrom]  = useState(initialDay || '')
+  const [dateTo,    setDateTo]    = useState(initialDay || '')
   const [pathQuery, setPathQuery] = useState('')
   const [copied,    setCopied]    = useState(false)
   const debouncedPath = useDebounce(pathQuery, 150)
@@ -148,11 +168,14 @@ export default function ChangeLog({ onNavigate }) {
           cat.tab == null || item.tab === cat.tab
         )
         for (const item of items) {
+          const how = cat.key === 'new_media' && item.arrived ? ARRIVALS[item.arrived] : null
           rows.push({
             ran_at:           entry.ran_at,
             trigger:          entry.trigger,
             duration_seconds: entry.duration_seconds ?? null,
             cat,
+            label: how ? how.label : cat.label,
+            color: how ? how.color : cat.color,
             path: item.path,
             tab:  item.tab,
             size: item.size ?? null,
@@ -165,15 +188,8 @@ export default function ChangeLog({ onNavigate }) {
 
   const rows = useMemo(() => {
     let r = allRows
-    if (dateFrom) {
-      const from = new Date(dateFrom).getTime()
-      r = r.filter(row => new Date(row.ran_at).getTime() >= from)
-    }
-    if (dateTo) {
-      // include the full selected day
-      const to = new Date(dateTo).getTime() + 86400_000
-      r = r.filter(row => new Date(row.ran_at).getTime() < to)
-    }
+    if (dateFrom) r = r.filter(row => runDay(row) >= dateFrom)
+    if (dateTo)   r = r.filter(row => runDay(row) <= dateTo)
     if (catFilter.length) r = r.filter(row => catFilter.includes(row.cat.key))
     if (debouncedPath.trim()) {
       const q = debouncedPath.trim().toLowerCase()
@@ -186,7 +202,7 @@ export default function ChangeLog({ onNavigate }) {
     const lines = [
       'Date,Trigger,Type,Path,Size',
       ...rows.map(r =>
-        `"${fmtDate(r.ran_at)}","${r.trigger ?? ''}","${r.cat.label}","${r.path}","${r.size ?? ''}"`
+        `"${fmtDate(r.ran_at)}","${r.trigger ?? ''}","${r.label}","${r.path}","${r.size ?? ''}"`
       ),
     ]
     const a = document.createElement('a')
@@ -216,6 +232,33 @@ export default function ChangeLog({ onNavigate }) {
     }
     return s
   }, [rows])
+
+  // What each scan's 50-per-kind cap left out of the rows the date and kind
+  // filters pass (`totals`, uncapped, since 2026-11-20): a folder of 200 files
+  // renamed lists 50 of them. A path search can't see the rest, so they're
+  // counted without it. Older entries have no totals.
+  const unlisted = useMemo(() => {
+    let n = 0
+    for (const entry of entries || []) {
+      const totals = entry.diff.totals
+      if (!totals) continue
+      const day = runDay(entry)
+      if ((dateFrom && day < dateFrom) || (dateTo && day > dateTo)) continue
+      for (const cat of CHANGE_CATEGORIES) {
+        if (catFilter.length && !catFilter.includes(cat.key)) continue
+        const byTab = totals[cat.diffKey] || {}
+        const total = cat.tab ? (byTab[cat.tab] || 0) : Object.values(byTab).reduce((a, b) => a + b, 0)
+        const listed = (entry.diff[cat.diffKey] || []).filter(i => cat.tab == null || i.tab === cat.tab).length
+        n += Math.max(0, total - listed)
+      }
+    }
+    return n
+  }, [entries, dateFrom, dateTo, catFilter])
+
+  // The oldest day the log holds, so a day before it says so rather than
+  // reading as a day nothing happened.
+  const oldestDay = entries?.length ? runDay(entries[entries.length - 1]) : null
+  const beforeLog = !!(oldestDay && dateTo && dateTo < oldestDay)
 
   const itemData = useMemo(() => ({ rows, onNavigate }), [rows, onNavigate])
 
@@ -293,7 +336,7 @@ export default function ChangeLog({ onNavigate }) {
 
       {/* Error */}
       {error && (
-        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--red)' }}>
+        <div style={{ padding: '12px 16px', borderRadius: 'var(--r)', background: tint('var(--red)', 7), border: `1px solid ${tint('var(--red)', 19)}`, fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--red)' }}>
           Failed to load change log: {error}
         </div>
       )}
@@ -313,14 +356,18 @@ export default function ChangeLog({ onNavigate }) {
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)' }}>
               {allRows.length === 0
                 ? 'No changes recorded yet. Changes appear after two or more successful audits.'
-                : 'No entries match the current filters.'}
+                : beforeLog
+                  ? `The change log goes back to ${fmtDay(oldestDay)}, so it holds nothing from these dates.`
+                  : unlisted > 0
+                    ? `${unlisted.toLocaleString()} ${unlisted === 1 ? 'change' : 'changes'} in these scans weren't listed: each scan lists 50 of each kind, and the search can't see the rest.`
+                    : 'No entries match the current filters.'}
             </div>
           ) : (
             <>
               {/* Column headers */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '200px 80px 120px 1fr 72px',
+                gridTemplateColumns: COLUMNS,
                 padding: '5px 16px',
                 height: COL_HEADER_HEIGHT,
                 borderBottom: '1px solid var(--border)',
@@ -359,9 +406,14 @@ export default function ChangeLog({ onNavigate }) {
       )}
 
       {!error && entries != null && rows.length > 0 && (
-        <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'right' }}>
+        <div style={{ marginTop: 8, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', textAlign: 'right' }}>
           {rows.length.toLocaleString()} {rows.length === 1 ? 'change' : 'changes'}
           {entries.length > 0 && ` across ${entries.length.toLocaleString()} ${entries.length === 1 ? 'audit' : 'audits'}`}
+          {unlisted > 0 && (
+            <span style={{ color: 'var(--text)' }}>
+              {` · ${unlisted.toLocaleString()} more weren't listed (each scan lists 50 of each kind${debouncedPath.trim() ? ', and the search can\'t see the rest' : ''})`}
+            </span>
+          )}
         </div>
       )}
     </div>

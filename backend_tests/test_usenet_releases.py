@@ -73,7 +73,7 @@ def test_backfill_never_offers_a_usenet_release():
     """The Usenet copy outranks the torrent by custom format score, so before
     the fix it was the run's pick, the one the row's Grab button sends."""
     result = _generate([_release('nzb', 'NZBgeek', protocol='usenet', cf=100),
-                        _release('tor', 'Aither')])
+                        _release('tor', 'Arvel')])
 
     assert _guids(result) == ['tor']
     assert result['best_release']['guid'] == 'tor'
@@ -88,13 +88,13 @@ def test_a_film_only_on_usenet_is_not_found():
 
 def test_a_release_that_does_not_say_its_protocol_is_still_offered():
     """Absence is not evidence: an arr that left the field out keeps its releases."""
-    result = _generate([_release('tor', 'Aither', protocol=None)])
+    result = _generate([_release('tor', 'Arvel', protocol=None)])
 
     assert _guids(result) == ['tor']
 
 
 def test_protocol_is_read_case_insensitively():
-    result = _generate([_release('nzb', 'NZBgeek', protocol='Usenet'), _release('tor', 'Aither')])
+    result = _generate([_release('nzb', 'NZBgeek', protocol='Usenet'), _release('tor', 'Arvel')])
 
     assert _guids(result) == ['tor']
 
@@ -102,7 +102,7 @@ def test_protocol_is_read_case_insensitively():
 def test_a_usenet_listing_never_satisfies_must_also_be_seeding_on():
     """*Must also be seeding on* means a tracker. The same release on a Usenet
     indexer is not a seed anywhere."""
-    result = _generate([_release('tor', 'Aither'), _release('nzb', 'NZBgeek', protocol='usenet')],
+    result = _generate([_release('tor', 'Arvel'), _release('nzb', 'NZBgeek', protocol='usenet')],
                        seeding_on=['NZBgeek'])
 
     assert result['status'] == 'not_found'
@@ -128,19 +128,19 @@ def _indexers(by_base_url):
 
 def test_usenet_indexers_are_left_out_of_the_pickers_and_named():
     answers = {
-        'http://mv:7878': [{'name': 'Aither', 'protocol': 'torrent'},
+        'http://mv:7878': [{'name': 'Arvel', 'protocol': 'torrent'},
                            {'name': 'NZBgeek', 'protocol': 'usenet'},
                            {'name': 'Shared', 'protocol': 'torrent'},
                            {'name': 'Older', 'implementation': 'Torznab'}],
         'http://tv:8989': [{'name': 'NZBgeek', 'protocol': 'usenet'},
                            {'name': 'Shared', 'protocol': 'usenet'},
-                           {'name': 'Aither', 'protocol': 'torrent'}],
+                           {'name': 'Arvel', 'protocol': 'torrent'}],
     }
     with patch('arr._arr_get', side_effect=_indexers(answers)):
         names, usenet = arr.fetch_arr_indexers(_TWO_ARRS)
 
     # De-duplicated across both arrs; a missing protocol stays listed.
-    assert names == ['Aither', 'Shared', 'Older']
+    assert names == ['Arvel', 'Shared', 'Older']
     # A name some arr has as a torrent indexer is never cleared from a choice.
     assert usenet == ['NZBgeek']
 
@@ -148,14 +148,14 @@ def test_usenet_indexers_are_left_out_of_the_pickers_and_named():
 def test_an_arr_that_did_not_answer_names_no_usenet_indexers():
     """The page clears only names in `usenet`. An arr that did not answer leaves
     its torrent indexers out of `names` too, and those choices must survive."""
-    answers = {'http://mv:7878': [{'name': 'Aither', 'protocol': 'torrent'}],
+    answers = {'http://mv:7878': [{'name': 'Arvel', 'protocol': 'torrent'}],
                'http://tv:8989': OSError('timed out')}
     with patch('arr._arr_get', side_effect=_indexers(answers)):
-        assert arr.fetch_arr_indexers(_TWO_ARRS) == (['Aither'], [])
+        assert arr.fetch_arr_indexers(_TWO_ARRS) == (['Arvel'], [])
 
 
 def test_the_indexers_endpoint_ships_both_lists():
-    answers = {'http://mv:7878': [{'name': 'Aither', 'protocol': 'torrent'},
+    answers = {'http://mv:7878': [{'name': 'Arvel', 'protocol': 'torrent'},
                                   {'name': 'NZBgeek', 'protocol': 'usenet'}],
                'http://tv:8989': []}
     with patch.object(app, 'AUDITORR_SECRET', ''), \
@@ -164,4 +164,4 @@ def test_the_indexers_endpoint_ships_both_lists():
          patch('arr._arr_get', side_effect=_indexers(answers)):
         body = app.app.test_client().get('/api/workflows/indexers', environ_base=_ENV).get_json()
 
-    assert body == {'status': 'success', 'indexers': ['Aither'], 'usenet': ['NZBgeek']}
+    assert body == {'status': 'success', 'indexers': ['Arvel'], 'usenet': ['NZBgeek']}

@@ -209,7 +209,7 @@ class QbitTrackerFailureTests(unittest.TestCase):
     """Both were `['Unknown']`, so a scan where some tracker calls failed moved
     those torrents' cumulative upload out of their trackers for one scan. The
     next scan moved it back, and the upload chart read the return as new upload
-    (3.9 TB on a 94 GB day, the reference box, 2026-10-11)."""
+    (terabytes on a day that uploaded under a hundred GB)."""
 
     def _run(self, client_cls=_FakeQbtClient, fail_trackers=()):
         client = client_cls(
@@ -893,8 +893,8 @@ class CompletionFlagInSourceTests(unittest.TestCase):
         """CLEANUP C4a. With *Append .!qB extension to incomplete files* on, the
         on-disk name is `Foo.mkv.!qB` while the listing reports `Foo.mkv`, so
         path equality fails and a file being actively written is offered for
-        `rm`. The option is off on the reference box and cannot be measured
-        there, so both spellings are claimed defensively."""
+        `rm`. The option was off everywhere this was checked and couldn't be
+        measured, so both spellings are claimed defensively."""
         file_map, _, _, _ = self._map(
             [_torrent('bbb', 'Bravo', state='downloading', progress=0.1)],
             {'bbb': ['Bravo/b.mkv']})
@@ -911,7 +911,7 @@ class CompletionFlagInSourceTests(unittest.TestCase):
     def test_an_incomplete_directory_is_claimed_c4b(self):
         """CLEANUP C4b. `save_path` is the *final* location; while downloading,
         the bytes are under the client's temp path, which `content_path`
-        follows. On the reference box that temp path is outside LOCAL_PATH so
+        follows. On the usual layout that temp path is outside LOCAL_PATH so
         nothing is walked — but TRaSH's layout is a recommendation, not a
         guarantee, and where it sits inside LOCAL_PATH the walk sees files the
         map does not have."""
@@ -936,8 +936,8 @@ class ContentPathShapeTests(unittest.TestCase):
             ['/dl/Bravo/b.mkv', '/dl/Bravo/subs/b.srt'])
 
     def test_a_single_file_torrent_inside_a_release_folder_is_the_file(self):
-        """All 8 of 200 completed torrents on the reference box where
-        `content_path != save_path/name` are this shape: qBittorrent resolves
+        """Every completed torrent checked where
+        `content_path != save_path/name` is this shape: qBittorrent resolves
         `content_path` to the file while `save_path/name` is the folder. Treating
         it as a directory to walk returns nothing for every one of them."""
         self.assertEqual(

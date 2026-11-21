@@ -7,7 +7,7 @@ import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   WorkflowPage, WorkflowHeader, WorkflowError, WorkflowWarning, ArrErrorsWarning, WorkflowCrossLink,
   Checkbox, Spinner, SpinKeyframes, Button, Disclosure, QualityChip, MatchChips, MONO_TITLE, tint,
-  regKey, RegistrationWarning, SearchInput,
+  regKey, RegistrationWarning, SearchInput, RadioMark, PickRow, PickList, PickName,
 } from './shared'
 
 const ACCENT = 'var(--green)'
@@ -108,26 +108,16 @@ function CandidateRow({ cand, selected, onSelect }) {
   const name = cand.name || cand.title || ''
   const sub  = cand.tracker || cand.indexer || ''
   return (
-    <div onClick={onSelect} style={{
-      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', cursor: 'pointer',
-      borderBottom: '1px solid var(--border)',
-      background: selected ? tint(ACCENT, 5) : 'transparent',
-      borderLeft: `2px solid ${selected ? ACCENT : 'transparent'}`,
-    }}>
-      <span style={{ width: 13, height: 13, marginTop: 2, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {/* Full name, wrapped — the release name is the thing being vetted, so it must never truncate */}
-        <div style={{ ...MONO_TITLE, lineHeight: 1.45, overflowWrap: 'anywhere' }}>{name}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
-          {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
-          <MatchChips match={cand.match} fields={MATCH_FIELDS} />
-          {sub && <span style={{ ...meta, color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{sub}</span>}
-          {cand.seeders != null && <span style={{ ...meta, color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders}S</span>}
-          <span style={meta}>{formatBytes(cand.size)}</span>
-        </div>
+    <PickRow on={selected} onPick={onSelect} color={ACCENT} aside={<ScoreBadge score={cand.match_score} />}>
+      <PickName name={name} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+        {cand.quality_name && <QualityChip label={cand.quality_name} hdr={cand.hdr} />}
+        <MatchChips match={cand.match} fields={MATCH_FIELDS} />
+        {sub && <span style={{ ...meta, color: cand.pm_tracker ? ACCENT : 'var(--text-dim)' }}>{sub}</span>}
+        {cand.seeders != null && <span style={{ ...meta, color: cand.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{cand.seeders}S</span>}
+        <span style={meta}>{formatBytes(cand.size)}</span>
       </div>
-      <ScoreBadge score={cand.match_score} />
-    </div>
+    </PickRow>
   )
 }
 
@@ -138,7 +128,7 @@ function NoneRow({ selected, onSelect, label }) {
       background: selected ? 'var(--surface3)' : 'transparent',
       borderLeft: `2px solid ${selected ? 'var(--text-dim)' : 'transparent'}`,
     }}>
-      <span style={{ width: 13, height: 13, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? 'var(--text-dim)' : 'var(--border2)'}`, background: selected ? 'var(--text-dim)' : 'transparent' }} />
+      <RadioMark on={selected} color="var(--text-dim)" />
       <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{label}</span>
     </div>
   )
@@ -163,7 +153,7 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
       boxShadow: 'var(--elev-1)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ width: 14, height: 14, borderRadius: '50%', flexShrink: 0, border: `1.5px solid ${selected ? ACCENT : 'var(--border2)'}`, background: selected ? ACCENT : 'transparent' }} />
+        <RadioMark on={selected} color={ACCENT} size={14} />
         <span style={{ fontSize: 'var(--font-md)', fontWeight: 700, color: 'var(--text)' }}>Grab this one</span>
         <span style={{ fontSize: 'var(--font-sm)', color: where.color }}>· {where.text}</span>
       </div>
@@ -187,11 +177,11 @@ function RecommendedRelease({ cand, selected, onSelect, indexer }) {
 // (TR20). A tracker spells names its own way, so the one the user came for can
 // score as a near match or not at all — it has to be reachable anyway.
 const LIST_HEADER = {
-  ...meta, position: 'sticky', top: 0, zIndex: 1, padding: '6px 12px',
+  ...meta, fontFamily: 'var(--sans)', position: 'sticky', top: 0, zIndex: 1, padding: '6px 12px',
   background: 'var(--surface2)', borderBottom: '1px solid var(--border)',
 }
 
-function CandidateList({ rows, keyOf, chosenKey, onChoose, indexer, othersLabel, isTail, tailLabel, noneLabel, filterLabel }) {
+function CandidateList({ label, rows, keyOf, chosenKey, onChoose, indexer, othersLabel, isTail, tailLabel, noneLabel, filterLabel }) {
   const [filter, setFilter] = useState('')
   const q = filter.trim().toLowerCase()
   const text = r => `${r.name || r.title || ''} ${r.tracker || r.indexer || ''}`.toLowerCase()
@@ -211,30 +201,27 @@ function CandidateList({ rows, keyOf, chosenKey, onChoose, indexer, othersLabel,
           {q && <span style={meta}>{shown.length} of {rows.length}</span>}
         </div>
       )}
-      <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-        <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-          {sections.map(([label, rs]) => (
-            <React.Fragment key={label || 'all'}>
-              {label && <div style={LIST_HEADER}>{label} · {rs.length}</div>}
-              {rs.map(r => (
-                <CandidateRow key={keyOf(r)} cand={r}
-                  selected={chosenKey != null && chosenKey === keyOf(r)}
-                  onSelect={() => onChoose(r)} />
-              ))}
-            </React.Fragment>
-          ))}
-          {q && !shown.length && (
-            <div style={{ padding: '8px 12px', fontSize: 'var(--font-base)', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
-              Nothing matches “{filter.trim()}”.
-            </div>
-          )}
-        </div>
-        {noneLabel && (
-          <NoneRow label={noneLabel}
-            selected={chosenKey == null}
-            onSelect={() => onChoose(null)} />
+      <PickList label={label} footer={noneLabel && (
+        <NoneRow label={noneLabel}
+          selected={chosenKey == null}
+          onSelect={() => onChoose(null)} />
+      )}>
+        {sections.map(([heading, rs]) => (
+          <React.Fragment key={heading || 'all'}>
+            {heading && <div style={LIST_HEADER}>{heading} · {rs.length}</div>}
+            {rs.map(r => (
+              <CandidateRow key={keyOf(r)} cand={r}
+                selected={chosenKey != null && chosenKey === keyOf(r)}
+                onSelect={() => onChoose(r)} />
+            ))}
+          </React.Fragment>
+        ))}
+        {q && !shown.length && (
+          <div style={{ padding: '8px 12px', fontSize: 'var(--font-base)', color: 'var(--text-dim)', borderBottom: '1px solid var(--border)' }}>
+            Nothing matches “{filter.trim()}”.
+          </div>
         )}
-      </div>
+      </PickList>
     </div>
   )
 }
@@ -293,17 +280,19 @@ const HEALTH = {
 }
 
 const cell = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', flexShrink: 0 }
+// A header, a link state or a tracker's health: words in the same cell size.
+const wordCell = { ...cell, fontFamily: 'var(--sans)' }
 
 function GroupTable({ torrents }) {
   const showInstance = torrents.some(t => t.instance_name)
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-        <span style={{ ...cell, width: 84 }}>library link</span>
-        <span style={{ ...cell, flex: 1, minWidth: 0 }}>torrent</span>
-        <span style={{ ...cell, width: 150, textAlign: 'right' }}>tracker</span>
-        <span style={{ ...cell, width: 64, textAlign: 'right' }}>size</span>
-        <span style={{ ...cell, width: 96, textAlign: 'right' }}>seeded · up</span>
+        <span style={{ ...wordCell, width: 84 }}>library link</span>
+        <span style={{ ...wordCell, flex: 1, minWidth: 0 }}>torrent</span>
+        <span style={{ ...wordCell, width: 150, textAlign: 'right' }}>tracker</span>
+        <span style={{ ...wordCell, width: 64, textAlign: 'right' }}>size</span>
+        <span style={{ ...wordCell, width: 96, textAlign: 'right' }}>seeded · up</span>
       </div>
       {torrents.map(t => {
         const link = LINK_STATE[String(t.hardlinked ?? null)]
@@ -311,7 +300,7 @@ function GroupTable({ torrents }) {
         return (
           <div key={regKey(t)} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
             <span title={t.hardlinked === false && t.only_copy_bytes ? `${link.title} (${formatBytes(t.only_copy_bytes)})` : link.title}
-              style={{ ...cell, width: 84, fontSize: 'var(--font-sm)', fontWeight: 700, color: link.color }}>
+              style={{ ...wordCell, width: 84, fontSize: 'var(--font-sm)', fontWeight: 700, color: link.color }}>
               {link.mark}
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -322,11 +311,11 @@ function GroupTable({ torrents }) {
               </div>
             </div>
             <div style={{ width: 150, textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ ...cell, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.tracker || 'no tracker'}</div>
+              <div style={{ ...cell, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.tracker || <span style={{ fontFamily: 'var(--sans)' }}>no tracker</span>}</div>
               {/* The tracker already dropping this registration is it agreeing, in
                   the client, that the PM is real (TR12). */}
               {health && (
-                <div title={t.tracker_msg || undefined} style={{ ...cell, color: health.color, marginTop: 2 }}>
+                <div title={t.tracker_msg || undefined} style={{ ...wordCell, color: health.color, marginTop: 2 }}>
                   {health.text}{t.tracker_health === 'unregistered' ? ' ✓ trumped' : ''}
                 </div>
               )}
@@ -476,6 +465,8 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
   const mountedRef   = useRef(true)
   const watchPollRef = useRef(null)
   const operationRef = useRef(null)   // this confirmation's operation id (S09)
+  const pmRef        = useRef(null)   // step 1's textarea
+  const focusPmRef   = useRef(false)  // set by "Trump another": focus it once it mounts
   useEffect(() => () => { mountedRef.current = false; clearTimeout(watchPollRef.current) }, [])
 
   useEffect(() => {
@@ -506,9 +497,20 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
     setPmText(''); setOldTitles([]); setNewTitle(''); setParsed(false)
     setIndexer(''); setPicks(null); setSelected({}); setGroup(null)
     setSearch(null); setConflict(null); setChosenRelease(null); setError(null); setResult(null)
-    setOnlyCopy(null); setQueued(null); setWatch(null); clearTimeout(watchPollRef.current)
+    setAmbiguity(null); setOnlyCopy(null); setQueued(null); setWatch(null); clearTimeout(watchPollRef.current)
     operationRef.current = null
   }, [])
+
+  // The same reset from the foot of step 5, where a finished swap leaves the
+  // user, so a run of PMs doesn't mean scrolling back to the header each time.
+  // The import panel keeps following the last grab.
+  const trumpAnother = () => { focusPmRef.current = true; reset() }
+  useEffect(() => {
+    if (parsed || !focusPmRef.current || !pmRef.current) return
+    focusPmRef.current = false
+    pmRef.current.focus({ preventScroll: true })
+    pmRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [parsed])
 
   const handleParse = async () => {
     setBusy('parse'); setError(null)
@@ -722,6 +724,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
           {!parsed ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <textarea
+                ref={pmRef}
                 value={pmText} onChange={e => setPmText(e.target.value)}
                 placeholder={SAMPLE_PM}
                 rows={7}
@@ -798,7 +801,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                   ) : (
                     <>
                       <PickNote pick={p} chosenKey={selected[i]} indexer={indexer} />
-                      <CandidateList rows={p.candidates} keyOf={regKey} indexer={indexer}
+                      <CandidateList label={`Torrents for ${p.title}`} rows={p.candidates} keyOf={regKey} indexer={indexer}
                         chosenKey={selected[i]}
                         onChoose={c => setSelected(s => ({ ...s, [i]: c ? regKey(c) : null }))}
                         othersLabel="other trackers"
@@ -889,7 +892,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
               {search.arr_item_ambiguous && search.arr_item_others?.length > 0 && (
                 <span
                   title={`${search.arr_item_others.length + 1} ${search.service === 'radarr' ? 'Radarr' : 'Sonarr'} instances hold the files of this group. The search and the grab go to ${search.connection_name || search.connection_id}. ${search.arr_item_others.map(o => `${o.connection_name || o.connection_id} holds ${o.title || 'it'} too`).join('; ')}.`}
-                  style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--yellow)', opacity: 0.9, alignSelf: 'flex-start' }}
+                  style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--yellow)', opacity: 0.9, alignSelf: 'flex-start' }}
                 >
                   on {search.connection_name || search.connection_id} · also {search.arr_item_others.map(o => o.connection_name || o.connection_id).join(', ')}
                 </span>
@@ -921,7 +924,7 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                     </Disclosure>
                   )}
                   {showOthers && (
-                    <CandidateList rows={others} keyOf={r => r.guid} indexer={indexer}
+                    <CandidateList label="Other releases" rows={others} keyOf={r => r.guid} indexer={indexer}
                       chosenKey={chosenRelease?.guid} onChoose={setChosenRelease}
                       othersLabel="other indexers"
                       isTail={r => r.trumped} tailLabel="named like a release being removed"
@@ -967,6 +970,13 @@ export default function Trumped({ onNavigate, initialOldTitle, triageDeadSeeds }
                 {result.watch_job_id
                   ? 'auditorr follows the download into Sonarr/Radarr — it is in the import panel, bottom right — and re-audits once the import lands.'
                   : result.removed > 0 ? 'The watchdog picks up the change and re-audits.' : null}
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <Button variant="primary" onClick={trumpAnother}>
+                  {result.grabbed === false || result.removal_error
+                    || (result.stages || []).some(s => s.status === 'failed')
+                    ? '↺ Start over' : 'Trump another →'}
+                </Button>
               </div>
             </div>
           ) : step5 && (

@@ -258,6 +258,40 @@ silently.
 
 Maximum 100 patterns, 200 characters each. Lines starting with `#` are comments.
 
+### Suggested from your last scan
+
+Apart from the files [always ignored](#always-ignored), what's worth excluding
+depends on your setup, so each scan looks for it and lists it at the top of this
+card, with what it found:
+
+- **A torrent category nothing reaches your library from**, such as games,
+  software or books with no app that hardlinks them. Every file in it counts as
+  not imported and is a Triage row. It's suggested when at least two of its
+  torrents have finished downloading, none of its files is in your library, and
+  other categories' files are. If nothing anywhere is hardlinked, that's usually
+  a wrong path in the settings above, so nothing is suggested.
+- **A library folder neither Sonarr nor Radarr manages**, such as home videos or
+  music ripped from CDs. Nothing in it is seeded and no workflow can act on it,
+  but it counts against *Hardlinked*. It's suggested only when every Sonarr and
+  Radarr answered on that scan and another library folder does hold their files.
+- **Full-disc rips** (`BDMV`, `VIDEO_TS`), when one is found and its
+  [preset](#presets) is off.
+
+**Add rule** puts the rule in the list below it, and **Turn on** lights the
+preset. **Not this** stops a suggestion coming back. Nothing changes until you
+click **Save Settings**, and the new rules apply from the next scan. Each
+**Undo** takes back what its button did.
+
+A folder's rule is its full path in the container, such as
+`literal:/data/torrents/games/`, because the usual layout uses the same folder
+names in both trees: `music/` alone would hide `torrents/music` and
+`media/music` together. If a category folder also holds orphaned files, the
+suggestion says how much, since excluding the folder takes them out of Cleanup
+too.
+
+When the scan found something, the Dashboard's **Last scan** card has an
+*Exclusions* line with **Review**, which opens this card.
+
 ### Pattern syntax
 
 | Pattern | Matches |
@@ -358,7 +392,8 @@ the page.
 ### Where exclusions come from
 
 Besides typing them here, exclusions are written by the **Exclude** buttons on
-the Cleanup and Triage pages, and by Triage's one-click suggestions. Everything
+the Cleanup and Triage pages, by Triage's one-click suggestions, and by the
+[suggestions from your last scan](#suggested-from-your-last-scan) above. Everything
 those buttons add lands in this list, visible and editable.
 
 Both Exclude buttons show you the exact rules before writing them. What they

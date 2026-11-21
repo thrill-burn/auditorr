@@ -49,7 +49,7 @@ from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_instance_failure, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key,
-    is_part_file_name, content_root, client_save_dirs,
+    is_part_file_name, content_root, client_save_dirs, announce_hosts, TrackerTally,
 )
 
 log = logging.getLogger(__name__)
@@ -179,14 +179,7 @@ def _norm_file(f):
 
 
 def _tracker_hosts(raw_trackers):
-    hosts = []
-    for t in raw_trackers:
-        url = t.get('url') or t.get('announce') or ''
-        if url.startswith('http') or url.startswith('udp'):
-            parts = url.split('/')
-            if len(parts) > 2:
-                hosts.append(parts[2])
-    return hosts or ['Unknown']
+    return announce_hosts(t.get('url') or t.get('announce') or '' for t in raw_trackers)
 
 
 def _torrent_status(state):
@@ -367,13 +360,17 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
         )
         fi_resp.raise_for_status()
         raw_files = _unwrap(fi_resp.json())
-        files = [_norm_file(f) for f in raw_files]
+        # Only each file's name and priority are read again (by `_norm_file`'s
+        # rules), so only they are kept: a dict per file, for every torrent,
+        # was held until the file map was built (SCAN D3).
+        files = ([f.get('name') or f.get('path') or '' for f in raw_files],
+                 [f.get('priority') for f in raw_files])
         files_ok = True
-        if not files and raw_files is not None:
+        if not raw_files and raw_files is not None:
             log.debug('qui: files endpoint returned empty list for %s', torrent_hash)
     except Exception as e:
         log.debug('qui: files endpoint failed for %s: %s', torrent_hash, e)
-        files, files_ok = [], False
+        files, files_ok = ([], []), False
 
     return hosts, health, files, files_ok
 
@@ -381,7 +378,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
 def _process_instance(session, base, inst, remote_path, local_path,
                       file_map, trackers_set, tracker_upload, tracker_seeding_size,
                       seen, seed_totals=None, report=None, unresolved_roots=None,
-                      fallback_roots=None, save_scope=None):
+                      fallback_roots=None, save_scope=None, tally=None):
     """One instance's torrents, folded into the shared maps.
 
     `seen` is the cross-instance bookkeeping, and it is **three sets, not one**
@@ -432,7 +429,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     th, hosts, health, files, files_ok = future.result()
                 except Exception:
                     th    = _norm_torrent(futures[future])['hash']
-                    hosts, health, files, files_ok = None, ('unknown', ''), [], False
+                    hosts, health, files, files_ok = None, ('unknown', ''), ([], []), False
                 if th:
                     tracker_map[th] = hosts
                     health_map[th]  = health
@@ -453,7 +450,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     if th:
                         tracker_map.setdefault(th, None)
                         health_map.setdefault(th, ('unknown', ''))
-                        files_map.setdefault(th, [])
+                        files_map.setdefault(th, ([], []))
                         failed_listings.add(th)
                         timed_out += 1
             log.warning('qui: timed out after %ds fetching per-torrent data for instance '
@@ -473,18 +470,21 @@ def _process_instance(session, base, inst, remote_path, local_path,
     # `complete` has no default on purpose: the safe-looking one (True) is the
     # unsafe one, so a call site that forgets it must fail loudly rather than
     # quietly declare an unfinished payload whole.
+    # `health` and `health_msg` are the torrent's, read once per torrent in the
+    # loop below, like `th`.
     def _add_entry(full_path, status, hosts, category, complete):
-        health, health_msg = health_map.get(th, ('unknown', ''))
-        entry = file_map.setdefault(full_path, {
-            'status':        status,
-            'trackers':      set(),
-            'hash':          th,
-            'instance_id':   inst_id,
-            'instance_name': inst_name,
-            'category':      category or '',
-            'tracker_health': health,
-            'tracker_msg':    health_msg,
-        })
+        entry = file_map.get(full_path)
+        if entry is None:
+            entry = file_map[full_path] = {
+                'status':        status,
+                'trackers':      set(),
+                'hash':          th,
+                'instance_id':   inst_id,
+                'instance_name': inst_name,
+                'category':      category or '',
+                'tracker_health': health,
+                'tracker_msg':    health_msg,
+            }
         entry['trackers'].update(hosts)
         # Sparse and sticky in the cautious direction — see the matching note
         # in _qbit.py. Absence means complete, so the flag costs memory only
@@ -520,6 +520,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
         th = nt['hash']
         if not th:
             continue
+        health, health_msg = health_map.get(th, ('unknown', ''))
         hosts  = tracker_map.get(th)
         if hosts is None:
             if report is not None:
@@ -558,6 +559,10 @@ def _process_instance(session, base, inst, remote_path, local_path,
             seen['regs'].add(reg)
             for h in hosts:
                 tracker_upload[h] = tracker_upload.get(h, 0) + nt['uploaded']
+            # Torrent counts and health are per registration too: each is a
+            # torrent the tracker sees, and each has its own announce verdict.
+            if tally is not None:
+                tally.add(th, hosts, health_map.get(th))
 
         # **Bytes de-duplicate by path.** One payload is one set of bytes on
         # disk however many registrations stand on it, so the key is the
@@ -587,7 +592,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
         # path the walk can never match.
         content_path  = remap_path(nt['content_path'], remote_path, local_path)
 
-        torrent_files = files_map.get(th, [])
+        names, prios = files_map.get(th, ((), ()))
 
         listing_failed = th in failed_listings
 
@@ -598,8 +603,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
         # torrent holds nothing, and the payload is enumerated from disk — at
         # content_path while it is still downloading, at save_path/name once it
         # has finished — rather than left to default to 'Orphaned'.
-        file_names = [f['name'] for f in torrent_files] if torrent_files else None
-        priorities = [f.get('priority') for f in torrent_files] if torrent_files else None
+        file_names = names if names else None
+        priorities = prios if names else None
         full_paths = torrent_claimed_paths(
             save_path, nt['name'], content_path, file_names, complete,
             torrent_hash=th, priorities=priorities)
@@ -684,20 +689,46 @@ def _process_instance(session, base, inst, remote_path, local_path,
 # fetch_file_map
 # ---------------------------------------------------------------------------
 
+def _preference_values(raw):
+    """qui's `/preferences` answer as qBittorrent's own `{key: value}` dict.
+
+    qui used to pass qBittorrent's preferences through. Since its preference
+    catalog (autobrr/qui, October 2026) it answers with a *view*: a list of
+    `{key, value, tab, section, control, …}` fields, one per setting it shows,
+    which still includes the four `client_save_dirs` reads (`save_path`,
+    `temp_path`, `temp_path_enabled`, `use_subcategories`). Anything else comes
+    back unchanged, so `client_save_dirs` still declines it (CLEANUP C28).
+    """
+    if isinstance(raw, list):
+        return {f['key']: f.get('value') for f in raw
+                if isinstance(f, dict) and isinstance(f.get('key'), str)}
+    return raw
+
+
 def _read_save_scope(sess, base, inst, remote_path, local_path, save_scope):
     """One instance's default, category and incomplete folders into `save_scope` (C27).
 
-    qui serves qBittorrent's own answers at `/preferences` and `/categories`.
-    Either failing, or not being a dict, makes the scope `unknown`: the scan
-    then offers no empty folder rather than one qBittorrent may save into (R1).
-    The instance itself still counts as answered; its torrents did.
+    qui serves qBittorrent's preferences at `/preferences`, as a list of fields
+    since its preference catalog (`_preference_values`, C28), and its categories
+    at `/categories`. Either failing, or coming back in a shape this doesn't
+    read, makes the scope `unknown`: the scan then offers no empty folder rather
+    than one qBittorrent may save into (R1). The instance itself still counts as
+    answered; its torrents did. **Every way to `unknown` logs**: the shape check
+    used to return quietly, so an install could go a month with no scan
+    offering an empty folder and nothing saying why.
     """
     try:
         prefs = sess.get(f"{base}/api/instances/{inst['id']}/preferences", timeout=15)
         prefs.raise_for_status()
         cats = sess.get(f"{base}/api/instances/{inst['id']}/categories", timeout=15)
         cats.raise_for_status()
-        dirs = client_save_dirs(prefs.json(), cats.json())
+        prefs_raw, cats_raw = prefs.json(), cats.json()
+        dirs = client_save_dirs(_preference_values(prefs_raw), cats_raw)
+        if dirs is None:
+            # Types only: the values are the user's folders.
+            log.info("qui[%s]: preferences (%s) or categories (%s) came back in a shape "
+                     "auditorr doesn't read — no empty folders this scan",
+                     inst.get('name', '?'), type(prefs_raw).__name__, type(cats_raw).__name__)
     except Exception as e:
         log.info("qui[%s]: preferences or categories did not load (%s) — no empty folders "
                  "this scan", inst.get('name', '?'), type(e).__name__)
@@ -763,6 +794,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     trackers_set         = set()
     tracker_upload       = {}
     tracker_seeding_size = {}
+    tally                = TrackerTally()
     # Cross-instance bookkeeping, one set per unit — see `_process_instance`.
     seen                 = {'regs': set(), 'payloads': set(),
                             'hashes': set(), 'multi': set()}
@@ -776,7 +808,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         try:
             _process_instance(sess, base, inst, remote_path, local_path,
                                file_map, trackers_set, tracker_upload, tracker_seeding_size,
-                               seen, seed_totals, report=report,
+                               seen, seed_totals, report=report, tally=tally,
                                unresolved_roots=unresolved_roots,
                                fallback_roots=fallback_roots, save_scope=save_scope)
             report['instances_ok'] += 1
@@ -803,6 +835,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # '_'-prefixed: every per-tracker loop already skips these.
     tracker_snapshot['_seed_byte_secs'] = seed_totals['byte_secs']
     tracker_snapshot['_max_seed_secs']  = seed_totals['max_secs']
+    trackers, _ = tally.finish(tracker_snapshot, trackers_set)
     mark_trackers_unanswered(tracker_snapshot, report, report['torrent_count'], 'qui')
 
     report['file_map_size'] = len(file_map)
@@ -833,7 +866,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     else:
         log.info('qui: total file_map entries across all instances: %d', len(file_map))
 
-    return file_map, sorted(trackers_set), tracker_snapshot, report
+    return file_map, trackers, tracker_snapshot, report
 
 
 # ---------------------------------------------------------------------------

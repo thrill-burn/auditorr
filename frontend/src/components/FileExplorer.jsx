@@ -40,11 +40,13 @@ function detectMediaType(filePath) {
 // existed it has rendered as coloured text — which is also what the
 // ration-colour rule asks for on a list where every row carries one. Kept that
 // way deliberately when the tints were fixed (R9); do not "restore" the fill.
+// A tag is a state word, so it's Geist; the name, size and trackers beside it
+// are data (mono, 2026-11-10).
 function Tag({ color, children }) {
   return (
     <span style={{
       padding: '1px 7px', fontSize: 'var(--font-sm)', fontWeight: 600,
-      fontFamily: 'var(--mono)', color, whiteSpace: 'nowrap', flexShrink: 0,
+      fontFamily: 'var(--sans)', color, whiteSpace: 'nowrap', flexShrink: 0,
     }}>{children}</span>
   )
 }
@@ -91,7 +93,7 @@ function ArrSearchButton({ service, color, state, onClick }) {
       onClick={onClick}
       style={{
         background: 'none', border: 'none', padding: '1px 2px',
-        color, fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', fontWeight: 600,
+        color, fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', fontWeight: 600,
         cursor: 'pointer', flexShrink: 0, textDecoration: 'none',
       }}
       onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
@@ -105,8 +107,16 @@ function ArrSearchButton({ service, color, state, onClick }) {
 // A dot before a filter option's label, the size the old chips drew it.
 const optDot = color => <Dot color={color} size={6} />
 
-function seedCountValue(file) {
-  return (file.trackers || []).filter(t => t !== 'None').length
+// How many trackers seed a file. `aliases` ({host: tracker}, the scan's
+// `tracker_aliases`) folds announce hosts that are one tracker (some trackers
+// announce on two), so a file seeded once counts once, as on the Trackers page's seed-count
+// bar. Most files hold no alias, and they take the old count's path.
+function seedCountValue(file, aliases) {
+  const ts = file.trackers || []
+  if (aliases && ts.some(t => aliases[t])) {
+    return new Set(ts.filter(t => t !== 'None').map(t => aliases[t] || t)).size
+  }
+  return ts.filter(t => t !== 'None').length
 }
 
 function seedCountMatches(selected, count) {
@@ -209,6 +219,7 @@ function SizeInput({ value, onChange, placeholder }) {
       type="number"
       min="0"
       step="any"
+      className="ph-words"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
@@ -667,7 +678,7 @@ function SizeRangeFilter({ minVal, maxVal, unit, onMinVal, onMaxVal, onUnit, onC
   const hasValue = minVal || maxVal
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>size:</span>
       <SizeInput value={minVal} onChange={onMinVal} placeholder="min" />
       <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>–</span>
       <SizeInput value={maxVal} onChange={onMaxVal} placeholder="max" />
@@ -693,7 +704,8 @@ const STATUS_FILTERS = [
   { id: 'Orphaned', label: 'Orphaned', color: 'var(--yellow)' },
 ]
 
-export default function FileExplorer({ files, trackers, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, revealPath }) {
+export default function FileExplorer({ files, trackers, trackerAliases, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, initialQuery, revealPath }) {
+  const aliases = trackerAliases && Object.keys(trackerAliases).length ? trackerAliases : null
   trackers = trackers || []
 
   const [sonarrConfigured,      setSonarrConfigured]      = useState(false)
@@ -728,8 +740,10 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
   const [userFlat, setUserFlat] = useState(() => localStorage.getItem('auditorr_view_flat') === '1')
   const [sortBy, setSortBy] = useState('name')
 
-  // Raw name query drives the input; debounced value drives filtering
-  const [nameQuery, setNameQuery] = useState('')
+  // Raw name query drives the input; debounced value drives filtering. A
+  // library map Unmanaged tile opens here on its folder (`initialQuery`, the
+  // title's library-relative path), which the path match below finds.
+  const [nameQuery, setNameQuery] = useState(initialQuery || '')
   const debouncedNameQuery = useDebounce(nameQuery, 150)
 
   useEffect(() => {
@@ -782,7 +796,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       (trackerInc.length === 0 || trackerInc.some(t => (f.trackers||[]).includes(t))) &&
       (trackerExc.length === 0 || !trackerExc.some(t => (f.trackers||[]).includes(t)))
 
-    const scMatch = seedCountMatches(seedCount, seedCountValue(f))
+    const scMatch = seedCountMatches(seedCount, seedCountValue(f, aliases))
 
     const nMatch = !nameLower || f.path.toLowerCase().includes(nameLower)
 
@@ -790,7 +804,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     const szMax = sizeMaxBytes === null || f.size <= sizeMaxBytes
 
     return sMatch && dMatch && eMatch && iMatch && tMatch && scMatch && nMatch && szMin && szMax
-  }), [files, statusFilter, dupFilter, exclFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes])
+  }), [files, statusFilter, dupFilter, exclFilter, importFilter, trackerInc, trackerExc, seedCount, nameLower, sizeMinBytes, sizeMaxBytes, aliases])
 
   const sortedFiltered = useMemo(() => {
     if (sortBy === 'size') return [...filtered].sort((a, b) => b.size - a.size)
@@ -834,7 +848,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
     const counts = new Map()
     for (const f of files || []) {
       if (exclFilter !== 'any' && (f.excluded === true) !== (exclFilter === 'only')) continue
-      const n = seedCountValue(f)
+      const n = seedCountValue(f, aliases)
       const bucket = n >= 5 ? '5plus' : n
       counts.set(bucket, (counts.get(bucket) || 0) + 1)
     }
@@ -847,7 +861,7 @@ export default function FileExplorer({ files, trackers, tab, initialStatus, init
       options.push({ value: '5plus', label: '5x+', count: counts.get('5plus') || 0 })
     }
     return options
-  }, [files, exclFilter, seedCount])
+  }, [files, exclFilter, seedCount, aliases])
 
   const exportCSV = () => {
     const rows = ['RelativePath,Size,Status,Imported,Trackers,LinkedPaths,DuplicatePaths',

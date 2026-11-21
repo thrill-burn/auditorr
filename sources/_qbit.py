@@ -20,7 +20,7 @@ from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key, content_root,
-    client_save_dirs,
+    client_save_dirs, announce_hosts, TrackerTally,
 )
 
 log = logging.getLogger(__name__)
@@ -121,9 +121,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         try:
             entries = [{'url': t.url, 'status': t.status, 'msg': t.msg}
                        for t in _get_thread_client().torrents_trackers(torrent_hash=torrent.hash)]
-            raw   = [e['url'] for e in entries
-                     if e['url'].startswith('http') or e['url'].startswith('udp')]
-            hosts = [u.split('/')[2] for u in raw if len(u.split('/')) > 2] or ['Unknown']
+            hosts = announce_hosts(e['url'] for e in entries)
             health, msg = classify_tracker_entries(entries)
         except Exception as e:
             log.debug('qbit: tracker listing failed for %s: %s', torrent.hash, e)
@@ -135,6 +133,10 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         except Exception as e:
             log.debug('qbit: file listing failed for %s: %s', torrent.hash, e)
             files, files_ok = [], False
+        # Only the names and priorities are read again, so only they are kept:
+        # the client's file entries are eight fields each, and every torrent's
+        # were held until the file map was built.
+        files = ([f.name for f in files], [getattr(f, 'priority', None) for f in files])
         return torrent.hash, hosts, (health, msg), files, files_ok
 
     tracker_map = {}
@@ -166,6 +168,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     trackers_set         = set()
     tracker_upload       = {}
     tracker_seeding_size = {}
+    tally                = TrackerTally()
     remote_path          = cfg.get('REMOTE_PATH', '')
     local_path           = cfg.get('LOCAL_PATH', '')
 
@@ -174,6 +177,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         if hosts is None:
             report['tracker_failures'] += 1
             hosts = ['Unknown']
+        tally.add(torrent.hash, hosts, health_map.get(torrent.hash))
         seed_secs = int(getattr(torrent, 'seeding_time', 0) or 0)
         if seed_secs > 0:
             seed_byte_secs += (torrent.size or 0) * seed_secs
@@ -210,12 +214,13 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         # listing is `None`: the paths are exactly what we do not have, so the
         # payload is enumerated from disk instead (ported from the qui backend)
         # rather than left to default to 'Orphaned'.
-        listing = None if torrent.hash in failed_listings else files_map.get(torrent.hash, [])
-        listed = None if listing is None else [f.name for f in listing]
+        listing = None if torrent.hash in failed_listings else files_map.get(torrent.hash, ([], []))
+        listed = None if listing is None else listing[0]
         # Priority 0 (*Do not download*) is what makes libtorrent keep a part
         # file beside the payload (CLEANUP C18).
-        priorities = None if listing is None else \
-            [getattr(f, 'priority', None) for f in listing]
+        priorities = None if listing is None else listing[1]
+        t_hash = torrent.hash
+        t_category = getattr(torrent, 'category', '') or ''
         full_paths = torrent_claimed_paths(
             save_path, getattr(torrent, 'name', '') or '', content_path, listed, complete,
             torrent_hash=torrent.hash, priorities=priorities)
@@ -240,14 +245,16 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
                 report_note(report,
                             f"file listing failed and nothing was found at {save_path}")
         for full_path in full_paths:
-            entry = file_map.setdefault(full_path, {
-                "status": status,
-                "trackers": set(),
-                "hash": torrent.hash,
-                "category": getattr(torrent, 'category', '') or '',
-                "tracker_health": health,
-                "tracker_msg": health_msg,
-            })
+            entry = file_map.get(full_path)
+            if entry is None:
+                entry = file_map[full_path] = {
+                    "status": status,
+                    "trackers": set(),
+                    "hash": t_hash,
+                    "category": t_category,
+                    "tracker_health": health,
+                    "tracker_msg": health_msg,
+                }
             entry["trackers"].update(hosts)
             # Sparse, and sticky in the cautious direction. Absence means
             # complete (the overwhelming majority), so the flag costs memory
@@ -272,14 +279,14 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
             if _HEALTH_RANK.get(health, 1) > _HEALTH_RANK.get(entry["tracker_health"], 1):
                 entry["tracker_health"] = health
                 entry["tracker_msg"]    = health_msg
-                entry["hash"]           = torrent.hash
+                entry["hash"]           = t_hash
             # Record every unregistered claimant of this path. The merge above
             # keeps only the healthiest hash, so a dead cross-seed whose payload
             # is alive on a working sibling would otherwise vanish. Retaining it
             # lets Triage surface the dead registration (remove it, keep files).
             if health == 'unregistered':
-                entry.setdefault("unreg_claimants", {})[torrent.hash] = {
-                    "hash": torrent.hash, "instance_id": None, "tracker_msg": health_msg,
+                entry.setdefault("unreg_claimants", {})[t_hash] = {
+                    "hash": t_hash, "instance_id": None, "tracker_msg": health_msg,
                 }
             if status == 'Seeding' or entry["status"] == 'Seeding':
                 entry["status"] = 'Seeding'
@@ -299,6 +306,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # '_'-prefixed: every per-tracker loop already skips these.
     tracker_snapshot['_seed_byte_secs'] = seed_byte_secs
     tracker_snapshot['_max_seed_secs']  = max_seed_secs
+    trackers, _ = tally.finish(tracker_snapshot, trackers_set)
     mark_trackers_unanswered(tracker_snapshot, report, len(torrents), 'qbit')
 
     report['file_map_size']    = len(file_map)
@@ -317,7 +325,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
             'completion field. Their files are still claimed (so they do not read '
             'as orphans) but are kept out of duplicate groups and the Triage pile.',
             report['incomplete_torrents'], report['completion_unknown'])
-    return file_map, sorted(trackers_set), tracker_snapshot, report
+    return file_map, trackers, tracker_snapshot, report
 
 
 # ---------------------------------------------------------------------------

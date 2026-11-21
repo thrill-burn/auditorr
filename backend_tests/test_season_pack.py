@@ -19,11 +19,11 @@ import app
 
 CONN = {'id': 'tv', 'service': 'sonarr', 'name': 'TV', 'base_url': 'http://sonarr:8989',
         'api_key': 'k', 'remote_path': '', 'media_path': '', 'local_media_path': ''}
-SERIES = {'service': 'sonarr', 'connection_id': 'tv', 'arr_id': 143, 'title': 'Small Prophets',
-          'year': 2025, 'title_slug': 'small-prophets', 'has_file': True, 'alt_titles': ['Kleine Propheten']}
+SERIES = {'service': 'sonarr', 'connection_id': 'tv', 'arr_id': 143, 'title': 'Quiet Harbour',
+          'year': 2025, 'title_slug': 'quiet-harbour', 'has_file': True, 'alt_titles': ['Stiller Hafen']}
 
 
-def _row(name, h, progress=1.0, instance_id=1, tracker='aither.cc'):
+def _row(name, h, progress=1.0, instance_id=1, tracker='arvel.test'):
     return {'reg': f'{instance_id}:{h}', 'hash': h, 'name': name, 'size': 5_000_000_000,
             'save_path': '/data/torrents/tv', 'content_path': f'/data/torrents/tv/{name}',
             'progress': progress, 'completion_on': 1 if progress >= 1.0 else 0,
@@ -32,15 +32,15 @@ def _row(name, h, progress=1.0, instance_id=1, tracker='aither.cc'):
 
 @pytest.fixture
 def season(tmp_path):
-    """The box's Small Prophets S01. E01 and E02 2160p and hardlinked to their
+    """A season assembled over time. E01 and E02 2160p and hardlinked to their
     own torrents; E03–E06 BluRay-1080p with nothing else linking them."""
-    media = tmp_path / 'media' / 'Small Prophets' / 'Season 1'
+    media = tmp_path / 'media' / 'Quiet Harbour' / 'Season 1'
     media.mkdir(parents=True)
     single = tmp_path / 'torrents'
     single.mkdir()
     index = []
     for n in range(1, 7):
-        lib = media / f'Small.Prophets.S01E{n:02d}.mkv'
+        lib = media / f'Quiet.Harbour.S01E{n:02d}.mkv'
         lib.write_bytes(b'x')
         if n <= 2:
             os.link(lib, single / lib.name)
@@ -90,16 +90,16 @@ class TestLookup:
         assert [lib[n]['linked'] for n in range(1, 7)] == [True, True, False, False, False, False]
         assert (lib[7]['has_file'], lib[7]['linked']) == (False, None)
         assert lib[3]['quality'] == 'Bluray-1080p'
-        assert (body['title'], body['client_name']) == ('Small Prophets', 'qui')
+        assert (body['title'], body['client_name']) == ('Quiet Harbour', 'qui')
 
     def test_a_pack_of_the_season_in_the_client_is_found_and_singles_are_not(self, season):
         rows = [
-            _row('Small.Prophets.S01.1080p.iP.WEB-DL.AAC2.0.H.264-Kitsune', 'k1'),
-            _row('Small.Prophets.S01E03.1080p.BluRay.DD+5.1.x264-SbR', 's3'),
-            _row('Small.Prophets.S02.1080p.WEB-DL-GRP', 's2'),
+            _row('Quiet.Harbour.S01.1080p.iP.WEB-DL.AAC2.0.H.264-Kitsune', 'k1'),
+            _row('Quiet.Harbour.S01E03.1080p.BluRay.DD+5.1.x264-SbR', 's3'),
+            _row('Quiet.Harbour.S02.1080p.WEB-DL-GRP', 's2'),
             _row('Other.Show.S01.1080p.WEB-DL-GRP', 'o1'),
-            _row('Kleine.Propheten.S01.German.1080p.WEB-DL-DE', 'de'),
-            _row('Small.Prophets.S01.2160p.WEB-DL-NEW', 'dl', progress=0.4),
+            _row('Stiller.Hafen.S01.German.1080p.WEB-DL-DE', 'de'),
+            _row('Quiet.Harbour.S01.2160p.WEB-DL-NEW', 'dl', progress=0.4),
         ]
         status, body = _post('/api/workflows/season_pack/lookup', season, rows=rows)
         assert status == 200
@@ -111,7 +111,7 @@ class TestLookup:
         assert packs[-1]['complete'] is False
 
     def test_a_pack_whose_year_is_before_the_series_began_is_another_show(self, season):
-        rows = [_row('Small.Prophets.1990.S01.1080p.WEB-DL-OLD', 'old')]
+        rows = [_row('Quiet.Harbour.1990.S01.1080p.WEB-DL-OLD', 'old')]
         _, body = _post('/api/workflows/season_pack/lookup', season, rows=rows)
         assert body['packs'] == []
 
@@ -122,7 +122,7 @@ class TestLookup:
         assert [p['hash'] for p in body['packs']] == ['dw']
 
     def test_a_client_that_did_not_answer_in_full_says_so(self, season):
-        rows = [_row('Small.Prophets.S01.1080p.iP.WEB-DL.AAC2.0.H.264-Kitsune', 'k1')]
+        rows = [_row('Quiet.Harbour.S01.1080p.iP.WEB-DL.AAC2.0.H.264-Kitsune', 'k1')]
         _, body = _post('/api/workflows/season_pack/lookup', season, rows=rows,
                         report={'instances_failed': [{'name': 'second'}]})
         assert body['client_checked'] is False
@@ -163,22 +163,22 @@ class TestReleases:
 
     def test_only_packs_of_this_season_and_the_singles_tracker_leads(self, season):
         releases = [
-            _release('Small.Prophets.S01.1080p.WEB-DL-OTHER', 'SeedPool', 'WEBDL-1080p'),
-            _release('Small.Prophets.S01E03.1080p.WEB-DL-EP', 'Aither', 'WEBDL-1080p', full_season=False),
-            _release('Small.Prophets.S02.1080p.WEB-DL-NEXT', 'Aither', 'WEBDL-1080p', mapped_season=2),
-            _release('Small.Prophets.S01.1080p.iP.WEB-DL-Kitsune', 'Aither', 'WEBDL-1080p'),
+            _release('Quiet.Harbour.S01.1080p.WEB-DL-OTHER', 'Sorrel', 'WEBDL-1080p'),
+            _release('Quiet.Harbour.S01E03.1080p.WEB-DL-EP', 'Arvel', 'WEBDL-1080p', full_season=False),
+            _release('Quiet.Harbour.S02.1080p.WEB-DL-NEXT', 'Arvel', 'WEBDL-1080p', mapped_season=2),
+            _release('Quiet.Harbour.S01.1080p.iP.WEB-DL-Kitsune', 'Arvel', 'WEBDL-1080p'),
         ]
         with patch.object(app, 'fetch_release_matrix', return_value=releases) as fetch:
-            status, body = _post('/api/workflows/season_pack/releases', season, body={'trackers': ['aither.cc']})
+            status, body = _post('/api/workflows/season_pack/releases', season, body={'trackers': ['arvel.test']})
         assert status == 200
         assert fetch.call_args.kwargs['season_number'] == 1
         assert [r['title'] for r in body['releases']] == [
-            'Small.Prophets.S01.1080p.iP.WEB-DL-Kitsune', 'Small.Prophets.S01.1080p.WEB-DL-OTHER']
+            'Quiet.Harbour.S01.1080p.iP.WEB-DL-Kitsune', 'Quiet.Harbour.S01.1080p.WEB-DL-OTHER']
         assert [r['preferred'] for r in body['releases']] == [True, False]
         assert body['searched'] == 4
 
     def test_each_release_says_how_it_compares_with_the_library(self, season):
-        releases = [_release('Small.Prophets.S01.1080p.BluRay-SbR', 'Aither', 'Bluray-1080p')]
+        releases = [_release('Quiet.Harbour.S01.1080p.BluRay-SbR', 'Arvel', 'Bluray-1080p')]
         with patch.object(app, 'fetch_release_matrix', return_value=releases):
             _, body = _post('/api/workflows/season_pack/releases', season)
         assert body['releases'][0]['vs_library'] == {'higher': 0, 'same': 4, 'lower': 2, 'unknown': 0}
@@ -203,7 +203,7 @@ class TestGrab:
         with ExitStack() as stack:
             mocks = [stack.enter_context(p) for p in [*_patched(season), *extra]]
             payload = {'connection_id': 'tv', 'arr_id': 143, 'season': 1, 'guid': 'g', 'indexer_id': 3,
-                       'series_title': 'Small Prophets', 'info_hash': 'ABCDEF', **(body or {})}
+                       'series_title': 'Quiet Harbour', 'info_hash': 'ABCDEF', **(body or {})}
             resp = app.app.test_client().post('/api/workflows/season_pack/grab', json=payload)
         queue_mock, grab_mock, watch_mock = mocks[-3:]
         return resp.status_code, resp.get_json(), queue_mock, grab_mock, watch_mock
@@ -214,9 +214,9 @@ class TestGrab:
         assert queue.call_args.kwargs['episode_ids'] == [501, 502, 503, 504, 505, 506, 507]
         grab.assert_called_once()
         args, kw = watch.call_args
-        assert args[1:5] == ('tv', 143, 1, 'Small Prophets · S01 pack')
+        assert args[1:5] == ('tv', 143, 1, 'Quiet Harbour · S01 pack')
         assert args[5] == [501, 502, 503, 504, 505, 506]
-        assert (kw['info_hash'], kw['series_title']) == ('ABCDEF', 'Small Prophets')
+        assert (kw['info_hash'], kw['series_title']) == ('ABCDEF', 'Quiet Harbour')
 
     def test_the_download_is_counted_on_the_page_that_opened_the_dialog(self, season):
         # Triage and Backfill both open it; a bundle that sends nothing is Triage's.
@@ -226,7 +226,7 @@ class TestGrab:
             assert watch.call_args.kwargs['workflow'] == row
 
     def test_a_season_already_in_the_queue_is_not_grabbed_twice(self, season):
-        status, body, _, grab, watch = self._grab(season, queue=[{'title': 'Small.Prophets.S01-X'}])
+        status, body, _, grab, watch = self._grab(season, queue=[{'title': 'Quiet.Harbour.S01-X'}])
         assert (status, body['code']) == (409, 'already_queued')
         grab.assert_not_called()
         watch.assert_not_called()
@@ -277,8 +277,8 @@ def _watch(outcome, records=(), info_hash=None, landed=False, **kw):
          patch.object(app, 'poll_queue_until_clear', return_value=res) as poll, \
          patch.object(app, 'force_manual_import_by_id') as forced, \
          patch.dict(app._import_watches, {}, clear=True):
-        job = app._start_pack_watch({}, 'tv', 143, 1, 'Small Prophets · S01 pack', [501], info_hash=info_hash,
-                                    series_title='Small Prophets', **kw)
+        job = app._start_pack_watch({}, 'tv', 143, 1, 'Quiet Harbour · S01 pack', [501], info_hash=info_hash,
+                                    series_title='Quiet Harbour', **kw)
         watch = dict(app._import_watches[job])
     forced.assert_not_called()
     return watch, poll
@@ -290,7 +290,7 @@ class TestWatch:
         watch, poll = _watch('import_pending', [{'downloadId': 'ABC123'}], info_hash='ABC123')
         assert watch['status'] == 'ready'
         assert watch['replace'] == {'hash': 'abc123', 'instance_id': None, 'connection_id': 'tv',
-                                    'arr_id': 143, 'season': 1, 'title': 'Small Prophets'}
+                                    'arr_id': 143, 'season': 1, 'title': 'Quiet Harbour'}
         assert poll.call_args.kwargs['download_id'] == 'ABC123'
 
     def test_with_no_info_hash_the_one_download_in_the_queue_names_it(self, season):

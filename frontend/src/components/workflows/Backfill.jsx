@@ -5,13 +5,25 @@ import { WATCH_ACTIVE, watchColor, watchPercent } from '../ImportProgress'
 import {
   OptionFilter, IndexerFilter, FolderFilter, SortPicker, CountPicker, SearchInput,
   SectionLabel, SectionHeading, Disclosure, WorkflowPage, WorkflowHeader, SpinKeyframes, Spinner, LoadingRow, WorkflowError, WorkflowWarning, ArrErrorsWarning,
-  Button, MatchChips, MATCH_COLOR, ITEM_TITLE, MONO_TITLE, tint,
+  Button, MatchChips, MATCH_COLOR, ITEM_TITLE, tint, QualityChip, PickList, PickRow, PickName,
   QUALITY_RES_OPTIONS, QUALITY_SOURCE_OPTIONS, HDR_OPTIONS, HDR_STYLE,
   useAuditComplete,
 } from './shared'
 import { SeasonPackModal } from './SeasonPack'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// BACKFILL B15: a candidate is under a library folder when its representative
+// file is, which answers for all of it (one series or movie folder holds every
+// file of a candidate). `app._backfill_under` is the same test, applied to the
+// run; this one counts the page. By path, never by title: the library map's
+// tiles are folders, and a folder's name isn't the arr's (`Glasshouse` can be
+// Sonarr's `GL4SSHOUSE`, and a movie folder carries its year).
+export function underFolder(group, under) {
+  const path = String(group.path || '').replace(/\\/g, '/')
+  const u = String(under || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  return !!u && (path === u || path.startsWith(u + '/'))
+}
+
 // Candidates arrive grouped, scoped and labelled with their root folder by the
 // server (`_resolve_backfill`), from the same computation the search runs on.
 // There is deliberately no grouping on this side any more (B7b): whether a
@@ -66,6 +78,11 @@ function scopeReason(item) {
 function kindsLine(groups) {
   const n = { season: 0, episode: 0, movie: 0 }
   for (const g of groups) n[g.scope] = (n[g.scope] || 0) + 1
+  return kindsText(n)
+}
+
+// The same words from counts, as a run reports its own (`job.kinds`, B17).
+function kindsText(n) {
   const parts = []
   if (n.season)  parts.push(`${n.season} season pack${n.season !== 1 ? 's' : ''}`)
   if (n.episode) parts.push(`${n.episode} single episode${n.episode !== 1 ? 's' : ''}`)
@@ -105,8 +122,8 @@ function matchedFilesLine(matched, total) {
 // mapping breaks every file on an instance, so it is the likely explanation only
 // when matches are rare. Where most of the library matched, the unmatched videos
 // are files the arr does not track at those paths. The first cut blamed a path
-// mapping either way, and the reference box answered it: 797 files matched, and
-// the unmatched videos sat together in one folder.
+// mapping either way, and a real library answered it: nearly every file
+// matched, and the unmatched videos sat together in one folder.
 function unmatchedFilesLine(matched, total, video) {
   if (video == null || total - matched <= 0) return ''
   const other = total - matched - video
@@ -151,6 +168,123 @@ const RANK_OPTIONS = [
   { value: 'closest', label: 'Closest to my file',       sub: 'size, then quality'  },
 ]
 
+// A floor under the chips (B16): each candidate's releases at its own file's
+// quality or better, resolution first, then source, as Triage compares them.
+// It's what a run from the library map starts on, so a chip left on 2160p by
+// an earlier run can't hide the 1080p release a 1080p title needs.
+const MIN_OPTIONS = [
+  { value: 'none', label: 'None',      sub: 'any quality'            },
+  { value: 'file', label: 'Your file', sub: "its quality or better" },
+]
+
+// The quality a run from the library map starts on (B15, B16): your file or
+// better, and every chip on Any. Ephemeral, so the chips you keep for
+// whole-library runs are neither used nor overwritten.
+const MAP_QUALITY = { min: 'file', res: [], source: [], hdr: [] }
+
+// B17 — a click from the library map searches straight away, so it needs a
+// depth of its own: one title is one candidate for a movie and a season pack
+// each for a show, but a show whose seasons are partly seeded is searched an
+// episode at a time (B1) and can hold dozens. Ten keeps the run quick. Held like
+// MAP_QUALITY, so the stored Search Depth is neither used nor overwritten.
+const MAP_DEPTH = 10
+
+// ── Why a row is empty (B16) ──────────────────────────────────────────────────
+// From the run's own counts (`app._backfill_empty`). The row said "No releases
+// found" whatever happened, so a Resolution chip left on 2160p read the same as
+// a tracker with nothing, when a tracker had both 1080p packs of a season.
+function plural(n, word) {
+  return `${n.toLocaleString()} ${word}${n !== 1 ? 's' : ''}`
+}
+
+// `[sentence, names]` pairs for the stage that emptied the row: the user's own
+// quality filters first, since those are the ones to change, then the indexers,
+// then the scope, then the other titles the arr listed.
+export function emptyReasons(item) {
+  const e = item.empty
+  if (!e) return [['No releases found', null]]
+  const out = []
+  if (e.quality > 0) out.push([`${plural(e.quality, 'release')} hidden by the Quality Filter: `, e.quality_names])
+  if (e.below_floor > 0) out.push([`${plural(e.below_floor, 'release')} below your file's ${e.floor}: `, e.below_floor_names])
+  if (out.length) return out
+  if (e.indexers > 0) return [[`${plural(e.indexers, 'release')}, none on the indexers in Indexer Strategy`, null]]
+  if (e.out_of_scope > 0) {
+    return [[item.scope === 'season'
+      ? `${plural(e.out_of_scope, 'release')}, none a pack of this season`
+      : `${plural(e.out_of_scope, 'release')}, none of exactly this file's episodes`, null]]
+  }
+  if (e.other_title > 0) {
+    const arr = item.arr_service === 'radarr' ? 'Radarr' : 'Sonarr'
+    return [[`None of this title: ${arr} listed ${plural(e.other_title, 'release')} of other titles`, null]]
+  }
+  return [['No releases found', null]]
+}
+
+// The whole count, for the line's hover text.
+export function emptyBreakdown(item) {
+  const e = item.empty
+  if (!e || !e.returned) return ''
+  const arr = item.arr_service === 'radarr' ? 'Radarr' : 'Sonarr'
+  const parts = [
+    e.usenet       && `${e.usenet.toLocaleString()} Usenet`,
+    e.other_title  && `${e.other_title.toLocaleString()} of other titles`,
+    e.out_of_scope && `${e.out_of_scope.toLocaleString()} ${item.scope === 'season' ? 'not this season' : "not exactly this file's episodes"}`,
+    e.indexers     && `${e.indexers.toLocaleString()} not on your indexers`,
+    e.quality      && `${e.quality.toLocaleString()} hidden by the Quality Filter`,
+    e.below_floor  && `${e.below_floor.toLocaleString()} below your file`,
+  ].filter(Boolean)
+  return `${arr} listed ${plural(e.returned, 'release')}${parts.length ? `: ${parts.join(', ')}` : ''}.`
+}
+
+// ── What a run searched with (B17) ────────────────────────────────────────────
+// From the run's own record (`app._gen_run_filters`). A run from the library map
+// never shows its settings, and a filter left on from last time (B16's 2160p,
+// a "Must also be seeding on" tracker) hides releases with nothing on screen to
+// say so until a row comes back empty. Only what narrows the run: a filter left
+// on All or Any isn't one. `[label, names]` pairs: the label in words, the
+// names (folders, qualities, indexers) as data.
+const optionLabel = (options, v) => options.find(o => o.value === v)?.label || v
+
+export function runFilterParts(f) {
+  if (!f) return []
+  const out = []
+  if (f.folders?.length)        out.push(['root folders ', f.folders])
+  if (f.title_search)           out.push(['titles matching ', [f.title_search]])
+  if (f.min_quality === 'file') out.push(["your file's quality or better", null])
+  if (f.res_filter?.length)     out.push(['resolution ', f.res_filter.map(v => optionLabel(QUALITY_RES_OPTIONS, v))])
+  if (f.source_filter?.length)  out.push(['source ', f.source_filter.map(v => optionLabel(QUALITY_SOURCE_OPTIONS, v))])
+  if (f.hdr_filter?.length)     out.push(['HDR ', f.hdr_filter.map(v => optionLabel(HDR_OPTIONS, v))])
+  if (f.download_from?.length)  out.push(['downloading from ', f.download_from])
+  if (f.seeding_on?.length)     out.push(['also seeding on ', f.seeding_on])
+  return out
+}
+
+function RunFilters({ parts }) {
+  return (
+    <span>
+      Filters: {parts.map(([label, names], i) => (
+        <span key={i}>
+          {i > 0 && ' · '}{label}
+          {names && <span style={{ fontFamily: 'var(--mono)' }}>{names.join(', ')}</span>}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+function EmptyLine({ item }) {
+  return (
+    <span title={emptyBreakdown(item) || undefined}>
+      {emptyReasons(item).map(([text, names], i) => (
+        <span key={i}>
+          {i > 0 && '; '}{text}
+          {names && <span style={{ fontFamily: 'var(--mono)' }}>{names.join(', ')}</span>}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 // ── Closeness to the file on disk (B3) ────────────────────────────────────────
 // Hue as text only, never a fill — the treatment Trumped gives its candidates
 // for the same question: is this the release I already have? (`MatchChips`,
@@ -163,28 +297,23 @@ function sizeDelta(delta) {
   return `${delta > 0 ? '+' : '−'}${formatBytes(Math.abs(delta))}`
 }
 
-// ── Grab button (shared) ──────────────────────────────────────────────────────
-// The idle Grab is a row chip in the accent; every state after it is a tag in
-// the same slot at the same size (R8), and the two that take a second click —
-// "anyway" and "Failed ↺" — are chips again.
-function GrabButton({ state, onGrab, onReset, onForce, errorMsg }) {
-  if (state === 'idle')        return <Button size="chip" tone="var(--accent)" onClick={onGrab}>Grab</Button>
-  if (state === 'grabbing')    return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>Grabbing…</span>
-  if (state === 'refreshing')  return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--accent)', fontFamily: 'var(--mono)' }}>Re-searching…</span>
-  if (state === 'grabbed')     return <span style={{ fontSize: 'var(--font-sm)', color: 'var(--green)', fontFamily: 'var(--mono)', padding: '2px 8px' }}>✓ Grabbed</span>
-  // Already in the arr's queue (B12): a second grab would download it twice, so
-  // it takes a deliberate click.
-  if (state === 'queued') return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span title={errorMsg} style={{ fontSize: 'var(--font-sm)', color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>In queue</span>
-      <Button size="chip" variant="ghost" onClick={onForce} title="Already downloading — grab another copy anyway">anyway</Button>
-    </span>
-  )
-  return <Button size="chip" tone="var(--red)" onClick={onReset} title={`${errorMsg || 'Grab failed'} — click to reset`}>Failed ↺</Button>
-}
-
 // ── Result item ───────────────────────────────────────────────────────────────
-const RELEASE_GRID = 'minmax(0,1fr) 100px 62px 72px 40px 90px 40px 44px 84px 72px'
+// A candidate's releases are a pick-one list (the kit's PickList, Trumped's
+// look), and the candidate's one Grab button takes the pick (B18). The picked
+// release is marked in Backfill's own blue.
+const ACCENT = 'var(--blue)'
+const PICK_META = { fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)' }
+
+const releaseKey = r => r.guid || r.title
+
+// What the candidate's Grab button says, by where its grab has got to (B18).
+function grabLabel(state, scope) {
+  if (state === 'grabbing')   return 'Grabbing…'
+  if (state === 'refreshing') return 'Re-searching…'
+  if (state === 'queued')     return 'Grab anyway'
+  return scope === 'season' ? 'Grab this pack' : 'Grab this release'
+}
+const GRAB_BUSY = ['grabbing', 'refreshing']
 
 // T25 — an episode row exists because part of its season is still seeded, so
 // Backfill won't search the season as a pack (B1). The season-pack dialog is
@@ -234,7 +363,7 @@ function SeasonPackSeasons({ rows, onFind }) {
               <div style={{ ...ITEM_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {s.target.title} · S{pad2(s.target.season)}
               </div>
-              <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', marginTop: 2 }}>
+              <div style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--text-dim)', marginTop: 2 }}>
                 {s.episodes} episode{s.episodes !== 1 ? 's' : ''} in this run
               </div>
             </div>
@@ -256,10 +385,19 @@ function SeasonPackSeasons({ rows, onFind }) {
   )
 }
 
+// BACKFILL B18 — a candidate is grabbed once. Its releases are a pick (the best
+// one picked to start with), and one md Grab button in its header takes the
+// pick, as the season-pack dialog and Trumped do. It was a Grab chip on every
+// release: the design system has no row chip for an action, the accent was
+// spent on every row, each state after a click was a different shape in a 72px
+// column (In queue + anyway didn't fit), and the other releases of a grabbed
+// candidate kept a live Grab, with only B12's advisory queue check behind it.
 function ResultItem({ item }) {
-  // grabStates: { [guid]: 'idle' | 'grabbing' | 'refreshing' | 'grabbed' | 'queued' | 'error' }
-  const [grabStates,    setGrabStates]    = useState({})
-  const [grabErrors,    setGrabErrors]    = useState({})
+  // The picked release's key; null until a row is clicked, which means the
+  // first (best) release.
+  const [pickedKey,     setPickedKey]     = useState(null)
+  // grab.state: 'idle' | 'grabbing' | 'refreshing' | 'grabbed' | 'queued' | 'error'
+  const [grab,          setGrabState]     = useState({ state: 'idle', message: null })
   const [importStatus,  setImportStatus]  = useState(null)   // null | watching | importing | done | error
   const [importMessage, setImportMessage] = useState(null)
   const [importProgress, setImportProgress] = useState(null) // 0–1 while downloading, when the arr says
@@ -274,10 +412,7 @@ function ResultItem({ item }) {
     clearTimeout(refreshPollRef.current)
   }, [])
 
-  const setGrab = useCallback((key, state, message) => {
-    setGrabStates(s => ({ ...s, [key]: state }))
-    if (message !== undefined) setGrabErrors(s => ({ ...s, [key]: message }))
-  }, [])
+  const setGrab = useCallback((state, message = null) => setGrabState({ state, message }), [])
 
   const startImportWatch = useCallback(async (release) => {
     if (importStartedRef.current || !item.arr_id) return
@@ -337,13 +472,12 @@ function ResultItem({ item }) {
     force:         force || undefined,
   }), [item])
 
-  const grabFailed = useCallback((key, err) => {
-    if (err.code === 'already_queued') setGrab(key, 'queued', err.message)
-    else setGrab(key, 'error', err.message)
+  const grabFailed = useCallback(err => {
+    if (err.code === 'already_queued') setGrab('queued', err.message)
+    else setGrab('error', err.message)
   }, [setGrab])
 
   const doRefreshAndRetry = useCallback(async (originalRelease) => {
-    const key = originalRelease.guid || originalRelease.title
     // The row's own search, exactly as the run issued it. Rebuilding the query
     // from season_number — which an episode row still carries, as a label —
     // turned the retry of an episode grab into a season-pack search.
@@ -360,58 +494,55 @@ function ResultItem({ item }) {
         if (data.status === 'done' && data.releases?.length) {
           const fresh = data.releases.find(r => r.indexer === originalRelease.indexer && r.title === originalRelease.title)
           if (!fresh) {
-            setGrab(key, 'error', `Release not found on ${originalRelease.indexer} after re-search`)
+            setGrab('error', `Release not found on ${originalRelease.indexer} after re-search`)
             return
           }
-          setGrab(key, 'grabbing')
+          setGrab('grabbing')
           try {
             await api.grabRelease(grabBody(fresh, false))
             if (item.key) GRABBED.add(item.key)
-            setGrab(key, 'grabbed')
+            setGrab('grabbed')
             startImportWatch(fresh)
           } catch (err2) {
             // Never a second automatic retry.
-            if (mountedRef.current) grabFailed(key, err2)
+            if (mountedRef.current) grabFailed(err2)
           }
         } else {
-          setGrab(key, 'error', data.message || 'Re-search failed')
+          setGrab('error', data.message || 'Re-search failed')
         }
       } catch (err) {
-        if (mountedRef.current) setGrab(key, 'error', err.message)
+        if (mountedRef.current) setGrab('error', err.message)
       }
     }
     poll()
   }, [item, grabBody, grabFailed, setGrab, startImportWatch])
 
-  const doGrab = useCallback(async (release, e, force = false) => {
-    e.stopPropagation()
-    const key = release.guid || release.title
-    const current = grabStates[key]
-    if (current && current !== 'error' && !(force && current === 'queued')) return
-    setGrab(key, 'grabbing')
+  // A grab starts from idle or a failure, or from "already in the queue" only
+  // as Grab anyway. A failure isn't retried by itself: the button is there
+  // again, beside the reason, and a grab the arr did carry out meets B12's
+  // queue check on the second click.
+  const doGrab = useCallback(async (release, force = false) => {
+    const current = grab.state
+    if (current !== 'idle' && current !== 'error' && !(force && current === 'queued')) return
+    setGrab('grabbing')
     try {
       await api.grabRelease(grabBody(release, force))
       // Only an accepted grab: a refusal (`already_queued`) or a failure keeps the row.
       if (item.key) GRABBED.add(item.key)
-      setGrab(key, 'grabbed')
+      setGrab('grabbed')
       startImportWatch(release)
     } catch (err) {
       // Only a stale guid is re-searched: it is the one failure a fresh search
       // fixes. Anything else is shown as it is — a timeout may be a grab the
       // arr did process, and retrying that downloads the release twice (B12).
       if (err.code === 'stale_release') {
-        setGrab(key, 'refreshing')
+        setGrab('refreshing')
         doRefreshAndRetry(release)
       } else {
-        grabFailed(key, err)
+        grabFailed(err)
       }
     }
-  }, [item, grabStates, grabBody, grabFailed, setGrab, startImportWatch, doRefreshAndRetry])
-
-  const resetGrab = useCallback((key, e) => {
-    e.stopPropagation()
-    setGrab(key, 'idle')
-  }, [setGrab])
+  }, [item, grab.state, grabBody, grabFailed, setGrab, startImportWatch, doRefreshAndRetry])
 
   const searching = item.status === 'searching'
   const found     = item.status === 'found'
@@ -433,8 +564,11 @@ function ResultItem({ item }) {
 
   const filename = (item.path || '').replace(/\\/g, '/').split('/').pop()
 
-  // Single-release grab key
-  const singleKey = item.best_release?.guid || item.best_release?.title
+  // The release the Grab button takes. The pick is held while a grab is under
+  // way and after one is accepted, so the outlined row is the one grabbed.
+  const picked    = releases.find(r => releaseKey(r) === pickedKey) || releases[0] || null
+  const locked    = GRAB_BUSY.includes(grab.state) || grab.state === 'grabbed'
+  const pick      = r => { if (!locked) setPickedKey(releaseKey(r)) }
 
   const infoUrl = found ? (releases[0]?.info_url || '') : ''
 
@@ -455,22 +589,22 @@ function ResultItem({ item }) {
           </div>
           {/* Single-release info line */}
           {!multi && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--sans)', marginTop: 2 }}>
               {searching && 'Querying indexers…'}
               {found && item.best_release && (() => {
                 const r = item.best_release
                 const parts = [r.indexer, formatBytes(r.size), r.size_delta != null ? sizeDelta(r.size_delta) : null,
                   r.seeders != null ? `${r.seeders}S` : null, r.quality_name, r.hdr || null].filter(Boolean)
                 if (r.custom_format_score) parts.push(`CF:${r.custom_format_score}`)
-                return <><span>{parts.join(' · ')}</span><MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" /></>
+                return <><span style={{ fontFamily: 'var(--mono)' }}>{parts.join(' · ')}</span><MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" /></>
               })()}
-              {notFound  && 'No releases found'}
+              {notFound  && <EmptyLine item={item} />}
               {errored   && item.error}
             </div>
           )}
           {multi && (
-            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginTop: 2 }}>
-              {releases.length} releases found
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', fontFamily: 'var(--sans)', marginTop: 2 }}>
+              {releases.length} releases found{!locked && ' · click one to pick it'}
             </div>
           )}
           {filename && (
@@ -537,11 +671,17 @@ function ResultItem({ item }) {
           </span>
         ))}
 
+        {grab.state === 'grabbed' && (
+          <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: 'var(--green)', flexShrink: 0 }}>
+            ✓ Grabbed
+          </span>
+        )}
+
         {/* Import status (auto-starts after any grab) */}
         {importStatus && (() => {
           const pct = watchPercent(importStatus, importProgress)
           return (
-            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
               {WATCH_ACTIVE.includes(importStatus) && pct == null && <Spinner size={8} weight={1.5} />}
               <span style={{ color: watchColor(importStatus) }} title={importMessage}>
                 {pct != null ? `Downloading ${pct}%` : (IMPORT_LABEL[importStatus] || importStatus)}
@@ -550,106 +690,67 @@ function ResultItem({ item }) {
           )
         })()}
 
-        {/* Single-release grab button */}
-        {found && !multi && item.best_release && (
-          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
-            <GrabButton
-              state={grabStates[singleKey] || 'idle'}
-              errorMsg={grabErrors[singleKey]}
-              onGrab={e => doGrab(item.best_release, e)}
-              onForce={e => doGrab(item.best_release, e, true)}
-              onReset={e => resetGrab(singleKey, e)}
-            />
-          </div>
+        {/* The candidate's one grab, of the picked release (B18). Already in
+            the arr's queue (B12), it's Grab anyway, since a second grab
+            downloads it twice. */}
+        {found && picked && grab.state !== 'grabbed' && (
+          <Button onClick={() => doGrab(picked, grab.state === 'queued')}
+            disabled={GRAB_BUSY.includes(grab.state)}
+            title={grab.state === 'queued'
+              ? 'Already downloading. Grab another copy anyway'
+              : `Hand ${picked.title} to ${item.arr_service === 'radarr' ? 'Radarr' : 'Sonarr'}`}>
+            {grabLabel(grab.state, item.scope)}
+          </Button>
         )}
       </div>
 
-      {/* Multi-release picker */}
+      {/* Why the last grab didn't go through, as a sentence: the server's own
+          reason, never only a hover. */}
+      {(grab.state === 'queued' || grab.state === 'error') && (
+        <div style={{
+          padding: multi ? '0 16px 8px 42px' : '0 16px 10px 42px', marginTop: multi ? 0 : -4,
+          fontSize: 'var(--font-base)', fontFamily: 'var(--sans)', lineHeight: 1.5,
+          color: grab.state === 'queued' ? 'var(--yellow)' : 'var(--red)',
+        }}>
+          {grab.state === 'queued'
+            ? (grab.message || 'Already in the queue')
+            : (grab.message ? `Grab failed: ${grab.message}` : 'Grab failed')}
+        </div>
+      )}
+
+      {/* Multi-release picker: Trumped's list, in Backfill's blue. Each name
+          whole and wrapped, its readouts under it; the name's link is still
+          its own click. */}
       {found && multi && (
-        <div style={{ paddingLeft: 42, paddingRight: 16, paddingBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {/* Column headers */}
-          <div style={{ display: 'grid', gridTemplateColumns: RELEASE_GRID, gap: 8, padding: '2px 10px' }}>
-            {['Title', 'Tracker', 'Size', 'vs file', 'Peers', 'Quality', 'Score', 'HDR', 'Match', ''].map((h, i) => (
-              <span key={i} style={{
-                fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', fontWeight: 600, letterSpacing: 0, textTransform: 'none',
-                color: 'var(--text-dim)', opacity: 0.75,
-                textAlign: i >= 2 && i <= 6 ? 'right' : 'left',
-              }}>{h}</span>
-            ))}
-          </div>
-          {releases.map((r, i) => {
-            const key     = r.guid || r.title
-            const gs      = grabStates[key] || 'idle'
-            const isBest  = i === 0
-            const hdrInfo = HDR_STYLE[r.hdr]
-            return (
-              <div key={key} style={{
-                display: 'grid', gridTemplateColumns: RELEASE_GRID,
-                alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 6,
-                background: isBest ? tint('var(--accent)', 3) : 'transparent',
-                border: `1px solid ${isBest ? tint('var(--accent)', 15) : 'transparent'}`,
-              }}>
-                {r.info_url ? (
-                  <a href={r.info_url} target="_blank" rel="noopener noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    style={{ ...MONO_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'underline', textDecorationColor: tint('var(--text)', 30), textUnderlineOffset: 2 }}
-                    title={r.title}>
-                    {r.title}
-                  </a>
-                ) : (
-                  <span style={{ ...MONO_TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    title={r.title}>
-                    {r.title}
-                  </span>
-                )}
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right' }}
-                  title={r.indexer}>
-                  {r.indexer}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
-                  {formatBytes(r.size)}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', textAlign: 'right', whiteSpace: 'nowrap',
-                  color: MATCH_COLOR[r.match?.size] || 'var(--text-dim)' }}>
-                  {sizeDelta(r.size_delta)}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: r.seeders > 0 ? 'var(--green)' : 'var(--text-dim)', textAlign: 'right' }}>
-                  {r.seeders != null ? `${r.seeders}S` : '—'}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={r.quality_name}>
-                  {r.quality_name || '—'}
-                </span>
-                <span style={{ fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: 'var(--text-dim)', textAlign: 'right' }}>
-                  {r.custom_format_score ?? 0}
-                </span>
-                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                  {hdrInfo ? (
-                    <span style={{
-                      fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', fontWeight: 700,
-                      padding: '2px 5px', borderRadius: 4,
-                      background: hdrInfo.bg, color: hdrInfo.color,
-                      whiteSpace: 'nowrap',
-                    }}>
-                      {r.hdr}
-                    </span>
-                  ) : null}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                  <MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <GrabButton
-                    state={gs}
-                    errorMsg={grabErrors[key]}
-                    onGrab={e => doGrab(r, e)}
-                    onForce={e => doGrab(r, e, true)}
-                    onReset={e => resetGrab(key, e)}
-                  />
-                </div>
-              </div>
-            )
-          })}
+        <div style={{ padding: '0 16px 12px 42px' }}>
+          <PickList label={`Releases of ${item.arr_title}`} maxHeight="min(60vh, 420px)">
+            {releases.map((r, i) => {
+              const key = releaseKey(r)
+              return (
+                <PickRow key={key} on={picked != null && key === releaseKey(picked)}
+                  onPick={() => pick(r)} color={ACCENT} disabled={locked} last={i === releases.length - 1}>
+                  <PickName name={r.title} href={r.info_url} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+                    <QualityChip label={r.quality_name} hdr={r.hdr} />
+                    <MatchChips match={r.match} fields={MATCH_FIELDS} titleSuffix=" against your file" />
+                    {r.indexer && <span style={PICK_META}>{r.indexer}</span>}
+                    {r.seeders != null && (
+                      <span style={{ ...PICK_META, color: r.seeders > 0 ? 'var(--green)' : 'var(--red)' }}>{r.seeders}S</span>
+                    )}
+                    <span style={PICK_META}>{formatBytes(r.size)}</span>
+                    {r.size_delta != null && (
+                      <span title="Size against your file" style={{ ...PICK_META, color: MATCH_COLOR[r.match?.size] || 'var(--text-dim)' }}>
+                        {r.size_delta === 0 ? 'exact size' : `${sizeDelta(r.size_delta)} vs file`}
+                      </span>
+                    )}
+                    {!!r.custom_format_score && (
+                      <span title="Custom format score" style={PICK_META}>CF {r.custom_format_score}</span>
+                    )}
+                  </div>
+                </PickRow>
+              )
+            })}
+          </PickList>
         </div>
       )}
     </div>
@@ -691,8 +792,14 @@ function saveJobId(id) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function Backfill({ onNavigate }) {
-  const [phase, setPhase] = useState(() => (readJobId() ? 'running' : 'config'))  // config | running | done | stopped
+export default function Backfill({ onNavigate, initialUnder }) {
+  // config | running | done | stopped. From the library map the page opens on
+  // the search it is about to start (B17), never on this tab's last run.
+  const [phase, setPhase] = useState(() => (initialUnder || readJobId() ? 'running' : 'config'))
+  // B15 — one library folder, from a tile on the Dashboard's library map. While
+  // it's set it is the selection: the root-folder chips and the title filter
+  // step aside, since either could only narrow the one title to nothing.
+  const [under, setUnder] = useState(() => initialUnder || null)
   // T25 — the season whose *Find season pack…* opened the dialog.
   const [packFor, setPackFor] = useState(null)
 
@@ -724,11 +831,29 @@ export default function Backfill({ onNavigate }) {
   const [resFilter,       setResFilter]       = useState(() => loadPref('resFilter', []))
   const [sourceFilter,    setSourceFilter]    = useState(() => loadPref('sourceFilter', []))
   const [hdrFilter,       setHdrFilter]       = useState(() => loadPref('hdrFilter', []))
+  // A new key, so a blob from before it reads the default: no PREFS_VERSION bump.
+  const [minQuality,      setMinQuality]      = useState(() => loadPref('minQuality', 'none'))
+  // B16 — a run from the library map has its own quality, not the stored one
+  // (MAP_QUALITY), for as long as `under` is set. "Show everything" goes back
+  // to the stored chips, which nothing here changed.
+  const [mapQuality,      setMapQuality]      = useState(() => (initialUnder ? MAP_QUALITY : null))
+  const [mapDepth,        setMapDepth]        = useState(MAP_DEPTH)
+  const mapRun = !!(under && mapQuality)
+  const depth    = mapRun ? mapDepth : searchCount
+  const setDepth = mapRun ? setMapDepth : setSearchCount
+  const quality = mapRun
+    ? mapQuality
+    : { min: minQuality, res: resFilter, source: sourceFilter, hdr: hdrFilter }
+  const setQuality = useMemo(() => {
+    if (!mapRun) return { min: setMinQuality, res: setResFilter, source: setSourceFilter, hdr: setHdrFilter }
+    const set = k => v => setMapQuality(q => ({ ...q, [k]: v }))
+    return { min: set('min'), res: set('res'), source: set('source'), hdr: set('hdr') }
+  }, [mapRun])
 
   // Job
-  const [jobId,       setJobId]       = useState(() => readJobId())
+  const [jobId,       setJobId]       = useState(() => (initialUnder ? null : readJobId()))
   const [jobData,     setJobData]     = useState(null)
-  const [reattaching, setReattaching] = useState(() => !!readJobId())
+  const [reattaching, setReattaching] = useState(() => !initialUnder && !!readJobId())
   const [notice,      setNotice]      = useState(null)
   const [pollError,   setPollError]   = useState(null)
   const pollRef     = useRef(null)
@@ -749,10 +874,10 @@ export default function Backfill({ onNavigate }) {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({
         v: PREFS_VERSION,
-        sort, releaseRank, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders,
+        sort, releaseRank, resFilter, sourceFilter, hdrFilter, minQuality, searchCount, selectedFolders,
       }))
     } catch {}
-  }, [sort, releaseRank, resFilter, sourceFilter, hdrFilter, searchCount, selectedFolders])
+  }, [sort, releaseRank, resFilter, sourceFilter, hdrFilter, minQuality, searchCount, selectedFolders])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -807,12 +932,14 @@ export default function Backfill({ onNavigate }) {
   const handleDownloadFromChange = v => { setDownloadFrom(v); saveFilters(v, seedingOn) }
   const handleSeedingOnChange    = v => { setSeedingOn(v);    saveFilters(downloadFrom, v) }
 
-  // Filter raw groups by title search, then derive folder chips + count reactively
+  // Filter raw groups by the map's folder or the title search, then derive
+  // folder chips + count reactively
   const filteredGroups = useMemo(() => {
+    if (under) return allGroups.filter(g => underFolder(g, under))
     if (!titleSearch.trim()) return allGroups
     const term = titleSearch.trim().toLowerCase()
     return allGroups.filter(g => (g.arr_title || '').toLowerCase().includes(term))
-  }, [allGroups, titleSearch])
+  }, [allGroups, titleSearch, under])
 
   const folderEntries = useMemo(() => groupByFolder(filteredGroups), [filteredGroups])
   const folders = useMemo(
@@ -826,13 +953,14 @@ export default function Backfill({ onNavigate }) {
     () => selectedFolders.filter(f => folders.some(x => x.name === f)), [selectedFolders, folders])
 
   const selectedGroups = useMemo(() => (
-    liveFolders.length === 0
+    under || liveFolders.length === 0
       ? filteredGroups
       : folderEntries.filter(([name]) => liveFolders.includes(name)).flatMap(([, items]) => items)
-  ), [folderEntries, filteredGroups, liveFolders])
+  ), [folderEntries, filteredGroups, liveFolders, under])
 
   const availableCount = selectedGroups.length
-  const willSearch = searchCount === null ? availableCount : Math.min(availableCount, searchCount)
+  const willSearch = depth === null ? availableCount : Math.min(availableCount, depth)
+
 
   const matchedLine = useMemo(
     () => matchedFilesLine(matchedFiles, totalUnseeded), [matchedFiles, totalUnseeded])
@@ -862,6 +990,10 @@ export default function Backfill({ onNavigate }) {
           completed:  data.completed,
           stopReason: data.stop_reason,
           current:    data.current || null,
+          // B17 — what the run searched with, in its own words (`job.filters`).
+          filters:    data.filters || null,
+          available:  data.available ?? null,
+          kinds:      data.kinds || null,
           results:    since === 0 ? (data.results || []) : [...(prev?.results || []), ...(data.results || [])],
         }))
         if (data.arr_errors) setArrErrors(data.arr_errors)
@@ -902,8 +1034,11 @@ export default function Backfill({ onNavigate }) {
     startPoll(id)
   }, [startPoll])
 
-  // Reattach to this tab's run, if it has one.
+  // Reattach to this tab's run, if it has one. Not from the map, which starts
+  // its own (B17): a finished run of another title isn't what the click asked
+  // for, and a running one answers the new run's 409 below.
   useEffect(() => {
+    if (initialUnder) return
     const id = readJobId()
     if (id) startPoll(id)
   }, [startPoll])
@@ -915,14 +1050,16 @@ export default function Backfill({ onNavigate }) {
     setPollError(null)
     try {
       const resp = await api.startGenerate({
-        folders:       liveFolders,
-        count:         searchCount ?? availableCount,
+        folders:       under ? [] : liveFolders,
+        count:         depth ?? availableCount,
         sort,
         release_rank:  releaseRank,
-        res_filter:    resFilter,
-        source_filter: sourceFilter,
-        hdr_filter:    hdrFilter,
-        title_search:  titleSearch.trim() || undefined,
+        res_filter:    quality.res,
+        source_filter: quality.source,
+        hdr_filter:    quality.hdr,
+        min_quality:   quality.min === 'file' ? 'file' : undefined,
+        title_search:  under ? undefined : (titleSearch.trim() || undefined),
+        under:         under || undefined,
         download_from: downloadFrom,
         seeding_on:    seedingOn,
         // B6 — grabbed since the last audit; the run builds its own list.
@@ -936,8 +1073,14 @@ export default function Backfill({ onNavigate }) {
     } catch (e) {
       if (e.code === 'job_running' && e.data?.job_id) {
         // Somebody's run — another tab's, or this one's from before. A new run
-        // no longer stops it; this page shows it instead (B4).
-        setNotice('A search was already running, so this is that search rather than a new one.')
+        // no longer stops it; this page shows it instead (B4). A map click that
+        // finds its own title's search still running just shows it (B17): the
+        // refusal names the running one's folder.
+        if (!(under && e.data.under === under)) {
+          setNotice(under
+            ? <>A search was already running, so this is that search, not one for <span style={{ fontFamily: 'var(--mono)' }}>{under}</span>. Stop it, then choose New Search to search that title.</>
+            : 'A search was already running, so this is that search rather than a new one.')
+        }
         attach(e.data.job_id)
         return
       }
@@ -945,6 +1088,24 @@ export default function Backfill({ onNavigate }) {
       setLoadError(e.message)
     }
   }
+
+  // B17 — from the library map the search starts by itself, once the page has
+  // loaded the indexer strategy the run posts. Nearly every click wants the
+  // defaults (this title, your file's quality or better), so the settings are
+  // one "New Search" away rather than in the way. It stays on the settings
+  // where they explain something a search couldn't: nothing under the folder,
+  // a load that failed, or only Usenet indexers. Once per mount: App keys the
+  // page by `under`, so another tile is another mount.
+  const autoRun = useRef(!!initialUnder)
+  useEffect(() => {
+    if (!autoRun.current || loading) return
+    autoRun.current = false
+    if (loadError || availableCount === 0 || (indexers.length === 0 && usenetCount > 0)) {
+      setPhase('config')
+      return
+    }
+    handleGenerate()
+  }, [loading])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStop = useCallback(async () => {
     if (jobId) { try { await api.stopGenerate(jobId) } catch (_) {} }
@@ -984,6 +1145,27 @@ export default function Backfill({ onNavigate }) {
           extra="Everything affected is missing from the candidates and folders below."
         />
 
+        {/* Why a map click found nothing sits here, in the banner that names
+            the folder. It was a line under the disabled Generate button, a
+            scroll below the fold, so it read as the page silently falling back
+            to the full settings. */}
+        {under && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 8, background: tint('var(--blue)', 6), border: `1px solid ${tint('var(--blue)', 19)}` }}>
+            <div style={{ fontSize: 'var(--font-base)', color: 'var(--text)', lineHeight: 1.5, minWidth: 0, overflowWrap: 'anywhere' }}>
+              <div>
+                From the library map: only <span style={{ fontFamily: 'var(--mono)' }}>{under}</span>
+                {!loading && <span style={{ color: 'var(--text-dim)' }}> · <span style={{ fontFamily: 'var(--mono)' }}>{availableCount.toLocaleString()}</span> candidate{availableCount !== 1 ? 's' : ''}</span>}
+              </div>
+              {!loading && availableCount === 0 && (
+                <div style={{ marginTop: 4 }}>
+                  Nothing here to search: Sonarr and Radarr manage none of its unseeded files, or they're excluded. Backfill can only search for what an arr manages.
+                </div>
+              )}
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => setUnder(null)} style={{ marginLeft: 'auto' }}>Show everything</Button>
+          </div>
+        )}
+
         {loading ? (
           <LoadingRow label="Loading candidates…" />
         ) : (
@@ -1015,7 +1197,7 @@ export default function Backfill({ onNavigate }) {
               </div>
             )}
 
-            {folders.length > 0 && (
+            {folders.length > 0 && !under && (
               <div>
                 <SectionLabel>Root Folders</SectionLabel>
                 <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.5 }}>
@@ -1028,20 +1210,26 @@ export default function Backfill({ onNavigate }) {
             <div>
               <SectionLabel>Quality Filter</SectionLabel>
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
-                Restrict results by resolution and/or source, exactly like a Sonarr/Radarr quality profile. <em>Any</em> = no restriction.
+                {mapRun
+                  ? <>From the library map, this search starts on releases at your file's quality or better, of any resolution, source or HDR. Changes here are for this search only, and the filters you keep for the whole library are left as they were.</>
+                  : <>Restrict results by resolution and/or source, exactly like a Sonarr/Radarr quality profile. <em>Any</em> = no restriction.</>}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div>
+                  <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Minimum</div>
+                  <SortPicker options={MIN_OPTIONS} value={quality.min} onChange={setQuality.min} label="Minimum quality" />
+                </div>
+                <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Resolution</div>
-                  <OptionFilter options={QUALITY_RES_OPTIONS} value={resFilter} onChange={setResFilter} />
+                  <OptionFilter options={QUALITY_RES_OPTIONS} value={quality.res} onChange={setQuality.res} />
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Source</div>
-                  <OptionFilter options={QUALITY_SOURCE_OPTIONS} value={sourceFilter} onChange={setSourceFilter} />
+                  <OptionFilter options={QUALITY_SOURCE_OPTIONS} value={quality.source} onChange={setQuality.source} />
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--font-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>HDR</div>
-                  <OptionFilter options={HDR_OPTIONS} value={hdrFilter} onChange={setHdrFilter} />
+                  <OptionFilter options={HDR_OPTIONS} value={quality.hdr} onChange={setQuality.hdr} />
                 </div>
               </div>
             </div>
@@ -1060,9 +1248,11 @@ export default function Backfill({ onNavigate }) {
                 How to order candidates when there are more than the search limit.
               </div>
               <SortPicker options={SORT_OPTIONS} value={sort} onChange={setSort} label="Priority" />
-              <div style={{ marginTop: 12 }}>
-                <SearchInput value={titleSearch} onChange={setTitleSearch} placeholder="Filter by title…" width={220} />
-              </div>
+              {!under && (
+                <div style={{ marginTop: 12 }}>
+                  <SearchInput value={titleSearch} onChange={setTitleSearch} placeholder="Filter by title…" width={220} />
+                </div>
+              )}
             </div>
 
             <div>
@@ -1070,6 +1260,7 @@ export default function Backfill({ onNavigate }) {
               <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 12, lineHeight: 1.5 }}>
                 Each candidate queries your indexers — expect 10–90s per search depending on your setup.
                 {availableCount > 0 && ` ${availableCount.toLocaleString()} searchable candidate${availableCount !== 1 ? 's' : ''}${kinds ? ` — ${kinds}` : ''}.`}
+                {mapRun && ` From the library map it searches up to ${MAP_DEPTH}, for this search only.`}
                 {/* Shown even at zero candidates: that is the case where a
                     resolution failure is most likely and the numbers matter
                     most. */}
@@ -1082,23 +1273,26 @@ export default function Backfill({ onNavigate }) {
               {unmatchedVideo > 0 && unmatchedExample && (
                 <div style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginTop: -4, marginBottom: 12, lineHeight: 1.6 }}>
                   For example, one of those videos and the {exampleArr}{unmatchedExample.connection_name && unmatchedExample.connection_name.toLowerCase() !== exampleArr.toLowerCase() ? ` (${unmatchedExample.connection_name})` : ''} file of the same name:
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', marginTop: 4, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 2, minWidth: 0 }}>
+                  <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', marginTop: 4, display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 2, minWidth: 0 }}>
                     <span>your library</span>
-                    <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.path}>{unmatchedExample.path}</span>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.path}>{unmatchedExample.path}</span>
                     <span>{exampleArr}</span>
-                    <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.arr_path}>{unmatchedExample.arr_path}</span>
+                    <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={unmatchedExample.arr_path}>{unmatchedExample.arr_path}</span>
                   </div>
                 </div>
               )}
-              <CountPicker value={searchCount} onChange={setSearchCount} max={availableCount} />
+              {/* Keyed, because the picker keeps its custom box's text: a map
+                  run's 10 must not stay in it after Show everything. */}
+              <CountPicker key={mapRun ? 'map' : 'all'} value={depth} onChange={setDepth} max={availableCount} />
             </div>
 
             <div>
               <Button variant="primary" onClick={handleGenerate} disabled={availableCount === 0}>
                 Generate {willSearch > 0 ? `${willSearch} ` : ''}Releases →
               </Button>
-              {availableCount === 0 && (
-                <div style={{ marginTop: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)' }}>
+              {/* A map run says why in its banner at the top. */}
+              {availableCount === 0 && !under && (
+                <div style={{ marginTop: 8, fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.6 }}>
                   No resolved candidates — check that Radarr/Sonarr is configured.
                 </div>
               )}
@@ -1123,10 +1317,33 @@ export default function Backfill({ onNavigate }) {
 
   const phaseLabel =
     reattaching                            ? 'Picking your search back up…' :
+    phase === 'running' && !jobId          ? 'Starting search…' :
     phase === 'running'                    ? `Searching ${completed} of ${total}…` :
     phase === 'done'                       ? `Done — ${found}` :
     jobData?.stopReason === 'abandoned'    ? `Stopped with nobody watching — ${found}` :
                                              `Stopped — ${found}`
+
+  // B17 — what the shown run searched, from the run itself, so a search picked
+  // up from the sidebar, another tab or a refused second run says the same as
+  // one this page started. Map runs never showed their settings, so they also
+  // say their folder and, when capped, how many their filters left.
+  const run = jobData?.filters ? jobData : null
+  const runUnder = run?.filters.under || null
+  const capped = !!(runUnder && run.available != null && run.total < run.available)
+  const kinds = run?.kinds ? kindsText(run.kinds) : ''
+  const scopeLine = notice || (runUnder && (
+    <>
+      From the library map: only <span style={{ fontFamily: 'var(--mono)' }}>{runUnder}</span>
+      {capped
+        ? ` · ${run.total} of its ${run.available} candidates. New Search to choose how many.`
+        : kinds ? ` · ${kinds}` : ''}
+    </>
+  ))
+  const filterParts = run ? runFilterParts(run.filters) : []
+  const filterLine = filterParts.length > 0 && <RunFilters parts={filterParts} />
+  const blurb = (scopeLine || filterLine)
+    ? <>{scopeLine}{scopeLine && filterLine && <br />}{filterLine}</>
+    : null
 
   return (
     <WorkflowPage gap={14}>
@@ -1135,7 +1352,7 @@ export default function Backfill({ onNavigate }) {
           the middle of the page above a left-aligned title. */}
       <WorkflowHeader
         title={phaseLabel}
-        blurb={notice}
+        blurb={blurb}
         right={phase === 'running'
           ? <Button onClick={handleStop}>Stop</Button>
           : <Button onClick={handleReset}>← New Search</Button>}
@@ -1172,7 +1389,7 @@ export default function Backfill({ onNavigate }) {
       {rows.length === 0 && phase === 'running' && (
         <div style={{ padding: '48px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: 'var(--text-dim)', fontSize: 'var(--font-base)' }}>
           <Spinner />
-          {reattaching ? 'Picking your search back up…' : 'Starting search…'}
+          {reattaching ? 'Picking your search back up…' : loading && !jobId ? 'Loading candidates…' : 'Starting search…'}
         </div>
       )}
 

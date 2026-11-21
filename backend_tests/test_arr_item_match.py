@@ -32,7 +32,7 @@ def _title(**over):
 class ArrYearGateTests(unittest.TestCase):
 
     def test_radarr_tolerates_one_year_of_drift(self):
-        parsed = {'title': 'Snow White', 'year': 1938}
+        parsed = {'title': 'Rose Red', 'year': 1938}
         self.assertTrue(arr_year_ok(parsed, {'service': 'radarr', 'year': 1937}))
         self.assertFalse(arr_year_ok(parsed, {'service': 'radarr', 'year': 1997}))
 
@@ -50,11 +50,11 @@ class ArrYearGateTests(unittest.TestCase):
         self.assertTrue(arr_year_ok(parsed, {'service': 'sonarr', 'year': 2015}))
 
     def test_a_title_that_is_a_year_is_not_a_release_year(self):
-        """'1923' parses its own name as the year; the arr stores 2022."""
-        parsed = parse_release_info('1923.S01E01.1080p.WEB-DL.mkv')
-        self.assertEqual(parsed['year'], 1923)
-        self.assertTrue(arr_year_ok(parsed, {'service': 'sonarr', 'year': 2022}))
-        self.assertTrue(arr_year_ok(parsed, {'service': 'radarr', 'year': 2022}))
+        """'1917' parses its own name as the year; the arr stores 2019."""
+        parsed = parse_release_info('1917.S01E01.1080p.WEB-DL.mkv')
+        self.assertEqual(parsed['year'], 1917)
+        self.assertTrue(arr_year_ok(parsed, {'service': 'sonarr', 'year': 2019}))
+        self.assertTrue(arr_year_ok(parsed, {'service': 'radarr', 'year': 2019}))
 
     def test_unknown_on_either_side_passes(self):
         self.assertTrue(arr_year_ok({'title': 'X', 'year': None}, {'service': 'radarr', 'year': 2020}))
@@ -125,8 +125,8 @@ class TrumpFindArrItemTests(unittest.TestCase):
         self.assertIsNone(item)
 
     def test_a_same_titled_series_never_answers_for_a_movie(self):
-        item = self._find('Dune.2021.2160p.UHD.BluRay-GRP.mkv',
-                          [_title(service='sonarr', title='Dune', year=2021, arr_id=9)])
+        item = self._find('Tidewater.2021.2160p.UHD.BluRay-GRP.mkv',
+                          [_title(service='sonarr', title='Tidewater', year=2021, arr_id=9)])
         self.assertIsNone(item)
 
     def test_the_right_type_still_resolves(self):
@@ -157,9 +157,9 @@ class TrumpFindArrItemTests(unittest.TestCase):
     def test_an_alternate_title_rescues_a_release_named_in_its_own_language(self):
         """T15's primitives at TR7's call site — the arr could only have matched
         the grab because it consults this same field."""
-        titles = [_title(service='sonarr', title="I'm Not Afraid", year=2018, arr_id=5,
-                         alt_titles=['No tengo miedo'])]
-        item = self._find('No.tengo.miedo.S01E01.1080p.WEB-DL-GRP.mkv', titles)
+        titles = [_title(service='sonarr', title="Nobody Sleeps", year=2018, arr_id=5,
+                         alt_titles=['Nadie duerme'])]
+        item = self._find('Nadie.duerme.S01E01.1080p.WEB-DL-GRP.mkv', titles)
         self.assertEqual(item['arr_id'], 5)
 
     def test_an_exact_title_still_beats_an_alias(self):
@@ -172,8 +172,8 @@ class TrumpFindArrItemTests(unittest.TestCase):
         self.assertEqual(item['arr_id'], 5)
 
     def test_the_soft_fallback_is_gated_on_service_too(self):
-        item = self._find('The Magic School Bus Rides Again S01 1080p WEB-DL-GRP',
-                          [_title(service='sonarr', title='The Magic School Bus Rides Again',
+        item = self._find('The Paper Kite Rides Again S01 1080p WEB-DL-GRP',
+                          [_title(service='sonarr', title='The Paper Kite Rides Again',
                                   year=2017, arr_id=5)])
         self.assertEqual(item['arr_id'], 5)
 

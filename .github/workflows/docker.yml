@@ -33,7 +33,10 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       # The script tests run the generated bash scripts; bash, GNU stat, cmp and
-      # ln are on the runner already.
+      # ln are on the runner already. So is node, which
+      # test_library_map_sizing.py and test_library_map.py's parity test run
+      # the library map's rules under (both fail rather than skip when CI is
+      # set and node is missing).
       - name: Backend tests
         run: python -m pytest backend_tests -q -p no:cacheprovider
 
@@ -82,3 +85,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Which build this is, for /api/debug/report's `build`: the commit,
+          # and the branch or tag (experimental, main, v1.8.4). The release and
+          # :experimental carry the same version number, so this is what tells
+          # a tester's two reports apart.
+          build-args: |
+            AUDITORR_COMMIT=${{ github.sha }}
+            AUDITORR_REF=${{ github.ref_name }}

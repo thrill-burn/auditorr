@@ -124,8 +124,8 @@ class TriageInstanceRankingTests(unittest.TestCase):
     first, from any connection. With a 1080p and a 4K Sonarr both holding an
     episode, the 4K answered first, the comparison came back `lower`, and that
     pre-selected the whole cross-seed group for deletion — with rescan and force
-    import pointed at the wrong instance. Unreachable on the reference box (M4:
-    one instance per service), so this is tested on the payload."""
+    import pointed at the wrong instance. Unreachable with one instance per
+    service (M4), so this is tested on the payload."""
 
     EP = 'tv/Show.S01E02.1080p.WEB-DL/Show.S01E02.1080p.WEB-DL.mkv'
 
@@ -276,7 +276,7 @@ class TriageVerdictSpreadTests(unittest.TestCase):
 class TriageRowEpisodesTests(unittest.TestCase):
     """A row's `episodes` is every episode its videos hold, and the title reads
     it. The title named the representative's episode, so a season pack with
-    two episodes left read "Small Prophets · S01E01" beside "2 of 6 files", and
+    two episodes left read "Quiet Harbour · S01E01" beside "2 of 6 files", and
     an imported dead seed's list was its representative's alone."""
 
     def _files(self, *episodes, **over):

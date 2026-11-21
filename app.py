@@ -12,7 +12,7 @@ import functools
 import ipaddress
 import urllib.parse
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -29,7 +29,7 @@ from db import (
     db_load_file_results, db_stream_file_results, db_has_file_results,
     db_read_snapshot,
     db_save_history,
-    db_get_recent_runs,
+    db_get_recent_runs, db_count_runs_since,
     db_clear_audit_history,
     db_get_upload_snapshots,
     db_retag_upload_snapshots, db_count_upload_snapshots_by_source,
@@ -43,8 +43,8 @@ from state import (
     get_state, set_state, try_start_scanning,
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path
-from arr import _test_arr_connection, arr_rescan, arr_search, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, compute_previous_upload, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path, pending_exclusion_suggestions
+from arr import _test_arr_connection, arr_rescan, arr_search, arr_title_for_folder, fetch_arr_poster, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, media_path_key, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
 from exclusions import reads_bracket_as_glob
@@ -58,7 +58,7 @@ from debug import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
 
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.9.0"
 
 # Keep the last ~400 log records in memory for /api/debug/report
 install_ring_buffer()
@@ -485,10 +485,152 @@ def client_error():
     return jsonify({'status': 'ok'})
 
 
+# The source report's counts the Last scan card reads. Notes and the failed
+# instances' reasons stay out: a reason is a raw exception that can name a host
+# (CR7), and the card has no use for one.
+_SCAN_REPORT_KEYS = ('source', 'torrent_count', 'distinct_torrents', 'file_map_size',
+                     'instances_ok', 'instances_total', 'listing_failures', 'listing_recovered',
+                     'listing_unresolved', 'tracker_failures', 'incomplete_torrents',
+                     'completion_unknown', 'partial')
+_SCAN_WALK_KEYS = ('configured', 'exists', 'files', 'stat_errors', 'unlistable', 'vanished')
+
+
+def _scan_report():
+    """What the last scan could see, for the dashboard's Last scan card.
+
+    R1 on the page: the scan has stored this since S03 and C2, and only the debug
+    report read it, so a refused scan left the dashboard showing the previous
+    one's numbers with nothing on it saying so. `last_run` is the newest run of
+    any status — a refusal is `anomaly`, with `anomaly` saying why; `report` is
+    the last scan that persisted, which is what every number on the page is.
+    """
+    rep = db_get_meta('last_source_report') or None
+    out = {'report': None, 'anomaly': None, 'last_run': None, 'runs_30d': {}}
+    if isinstance(rep, dict):
+        report = {k: rep.get(k) for k in _SCAN_REPORT_KEYS}
+        report['instances_failed'] = len(rep.get('instances_failed') or [])
+        report['filesystem'] = {
+            root: {k: (block or {}).get(k) for k in _SCAN_WALK_KEYS}
+            for root, block in (rep.get('filesystem') or {}).items()}
+        out['report'] = report
+    runs = db_get_recent_runs(limit=1)
+    if runs:
+        r = runs[0]
+        out['last_run'] = {k: r.get(k) for k in ('ran_at', 'trigger', 'status', 'duration_seconds',
+                                                  'peak_rss_mb')}
+        if r.get('status') != 'ok':
+            out['last_run']['error_message'] = r.get('error_message')
+        if r.get('status') == 'anomaly':
+            a = db_get_meta('last_source_anomaly') or {}
+            out['anomaly'] = {k: a.get(k) for k in ('at', 'trigger', 'code', 'message')}
+    out['runs_30d'] = db_count_runs_since((datetime.now() - timedelta(days=30)).isoformat())
+    return out
+
+
 @app.route('/api/results')
 @require_auth
 def get_results():
-    return jsonify(db_load_results())
+    data = db_load_results()
+    try:
+        data['scan_report'] = _scan_report()
+    except Exception as e:
+        log.warning(f"Could not build the scan report: {e}")
+        data['scan_report'] = None
+    return jsonify(data)
+
+
+@app.route('/api/library_map')
+@require_auth
+def get_library_map():
+    """The dashboard's library map, as the last scan stored it (`audit.library_map_row`).
+
+    Streamed through like `/api/files`. `[]` until the first scan that writes it.
+    """
+    return app.response_class(db_stream_file_results('library_map'), mimetype='application/json')
+
+
+@app.route('/api/exclusion_suggestions')
+@require_auth
+def get_exclusion_suggestions():
+    """Settings' exclusion suggestions from the last scan (`audit.exclusion_suggestions`),
+    less what the config already answers (`pending_exclusion_suggestions`): a
+    dismissed one, a rule already in the list, a preset already on. A small row,
+    so it's loaded and filtered rather than streamed. `[]` before the first scan
+    that writes it."""
+    rows = db_load_file_results('exclusion_suggestions')
+    return jsonify({'status': 'success',
+                    'suggestions': pending_exclusion_suggestions(rows, db_load_config())})
+
+
+def _map_folder_arg():
+    """The `folder` a library-map detail asks about: library-relative, only ever compared."""
+    rel = (request.args.get('folder') or '').strip()
+    return rel if 0 < len(rel) <= 1024 and '\x00' not in rel else None
+
+
+@app.route('/api/library_map/title')
+@require_auth
+def get_library_map_title():
+    """The series or movie a library-map title is, for the map's detail strip (2026-11-10).
+
+    Found by folder from the cached title list (`arr_title_for_folder`), so a
+    hover costs no arr call while the cache is warm. Answers `found: true` with
+    what the strip says; `found: false` when every instance answered and none
+    holds the folder; `found: null` with the instances that didn't answer when
+    it couldn't ask (R1); `configured: false` with no arr at all.
+    """
+    rel = _map_folder_arg()
+    if rel is None:
+        return jsonify({'error': 'folder required', 'code': 'folder_required'}), 400
+    cfg = db_load_config()
+    try:
+        if not normalize_arr_connections(cfg):
+            return jsonify({'found': False, 'configured': False})
+    except ValueError:
+        return jsonify({'found': None, 'unreachable': []})
+    row, errors = arr_title_for_folder(cfg, rel)
+    if row is None:
+        if errors:
+            return jsonify({'found': None, 'unreachable': [e.get('name') or e.get('service') for e in errors]})
+        return jsonify({'found': False})
+    return jsonify({
+        'found':   True,
+        'service': row.get('service'),
+        'title':   row.get('title') or '',
+        'year':    row.get('year'),
+        'status':  row.get('status') or '',
+        'network': row.get('network') or row.get('studio') or '',
+        'seasons': row.get('season_count'),
+        'runtime': row.get('runtime') or 0,
+        'poster':  bool(row.get('poster')),
+    })
+
+
+@app.route('/api/library_map/poster')
+@require_auth
+def get_library_map_poster():
+    """The poster of the series or movie a library-map title is, from its arr (2026-11-10).
+
+    Fetched through auditorr because the arr wants its API key, which never
+    reaches the browser. 404 when there's no match or no poster; the strip
+    then draws the title's initials. Cached by the browser for a day, so a
+    second look costs nothing; nothing is held here.
+    """
+    rel = _map_folder_arg()
+    if rel is None:
+        return jsonify({'error': 'folder required', 'code': 'folder_required'}), 400
+    cfg = db_load_config()
+    try:
+        row, _ = arr_title_for_folder(cfg, rel)
+    except ValueError:
+        row = None
+    got = fetch_arr_poster(cfg, row) if row else None
+    if not got:
+        return ('', 404)
+    data, ctype = got
+    resp = app.response_class(data, mimetype=ctype)
+    resp.headers['Cache-Control'] = 'private, max-age=86400'
+    return resp
 
 
 @app.route('/api/next_steps')
@@ -657,6 +799,12 @@ def handle_config():
                     data.get('MEDIA_SERVER_EXCLUSION_PRESETS', [])
                 ),
                 'EXCLUSION_HIDE_FROM_EXPLORER': bool(data.get('EXCLUSION_HIDE_FROM_EXPLORER', False)),
+                # Falls back to the stored list, like the link addresses above:
+                # a save from a bundle that predates it keeps every dismissal.
+                'EXCLUSION_SUGGESTIONS_DISMISSED': [
+                    s for s in data.get('EXCLUSION_SUGGESTIONS_DISMISSED',
+                                        existing.get('EXCLUSION_SUGGESTIONS_DISMISSED', []))
+                    if isinstance(s, str)],
                 'SONARR_URL':         str(data.get('SONARR_URL', '')),
                 'SONARR_API_KEY':     str(data['SONARR_API_KEY']) if data.get('SONARR_API_KEY') else existing.get('SONARR_API_KEY', ''),
                 'RADARR_URL':         str(data.get('RADARR_URL', '')),
@@ -712,7 +860,7 @@ def handle_config():
                     # cross_seed_stats is added by the audit, not process_health_metrics —
                     # recompute it here so the config-save dashboard refresh doesn't drop
                     # the Cross-Seed Effectiveness / Tracker Leaderboard panels.
-                    cs_stats = _compute_cross_seed_stats(media_files)
+                    cs_stats = _compute_cross_seed_stats(media_files, curr.get('tracker_aliases'))
                     if cs_stats:
                         new_dashboard['cross_seed_stats'] = cs_stats
                     curr['dashboard'] = new_dashboard
@@ -1207,8 +1355,8 @@ def _cleanup_landmarks(rows, remote, local):
 
     The script's working-directory guard needs names a finished run leaves in
     place, and the selection supplies them only where something sits above a
-    release folder. With no category folder, which is the reference box's
-    layout, a release folder is one segment deep and its parent is the torrent
+    release folder. With no category folder (a common
+    layout), a release folder is one segment deep and its parent is the torrent
     folder itself, so no guard was emitted at all (CODE_REVIEW_2026-09-27 CR5).
 
     A complete torrent's payload is on disk under its `save_path/name`, and the
@@ -1635,6 +1783,7 @@ def actions_radarr_search():
 def get_upload_stats():
     from_date = request.args.get('from') or None
     to_date   = request.args.get('to')   or None
+    days      = 30
     if from_date or to_date:
         stats = compute_upload_stats(from_date=from_date, to_date=to_date)
     else:
@@ -1644,6 +1793,14 @@ def get_upload_stats():
         stats = compute_upload_stats(days)
     if stats is None:
         return jsonify({"status": "pending", "message": "Not enough data yet. Upload stats require at least 2 audits."})
+    # The equal window before this one, for the Trackers page's comparison. A
+    # To with no From is open at the start, so it has no window before it.
+    try:
+        stats['previous'] = (compute_previous_upload(days, from_date=from_date, to_date=to_date)
+                             if from_date or not to_date else None)
+    except Exception as e:
+        log.warning(f"Previous upload window failed: {e}")
+        stats['previous'] = None
     return jsonify(stats)
 
 
@@ -2579,7 +2736,7 @@ def _client_season_packs(rows, series, season):
     pack). Complete packs come first, then the better release.
 
     A pack's name has no `SxxEyy` for the title parse to stop at, so its parsed
-    title runs on through the season (`Small Prophets S01`, and a language tag
+    title runs on through the season (`Quiet Harbour S01`, and a language tag
     after it). The title is the part before the season token.
     """
     keys = set()
@@ -2990,7 +3147,7 @@ def _trump_find_arr_item(cfg, parsed, titles=None, name=''):
     in the first place (TRIAGE T15, same primitives) — then a **soft fallback**
     ranked by shared title core, because a trump's new-release name often
     carries a stray season token or extra scene tokens the exact key match can't
-    fold ('… Rides Again S01' vs the series 'The Magic School Bus Rides Again')
+    fold ('… Rides Again S01' vs the series 'The Paper Kite Rides Again')
     and a graded title match beats a hard 404.
 
     **Content type is a gate, not a sort key**, at every tier — TRIAGE T1's fix
@@ -3319,8 +3476,8 @@ def _trump_link_state(cfg, group):
     """Does anything outside this group still hold each member's bytes? (TR3)
 
     The confirm screen's whole safety argument for `delete_files=True` was
-    "your library hardlinks survive", and nothing checked it; M1 measured 3.5%
-    of the reference box's torrent-tree files at `st_nlink == 1`. Every distinct
+    "your library hardlinks survive", and nothing checked it; M1 measured a few
+    percent of one library's torrent-tree files at `st_nlink == 1`. Every distinct
     path in the **whole group** is stat'ed and grouped by `(st_dev, st_ino)`:
     *own* is how many distinct group paths sit on an inode, *outside* is
     `st_nlink − own`. A file is True when outside > 0, False when it is 0 — this
@@ -4742,7 +4899,7 @@ def workflows_triage():
         type. A *gate*, not a tiebreak: this used to end `... or lib_rows`, which
         fell back to the wrong-type rows whenever the right type had none, so a
         TV episode of a same-titled series absent from Sonarr matched the film in
-        Radarr (Fargo, Hannibal, Dune, Shōgun — the collisions are not exotic).
+        Radarr (Fargo, Hannibal, Westworld, Shōgun — the collisions are not exotic).
         That produced quality_cmp 'same', which is exactly what renders the Force
         import button, and force_import_files then posts replaceExistingFiles
         against the movie's id: one episode deliberately written over a library
@@ -5686,8 +5843,13 @@ def _running_gen_job():
 
 
 def _gen_job_running_response(job):
-    """Refused, not replaced: a new run never stops somebody else's (B4)."""
+    """Refused, not replaced: a new run never stops somebody else's (B4).
+
+    `under` is the running one's library-map folder, so a map click that finds
+    its own title's search running can show it without saying it's another (B17).
+    """
     return jsonify({'status': 'error', 'code': 'job_running', 'job_id': job['id'],
+                    'under': (job.get('filters') or {}).get('under'),
                     'message': 'A search is already running — showing it instead.'}), 409
 
 
@@ -5786,8 +5948,94 @@ def _backfill_group(scope, files, season=None, held=None, unseeded=None):
         # say why an episode was not searched as part of its season.
         'season_files_held':     held,
         'season_files_unseeded': unseeded,
+        # B16: what "your file or better" is measured against. A pack covers
+        # every file of its season, so it's the lowest of them: the floor then
+        # hides only a release worse than everything you hold, never one a file
+        # in the season is at (a season whose profile was lowered part-way).
+        'floor_quality':   _lowest_quality(c.get('file_quality') for c in files),
     })
     return group
+
+
+def _parsed_quality(quality_name):
+    """An arr quality name as `compare_release_quality`'s parsed side."""
+    res, src = parse_quality_name(quality_name)
+    return {'resolution': res, 'source': src}
+
+
+def _lowest_quality(names):
+    """The lowest of some arr quality names, or `''` where none is readable.
+
+    Ordered as Triage compares a release with a library file (resolution, then
+    source). A name that can't be placed is skipped, never taken as the lowest.
+    """
+    lowest = ''
+    for name in names:
+        res, src = parse_quality_name(name)
+        if not (res or src):
+            continue
+        if not lowest or compare_release_quality(_parsed_quality(name), lowest) == 'lower':
+            lowest = name
+    return lowest
+
+
+def _below_floor(release, floor):
+    """Is this release positively worse than `floor`? (B16, "your file or better")
+
+    Only `lower` hides it: a release or a file whose quality can't be read is
+    `unknown` and stays, because a filter the user didn't choose mustn't empty a
+    row on a guess.
+    """
+    return bool(floor) and compare_release_quality(
+        _parsed_quality(release.get('quality_name')), floor) == 'lower'
+
+
+# How many distinct qualities an empty row names as hidden (B16).
+_EMPTY_QUALITIES_MAX = 4
+
+
+def _quality_labels(rows):
+    """Distinct `quality HDR` labels of some releases, first seen first, bounded."""
+    out = []
+    for r in rows:
+        label = f"{r.get('quality_name') or 'Unknown'} {r.get('hdr') or ''}".strip()
+        if label not in out:
+            out.append(label)
+            if len(out) == _EMPTY_QUALITIES_MAX:
+                break
+    return out
+
+
+def _backfill_empty(report, rows, in_scope, download_from, seeding_on, quality, floor):
+    """Why a candidate's search came back with nothing to offer (B16).
+
+    The row said "No releases found" whatever happened, so a Resolution chip
+    left on 2160p from an earlier run read the same as an empty tracker: on the
+    box, one tracker had both 1080p packs of a season and the row said none existed
+    (BACKFILL B2 recorded the same silence for the Source chip). Counted in the
+    order the run filters, each stage over what reached it, and asked for only
+    when the row is empty, so a row with releases costs nothing more.
+
+    `quality` is the run's res/source/HDR chips; `floor` the candidate's
+    `floor_quality` when the run asked for "your file or better", else `''`.
+    """
+    on_indexers = _apply_release_filters(in_scope, download_from, seeding_on)
+    chosen = _apply_release_filters(on_indexers, [], [], **quality)
+    kept = {id(r) for r in chosen}
+    hidden = [r for r in on_indexers if id(r) not in kept]
+    below = [r for r in chosen if _below_floor(r, floor)]
+    return {
+        'returned':        report.get('returned', len(rows)),
+        'usenet':          report.get('usenet', 0),
+        'other_title':     report.get('other_title', 0) + report.get('unidentified', 0),
+        'out_of_scope':    len(rows) - len(in_scope),
+        'indexers':        len(in_scope) - len(on_indexers),
+        'quality':         len(hidden),
+        'quality_names':   _quality_labels(hidden),
+        'below_floor':     len(below),
+        'below_floor_names': _quality_labels(below),
+        'floor':           floor or None,
+    }
 
 
 def _resolve_backfill(cfg):
@@ -5817,8 +6065,9 @@ def _resolve_backfill(cfg):
     arr_media, arr_errors, arr_roots = fetch_arr_media_index_with_roots(cfg)
     media_root = cfg.get('MEDIA_PATH', '')
 
-    def _norm(p):
-        return os.path.normpath(str(p or '')).replace('\\', '/')
+    # The scan's Unmanaged stamp keys on the same (`arr.media_path_key`), so
+    # the map's Not seeded is exactly what this can search.
+    _norm = media_path_key
 
     arr_index = {}
     for item in arr_media:
@@ -5925,6 +6174,30 @@ _UNMATCHED_NAMES_MAX = 200
 # The most grabbed-candidate keys a generate request may name (B6). A page holds
 # them only until the audit lands, so this is a sanity bound, not a working one.
 _EXCLUDE_KEYS_MAX = 2000
+
+# The most names a run's recorded filters keep per list (B17). An indexer, root
+# folder or chip list holds a handful; this only bounds what a status poll sends.
+_GEN_FILTER_NAMES_MAX = 50
+
+
+def _gen_run_filters(under, folders, title_search, min_file, res_filter, source_filter,
+                     hdr_filter, download_from, seeding_on):
+    """What a generate run narrows by, said by the run (B17).
+
+    A page that picks a run up later (the sidebar, another tab, a refused second
+    run) can't know these from its own state, and a run from the library map
+    never showed its settings, so `/generate/status` carries them. Only what
+    narrows the run, and an empty list is no restriction. Release ranking and
+    priority only order it, and the grabbed keys (B6) are the page's own.
+    """
+    def names(v):
+        return [x for x in v if isinstance(x, str)][:_GEN_FILTER_NAMES_MAX] if isinstance(v, list) else []
+    return {'under': under or None, 'folders': names(folders),
+            'title_search': title_search or None,
+            'min_quality': 'file' if min_file else None,
+            'res_filter': names(res_filter), 'source_filter': names(source_filter),
+            'hdr_filter': names(hdr_filter),
+            'download_from': names(download_from), 'seeding_on': names(seeding_on)}
 
 
 def _unmatched_example(unmatched_names, arr_media, conn_by_id):
@@ -6079,10 +6352,27 @@ def _build_generate_candidates(cfg, folders=None, title_search=None):
     return _narrow_backfill(_resolve_backfill(cfg)['groups'], folders, title_search)
 
 
-def _narrow_backfill(groups, folders=None, title_search=None, exclude_keys=None):
-    """The page's folder and title filters, and the candidates it already grabbed (B6)."""
+def _backfill_under(group, under):
+    """Whether a candidate's files sit at or under `under`, a library-relative folder
+    (BACKFILL B15: the dashboard's library map opens Backfill on one title).
+
+    By path, never by title: the map's tiles are folders, and a folder's name
+    isn't the arr's title (`Glasshouse` can be Sonarr's `GL4SSHOUSE`, and a
+    movie folder carries its year). Every file of a candidate is in one series
+    or movie folder, so its representative path answers for all of them.
+    """
+    path = str(group.get('path') or '').replace('\\', '/')
+    under = str(under).replace('\\', '/').strip('/')
+    return bool(under) and (path == under or path.startswith(under + '/'))
+
+
+def _narrow_backfill(groups, folders=None, title_search=None, exclude_keys=None, under=None):
+    """The page's folder and title filters, the map's folder scope (B15), and the
+    candidates it already grabbed (B6)."""
     if exclude_keys:
         groups = [g for g in groups if g['key'] not in exclude_keys]
+    if under:
+        groups = [g for g in groups if _backfill_under(g, under)]
     if folders:
         groups = [g for g in groups if g['folder'] in folders]
     if title_search:
@@ -6115,7 +6405,11 @@ def workflows_generate():
     res_filter    = data.get('res_filter') or []
     source_filter = data.get('source_filter') or []
     hdr_filter    = data.get('hdr_filter') or []
+    # B16: "your file or better", each candidate against its own files
+    # (`floor_quality`). Anything else is no minimum.
+    min_file      = data.get('min_quality') == 'file'
     title_search  = (data.get('title_search') or '').strip()
+    under         = (data.get('under') or '').strip() if isinstance(data.get('under'), str) else ''
     # B6 — the keys of candidates whose grab this page's server accepted, held by
     # the page until the audit lands. The run builds its candidates here, so a
     # grabbed candidate the page merely hid would be searched and offered again.
@@ -6135,11 +6429,10 @@ def workflows_generate():
     cfg = db_load_config()
     try:
         backfill = _resolve_backfill(cfg)
-        candidates = _sort_generate_candidates(
-            _narrow_backfill(backfill['groups'], folders=folders or None,
-                             title_search=title_search or None, exclude_keys=exclude_keys),
-            sort,
-        )[:count]
+        narrowed = _narrow_backfill(backfill['groups'], folders=folders or None,
+                                    title_search=title_search or None, exclude_keys=exclude_keys,
+                                    under=under or None)
+        candidates = _sort_generate_candidates(narrowed, sort)[:count]
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 400
     # The errors of the fetch this run's candidates came from (S11). The cache is
@@ -6156,7 +6449,15 @@ def workflows_generate():
            'started_at': now, 'last_polled': now, 'finished_at': None,
            # Kept on the job so a page that reattaches can still say which
            # instances this run could not read.
-           'arr_errors': arr_errors}
+           'arr_errors': arr_errors,
+           # B17 — what it searched with, how many candidates its filters left
+           # before the depth cut, and what kind each searched one is. Set here
+           # and never changed: the status poll reads them while the thread runs.
+           'filters': _gen_run_filters(under, folders, title_search, min_file, res_filter,
+                                       source_filter, hdr_filter, download_from, seeding_on),
+           'available': len(narrowed),
+           'kinds': {s: sum(1 for c in candidates if c.get('scope') == s)
+                     for s in ('season', 'episode', 'movie')}}
     with _gen_jobs_lock:
         running = _running_gen_job()
         if running:
@@ -6200,6 +6501,11 @@ def workflows_generate():
                 'releases':          None,
                 'best_release':      None,
                 'error':             None,
+                # B16. Present from creation and only ever reassigned: the status
+                # endpoint serialises this row as `current` while it's searched,
+                # and a key appearing mid-iteration raises there.
+                'floor_quality':     None,
+                'empty':             None,
             }
             job['results'].append(result)
             try:
@@ -6211,16 +6517,23 @@ def workflows_generate():
                     search = _backfill_search(candidate, episode_id=episode_id)
                     result['search'] = search
                     result['episode_numbers'] = episode_numbers
+                report = {}
                 rows = fetch_release_matrix(
                     cfg, search['service'], search['connection_id'], search['arr_id'],
                     episode_id=search.get('episode_id'),
                     season_number=search.get('season_number'),
                     file_path=search.get('path'),
+                    report=report,
                 )
-                rows = [r for r in rows if _release_in_scope(r, scope, episode_numbers,
-                                                             season=candidate.get('season_number'),
-                                                             episode_ids=episode_ids)]
-                filtered = _apply_release_filters(rows, download_from, seeding_on, res_filter=res_filter, source_filter=source_filter, hdr_filter=hdr_filter)
+                in_scope = [r for r in rows if _release_in_scope(r, scope, episode_numbers,
+                                                                 season=candidate.get('season_number'),
+                                                                 episode_ids=episode_ids)]
+                quality = {'res_filter': res_filter, 'source_filter': source_filter, 'hdr_filter': hdr_filter}
+                filtered = _apply_release_filters(in_scope, download_from, seeding_on, **quality)
+                floor = (candidate.get('floor_quality') or '') if min_file else ''
+                if floor:
+                    filtered = [r for r in filtered if not _below_floor(r, floor)]
+                result['floor_quality'] = floor or None
                 # The arr's own order unless the user asked for closeness to the
                 # file on disk (B3, amendment 2). Either way the closeness
                 # evidence is attached, so every row still shows what it is
@@ -6236,6 +6549,9 @@ def workflows_generate():
                 result['status']       = 'found' if best else 'not_found'
                 result['releases']     = filtered
                 result['best_release'] = best
+                if not best:
+                    result['empty'] = _backfill_empty(report, rows, in_scope, download_from,
+                                                      seeding_on, quality, floor)
             except Exception as e:
                 log.warning("Generate search failed for %s: %s", candidate.get('arr_title'), e)
                 result['status'] = 'error'
@@ -6291,7 +6607,10 @@ def workflows_generate_status():
                     'results': job['results'][since:completed],
                     'current': current,
                     'stop_reason': job.get('stop_reason'),
-                    'arr_errors': job.get('arr_errors') or []})
+                    'arr_errors': job.get('arr_errors') or [],
+                    'filters': job.get('filters'),
+                    'available': job.get('available'),
+                    'kinds': job.get('kinds')})
 
 
 @app.route('/api/workflows/generate/stop', methods=['POST'])

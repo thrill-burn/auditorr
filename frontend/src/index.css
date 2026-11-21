@@ -18,7 +18,12 @@
   --red:       #e5604d;
   --blue:      #5b9bd9;
   --cyan:      #55b6c2;
-  --purple:    #a78bd0;
+  /* Lighter than it was (#a78bd0, 2026-11-14, the user's pick): it was as
+     light as --blue (L* 63 and 62), so Dedupe's purple and Backfill's blue
+     differed by hue alone and read as one colour to red-green colour
+     blindness (simulated ΔE 2.1 on the map, 2.7 in New in the library).
+     Now a step lighter than --blue as well. Light's is already darker. */
+  --purple:    #cfbdf3;
   --neutral:   #353a40;
   --mono:      'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans:      'Geist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -51,6 +56,26 @@
      the same step light mode's white takes above its own track. */
   --seg-on:    #2a2e33;
   --seg-edge:  #3a3f46;
+  /* Linked as a chart series: New in the library's bars. --text-dim mixed
+     into --surface3 at 42%, the cool slate that suits its blue. */
+  --map-linked: #55595e;
+  /* The library map (2026-11-13, "Frosted panes", then "clear glass, solid
+     states", the user's picks): --map-tray is what a folder's titles sit on,
+     and Linked's and Other's panes are clear glass, the tray itself, so the
+     glass is only the glint LibraryMap.jsx's LOOK draws on it (the user: "a
+     glint or shine on the background and does not overwhelm the
+     background"). A workflow state is its card colour (--blue, --yellow,
+     --red, --purple) mixed --map-mix into the pane. Plain hex, because the
+     canvas reads them and can't read a color-mix(). Not --map-linked: New in
+     the library's bars would vanish at the tray's colour. */
+  --map-tray:        #16181b;
+  --map-pane-linked: #16181b;
+  --map-pane-other:  #16181b;
+  --map-mix: 74%;
+  /* Unmanaged (2026-11-14): unseeded and in no arr. No workflow acts on it,
+     so no workflow's colour and no pattern: a plain grey, the user's pick,
+     a step below the states' lightness and well off the clear panes. */
+  --map-unmanaged: #62676d;
 }
 
 [data-theme="light"] {
@@ -76,6 +101,19 @@
   --shadow-pop: 0 18px 42px rgba(28, 25, 23, 0.16);
   --seg-on:    #ffffff;
   --seg-edge:  #ceccc7;
+  /* Neutral greys with no hue (2026-11-10, the user's pick from a preview):
+     mixed from the stone --text-dim like dark's, they read as putty beside
+     the sky blue. */
+  --map-linked: #c3c3c3;
+  /* Light's titles sit on the white card, not the grey --surface2 tray: on
+     the tray its clear panes read as white keys, where dark's tray is nearly
+     its card (L* 8 against 5). Its glint is LOOK.light's, at 45% of the
+     first build's (the user's pick from .internal/preview/mapglass.mjs). */
+  --map-tray:        #ffffff;
+  --map-pane-linked: #ffffff;
+  --map-pane-other:  #ffffff;
+  --map-mix: 72%;
+  --map-unmanaged: #b4b4b4;
 }
 
 html, body, #root {
@@ -141,6 +179,12 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   font-family: var(--mono);
   color: var(--text);
 }
+
+/* A mono field (a path, a key, a size) whose placeholder is a hint rather than
+   an example value: "Search filename…", "paste API key…", "min". The hint is
+   words, so it's Geist; what's typed is data, so it stays mono. A placeholder
+   that's an example value (http://192.168.1.x:8080, /data/torrents) stays mono. */
+.ph-words::placeholder { font-family: var(--sans); }
 
 .ui-status-dot {
   display: inline-block;
@@ -252,6 +296,75 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .seg-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 .seg-opt:disabled { opacity: 0.45; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) { .seg-opt { transition: none; } }
+
+/* The library map's height grip (LibraryMap.jsx, 2026-11-10): a full-width bar
+   under the map with a line icon, washed on hover like a segment. Drag it,
+   double-click it for the default, or focus it and use the arrow keys.
+   touch-action: none, or a touch drag scrolls the page instead. */
+.map-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  cursor: row-resize;
+  touch-action: none;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
+}
+.map-grip:hover,
+.map-grip[data-dragging="true"] { color: var(--text); background: color-mix(in srgb, var(--text) 4%, transparent); }
+.map-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .map-grip { transition: none; } }
+
+/* The library map's legend (LibraryMap.jsx, 2026-11-10): each entry is a
+   button that highlights its state on the map, as WinDirStat's extension list
+   lights up one type's files. Quiet until hovered, washed like a segment, and
+   raised like a selected segment while its state is lit. A state with no bytes
+   is disabled at the legend's old 55%. */
+.map-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: var(--font-sm);
+  line-height: 1.25;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s cubic-bezier(.4,0,.2,1), color 0.12s cubic-bezier(.4,0,.2,1);
+}
+.map-key:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--text); background: color-mix(in srgb, var(--text) 4%, transparent); }
+.map-key[aria-pressed="true"] { background: var(--seg-on); color: var(--text); box-shadow: var(--elev-1), inset 0 0 0 1px var(--seg-edge); }
+.map-key:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.map-key:disabled { opacity: 0.55; cursor: default; }
+@media (prefers-reduced-motion: reduce) { .map-key { transition: none; } }
+
+/* New in the library (ScanCards.jsx, 2026-11-20): a day's column opens Audit
+   History on its files. The whole column is the target, washed on hover and
+   focus, since a narrow bar is a small thing to hit and a day of moves alone
+   draws none. */
+.nil-day { cursor: pointer; outline: none; }
+.nil-hit { fill: transparent; }
+.nil-day:hover .nil-hit { fill: color-mix(in srgb, var(--text) 6%, transparent); }
+.nil-day:focus-visible .nil-hit { fill: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* PickRow (shared.jsx, 2026-11-12): one row of a pick-one list — Trumped's
+   candidates and replacement releases, Backfill's releases, the season-pack
+   dialog's. The picked row's tint and edge are inline (they take the page's
+   colour), so an unpicked row has no inline background and the hover wash here
+   can reach it. */
+.pick-row { transition: background 0.12s cubic-bezier(.4,0,.2,1); }
+.pick-row:hover:not([aria-checked="true"]):not([aria-disabled="true"]) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.pick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .pick-row { transition: none; } }
 
 /* IconButton / CloseButton (shared.jsx): a quiet square for a line icon — the
    close ×, a collapse chevron. An icon has no font size, which is what retired

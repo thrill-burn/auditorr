@@ -133,7 +133,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
       {/* Job list */}
       <div style={{ overflowY: 'auto', flex: 1 }}>
         {jobs.length === 0 && (
-          <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-base)', fontFamily: 'var(--mono)' }}>
+          <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--font-base)', fontFamily: 'var(--sans)' }}>
             No active import jobs
           </div>
         )}
@@ -167,7 +167,7 @@ export default function ImportProgress({ open, jobs, onClose }) {
                   {/* A known percentage replaces the spinner; an unknown keeps it. */}
                   {pct == null && <StageIcon type={cfg.icon} color={cfg.color} />}
                   <span style={{
-                    fontSize: 'var(--font-sm)', fontFamily: 'var(--mono)', color: cfg.color,
+                    fontSize: 'var(--font-sm)', fontFamily: 'var(--sans)', color: cfg.color,
                   }} title={ended ? job.message : undefined}>
                     {cfg.label}
                     {pct != null && ` ${pct}%`}

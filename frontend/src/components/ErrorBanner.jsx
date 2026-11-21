@@ -9,7 +9,7 @@ export default function ErrorBanner({ message }) {
       padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 10,
     }}>
       <span style={{ color: 'var(--red)', fontSize: 'var(--font-md)' }}>⚠</span>
-      <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-base)', color: 'var(--red)' }}>
+      <span style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--red)' }}>
         {message}
       </span>
     </div>

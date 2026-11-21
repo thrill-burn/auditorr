@@ -17,7 +17,9 @@ export { DURATION_UNITS, SIZE_UNITS, applyListFilters } from './listFilterRules'
 // and a filter left over from last week would hide rows without saying so.
 
 const DIVIDER = { width: 1, height: 18, background: 'var(--border2)', margin: '0 3px', flexShrink: 0 }
-const DIM = { fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }
+// The bar's labels, suffixes, hint and count line: all words, so Geist. What's
+// typed into its boxes is data and stays mono.
+const DIM = { fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }
 
 function readStored(storageKey, fields) {
   try {
@@ -29,9 +31,14 @@ function readStored(storageKey, fields) {
 }
 
 // [state, setState, result] — `result` is `applyListFilters` for `items`,
-// recomputed when either changes.
-export function useListFilters(storageKey, fields, items) {
-  const [state, setState] = useState(() => readStored(storageKey, fields))
+// recomputed when either changes. `initialQuery` (a tile on the Dashboard's
+// library map, 2026-11-09) starts the page on an empty filter with just that
+// search, rather than the stored one: a tracker or range left from earlier
+// could hide the very row the tile was for.
+export function useListFilters(storageKey, fields, items, initialQuery) {
+  const [state, setState] = useState(() => (initialQuery
+    ? { ...emptyFilterState(fields), q: String(initialQuery) }
+    : readStored(storageKey, fields)))
   useEffect(() => {
     try { sessionStorage.setItem(storageKey, JSON.stringify(state)) } catch { /* private mode */ }
   }, [storageKey, state])
@@ -62,6 +69,7 @@ function RangeInput({ value, onChange, placeholder, label, problem }) {
   return (
     <input
       type="number" min="0" step="any"
+      className="ph-words"
       value={value}
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}

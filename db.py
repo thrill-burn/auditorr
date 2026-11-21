@@ -1,7 +1,9 @@
 import os
 import json
 import zlib
+import itertools
 import sqlite3
+from array import array
 import logging
 import threading
 from contextlib import contextmanager
@@ -63,6 +65,9 @@ DEFAULT_CONFIG = {
     'DISC_RIP_EXCLUSION_PRESETS':  [],
     'MEDIA_SERVER_EXCLUSION_PRESETS': [],
     'EXCLUSION_HIDE_FROM_EXPLORER': False,
+    # Exclusion suggestions the user said "Not this" to, by id
+    # (`audit.exclusion_suggestions`), so they don't come back.
+    'EXCLUSION_SUGGESTIONS_DISMISSED': [],
     'SONARR_URL':         '',
     'SONARR_API_KEY':     '',
     'RADARR_URL':         '',
@@ -296,6 +301,10 @@ class PreparedFileResults:
     compact rows, against a record list already costing several GB — and **the
     previous generation is still never read**, which is what
     "never hold two inventories" is actually protecting.
+
+    Those compress times are the pure-Python encoder's. Since SCAN SC1
+    (2026-11-15) the whole save step is about 2 s at 650,000 files, still 20
+    times the write, so staging stands.
     """
 
     __slots__ = ('count', 'blob')
@@ -464,6 +473,20 @@ def db_get_last_two_snapshots():
         conn.close()
 
 
+def db_count_runs_since(since_iso):
+    """`{status: count}` of the audit runs at or after `since_iso` — the Last scan
+    card's "N scans in the last 30 days", without reading every row."""
+    conn = _db_conn()
+    try:
+        rows = conn.execute(
+            'SELECT status, COUNT(*) AS n FROM audit_runs WHERE ran_at >= ? GROUP BY status',
+            (since_iso,)
+        ).fetchall()
+        return {r['status']: r['n'] for r in rows}
+    finally:
+        conn.close()
+
+
 def db_get_recent_runs(limit=None):
     conn = _db_conn()
     try:
@@ -547,12 +570,95 @@ def db_load_results(conn=None):
         return {"trackers": [], "status": "No audit run yet.", "dashboard": None}
 
 
+# Items per `json.dumps` call when a file list is staged: about a megabyte of
+# text for file records, so the encoder's output is never the whole list.
+_JSON_BATCH = 2000
+# The value types `_json_chunks` streams rather than hands to the encoder whole.
+_JSON_NESTED = frozenset((list, tuple, dict))
+
+
+def _json_chunks(obj):
+    """`json.dumps(obj)` as a run of strings, `_JSON_BATCH` items at a time.
+
+    Joined, they are exactly the text `json.JSONEncoder().iterencode(obj)`
+    yields: a list is its items' encodings joined by `, ` inside brackets, a
+    dict its `key: value` pairs joined the same way inside braces, and each
+    batch is encoded by `json.dumps` with the brackets or braces cut off.
+
+    Which values are streamed and which go to the encoder inside a batch only
+    changes where the text is cut, never the text: a list or dict under a
+    string key is streamed, anything else (a subclass of one, a value under a
+    key `json` would have to coerce) is left to `json.dumps`.
+    """
+    if isinstance(obj, (list, tuple)):
+        if not obj:
+            yield '[]'
+            return
+        for i in range(0, len(obj), _JSON_BATCH):
+            yield ('[' if i == 0 else ', ') + json.dumps(obj[i:i + _JSON_BATCH])[1:-1]
+        yield ']'
+    elif isinstance(obj, dict):
+        if not obj:
+            yield '{}'
+            return
+        lead, items = '{', iter(obj.items())
+        while True:
+            batch = dict(itertools.islice(items, _JSON_BATCH))
+            if not batch:
+                break
+            # A batch holding no list or dict of its own (a signature map is
+            # all of them) is one `json.dumps`, with no Python-level loop.
+            if _JSON_NESTED.isdisjoint(map(type, batch.values())):
+                yield lead + json.dumps(batch)[1:-1]
+                lead = ', '
+                continue
+            # Otherwise each nested value is streamed in its turn, and the
+            # values between them are encoded together.
+            pending = {}
+            for k, v in batch.items():
+                if type(k) is str and type(v) in _JSON_NESTED:
+                    if pending:
+                        yield lead + json.dumps(pending)[1:-1]
+                        lead, pending = ', ', {}
+                    yield lead + json.dumps(k) + ': '
+                    yield from _json_chunks(v)
+                    lead = ', '
+                else:
+                    pending[k] = v
+            if pending:
+                yield lead + json.dumps(pending)[1:-1]
+                lead = ', '
+        yield '}'
+    else:
+        yield json.dumps(obj)
+
+
+def _compress_json(obj):
+    """`zlib.compress(json.dumps(obj).encode(), 1)`, the same bytes, without the
+    whole text ever existing: each batch is compressed as it's encoded. A
+    `compress` call that returns nothing isn't kept."""
+    cobj = zlib.compressobj(level=1)
+    chunks = []
+    for text in _json_chunks(obj):
+        data = cobj.compress(text.encode('utf-8', errors='replace'))
+        if data:
+            chunks.append(data)
+    chunks.append(cobj.flush())
+    return b''.join(chunks)
+
+
 def db_prepare_file_results(files):
     """Compress a file list ready for `db_save_file_results` — outside any lock.
 
-    Streams JSON through zlib rather than materializing the full string + bytes
-    simultaneously. For 650K-file libraries this avoids a ~1 GB peak where
-    json.dumps() string, .encode() bytes, and compressed output all coexist.
+    The JSON goes through zlib a batch at a time (`_json_chunks`), so the whole
+    text never exists at once, and each batch is encoded by `json.dumps`, the C
+    encoder. `JSONEncoder().iterencode` called directly, which this used, is the
+    pure-Python encoder: 68 small strings per torrent record, each compressed
+    on its own with nearly every result empty, and the `b''.join` over 20
+    million of them was the whole scan's memory peak (SCAN SC1; 7.97 → 0.54 s
+    and 1,762 → 21.5 MB on 300,005 records). Empty results are dropped for the
+    same reason. The stored bytes are unchanged, held by
+    `test_staging_identity.py`.
 
     Split out from the write in Phase 13 so the publish transaction holds the
     write lock for the write alone — see `PreparedFileResults` for the numbers.
@@ -561,13 +667,9 @@ def db_prepare_file_results(files):
     two trees apart — a dict of record lists. `count` is records either way, so
     the stats row means the same thing for every tab.
     """
-    cobj = zlib.compressobj(level=1)
-    chunks = [cobj.compress(chunk.encode('utf-8', errors='replace'))
-              for chunk in json.JSONEncoder().iterencode(files)]
-    chunks.append(cobj.flush())
     count = (sum(len(v) for v in files.values() if isinstance(v, list))
              if isinstance(files, dict) else len(files))
-    return PreparedFileResults(count, b''.join(chunks))
+    return PreparedFileResults(count, _compress_json(files))
 
 
 def db_save_file_results(tab, files, conn=None, generation=None):
@@ -650,9 +752,14 @@ def db_stream_file_results(tab, chunk_size=1 << 20):
 
 
 def db_prepare_file_signatures(sigs):
-    """Compress a signature map ready for `db_save_file_signatures` — outside any lock."""
-    return PreparedFileResults(
-        len(sigs), zlib.compress(json.dumps(sigs).encode('utf-8', errors='replace'), 1))
+    """Compress a signature map ready for `db_save_file_signatures` — outside any lock.
+
+    Batch by batch like the file lists (SCAN SC8): as one string and its bytes
+    a map of 350,000 paths was 93 MB held for the length of the call, at what
+    is the scan's peak once the file lists no longer are. 6 MB this way, the
+    same blob, and no slower (`dict(islice(...))` batches, no per-path loop).
+    """
+    return PreparedFileResults(len(sigs), _compress_json(sigs))
 
 
 def db_save_file_signatures(tab, sigs, conn=None):
@@ -679,6 +786,52 @@ def db_load_file_signatures(tab, conn=None):
         if isinstance(data, (bytes, bytearray)):
             return json.loads(zlib.decompress(data).decode())
         return json.loads(data)
+
+
+# The library's file identities, for telling a moved file from a new one (New
+# in the library, 2026-11-20). `audit.library_keys` is one signed 64-bit key per
+# library file; stored raw, because hashes don't compress, and never read as
+# JSON: `/api/files` serves only `media` and `torrents`.
+_LIBRARY_KEYS_TAB = 'media_keys'
+
+
+def db_save_library_keys(keys, conn=None):
+    """Persist `audit.library_keys`' array (or its bytes) for the next scan's
+    diff. The array is bound through its own buffer, never copied to bytes.
+
+    Written only when it differs from what's stored: a library's unlinked files
+    rarely change between scans (imports arrive linked), and reading the row to
+    compare costs a quarter of writing it (0.5 against 1.8 ms at 350,000 library
+    files). In the caller's transaction, so the comparison and the write are one."""
+    blob = keys if isinstance(keys, (bytes, bytearray)) else memoryview(keys).cast('B')
+    with _writing(conn) as c:
+        row = c.execute('SELECT files_json FROM file_results WHERE tab = ?',
+                        (_LIBRARY_KEYS_TAB,)).fetchone()
+        stored = row['files_json'] if row is not None else None
+        # Lengths first, then bytes against bytes: a memoryview compares item
+        # by item, 0.57 ms here against 0.02.
+        if (isinstance(stored, (bytes, bytearray)) and len(stored) == len(blob)
+                and stored == bytes(blob)):
+            return
+        c.execute('INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
+                  (_LIBRARY_KEYS_TAB, blob))
+
+
+def db_load_library_keys(conn=None):
+    """The previous scan's library keys as an `array('q')`, or `None` when there
+    are none to read (a database from before they were stored): could not ask,
+    so the caller counts as it did before."""
+    with _reading(conn) as c:
+        row = c.execute('SELECT files_json FROM file_results WHERE tab = ?',
+                        (_LIBRARY_KEYS_TAB,)).fetchone()
+        blob = row['files_json'] if row else None
+    if not isinstance(blob, (bytes, bytearray)):
+        return None
+    out = array('q')
+    if len(blob) % out.itemsize:
+        return None
+    out.frombytes(blob)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +958,10 @@ def db_save_config(conf):
 # these numbers rather than a second copy of them.
 EXCLUSION_PATTERNS_MAX = 100
 EXCLUSION_PATTERN_MAX_CHARS = 200
+# Dismissed exclusion suggestions: an id is a kind and a folder name, so the
+# cap is generous; it only stops a runaway client growing the config row.
+EXCLUSION_SUGGESTIONS_DISMISSED_MAX = 500
+EXCLUSION_SUGGESTION_ID_MAX_CHARS = 300
 
 
 def validate_config(data):
@@ -882,6 +1039,17 @@ def validate_config(data):
                 elif len(p) > EXCLUSION_PATTERN_MAX_CHARS:
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must not exceed "
                                   f"{EXCLUSION_PATTERN_MAX_CHARS} characters")
+
+    dismissed = data.get('EXCLUSION_SUGGESTIONS_DISMISSED')
+    if dismissed is not None:
+        if not isinstance(dismissed, list):
+            errors.append("EXCLUSION_SUGGESTIONS_DISMISSED must be a list")
+        elif len(dismissed) > EXCLUSION_SUGGESTIONS_DISMISSED_MAX:
+            errors.append(f"EXCLUSION_SUGGESTIONS_DISMISSED must not exceed "
+                          f"{EXCLUSION_SUGGESTIONS_DISMISSED_MAX} entries")
+        elif any(not isinstance(s, str) or len(s) > EXCLUSION_SUGGESTION_ID_MAX_CHARS for s in dismissed):
+            errors.append(f"EXCLUSION_SUGGESTIONS_DISMISSED entries must be strings of at most "
+                          f"{EXCLUSION_SUGGESTION_ID_MAX_CHARS} characters")
 
     presets = data.get('MEDIA_SERVER_EXCLUSION_PRESETS')
     if presets is not None:

@@ -3,15 +3,18 @@ import re
 import gc
 import math
 import time
+import shutil
 import hashlib
 import logging
 import posixpath
 import threading
 import unicodedata
+from array import array
 from datetime import datetime, timedelta
 
 import sources
-from arr import VIDEO_EXTENSIONS
+from sources import canonical_trackers, strip_port
+from arr import VIDEO_EXTENSIONS, fetch_arr_managed_paths, media_path_key
 from exclusions import is_excluded, compile_exclusions
 from scripts import dedupe_group_count, dedupe_row
 from media_server_exclusions import expand_exclusion_patterns
@@ -24,12 +27,14 @@ from db import (
     db_save_change_log_entry,
     db_save_file_results, db_prepare_file_results,
     db_save_file_signatures, db_load_file_signatures, db_prepare_file_signatures,
+    db_save_library_keys, db_load_library_keys,
     db_get_meta, db_set_meta, db_update_meta, db_delete_meta,
-    db_publish,
+    db_publish, EXCLUSION_PATTERN_MAX_CHARS,
 )
 import rounds
 from state import get_state, set_state, update_progress
-from debug import process_rss_mb, container_memory, host_available_mb, malloc_trim
+from debug import (process_rss_mb, container_memory, host_available_mb, malloc_trim,
+                   reset_peak_rss, peak_rss_since_reset_mb, rss_and_peak_mb)
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +88,12 @@ _UNLISTABLE_SHALLOW_DEPTH = 2
 # An empty folder changed this recently may be about to be filled — a download
 # starting, a move in progress — so it isn't offered (C27). qui's default.
 EMPTY_DIR_GRACE_SECS = 600
+
+
+# An inode no torrent claims has no trackers: one shared empty value, not an
+# empty set per inode (216 bytes each, SCAN SC9). A claim replaces it with a set
+# of its own, built as `set().update` built it, so its order is the same.
+_NO_TRACKERS = frozenset()
 
 
 def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_so_far, total_files, exclusion_patterns=None, total_ref=None, compiled_exclusions=None, walk_report=None, empty_dirs=None, protected_dirs=None):
@@ -203,13 +214,18 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                     stack[-1][0] if stack[-1][0].endswith(('/', os.sep)) else stack[-1][0] + os.sep):
                 _settle(stack.pop())
             stack.append([root, len(dirs), 0, bool(files), []])
+        rel_root = None
         for filename in files:
             full_path = os.path.join(root, filename)
             try:
                 st       = os.stat(full_path)
                 file_key = (st.st_dev, st.st_ino)
                 size     = st.st_size
-                rel_path = os.path.relpath(full_path, base_path)
+                # `relpath` of a file is its folder's, plus its name: worked
+                # out once per folder, not once per file.
+                if rel_root is None:
+                    rel_root = os.path.relpath(root, base_path)
+                rel_path = filename if rel_root == os.curdir else os.path.join(rel_root, filename)
                 excluded = (compiled_exclusions.match(full_path, rel_path, filename)
                             if compiled_exclusions is not None
                             else is_excluded(full_path, rel_path, filename, exclusion_patterns))
@@ -227,12 +243,17 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 # torrent is gone is not claimed, and is an ordinary orphan.
                 if qbit_info is not None and not excluded and sources.is_part_file_name(filename):
                     excluded = True
-                inode_map.setdefault(file_key, {
-                    'trackers': set(), 'status': 'Orphaned',
+                # SCAN SC9: the entry is the walk's peak, alive with every
+                # record, so it carries nothing it doesn't need. `key` is the
+                # inode's one key tuple, which every path of it appends to the
+                # key order in place of its own fresh one; `unreg_claimants` is
+                # made only for an inode that has one.
+                info = inode_map.setdefault(file_key, {
+                    'key': file_key,
+                    'trackers': _NO_TRACKERS, 'status': 'Orphaned',
                     'torrent_paths': [], 'media_paths': [], 'hash': '',
                     'instance_id': None, 'instance_name': None,
                     'tracker_health': 'unknown', 'tracker_msg': '',
-                    'unreg_claimants': {},
                     'size': 0,
                     'torrent_rel_path': None, 'torrent_excluded': False,
                     'media_rel_path': None, 'media_excluded': False,
@@ -265,7 +286,10 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         info['torrent_rel_path'] = rel_path
                         info['torrent_excluded'] = excluded
                     if qbit_info:
-                        info['trackers'].update(qbit_info['trackers'])
+                        if info['trackers'] is _NO_TRACKERS:
+                            info['trackers'] = set(qbit_info['trackers'])
+                        else:
+                            info['trackers'].update(qbit_info['trackers'])
                         info['category'] = qbit_info.get('category', '') or info.get('category', '')
                         # Cross-seeds via distinct hardlinks share an inode but
                         # have distinct paths, so each is a separate qbit_file_map
@@ -283,8 +307,9 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                             info['tracker_msg']    = qbit_info.get('tracker_msg', '')
                         # Union unregistered claimants across every path of this
                         # inode so a dead cross-seed sibling survives the merge.
-                        for h, c in (qbit_info.get('unreg_claimants') or {}).items():
-                            info['unreg_claimants'][h] = c
+                        unreg = qbit_info.get('unreg_claimants')
+                        if unreg:
+                            info.setdefault('unreg_claimants', {}).update(unreg)
                         # Completion (R2). Sparse — absent means complete, which
                         # is almost every record, and an extra key on every
                         # inode_map entry is the RAM hotspot this walk is
@@ -311,7 +336,7 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                         if not excluded and st.st_mtime > 0 and (
                                 oldest_mtime is None or st.st_mtime < oldest_mtime):
                             oldest_mtime = st.st_mtime
-                key_order.append(file_key)
+                key_order.append(info['key'])
             except Exception as e:
                 log.warning(f"Could not stat {full_path}: {e}")
                 stat_errors += 1
@@ -321,7 +346,9 @@ def _walk_directory(base_path, source_label, inode_map, qbit_file_map, scanned_s
                 total_ref[0] += 1
                 if total_ref[0] % 500 == 0:
                     set_state(total_files=total_ref[0])
-            update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
+            if not scanned & 127:
+                update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
+    update_progress(scanned, total_ref[0] if total_ref is not None else total_files)
     walk['stat_errors'] = stat_errors
     if track_empty:
         while stack:
@@ -729,7 +756,19 @@ def _dedupe_paths(tree_paths):
 
 
 def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map,
-                      compiled_exclusions=None, unverified=None):
+                      compiled_exclusions=None, unverified=None, unmanaged=None, counts=None,
+                      torrent_folders=None, unlinked_keys=None):
+    """`unmanaged`: `unmanaged_test`'s answer for one library path, when the arrs
+    gave a whole one. Each unseeded library record it says no arr holds is
+    stamped `unmanaged`, here, in the loop that builds the records, so the
+    stamp costs no pass of its own; `counts['unmanaged']` says how many.
+
+    `torrent_folders`, when a dict, is filled by `_mark_whole_torrents` with
+    each top-level torrent folder's registrations, for `exclusion_suggestions`.
+
+    `unlinked_keys`, when an `array('q')`, gets `library_keys`' key for each
+    library record no torrent file is linked to, in record order, here in the
+    branches that already run only for those, so it costs no pass of its own."""
     if unverified:
         # Normalised once here as well as in `unverified_spec`: every comparison
         # below is against `_match_key` paths, and a root spelled any other way
@@ -737,15 +776,17 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         unverified = {'all': bool(unverified.get('all')),
                       'roots': [_match_key(r) for r in (unverified.get('roots') or []) if r]}
     torrent_files_data, sidecar_candidates = [], []
-    seen_torrent_keys = set()
+    # An inode emitted is marked on its own entry, which has room for the key
+    # (SCAN SC9), not in a set of every key: `torrent_record` (the record, read
+    # by the library loop below) and `media_done`. So this marks the inode map
+    # it's given, and is called once per map, as the scan does.
     for file_key in torrent_key_order:
         # Cross-seeded files share an inode across multiple torrent directories.
         # Only emit one entry per unique inode so the file browser and health
         # metrics don't count the same physical file N times (once per cross-seed).
-        if file_key in seen_torrent_keys:
-            continue
-        seen_torrent_keys.add(file_key)
         info    = inode_map[file_key]
+        if 'torrent_record' in info:
+            continue
         file_id = f"{file_key[0]}:{file_key[1]}"
         # Unregistered cross-seed claimants other than the kept (healthiest) one:
         # dead torrent registrations whose payload is still alive on this inode.
@@ -804,32 +845,50 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         # nothing: a library with nothing to stamp never pays for a second walk.
         if not imported and _is_sidecar_candidate(record):
             sidecar_candidates.append(record)
+        info['torrent_record'] = record
         torrent_files_data.append(record)
     media_files_data = []
-    seen_media_keys = set()
+    # The keys cost a hash per unlinked record. What pays for them, in this
+    # loop: `duplicate_map` is looked up once a record, not twice (a tuple key
+    # hashes again on every lookup), and `torrent_paths` once, not twice.
+    add_key = (unlinked_keys if unlinked_keys is not None else array('q')).append
     for file_key in media_key_order:
-        if file_key in seen_media_keys:
-            continue
-        seen_media_keys.add(file_key)
         info    = inode_map[file_key]
-        file_id = f"{file_key[0]}:{file_key[1]}"
+        if 'media_done' in info:
+            continue
+        info['media_done'] = True
+        # A linked inode's torrent record holds an equal `file_id` and
+        # `trackers`: the library record takes the same objects (SCAN SC9).
+        twin = info.get('torrent_record')
+        linked = info['torrent_paths']
+        size = info['size']
+        dups = duplicate_map.get(file_key)
         record = {
-            "path": info['media_rel_path'], "size": info['size'], "inode": file_key[1],
-            "file_id": file_id,
+            "path": info['media_rel_path'], "size": size, "inode": file_key[1],
+            "file_id": twin['file_id'] if twin else f"{file_key[0]}:{file_key[1]}",
             "status": info['status'], "imported": True,
-            "trackers": list(info['trackers']) or ["None"],
-            "linked_paths": info['torrent_paths'],
-            "duplicate_paths": duplicate_map.get(file_key, []),
+            "trackers": twin['trackers'] if twin else (list(info['trackers']) or ["None"]),
+            "linked_paths": linked,
+            "duplicate_paths": dups if dups is not None else [],
             "excluded": info['media_excluded'],
         }
-        if file_key in duplicate_map:
+        if dups is not None:
             extra = _dedupe_paths(info['media_paths'])
             if extra:
                 record["dedupe_paths"] = extra
+            if not linked:
+                add_key(hash((file_key[1], size)))
+        # Unseeded as the map reads it (`_map_state_media`); a linked file,
+        # most of a library, leaves at the first test.
+        elif not linked:
+            add_key(hash((file_key[1], size)))
+            if unmanaged is not None and not record['excluded'] and unmanaged(record['path']):
+                record['unmanaged'] = True
+                counts['unmanaged'] += 1
         media_files_data.append(record)
     # Before the whole-torrent stamps, which read it.
     _mark_sidecars(torrent_files_data, sidecar_candidates)
-    _mark_whole_torrents(torrent_files_data, media_files_data)
+    _mark_whole_torrents(torrent_files_data, media_files_data, folders=torrent_folders)
     _mark_cleanup_folders(torrent_files_data, media_files_data,
                           extra_paths=_extra_torrent_paths(inode_map),
                           leftovers=[r['leftover'] for r in torrent_files_data if r.get('leftover')])
@@ -863,7 +922,7 @@ def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=(), 
     than orphans lived under the folder. So one stray orphan inside a live
     torrent's release folder — a sample a repack dropped — made a one-file group
     whose rule hid the live torrent (C16, TRIAGE T6's bug on the side Phase 5 did
-    not fix). Depth also refused the reference box's one-segment release
+    not fix). Depth also refused one-segment release
     folders, torrents saved with no category directory.
 
     **The field name is Triage's, deliberately: `excl_folder`** — one name, one
@@ -1111,8 +1170,60 @@ def _mark_sidecars(torrent_files_data, candidates=None):
             r['sidecar'] = True
 
 
-def _mark_whole_torrents(torrent_files_data, media_files_data):
+# A registration's imported states in `_mark_whole_torrents`' pass 1, as bits.
+# _REG_UNFINISHED is the suggestions' own: the registration's first record is
+# excluded or not known to be complete, so it's no evidence about its folder.
+_REG_IMPORTED, _REG_NOT_IMPORTED, _REG_UNFINISHED = 1, 2, 4
+_REG_STATES = _REG_IMPORTED | _REG_NOT_IMPORTED
+# A folder's not-imported copies kept for the library test, at most: one in
+# the library is enough to refuse the folder.
+_FOLDER_COPIES_MAX = 50
+
+
+def _top_and_category(r):
+    """`(top-level torrent folder, client category)` of a torrent record; the
+    folder is '' for a file at the torrent root."""
+    path = r.get('path') or ''
+    i = path.find('/')
+    j = path.find('\\')
+    if j >= 0 and (i < 0 or j < i):
+        i = j
+    return (path[:i] if i > 0 else '', r.get('category') or '')
+
+
+def _tally_torrent_folders(folders, reg_where, states, copies):
+    """Fill `folders` with `{top: {torrents, finished, imported, categories,
+    copies}}` from pass 1's registrations: how many own records under the
+    folder, how many of those are finished and have nothing in the library, how
+    many have something in it, the client categories they use (at most four),
+    and the duplicate paths of their not-imported files (`_FOLDER_COPIES_MAX`).
+    Per registration, never per file."""
+    for h, (top, cat) in reg_where.items():
+        t = folders.get(top)
+        if t is None:
+            t = folders[top] = {'torrents': 0, 'finished': 0, 'imported': 0,
+                                'categories': set(), 'copies': []}
+        b = states[h]
+        t['torrents'] += 1
+        if b & _REG_IMPORTED:
+            t['imported'] += 1
+        elif not b & _REG_UNFINISHED:
+            t['finished'] += 1
+        if cat and len(t['categories']) < 4:
+            t['categories'].add(cat)
+    for h, dups in copies:
+        t = folders[reg_where[h][0]]
+        if len(t['copies']) < _FOLDER_COPIES_MAX:
+            t['copies'].append(dups)
+
+
+def _mark_whole_torrents(torrent_files_data, media_files_data, folders=None):
     """Stamp the two facts Triage needs to build a folder exclusion safely (T6).
+
+    `folders`, when a dict, is filled with each top-level torrent folder's
+    registrations for the exclusion suggestions (`torrent_folder_tally`): pass 1
+    already visits every record by registration, so the tally costs one lookup
+    a registration, not a pass of its own.
 
     `whole_torrent` — the torrent is *homogeneous*, every file in the same
     imported state, so the Triage row covers all of it. A partially-imported
@@ -1164,18 +1275,39 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
     """
     # Pass 1 — homogeneity, which hashes Triage can act on at all, and how many
     # files each torrent has against how many its Triage row will show.
+    #
+    # A registration's imported states are bits, not a set: _REG_IMPORTED for
+    # a file in the library, _REG_NOT_IMPORTED for one that isn't and isn't a
+    # sidecar (which has no say), so homogeneous is exactly one of the two. A
+    # set was 216 bytes a registration at the scan's peak (2026-11-20).
     imported_states, relevant = {}, set()
     files_of, row_records = {}, []
+    # The exclusion suggestions' half: a registration's folder and category off
+    # its first record, one shared tuple per pair, so the dict holds no string
+    # of its own; and a not-imported file's copies, which the tally reads.
+    reg_where = {} if folders is not None else None
+    pairs, copies = {}, []
     # Keyed by registration (`torrent_record_key`, S05), which is the hash
     # wherever a torrent is registered once.
     for r in torrent_files_data:
         h = torrent_record_key(r)
         if not h:
             continue
-        states = imported_states.setdefault(h, set())
-        imported = bool(r.get('imported'))
-        if imported or not r.get('sidecar'):
-            states.add(imported)
+        b = imported_states.get(h)
+        if b is None:
+            b = 0
+            if reg_where is not None:
+                where = _top_and_category(r)
+                reg_where[h] = pairs.setdefault(where, where)
+                if r.get('excluded') or r.get('incomplete') or r.get('completion_unknown'):
+                    b = _REG_UNFINISHED
+        if r.get('imported'):
+            b |= _REG_IMPORTED
+        elif not r.get('sidecar'):
+            b |= _REG_NOT_IMPORTED
+            if reg_where is not None and r.get('duplicate_paths'):
+                copies.append((h, r['duplicate_paths']))
+        imported_states[h] = b
         files_of[h] = files_of.get(h, 0) + 1
         if _is_triage_relevant(r):
             relevant.add(h)
@@ -1183,7 +1315,10 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
                 row_records.append(r)
     _stamp_torrent_files(row_records, files_of)
     del row_records, files_of
-    whole = {h for h in relevant if len(imported_states[h]) == 1}
+    if reg_where is not None:
+        _tally_torrent_folders(folders, reg_where, imported_states, copies)
+        del reg_where, pairs, copies
+    whole = {h for h in relevant if (imported_states[h] & _REG_STATES) in (_REG_IMPORTED, _REG_NOT_IMPORTED)}
     if not whole:
         return
 
@@ -1301,7 +1436,499 @@ def _library_shape(scoring_media):
 # config save until the next scan. (`dedupe_group_count` is recomputed there
 # instead, from the lists the recompute already holds.)
 SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
-                     'cleanup_unchecked_count', 'empty_folder_count', 'empty_folders_unknown')
+                     'cleanup_unchecked_count', 'empty_folder_count', 'empty_folders_unknown',
+                     'disk_space', 'unmanaged_check', 'unmanaged_count')
+
+
+# ---------------------------------------------------------------------------
+# The library map (the dashboard's treemap, 2026-11-09)
+# ---------------------------------------------------------------------------
+#
+# The disk as root → top-level folder → title, each title's bytes split by the
+# workflow that acts on them. **Linked bytes are counted once, in the library**:
+# a torrent-tree record with a library link is the same inode the library side
+# already counted, so the torrent root holds only what isn't linked. The states
+# are in the four dashboard cards' order, and the frontend's file-level view
+# (`libraryMapRules.js`, `stateOfMedia` / `stateOfTorrent`) is the same rule in
+# JavaScript, so the two views of a file can't disagree.
+#
+# **A dead seed is a library state** (2026-11-11): a library file linked to a
+# torrent its tracker has deleted (`_is_dead_seed_torrent`). Its bytes are the
+# library file's, drawn once, there; Triage removes the torrent and its torrent-
+# side link, and the file turns Not seeded for Backfill. It was drawn Linked,
+# which looked healthy, and Triage's rows were on no tile. Appended last, so a
+# version 1 row's six sums keep their places.
+#
+# **Unmanaged is a library state** (2026-11-14): a library file that isn't
+# seeded and that no arr holds (`stamp_unmanaged`, the scan's stamp). It was
+# drawn Not seeded, and a click opened Backfill on nothing: a second copy
+# of a movie in a release-named folder beside Radarr's own, a show folder
+# whose episodes Sonarr tracks none of, a film's extras. No workflow acts on it,
+# so it's in no workflow's colour and no gap total. Appended last, so a
+# version 2 row's seven sums keep their places.
+#
+# **A library sidecar is Other** (2026-11-20): an unseeded library file that
+# isn't a video (a Bazarr subtitle, a media server's .nfo or artwork) and that
+# an arr holds a file beside. Backfill can't search one (B9), so drawn Not
+# seeded it was a gap the sizing rules raised to a visible stripe on every title
+# that had one: one 60 KB subtitle per title took the whole floor budget. It's
+# the Unmanaged stamp's own test (`unmanaged_test`: a video by its extension,
+# anything else by its folder), so the two can't disagree, and an unmanaged
+# folder's sidecars stay Unmanaged. Same row format, so still version 3.
+MAP_LINKED, MAP_UNSEEDED, MAP_ORPHANED, MAP_NOT_IMPORTED, MAP_COPY, MAP_OTHER, MAP_DEAD_SEED, MAP_UNMANAGED = range(8)
+MAP_STATES = 8
+# Titles kept by name, largest first. The rest fold into one tile per folder:
+# a title under a pixel draws nothing, and the row stays small on a library
+# with tens of thousands of titles.
+LIBRARY_MAP_TITLES_MAX = 2000
+
+
+def _map_video(path):
+    """Whether a library path is a video by its extension, as `unmanaged_test`
+    reads one: the text from the name's last dot, a dot that opens the name not
+    counting. `libraryMapRules.js`' `isVideo` is the same rule."""
+    dot = path.rfind('.')
+    return dot > max(path.rfind('/'), path.rfind('\\')) + 1 and path[dot:].lower() in VIDEO_EXTENSIONS
+
+
+def _map_state_media(f, dead=None):
+    """`dead`: the `file_id`s of dead seeds' torrent records, as `library_map_row` reads them."""
+    if f.get('linked_paths'):
+        return MAP_DEAD_SEED if dead and f.get('file_id') in dead else MAP_LINKED
+    if f.get('duplicate_paths'):
+        return MAP_COPY
+    if f.get('unmanaged'):
+        return MAP_UNMANAGED
+    return MAP_UNSEEDED if _map_video(f.get('path') or '') else MAP_OTHER
+
+
+def stamp_unmanaged(media_files, media_root, managed):
+    """Stamp `unmanaged: True` on each unseeded library file no arr holds; the count.
+
+    Unseeded as the map reads it (`_map_state_media`): not excluded, no link,
+    no copy. `managed` is `arr.fetch_arr_managed_paths`' `ManagedPaths`, matched on
+    `arr.media_path_key` of the file's full path, which is Backfill's own test,
+    so a video stamped here is exactly one Backfill can't search, and one left
+    Not seeded is one it can. **Anything else follows its folder**: no arr
+    lists a subtitle, a poster or an .nfo, so one is unmanaged only where no
+    arr holds a file beside it. Matched alone, every sidecar of a Radarr movie
+    would have been a grey sliver saying it was in no arr. Sparse: a file that
+    isn't stamped has no key, so the record costs nothing more. Never called
+    without a whole answer from every arr (R1). The scan stamps in
+    `_assemble_records`, by the same `unmanaged_test`.
+    """
+    unmanaged = unmanaged_test(managed, media_root)
+    n = 0
+    for f in media_files:
+        if f.get('linked_paths') or f.get('duplicate_paths') or f.get('excluded'):
+            continue
+        if unmanaged(f.get('path') or ''):
+            f['unmanaged'] = True
+            n += 1
+    return n
+
+
+def unmanaged_test(managed, media_root):
+    """`unmanaged(path)` for a library path: does no arr hold it? (`stamp_unmanaged`)
+
+    A video by its own path, anything else by its folder. The key is
+    `media_path_key` of the full path, Backfill's; for a path the walk wrote
+    (`os.path.relpath`'s, already normal, no backslash) that's the normalised
+    root and the path joined, so it's built without `normpath`: at 650,000
+    files that was half the stamp's time. Anything else takes the long way.
+    """
+    root = media_path_key(media_root)
+    prefix = '' if root == '.' else (root if root.endswith('/') else root + '/')
+
+    def unmanaged(rel):
+        if rel and rel[0] != '/' and '\\' not in rel:
+            key = prefix + rel
+        else:
+            key = media_path_key(rel if os.path.isabs(rel) else os.path.join(media_root, rel))
+        # The extension as `splitext` reads it for any real file name, without
+        # its Python-level loop.
+        dot = key.rfind('.')
+        if dot > key.rfind('/') + 1 and key[dot:].lower() in VIDEO_EXTENSIONS:
+            return key not in managed
+        return not managed.holds_folder_of(key)
+    return unmanaged
+
+
+def _map_state_torrent(f):
+    """An unlinked torrent-tree record's state. Never called for a linked one."""
+    if f.get('status') == 'Orphaned':
+        return MAP_ORPHANED
+    # An unfinished download is nobody's to act on yet (T4), and a sidecar of an
+    # imported torrent isn't "not imported" (T19), so both are Other, as the
+    # Not Imported card and Triage read them.
+    if not f.get('imported') and not f.get('sidecar') and not f.get('incomplete'):
+        return MAP_NOT_IMPORTED
+    if f.get('duplicate_paths'):
+        return MAP_COPY
+    return MAP_OTHER
+
+
+def _map_key(path):
+    """A root-relative path up to its second slash: its title's key."""
+    if '\\' in path:
+        path = path.replace('\\', '/')
+    i = path.find('/')
+    j = path.find('/', i + 1) if i >= 0 else -1
+    return path[:j] if j > 0 else path
+
+
+def _map_title(path):
+    """`(top-level folder, title)` of a root-relative path. A title is the folder
+    below the top-level one, or the file itself when it sits directly in it; a
+    file at the root has no folder (`''`)."""
+    if '\\' in path:
+        path = path.replace('\\', '/')
+    parts = path.split('/', 2)
+    if len(parts) == 1:
+        return '', parts[0]
+    return parts[0], parts[1]
+
+
+def dead_seed_keys(torrent_files):
+    """`{file_id: the torrent's title key}` for every dead seed among `torrent_files`
+    (`_is_dead_seed_torrent`, linked): what the library map draws as MAP_DEAD_SEED,
+    on the library file sharing the inode. The scan passes its Triage subset,
+    which holds every dead seed, so this reads a few records rather than all."""
+    return {f['file_id']: _map_key(f.get('path') or '') for f in torrent_files
+            if f.get('tracker_health') == 'unregistered' and f.get('linked_paths') and f.get('file_id')
+            and _is_dead_seed_torrent(f)}
+
+
+# A full-disc rip's index file, in the folder the disc-rip preset excludes
+# (`BDMV`, `VIDEO_TS`), which is one per disc: BDMV/BACKUP holds a second
+# index.bdmv, and VIDEO_TS.BUP is the backup's. `_DISC_TAILS` is the one test
+# every unlinked torrent file pays, a C-level `endswith`.
+_DISC_TAILS = ('.bdmv', '.BDMV', '.ifo', '.IFO')
+_DISC_INDEX = (('/bdmv/index.bdmv', 'bluray'), ('/video_ts/video_ts.ifo', 'dvd'))
+
+
+def _count_disc(discs, root, path):
+    p = '/' + path.lower()
+    for tail, kind in _DISC_INDEX:
+        if p.endswith(tail):
+            per = discs.get(kind)
+            if per is None:
+                per = discs[kind] = {'library': 0, 'torrents': 0}
+            per[root] += 1
+            return
+
+
+def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MAX, dead=None,
+                    discs=None):
+    """The library map's compact row: `{version, folders, titles, folded}`.
+
+    `discs`, when a dict, is filled with the full-disc rips the map passed on
+    the way (`{'bluray' | 'dvd': {'library': n, 'torrents': n}}`, one per disc
+    folder) for the exclusion suggestions: an out-parameter like the walk's
+    `walk_report`, read only off files that aren't linked or excluded, which is
+    where a rip the preset would hide sits, so a linked file pays nothing.
+
+    * `folders` — `[root, name]`, root `library` or `torrents`.
+    * `titles`  — `[folder index, name, files, b0 … b7]`, one byte sum per state
+      (`MAP_*`), the `titles_max` largest. A library title holding a dead seed
+      adds the dead torrent's own folder (`category/release`) last, which is
+      what Triage's search matches: its rows are torrents, named as the client
+      names them, never as the library does.
+    * `folded`  — `[folder index, titles, files, b0 … b7]`, every other title of
+      that folder in one.
+
+    Version 3 (2026-11-14) added the eighth state, MAP_UNMANAGED, read off the
+    scan's `unmanaged` stamp; version 2 (2026-11-11) the seventh, MAP_DEAD_SEED.
+    A version 2 row has seven sums and a version 1 row six and no search, and
+    the frontend reads all three. `dead` is `dead_seed_keys`' answer, worked out
+    here when not given.
+
+    Excluded files are left out, as the score leaves them out. Holds names, so it
+    is its own file_results row, served by `/api/library_map` and never part of
+    the summary or the debug report.
+    """
+    # Runs over every record of both trees each scan, so it's written for that:
+    # a title's key is the path up to its second slash (one slice, not a split
+    # into parts), the media state is inline, and the torrent side's commonest
+    # case, a linked file, leaves first. 1.24 s → see .internal/dash_bench/.
+    #
+    # A dead seed is drawn on the library file it shares an inode with, joined
+    # on `file_id` (device and inode, so no path spelling can miss). The scan
+    # hands `dead` in from its Triage subset, so neither pass checks a tracker,
+    # and with no dead seed the library pass is the loop it always was. Finding
+    # them is one membership test per library file, only while there's one to
+    # find: at 650,000 files, +0.002 s with none and +0.021 s with 1,247
+    # (Linux, .internal/dash_bench/deadseed.py).
+    if dead is None:
+        dead = dead_seed_keys(torrent_files)
+    #
+    # A title's files arrive together (the walk lists a folder at a time), so
+    # each loop tries the last title first: a path under its key and a slash is
+    # that title, one `startswith` in place of two finds, a slice and a lookup.
+    # Any other path works its key out as before. That's what pays for reading
+    # an unseeded library file's extension (2026-11-20, dash_bench/suggestions.py).
+    lib, tor, search = {}, {}, {}
+    prefix, row = None, None
+    for f in media_files:
+        if f.get('excluded'):
+            continue
+        path = f.get('path') or ''
+        if '\\' in path:
+            path = path.replace('\\', '/')
+        if prefix is None or not path.startswith(prefix):
+            i = path.find('/')
+            j = path.find('/', i + 1) if i >= 0 else -1
+            key = path[:j] if j > 0 else path
+            row = lib.get(key)
+            if row is None:
+                row = lib[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]   # files, then MAP_STATES sums
+            prefix = key + '/'
+        row[0] += 1
+        # 1 + MAP_LINKED / MAP_COPY / MAP_UNMANAGED / MAP_UNSEEDED / MAP_OTHER,
+        # as `_map_state_media`. The stamp is read only on an unseeded file, and
+        # the extension (`_map_video`, inline) only on one the stamp left.
+        if f.get('linked_paths'):
+            row[1] += f.get('size') or 0
+        elif f.get('duplicate_paths'):
+            row[5] += f.get('size') or 0
+        elif f.get('unmanaged'):
+            row[8] += f.get('size') or 0
+        else:
+            # An extension as written, nearly always lower case, is one lookup;
+            # anything else takes `_map_video`'s whole test (any case, and a
+            # dot that opens the name, or none at all, is no extension).
+            dot = path.rfind('.')
+            ext = path[dot:]
+            if ext in VIDEO_EXTENSIONS and dot > 0 and path[dot - 1] != '/':
+                row[2] += f.get('size') or 0
+            else:
+                ext = ext.lower() if dot > path.rfind('/') + 1 else ''
+                if ext in VIDEO_EXTENSIONS:
+                    row[2] += f.get('size') or 0
+                else:
+                    row[6] += f.get('size') or 0
+                    if discs is not None and (ext == '.bdmv' or ext == '.ifo'):
+                        _count_disc(discs, 'library', path)
+    if dead:
+        # One membership test a record, in a comprehension; the rest runs on
+        # the few it finds.
+        for f in [f for f in media_files if f.get('file_id') in dead]:
+            q = dead[f['file_id']]
+            if not f.get('linked_paths') or f.get('excluded'):
+                continue
+            key = _map_key(f.get('path') or '')
+            row = lib[key]
+            size = f.get('size') or 0
+            row[1] -= size
+            row[1 + MAP_DEAD_SEED] += size
+            if key not in search:
+                search[key] = q
+    prefix = None
+    for f in torrent_files:
+        if f.get('linked_paths') or f.get('excluded'):
+            continue
+        path = f.get('path') or ''
+        if '\\' in path:
+            path = path.replace('\\', '/')
+        if prefix is None or not path.startswith(prefix):
+            i = path.find('/')
+            j = path.find('/', i + 1) if i >= 0 else -1
+            key = path[:j] if j > 0 else path
+            row = tor.get(key)
+            if row is None:
+                row = tor[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+            prefix = key + '/'
+        row[0] += 1
+        row[1 + _map_state_torrent(f)] += f.get('size') or 0
+        if discs is not None and path.endswith(_DISC_TAILS):
+            _count_disc(discs, 'torrents', path)
+    # Sorted in place, largest first, without a second copy of either dict.
+    items = [('library', key, row) for key, row in lib.items()]
+    del lib
+    items.extend(('torrents', key, row) for key, row in tor.items())
+    del tor
+    items.sort(key=lambda it: -sum(it[2][1:]))
+    folders, fidx, out, folded = [], {}, [], {}
+    for root, key, row in items:
+        folder, title = _map_title(key)
+        fk = (root, folder)
+        fi = fidx.get(fk)
+        if fi is None:
+            fi = fidx[fk] = len(folders)
+            folders.append([root, folder])
+        if len(out) < titles_max:
+            q = search.get(key) if root == 'library' else None
+            out.append([fi, title, *row, q] if q else [fi, title, *row])
+        else:
+            agg = folded.get(fi)
+            if agg is None:
+                agg = folded[fi] = [0] * (2 + MAP_STATES)
+            agg[0] += 1
+            for i, v in enumerate(row):
+                agg[1 + i] += v
+    return {'version': 3, 'folders': folders, 'titles': out,
+            'folded': [[fi, *agg] for fi, agg in sorted(folded.items())]}
+
+
+def disk_space(local_path, media_path):
+    """Free and total bytes of the filesystem under each root, for the map's header.
+
+    `same` says the two roots report one filesystem, so the card shows one free
+    figure. Counts only — the details reach the debug report. A root that isn't
+    there or can't be asked is left out rather than read as empty (R1).
+    """
+    out, devs = {}, {}
+    for name, path in (('torrents', local_path), ('media', media_path)):
+        if not path:
+            continue
+        try:
+            st = os.stat(path)
+            du = shutil.disk_usage(path)
+        except OSError:
+            continue
+        out[name] = {'free': du.free, 'total': du.total}
+        devs[name] = st.st_dev
+    if not out:
+        return None
+    out['same'] = len(devs) == 2 and devs['torrents'] == devs['media']
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Exclusion suggestions (2026-11-20)
+# ---------------------------------------------------------------------------
+#
+# A new install has the always-on rules and nothing else, and what's left for a
+# user to exclude is their own: a torrent category nothing reaches the library
+# from (games, software, books), a library folder no arr manages (home videos),
+# full-disc rips. No fixed list can name the first two, so the scan does, from
+# evidence it already has, and Settings shows each with its figures and the
+# rule it would add. Nothing is written until the user adds one and saves.
+#
+# Three kinds, each refused where the evidence could mean something else:
+#
+# * **A torrent folder** (top level, `literal:` + its full container path): at
+#   least two finished registrations under it, none with a file in the library
+#   or a copy there, while some registration elsewhere has one. Nothing linked
+#   anywhere is a wrong path in Settings, not a category to hide; a download
+#   still running is no evidence (T4); one torrent alone could be an import
+#   that hasn't happened yet.
+# * **A library folder** (top level): every byte Unmanaged, while another folder
+#   holds something an arr manages or a link. Unmanaged exists only where every
+#   arr answered in full (R1), so a scan they didn't answer suggests none.
+# * **A disc-rip preset**: a BDMV or VIDEO_TS folder found with its preset off.
+#
+# **The rule is the folder's full container path**: the usual layout names both
+# trees' folders alike (torrents/music, media/music), and a relative rule
+# matches both. `literal:` is what the Exclude buttons write (R4), so a bracket
+# in a folder's name can't make it a pattern. It holds names, so it's its own
+# file_results row, never in the details or the debug report. What the user
+# dismissed and what's already in the config are filtered when it's read
+# (`app.exclusion_suggestions`), not here, so a dismissal applies at once.
+EXCLUSION_SUGGESTIONS_MAX = 10      # of each kind, largest first
+
+
+def _map_folder_sums(row):
+    """`{(root, top-level folder): [files, b0 … b7]}` from a `library_map_row`
+    row, its folded titles included."""
+    sums = {}
+    folders = row.get('folders') or []
+    for entries in (row.get('titles') or (), row.get('folded') or ()):
+        for e in entries:
+            key = tuple(folders[e[0]])
+            s = sums.get(key)
+            if s is None:
+                s = sums[key] = [0] * (1 + MAP_STATES)
+            s[0] += e[2]
+            for i in range(MAP_STATES):
+                s[1 + i] += e[3 + i]
+    return sums
+
+
+def _folder_rule(root, folder):
+    return 'literal:' + root.rstrip('/\\') + '/' + folder + '/'
+
+
+def exclusion_suggestions(cfg, torrent_folders, map_row, discs):
+    """The scan's exclusion suggestions, largest first within each kind.
+
+    `torrent_folders` is `_mark_whole_torrents`' tally, `map_row` this scan's
+    `library_map_row` and `discs` what that filled in. Each suggestion has an
+    `id` (`torrents:<folder>`, `library:<folder>`, `preset:<name>`) that a
+    dismissal is stored under, its `kind`, and its figures; a folder's carries
+    the `rule` it would add, a preset's the `preset` it would turn on.
+    """
+    sums = _map_folder_sums(map_row or {})
+    out = []
+
+    local = cfg.get('LOCAL_PATH') or ''
+    media = cfg.get('MEDIA_PATH') or ''
+    tf = torrent_folders or {}
+    if local and any(t['imported'] for t in tf.values()):
+        media_key = _norm_abs(media) if media else None
+        found = []
+        for top, t in tf.items():
+            if not top or t['imported'] or t['finished'] < 2:
+                continue
+            if media_key and any(_path_under(_norm_abs(p), media_key)
+                                 for dups in t['copies'] for p in dups):
+                continue
+            s = sums.get(('torrents', top))
+            size = sum(s[1:]) if s else 0
+            rule = _folder_rule(local, top)
+            if not size or len(rule) > EXCLUSION_PATTERN_MAX_CHARS:
+                continue
+            cats = sorted(t['categories'])
+            found.append({'id': 'torrents:' + top, 'kind': 'torrents', 'folder': top, 'rule': rule,
+                          'category': cats[0] if len(cats) == 1 else None,
+                          'torrents': t['torrents'], 'files': s[0], 'size': size,
+                          'orphaned_size': s[1 + MAP_ORPHANED]})
+        found.sort(key=lambda x: -x['size'])
+        out.extend(found[:EXCLUSION_SUGGESTIONS_MAX])
+
+    if media:
+        lib = {folder: s for (root, folder), s in sums.items() if root == 'library'}
+        unmanaged = 1 + MAP_UNMANAGED
+        found = []
+        for folder, s in lib.items():
+            if not folder or not s[unmanaged] or sum(s[1:]) != s[unmanaged]:
+                continue
+            # Another folder holds something an arr manages, or a link: the
+            # arrs' answer covers this library, and this folder is outside it.
+            if not any(sum(o[1:]) > o[unmanaged] for f2, o in lib.items() if f2 != folder):
+                continue
+            rule = _folder_rule(media, folder)
+            if len(rule) > EXCLUSION_PATTERN_MAX_CHARS:
+                continue
+            found.append({'id': 'library:' + folder, 'kind': 'library', 'folder': folder, 'rule': rule,
+                          'files': s[0], 'size': s[unmanaged]})
+        found.sort(key=lambda x: -x['size'])
+        out.extend(found[:EXCLUSION_SUGGESTIONS_MAX])
+
+    on = set(cfg.get('DISC_RIP_EXCLUSION_PRESETS') or [])
+    for kind in ('bluray', 'dvd'):
+        d = (discs or {}).get(kind)
+        if d and kind not in on and (d['library'] or d['torrents']):
+            out.append({'id': 'preset:' + kind, 'kind': 'preset', 'preset': kind,
+                        'discs': {'library': d['library'], 'torrents': d['torrents']}})
+    return out
+
+
+def pending_exclusion_suggestions(suggestions, cfg):
+    """The stored suggestions less what the config already answers: one the
+    user dismissed, a rule already in the list, a preset already on. Read at
+    request time, so a save takes a suggestion off before the next scan."""
+    dismissed = set(s for s in (cfg.get('EXCLUSION_SUGGESTIONS_DISMISSED') or []) if isinstance(s, str))
+    rules = set(p.strip() for p in (cfg.get('EXCLUSION_PATTERNS') or []) if isinstance(p, str))
+    presets = set(cfg.get('DISC_RIP_EXCLUSION_PRESETS') or [])
+    out = []
+    for s in suggestions or []:
+        if not isinstance(s, dict) or s.get('id') in dismissed:
+            continue
+        if s.get('rule') in rules or s.get('preset') in presets:
+            continue
+        out.append(s)
+    return out
 
 
 def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
@@ -1325,6 +1952,14 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
     total_media_size      = sum(f['size'] for f in scoring_media)
     hardlinked_media_size = sum(f['size'] for f in scoring_media if f.get('linked_paths'))
     total_torrents_size   = sum(f['size'] for f in scoring_torrents)
+    # The bytes both trees hold, counted once: the library map's "saved by
+    # hardlinks", and what turns the two totals into bytes on disk.
+    # `hardlinked_media_size` can't stand in for it: a library file whose torrent
+    # twin is excluded counts there but not in the torrent total (one linked
+    # disc rip can make it larger than the whole torrent folder). The smaller
+    # of the two sides is what is held twice.
+    shared_size = min(sum(f['size'] for f in scoring_torrents if f.get('linked_paths')),
+                      hardlinked_media_size)
     orphaned_torrent_size = sum(f['size'] for f in scoring_torrents if f['status'] == 'Orphaned')
     # A sidecar of a torrent the library holds is not "not imported" (T19). An
     # unfinished download still is, here: T4 left the per-file figure alone.
@@ -1370,6 +2005,7 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
         "details": {
             "total_media_size": total_media_size, "hardlinked_media_size": hardlinked_media_size,
             "total_torrents_size": total_torrents_size, "orphaned_torrent_size": orphaned_torrent_size,
+            "shared_size": shared_size,
             "not_imported_size": not_imported_size, "duplicate_size": dup_size,
             "orphaned_torrent_count": sum(1 for f in scoring_torrents if f['status'] == 'Orphaned'),
             # Cleanup's Excluded box. Counted here rather than carried on the
@@ -1444,31 +2080,64 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
 # Upload / yield stats
 # ---------------------------------------------------------------------------
 
-def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
-    """Compute per-tracker upload deltas and yield from stored snapshots.
+def _canon_upload_snapshot(snap, aliases):
+    """A stored upload snapshot, keyed the way the latest scan names trackers.
 
-    Returns None if fewer than 2 snapshots exist (not enough data for deltas).
-    Pass from_date/to_date (ISO date strings) to query a specific range instead of days.
-    `conn` reads through an open transaction — the audit computes its yield
-    summary inside the publish, after writing this scan's own snapshot, which is
-    what keeps the stored figure identical to the pre-Phase-13 ordering.
+    Two folds, both for history written before them. A host stored with its
+    port (`tracker.example:2710`) is the host without it; were both in one snapshot
+    they'd be different torrents, so their sums add. And an alias
+    (`sources.TrackerTally`) folds into its tracker: the same torrents under a
+    second host, so the same sums, and the larger is kept rather than the two
+    added, because an old snapshot's two hosts may have differed by a torrent.
+    A snapshot written since needs neither, and comes back as it was.
     """
-    all_rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
-                                       conn=conn)
-    # A scan that could not fetch some torrents' tracker lists filed their
-    # upload under `Unknown`, so every tracker it touched dips for that scan
-    # and returns on the next. A dip reads as a counter reset and is skipped,
-    # and the return counts in full: one such scan put 3.9 TB on a 94 GB day.
-    # Leaving the scan out of every per-tracker series diffs the scan before
-    # it against the scan after it, so the interval's real upload still counts.
-    # Its `_library` block doesn't depend on trackers, and is kept.
-    rows = [r for r in all_rows if not r['snapshot'].get('_trackers_unanswered')]
-    if len(rows) < 2:
-        return None
+    out = {}
+    for host, data in snap.items():
+        if host.startswith('_') or not isinstance(data, dict):
+            out[host] = data
+            continue
+        h = strip_port(host)
+        prev = out.get(h)
+        if prev is None:
+            out[h] = data
+            continue
+        merged = dict(prev)
+        for k, v in data.items():
+            if isinstance(v, (int, float)) and isinstance(merged.get(k, 0), (int, float)):
+                merged[k] = merged.get(k, 0) + v
+        out[h] = merged
+    for member, keep in (aliases or {}).items():
+        m = out.pop(member, None)
+        if not isinstance(m, dict):
+            continue
+        k = out.get(keep)
+        if not isinstance(k, dict):
+            out[keep] = m
+            continue
+        merged = dict(k)
+        for f, v in m.items():
+            if isinstance(v, (int, float)) and isinstance(merged.get(f, 0), (int, float)):
+                merged[f] = max(merged.get(f, 0), v)
+        out[keep] = merged
+    return out
 
-    # Daily buckets: {date_str: {host: delta_bytes}}
+
+def _stored_tracker_aliases(conn=None):
+    """The latest scan's aliases, which every stored snapshot is read through."""
+    try:
+        return db_get_meta('tracker_aliases', None, conn=conn) or {}
+    except Exception as e:
+        log.debug(f"tracker aliases unreadable, reading snapshots as stored: {e}")
+        return {}
+
+
+def _daily_upload_deltas(rows):
+    """{date: {host: bytes uploaded}} from consecutive snapshots.
+
+    `rows` are canonical (`_canon_upload_snapshot`) and free of
+    `_trackers_unanswered` scans.
+    """
     daily_by_tracker = {}
-
     for i in range(1, len(rows)):
         prev_row = rows[i - 1]
         curr_row = rows[i]
@@ -1483,7 +2152,7 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
             continue
 
         try:
-            t_prev = datetime.fromisoformat(prev_row['taken_at'])
+            datetime.fromisoformat(prev_row['taken_at'])
             t_curr = datetime.fromisoformat(curr_row['taken_at'])
         except ValueError:
             continue
@@ -1501,6 +2170,90 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
             if delta < 0:
                 continue
             bucket[host] = bucket.get(host, 0) + delta
+    return daily_by_tracker
+
+
+def compute_previous_upload(days=30, from_date=None, to_date=None, conn=None):
+    """The window of the same length just before the one asked for: what it
+    uploaded, in total and per tracker, for the Trackers page's "on the 30 days
+    before".
+
+    None for All, and None when the stored history doesn't reach back across the
+    whole earlier window: a comparison with part of a window would read as a drop.
+    """
+    now = datetime.now()
+    try:
+        if from_date:
+            start = datetime.fromisoformat(from_date)
+            if not to_date:
+                end = now
+            elif len(to_date) <= 10:
+                end = datetime.fromisoformat(to_date) + timedelta(days=1)
+            else:
+                end = datetime.fromisoformat(to_date)
+        elif days:
+            end, start = now, now - timedelta(days=days)
+        else:
+            return None
+    except ValueError:
+        return None
+    span = end - start
+    if span.total_seconds() <= 0:
+        return None
+    prev_start = start - span
+    rows = db_get_upload_snapshots(from_date=prev_start.isoformat(), to_date=start.isoformat(),
+                                   conn=conn)
+    aliases = _stored_tracker_aliases(conn)
+    rows = [dict(r, snapshot=_canon_upload_snapshot(r['snapshot'], aliases)) for r in rows]
+    rows = [r for r in rows if not r['snapshot'].get('_trackers_unanswered')]
+    if len(rows) < 2:
+        return None
+    try:
+        if datetime.fromisoformat(rows[0]['taken_at']) - prev_start > timedelta(days=1):
+            return None
+    except ValueError:
+        return None
+    by_tracker = {}
+    for day in _daily_upload_deltas(rows).values():
+        for host, delta in day.items():
+            by_tracker[host] = by_tracker.get(host, 0) + delta
+    return {
+        "from":       prev_start.strftime('%Y-%m-%d'),
+        "to":         (start - timedelta(seconds=1)).strftime('%Y-%m-%d'),
+        "days":       max(1, round(span.total_seconds() / 86400)),
+        "total":      sum(by_tracker.values()),
+        "by_tracker": by_tracker,
+    }
+
+
+def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
+    """Compute per-tracker upload deltas and yield from stored snapshots.
+
+    Returns None if fewer than 2 snapshots exist (not enough data for deltas).
+    Pass from_date/to_date (ISO date strings) to query a specific range instead of days.
+    `conn` reads through an open transaction — the audit computes its yield
+    summary inside the publish, after writing this scan's own snapshot, which is
+    what keeps the stored figure identical to the pre-Phase-13 ordering.
+    """
+    all_rows = db_get_upload_snapshots(since_days=days, from_date=from_date, to_date=to_date,
+                                       conn=conn)
+    # Every snapshot keyed the way the latest scan names trackers, so a tracker
+    # whose hosts were folded keeps one continuous series.
+    aliases = _stored_tracker_aliases(conn)
+    all_rows = [dict(r, snapshot=_canon_upload_snapshot(r['snapshot'], aliases)) for r in all_rows]
+    # A scan that could not fetch some torrents' tracker lists filed their
+    # upload under `Unknown`, so every tracker it touched dips for that scan
+    # and returns on the next. A dip reads as a counter reset and is skipped,
+    # and the return counts in full: one such scan put 3.9 TB on a 94 GB day.
+    # Leaving the scan out of every per-tracker series diffs the scan before
+    # it against the scan after it, so the interval's real upload still counts.
+    # Its `_library` block doesn't depend on trackers, and is kept.
+    rows = [r for r in all_rows if not r['snapshot'].get('_trackers_unanswered')]
+    if len(rows) < 2:
+        return None
+
+    # Daily buckets: {date_str: {host: delta_bytes}}
+    daily_by_tracker = _daily_upload_deltas(rows)
 
     # Build daily_uploads list in date order
     daily_uploads = [
@@ -1516,6 +2269,9 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
     # Use the last snapshot of each day (all rows, not just delta pairs)
     daily_point_by_tracker = {}
     daily_library_by_date  = {}
+    # New library files per day, by how they arrived. Each snapshot holds its own
+    # scan's count, so a day is the **sum** of its scans, not its last one.
+    daily_new_media        = {}
     for row in all_rows:
         try:
             t = datetime.fromisoformat(row['taken_at'])
@@ -1536,7 +2292,14 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
         # Library-wide block (hardlinked/duplicates) — absent in old snapshots
         lib = row['snapshot'].get('_library')
         if isinstance(lib, dict):
-            daily_library_by_date[date_str] = lib
+            nm = lib.get('new_media')
+            if isinstance(nm, dict):
+                # `moved` isn't new (2026-11-20): the card says it, apart from
+                # the bars. Snapshots from before it was counted have none.
+                day = daily_new_media.setdefault(date_str, {'linked': 0, 'copies': 0, 'unseeded': 0, 'moved': 0})
+                for k in day:
+                    day[k] += int(nm.get(k) or 0)
+            daily_library_by_date[date_str] = {k: v for k, v in lib.items() if k != 'new_media'}
 
     daily_tracker_stats = [
         {'date': date_str, 'by_tracker': stats}
@@ -1595,6 +2358,8 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
         "daily_uploads":       daily_uploads,
         "daily_tracker_stats": daily_tracker_stats,
         "daily_library_stats": daily_library_stats,
+        # Only days a scan counted: a day before counting began is absent, not 0.
+        "daily_new_media":     [{'date': d, **v} for d, v in sorted(daily_new_media.items())],
         "tracker_yields":      tracker_yields,
     }
 
@@ -1651,12 +2416,133 @@ def file_signatures(files):
     }
 
 
-def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None):
+def new_media_class(f, torrent_root):
+    """How a library file new since the last scan arrived (the dashboard's New in
+    the library card): `linked` to a torrent file, a `copies` of one (identical
+    bytes, its own inode, so the link wasn't made), or `unseeded` (neither: a
+    rip, a Usenet grab, a copy of another library file). Says nothing about who
+    made a copy — the first real copy Dedupe found was made by hand (DEDUPE).
+
+    **Videos only** (`_map_video`, the map's rule), so `None` for anything else,
+    linked or not (2026-11-20, the user's call: the card is about the library).
+    Bazarr writes a subtitle beside every new episode, so a healthy library read
+    as half its new files not seeded, and a hardlinked `.nfo` counted twice for
+    one episode."""
+    if not _map_video(f.get('path') or ''):
+        return None
+    if f.get('linked_paths'):
+        return 'linked'
+    for p in f.get('duplicate_paths') or ():
+        if not torrent_root or _path_under(_norm_abs(p), torrent_root):
+            return 'copies'
+    return 'unseeded'
+
+
+# A moved or renamed library file is not a new one (2026-11-20). The diff knows
+# a library file by its path, so renaming a folder read as every file in it
+# arriving unseeded. A file keeps its inode through a move, and the scan tells
+# a move two ways, neither of them a pass of its own:
+#
+# - **A linked file by its torrent file.** The torrent tree's signatures already
+#   say whether each torrent file was linked last scan (`SIG_IMPORTED`). A new
+#   library path on a torrent file that was linked before is the same bytes
+#   under a new name; only a newly linked torrent file (`newly_linked`, filled
+#   by the torrent diff where it already finds `newly_imported`) is an arrival.
+# - **An unlinked file by its key**, `hash((inode, size))`, which
+#   `_assemble_records` keeps for every unlinked library record (`library_keys`
+#   is the same rule over records) and the publish stores as `media_keys`. A new
+#   unlinked path whose key the previous scan held is `moved`.
+#
+# The size keeps a reused inode from passing for a move: an upgrade by copy
+# frees the old file's inode and can be given it straight back. The device
+# isn't in it, because a remount can renumber it. A hash of a tuple of ints is
+# the same in every process (only str and bytes are salted), and since 3.8 in
+# every Python; if that ever changed, one scan would count its moves as new, as
+# every scan did before.
+_ARRIVALS = ('linked', 'copies', 'unseeded', 'moved')
+_ARRIVAL_CODE = {name: i for i, name in enumerate(_ARRIVALS)}
+_LINKED = _ARRIVAL_CODE['linked']
+_MOVED = _ARRIVAL_CODE['moved']
+_NO_KEY = -1           # what no tuple hashes to (CPython turns -1 into -2)
+_MOVE_CHUNK = 65536    # new paths checked against the previous keys at a time
+
+
+def _file_key(f):
+    ino = f.get('inode')
+    return hash((ino, f['size'])) if ino is not None else _NO_KEY
+
+
+def library_keys(media_files):
+    """`hash((inode, size))` of each library record no torrent file is linked
+    to, as an `array('q')`, 8 bytes a file. The rule `_assemble_records` keeps
+    `unlinked_keys` by, over the records it built (tests, and the parity test
+    that holds the two equal); a record without an inode is left out."""
+    return array('q', (hash((f['inode'], f['size'])) for f in media_files
+                       if not f.get('linked_paths') and f.get('inode') is not None))
+
+
+def _mark_moves(codes, keys, load_prev):
+    """Re-mark as `moved` each counted new unlinked path whose key the previous
+    scan's library held. A chunk of the new paths' keys at a time against one
+    pass over the previous array, so a whole library renamed holds a chunk's
+    set, never one the size of the library. Linked paths are `newly_linked`'s
+    to decide."""
+    prev = load_prev()
+    if prev is None or not len(prev):
+        return
+    for start in range(0, len(keys), _MOVE_CHUNK):
+        chunk = keys[start:start + _MOVE_CHUNK]
+        hits = set(chunk)
+        hits.discard(_NO_KEY)
+        if not hits:
+            continue
+        hits.intersection_update(prev)
+        if hits:
+            for i, k in enumerate(chunk, start):
+                if k in hits and codes[i] != _LINKED:
+                    codes[i] = _MOVED
+
+
+def _ordered_totals(totals):
+    """`totals` in one order whatever order its changes were met in: lists as
+    `_DIFF_LISTS`, the library before the torrent tree."""
+    return {k: {t: totals[k][t] for t in ('media', 'torrents') if t in totals[k]}
+            for k in _DIFF_LISTS if k in totals}
+
+
+def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
+                                 new_media=None, torrent_root=None, prev_library_keys=None,
+                                 newly_linked=None):
     """Diff the current snapshot against compact signatures of the previous scan.
 
     prev_sigs_by_tab: {'media': {path: bitmask}, 'torrents': {path: bitmask}}
     Lists are capped at 50 entries during collection (not after) so a mass
-    rename/move can't transiently allocate one diff entry per file.
+    rename/move can't transiently allocate one diff entry per file. `totals`
+    counts each list's changes by tree, uncapped, so Audit History can say how
+    many a capped list left out.
+
+    `new_media`, when a dict of counters (`linked`, `copies`, `unseeded`), is
+    filled in place with every new library path's `new_media_class`, uncapped
+    and whether or not anything else changed: an out-parameter like the walk's
+    `walk_report`, so the return value every caller reads is unchanged. Counted
+    here because this loop already visits every library file against the
+    previous scan's paths. `torrent_root` is `_norm_abs`'d. Each library
+    `new_files` entry the list keeps says how its file arrived (`arrived`), when
+    it was counted.
+
+    A moved or renamed file counts as `moved` (added to `new_media` only when
+    there are any), not as an arrival, decided after both trees (the scan diffs
+    them in two calls, the torrent tree's first):
+
+    - `newly_linked`, a set, is filled by the torrent tree's diff with the key
+      (`_file_key`) of each torrent file linked now and not last scan, and read
+      for the library's: a new linked path whose key isn't in it was linked
+      before. `None`, or a torrent tree diffed here with no previous scan of
+      it (could not ask), counts every linked path as an arrival.
+    - `prev_library_keys`, a callable returning the previous scan's unlinked
+      keys (`library_keys`; `None`: could not ask), is called only when the
+      library has a counted new unlinked path and a removed one, since a move
+      leaves both.
     """
     if not prev_sigs_by_tab or not curr_snap:
         return None
@@ -1672,6 +2558,7 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None):
     }
     CAP = 50
     has_changes = False
+    totals = {}
 
     cs = (curr_snap.get('dashboard') or {}).get('score')
     if prev_score is not None and cs is not None:
@@ -1680,34 +2567,110 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None):
     def add(key, entry):
         nonlocal has_changes
         has_changes = True
+        by_tab = totals.setdefault(key, {})
+        by_tab[entry['tab']] = by_tab.get(entry['tab'], 0) + 1
         if len(changes[key]) < CAP:
             changes[key].append(entry)
+            return True
+        return False
+
+    # The library's counted new paths, resolved once the torrent tree has said
+    # which links are new: how each arrived and its key, a byte and 8 bytes (a
+    # whole library renamed is millions of them), the entries the capped list
+    # kept by index, and how many library paths went.
+    codes, keys, listed, lib_removed = bytearray(), array('q'), [], 0
+    # A torrent tree diffed here with no previous scan of it can't say which
+    # links are new, as the caller's `None` says when it diffs the trees apart.
+    links_known = newly_linked is not None and not (
+        'torrent_files' in curr_snap and not prev_sigs_by_tab.get('torrents'))
 
     for tab, key in [('media', 'media_files'), ('torrents', 'torrent_files')]:
         prev = prev_sigs_by_tab.get(tab) or {}
         curr_paths = set()
+        # A tree with no previous signatures is a first scan of it, where every
+        # path is "new" and none of them arrived.
+        count_new = new_media is not None and tab == 'media' and bool(prev)
+        links = newly_linked if tab == 'torrents' else None
 
         for f in curr_snap.get(key, []):
             path = f['path']
             curr_paths.add(path)
             if path not in prev:
-                add('new_files', {'path': path, 'size': f['size'], 'tab': tab})
+                entry = {'path': path, 'size': f['size'], 'tab': tab}
+                kept = add('new_files', entry)
+                if count_new and not f.get('excluded'):
+                    how = new_media_class(f, torrent_root)
+                    if how:
+                        if kept:
+                            listed.append((len(codes), entry))
+                        codes.append(_ARRIVAL_CODE[how])
+                        keys.append(_file_key(f))
+                elif links is not None and f.get('imported'):
+                    links.add(_file_key(f))
             else:
                 sig = prev[path]
                 if not (sig & SIG_ORPHANED) and f.get('status') == 'Orphaned':
                     add('newly_orphaned', {'path': path, 'size': f['size'], 'tab': tab})
                 if tab == 'torrents' and not (sig & SIG_IMPORTED) and f.get('imported'):
                     add('newly_imported', {'path': path, 'size': f['size'], 'tab': tab})
+                    if links is not None:
+                        links.add(_file_key(f))
                 if not (sig & SIG_HAS_DUPS) and f.get('duplicate_paths'):
                     add('new_duplicates', {'path': path, 'size': f['size'], 'tab': tab})
                 if (sig & SIG_HAS_DUPS) and not f.get('duplicate_paths'):
                     add('resolved_duplicates', {'path': path, 'size': f['size'], 'tab': tab})
 
+        removed = 0
         for path in prev:
             if path not in curr_paths:
+                removed += 1
                 add('removed_files', {'path': path, 'tab': tab})
+        if tab == 'media':
+            lib_removed = removed
 
-    return changes if has_changes else None
+    if codes:
+        if links_known:
+            for i, code in enumerate(codes):
+                if code == _LINKED and keys[i] != _NO_KEY and keys[i] not in newly_linked:
+                    codes[i] = _MOVED
+        if (lib_removed and prev_library_keys is not None
+                and (codes.count(_ARRIVAL_CODE['unseeded']) or codes.count(_ARRIVAL_CODE['copies']))):
+            _mark_moves(codes, keys, prev_library_keys)
+        for code, name in enumerate(_ARRIVALS):
+            n = codes.count(code)
+            if n:
+                new_media[name] = new_media.get(name, 0) + n
+        for i, entry in listed:
+            entry['arrived'] = _ARRIVALS[codes[i]]
+
+    if not has_changes:
+        return None
+    changes['totals'] = _ordered_totals(totals)
+    return changes
+
+
+_DIFF_LISTS = ('newly_orphaned', 'newly_imported', 'new_duplicates', 'resolved_duplicates',
+               'new_files', 'removed_files')
+
+
+def _merge_tab_diffs(media, torrents, prev_score, dashboard):
+    """One change-log entry from the two trees' diffs, as one call over both
+    gives it: each list the library's entries then the torrent tree's, 50 in
+    all, the two trees' `totals` together, and nothing when neither tree
+    changed."""
+    if media is None and torrents is None:
+        return None
+    out = {k: ((media or {}).get(k) or []) + ((torrents or {}).get(k) or []) for k in _DIFF_LISTS}
+    out = {k: v[:50] for k, v in out.items()}
+    cs = (dashboard or {}).get('score')
+    out['score_delta'] = round(cs - prev_score, 1) if prev_score is not None and cs is not None else None
+    totals = {}
+    for d in (media, torrents):
+        for k, by_tab in ((d or {}).get('totals') or {}).items():
+            for t, n in by_tab.items():
+                totals.setdefault(k, {})[t] = totals.get(k, {}).get(t, 0) + n
+    out['totals'] = _ordered_totals(totals)
+    return {k: out[k] for k in _DIFF_LISTS + ('score_delta', 'totals')}
 
 
 def compute_diff(prev_snap, curr_snap):
@@ -1723,7 +2686,7 @@ def compute_diff(prev_snap, curr_snap):
     return compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
 
 
-def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
+def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None, dead_regs=None):
     """Count items that genuinely left the Triage pile since the last scan.
 
     This is the Next steps shovel counter (`ns_progress['shoveled']`), and it
@@ -1774,7 +2737,9 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
 
     # ── Dead registrations, by hash ──────────────────────────────────────────
     if prev_dead_regs:
-        resolved += len(set(prev_dead_regs) - dead_registration_hashes(torrent_files))
+        if dead_regs is None:
+            dead_regs = dead_registration_hashes(torrent_files)
+        resolved += len(set(prev_dead_regs) - dead_regs)
 
     # ── File records, by path ────────────────────────────────────────────────
     if not prev_torrent_sigs:
@@ -1822,60 +2787,115 @@ def count_pile_resolved(prev_torrent_sigs, torrent_files, prev_dead_regs=None):
 # Pre-computed summary stats (avoid shipping raw file lists on /api/results)
 # ---------------------------------------------------------------------------
 
-def _compute_cross_seed_stats(media_files):
+# Pairs of trackers the Cross-seed effectiveness card lists. A library of N
+# trackers has N(N-1)/2 pairs; past the top few they are noise.
+_CROSS_SEED_PAIRS_KEPT = 6
+
+
+def _compute_cross_seed_stats(media_files, aliases=None):
+    """Library files by how many trackers seed them, and what each tracker seeds.
+
+    Per tracker: `size`/`count` (library it seeds), and `only_size`/`only_count`,
+    the part **no other tracker seeds** — what would lose its last seed if that
+    tracker went. On a hardlinked library that is the tracker's own contribution,
+    not disk it costs: the files are library either way. `pairs` are the tracker
+    pairs that seed the most of the same library.
+
+    `aliases` (`TrackerTally`) folds announce hosts that are one tracker, so a
+    file on a two-host tracker is seeded once, not "cross-seeded" on itself.
+    """
     if not media_files:
         return None
     buckets      = {}
     weighted_sum = 0
     total_size   = 0
     tracker_map  = {}
+    pairs        = {}
+    # Every number here is a function of a file's tracker set and its size, and
+    # a library has a few hundred distinct sets, so the per-file pass only sums
+    # by the record's own tuple and the sets are read once each afterwards. The
+    # pass it replaced looped each file's trackers; this one is faster than it
+    # with the pairs and the folding added (2026-11-13, Linux, 500K files).
+    combos = {}
     for f in media_files:
-        real_trackers = [t for t in (f.get('trackers') or []) if t != 'None']
+        key = tuple(f.get('trackers') or ())
+        c = combos.get(key)
+        if c is None:
+            combos[key] = [f['size'], 1]
+        else:
+            c[0] += f['size']
+            c[1] += 1
+    for raw, (size, files) in combos.items():
+        real_trackers = canonical_trackers(raw, aliases)
         n = len(real_trackers)
-        buckets[n]    = buckets.get(n, 0) + f['size']
-        weighted_sum += f['size'] * n
-        total_size   += f['size']
+        buckets[n]    = buckets.get(n, 0) + size
+        weighted_sum += size * n
+        total_size   += size
         for t in real_trackers:
-            if t not in tracker_map:
-                tracker_map[t] = {'name': t, 'size': 0, 'count': 0}
-            tracker_map[t]['size']  += f['size']
-            tracker_map[t]['count'] += 1
+            m = tracker_map.get(t)
+            if m is None:
+                m = tracker_map[t] = {'name': t, 'size': 0, 'count': 0, 'only_size': 0, 'only_count': 0}
+            m['size']  += size
+            m['count'] += files
+            if n == 1:
+                m['only_size']  += size
+                m['only_count'] += files
+        if n > 1:
+            ordered = sorted(real_trackers)
+            for i in range(n - 1):
+                for j in range(i + 1, n):
+                    key = (ordered[i], ordered[j])
+                    pairs[key] = pairs.get(key, 0) + size
     multiplier   = weighted_sum / total_size if total_size > 0 else 0
     max_count    = max(buckets.keys()) if buckets else 0
     segments     = [{'count': i, 'size': buckets.get(i, 0)} for i in range(max_count + 1)]
     tracker_stats = sorted(tracker_map.values(), key=lambda x: -x['size'])
+    top_pairs = sorted(pairs.items(), key=lambda kv: -kv[1])[:_CROSS_SEED_PAIRS_KEPT]
     return {
         'multiplier':    multiplier,
         'segments':      segments,
         'total_size':    total_size,
         'tracker_stats': tracker_stats,
+        'pairs':         [{'trackers': list(k), 'size': v} for k, v in top_pairs],
     }
 
 
-def _compute_tracker_file_stats(torrent_files):
-    stats = {}
+_TRACKER_FILE_FIELDS = ('seeding_count', 'seeding_size', 'orphaned_count', 'orphaned_size',
+                        'not_imported_count', 'not_imported_size')
+
+
+def _compute_tracker_file_stats(torrent_files, aliases=None):
+    """Per tracker: seeding, orphaned and not-imported files and bytes.
+
+    Summed by each record's tracker tuple, then spread to the trackers once per
+    distinct tuple (see `_compute_cross_seed_stats`), with `aliases` folded there.
+    """
+    combos = {}
     for f in torrent_files:
         if f.get('excluded'):
             continue
-        for t in (f.get('trackers') or []):
-            if t == 'None':
-                continue
-            if t not in stats:
-                stats[t] = {
-                    'seeding_count': 0, 'seeding_size': 0,
-                    'orphaned_count': 0, 'orphaned_size': 0,
-                    'not_imported_count': 0, 'not_imported_size': 0,
-                }
-            s = stats[t]
-            if f['status'] == 'Seeding':
-                s['seeding_count'] += 1
-                s['seeding_size']  += f['size']
-            elif f['status'] == 'Orphaned':
-                s['orphaned_count'] += 1
-                s['orphaned_size']  += f['size']
-            if not f.get('imported') and f['status'] != 'Orphaned' and not f.get('sidecar'):
-                s['not_imported_count'] += 1
-                s['not_imported_size']  += f['size']
+        key = tuple(f.get('trackers') or ())
+        s = combos.get(key)
+        if s is None:
+            s = combos[key] = [0, 0, 0, 0, 0, 0]
+        status = f['status']
+        if status == 'Seeding':
+            s[0] += 1
+            s[1] += f['size']
+        elif status == 'Orphaned':
+            s[2] += 1
+            s[3] += f['size']
+        if not f.get('imported') and status != 'Orphaned' and not f.get('sidecar'):
+            s[4] += 1
+            s[5] += f['size']
+    stats = {}
+    for raw, s in combos.items():
+        for t in canonical_trackers(raw, aliases):
+            st = stats.get(t)
+            if st is None:
+                st = stats[t] = dict.fromkeys(_TRACKER_FILE_FIELDS, 0)
+            for k, v in zip(_TRACKER_FILE_FIELDS, s):
+                st[k] += v
     return stats
 
 
@@ -2287,16 +3307,40 @@ def filesystem_plausibility(root, block, reference, file_map_size=0):
 _marker_lock = threading.Lock()
 
 
+def _phase_memory(kernel):
+    """`(rss_mb, hwm_mb)` as a phase begins. `hwm_mb` is the kernel's peak since
+    the scan's reset, read with RSS in one pass of /proc (`rss_and_peak_mb`),
+    or None where the reset was refused (`peak_source` 'sampled'): there VmHWM
+    is the process's peak, not the scan's."""
+    return rss_and_peak_mb() if kernel else (process_rss_mb(), None)
+
+
+def _phase_entry(message, t, rss, hwm):
+    """One `phase_history` entry, as the phase begins (for the debug report's
+    field testers, 2026-11-16).
+
+    `t` is seconds since the scan started (`scan_clock`, monotonic) to 0.01 s,
+    so a phase's length is the next entry's `t` less its own; `at` is the wall
+    clock to the second, kept for anything that reads it. `rss_mb` is RSS now
+    and `hwm_mb` the scan's peak so far (`_phase_memory`), so the phase that
+    raised the peak is the one after which `hwm_mb` jumps.
+    """
+    return {'message': message, 'rss_mb': rss,
+            'at': datetime.now().isoformat(timespec='seconds'), 't': t, 'hwm_mb': hwm}
+
+
 def _enter_phase(phase, message):
     """Advance the scan to a new phase: update state, log RSS, and persist the
     scan marker so a process killed mid-scan (OOM, container restart) leaves
     evidence of exactly where it died for the next boot to report."""
-    rss = process_rss_mb()
+    now = time.monotonic()
+    state = get_state()
+    clock = state.get('scan_clock')
+    rss, hwm = _phase_memory(state.get('peak_source') == 'kernel')
     set_state(status_message=message, phase=phase)
     log.info(f"Audit: {message}" + (f" (rss={rss} MB)" if rss is not None else ""))
-    hist = (get_state().get('phase_history') or []) + [{
-        'message': message, 'rss_mb': rss, 'at': datetime.now().isoformat(timespec='seconds'),
-    }]
+    hist = (state.get('phase_history') or []) + [_phase_entry(
+        message, round(now - clock, 2) if clock is not None else None, rss, hwm)]
     set_state(phase_history=hist[-30:])
     try:
         with _marker_lock:
@@ -2323,8 +3367,12 @@ def _memory_sampler(stop_event, interval=20):
             with _marker_lock:
                 marker = db_get_meta('scan_marker')
                 if marker:
+                    # The scan's own peak so far where the kernel keeps it (SC7),
+                    # so a scan killed mid-way leaves it for its aborted row.
+                    peak = (peak_rss_since_reset_mb() if marker.get('peak_from_kernel')
+                            else None) or rss
                     marker['last_rss_mb']    = rss
-                    marker['peak_rss_mb']    = max(rss, marker.get('peak_rss_mb') or 0)
+                    marker['peak_rss_mb']    = max(peak, marker.get('peak_rss_mb') or 0)
                     marker['last_sample_at'] = datetime.now().isoformat(timespec='seconds')
                     db_set_meta('scan_marker', marker)
         except Exception:
@@ -2350,11 +3398,21 @@ def _memory_sampler(stop_event, interval=20):
 
 
 def _scan_peak_rss():
-    """Best-effort per-scan peak RSS: the sampler folds highs into the scan
-    marker every 20s; fall back to the current reading. Persisted onto the
-    audit_runs row so peak-per-scan trends survive across days of history."""
+    """The scan's peak RSS, persisted onto its audit_runs row.
+
+    SCAN SC7: the kernel's VmHWM, which `run_audit_process` restarts as the scan
+    begins (`peak_from_kernel` on the marker says it did), so it holds the real
+    peak. It used to be the highest of the sampler's readings, one every 20 s,
+    so a scan under 20 s stored its RSS at save time and a longer one whichever
+    reading came nearest its peak. That stays the answer where the reset can't
+    be made (not Linux, a /proc that won't take the write)."""
     try:
-        return (db_get_meta('scan_marker') or {}).get('peak_rss_mb') or process_rss_mb()
+        marker = db_get_meta('scan_marker') or {}
+        if marker.get('peak_from_kernel'):
+            peak = peak_rss_since_reset_mb()
+            if peak:
+                return peak
+        return marker.get('peak_rss_mb') or process_rss_mb()
     except Exception:
         return None
 
@@ -2479,6 +3537,69 @@ def _record_source_anomaly(anomaly, trigger, cfg, scan_start, persist=True):
     set_state(status_message=msg, last_scan_status="error", anomaly_code=anomaly['code'])
 
 
+# How long a scan waits, once its walks are done, for the arrs' answer to the
+# Unmanaged stamp. Past it the stamp is skipped (`unreachable`): a slow arr
+# mustn't hold up a scan, and its files stay Not seeded, as they were drawn
+# before the stamp existed.
+_ARR_PATHS_WAIT = 60
+
+
+def _ask_arrs_meanwhile(cfg):
+    """Start `arr.fetch_arr_managed_paths` on a thread; return `(answer, still_asking)`.
+
+    The scan asks while it walks the disk: the arrs usually answer well inside
+    the walks, so the stamp costs it no time unless the arrs are
+    slower than both walks. `answer()` waits up to `_ARR_PATHS_WAIT` and is
+    `(None, 'unreachable')` past it or on any failure.
+
+    `answer(timing)` also fills `timing` with how the ask went, for the debug
+    report's `arr_ask` (2026-11-16): `secs` the arrs took (None if still
+    asking when the scan gave up), `files` in the answer (None without one),
+    `check`, `waited_secs` the scan waited for it, and `timed_out`. Sonarr is a
+    request per series, so a library of thousands of series can near the
+    cap, which a small library's arrs answer too fast to show.
+    """
+    box = {}
+
+    def run():
+        start, got = time.monotonic(), None
+        try:
+            got = fetch_arr_managed_paths(cfg)
+        except Exception as e:
+            log.warning("Could not ask the arrs which files they hold: %s", type(e).__name__)
+        # One assignment, so `answer()` reads the answer and its time together.
+        box['done'] = (got, time.monotonic() - start)
+
+    t = threading.Thread(target=run, daemon=True, name='audit-arr-paths')
+    t.start()
+
+    def answer(timing=None):
+        start = time.monotonic()
+        t.join(_ARR_PATHS_WAIT)
+        waited = time.monotonic() - start
+        done = box.get('done')
+        managed, check = (done and done[0]) or (None, 'unreachable')
+        if timing is not None:
+            timing.update(secs=round(done[1], 2) if done else None,
+                          files=len(managed) if managed is not None else None,
+                          check=check, waited_secs=round(waited, 2),
+                          timed_out=done is None and t.is_alive())
+        return managed, check
+    return answer, t.is_alive
+
+
+# SCAN SC3. The cyclic collector's third threshold for the length of a scan. A
+# scan builds millions of containers that all live until it ends, and every
+# full collection walks all of them and frees nothing: 22 passes and about 5 s
+# of a 40 s scan at 650,000 files. With the third threshold this high, full
+# passes wait for the `gc.collect()` the scan already ends with. The first two
+# are left as they are, so young collections carry on, for request threads too.
+# The setting is the process's, so `run_audit_process` puts the old one back in
+# its `finally`. Re-measure if the image leaves Python 3.12: the collector
+# differs between versions.
+SCAN_GC_FULL_THRESHOLD = 1_000_000
+
+
 def run_audit_process(trigger=None, persist_source_errors=True):
     cfg = db_load_config()
     # Accept trigger as parameter so callers can pass it explicitly,
@@ -2486,22 +3607,46 @@ def run_audit_process(trigger=None, persist_source_errors=True):
     if trigger is None:
         trigger = get_state().get('trigger', 'manual')
     scan_start = time.time()
+    # The phase history's clock (`t`), read with `scan_start` so the last
+    # phase runs to `last_scan_duration`. Monotonic: a clock step can't make a
+    # phase read negative.
+    scan_clock = time.monotonic()
+    # SCAN SC7: the kernel's peak, restarted here, is the scan's own. Before
+    # the scan's first state write, which says whether it was (`peak_source`:
+    # where the reset is refused, the stored peak is the sampler's).
+    peak_from_kernel = reset_peak_rss()
+    # The listing is the history's first phase, at t 0. Seeded here rather
+    # than through `_enter_phase`, which writes the scan marker: the marker's
+    # first write is the one below.
+    rss, hwm = _phase_memory(peak_from_kernel)
     set_state(is_scanning=True, progress=0, scanned_files=0, total_files=0,
               status_message="Connecting to torrent source...", last_scan_status="running",
-              phase="connecting", phase_history=[], anomaly_code=None)
+              phase="connecting", anomaly_code=None, arr_ask=None,
+              peak_source='kernel' if peak_from_kernel else 'sampled', scan_clock=scan_clock,
+              phase_history=[_phase_entry("Connecting to torrent source...", 0.0, rss, hwm)])
     try:
         db_set_meta('scan_marker', {
             'started_at': datetime.now().isoformat(timespec='seconds'),
             'trigger':    trigger,
             'pid':        os.getpid(),
             'phase':      'Connecting to torrent source...',
+            'peak_from_kernel': peak_from_kernel,
         })
     except Exception as e:
         log.warning(f"Could not write scan marker: {e}")
     sampler_stop = threading.Event()
     threading.Thread(target=_memory_sampler, args=(sampler_stop,), daemon=True,
                      name="audit-memory-sampler").start()
+    # SCAN SC3. Full collections wait for the scan's end; see
+    # SCAN_GC_FULL_THRESHOLD. The last statement before the `try`, so nothing
+    # can raise between raising the threshold and the `finally` that puts the
+    # process's own back.
+    gc_thresholds = gc.get_threshold()
+    gc.set_threshold(gc_thresholds[0], gc_thresholds[1], SCAN_GC_FULL_THRESHOLD)
     try:
+        # The arrs' file paths, for the library map's Unmanaged stamp, asked
+        # while the disk is walked.
+        arr_answer, arr_asking = _ask_arrs_meanwhile(cfg)
         # Save roots of listings that failed with nothing found on disk — in
         # memory only, never on the persisted report (see `unverified_spec`).
         unresolved_roots = []
@@ -2556,9 +3701,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         accepted.append(_guard_filesystem(
             'torrents', filesystem['torrents'], reference, trigger,
             file_map_size=int(source_report.get('file_map_size') or 0)))
+        # SCAN SC5. Only the torrent walk reads the client's file map: the two
+        # guards above read the report's counts, and the media walk asks the
+        # client nothing. Released here (~200 MB at 650K files), not after
+        # the media walk, which is handed no map. Past this line the name is
+        # unbound until the `finally` assigns it, and the MemoryError handler's
+        # `del` expects that.
+        del qbit_file_map
         _enter_phase("disk", "Scanning media directory...")
         media_key_order, _, media_errors, oldest_media_mtime = _walk_directory(
-            cfg.get('MEDIA_PATH',''), 'Media', inode_map, qbit_file_map, scanned, 0,
+            cfg.get('MEDIA_PATH',''), 'Media', inode_map, None, scanned, 0,
             exclusion_patterns=exclusion_patterns, total_ref=total_ref,
             compiled_exclusions=compiled_excl, walk_report=filesystem['media'])
         # The media root's checks: after its walk, before the assemble phase and
@@ -2568,16 +3720,40 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # persisted and reaches /api/debug/report.
         source_report['filesystem'] = filesystem
         stat_errors = torrent_errors + media_errors
-        # The source file map is only consulted during the walks — release it
-        # (~300 MB at 650K files) before the memory-heavy assemble/save phases.
-        del qbit_file_map
         _enter_phase("post", "Detecting duplicates...")
         duplicate_map = _build_duplicate_map(inode_map)
+        # The library map's Unmanaged state: unseeded files no arr holds,
+        # stamped as the records are built. Only on a whole answer from every
+        # arr; otherwise nothing is stamped and those files stay Not seeded
+        # (R1), which Last scan says.
+        if arr_asking():
+            _enter_phase("post", "Asking Sonarr and Radarr which files they hold...")
+        # How long the arrs took, for the debug report: counts and seconds
+        # only, never an instance's name or address.
+        arr_ask = {}
+        managed, unmanaged_check = arr_answer(arr_ask)
+        set_state(arr_ask=arr_ask)
+        log.info("Audit: Sonarr/Radarr file list: check=%s files=%s secs=%s waited_secs=%s "
+                 "timed_out=%s", arr_ask['check'], arr_ask['files'], arr_ask['secs'],
+                 arr_ask['waited_secs'], arr_ask['timed_out'])
+        if unmanaged_check == 'unreachable':
+            log.info("Audit: Sonarr/Radarr didn't all answer, so no library file is marked unmanaged this scan")
+        stamp_counts = {'unmanaged': 0}
+        # Each top-level torrent folder's registrations, for the exclusion
+        # suggestions; filled by the whole-torrent pass, which reads them anyway.
+        torrent_folders = {}
+        # Each unlinked library file's key, for the next scan to tell one that
+        # moved from one that's new (New in the library); stored in the publish.
+        unlinked_keys = array('q')
         _enter_phase("post", "Assembling file records...")
         _unverified = unverified_spec(source_report, unresolved_roots)
         torrent_files_data, media_files_data = _assemble_records(
             torrent_key_order, media_key_order, inode_map, duplicate_map,
-            compiled_exclusions=compiled_excl, unverified=_unverified)
+            compiled_exclusions=compiled_excl, unverified=_unverified,
+            unmanaged=unmanaged_test(managed, cfg.get('MEDIA_PATH', '')) if managed is not None else None,
+            counts=stamp_counts, torrent_folders=torrent_folders, unlinked_keys=unlinked_keys)
+        del managed
+        unmanaged_count = stamp_counts['unmanaged']
         del torrent_key_order, media_key_order, inode_map, duplicate_map
         if _unverified:
             log.warning("Audit: %d orphaned file(s) marked unverified — the client could not "
@@ -2594,6 +3770,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # walk's own stat calls. Age is stored, not the timestamp — the ladder
         # wants "how long have you had this", and a stored age cannot drift into
         # the future if the clock moves.
+        # The compact Dedupe row's two lists, which the badge's count reads too:
+        # one pass over every record, not two (SCAN SC11).
+        dedupe_lists = dedupe_row(torrent_files_data, media_files_data)
         _extra_details = {
             'seed_byte_secs': tracker_snapshot.get('_seed_byte_secs', 0),
             'max_seed_secs':  tracker_snapshot.get('_max_seed_secs', 0),
@@ -2604,7 +3783,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # number. `duplicate_count` counts files and feeds the health score,
             # the change log, Singleton and Clone Hunter, so it stays as it is;
             # the badge reads this and falls back to it where absent.
-            'dedupe_group_count': dedupe_group_count(torrent_files_data, media_files_data, cfg),
+            'dedupe_group_count': dedupe_group_count(dedupe_lists['torrents'], dedupe_lists['media'], cfg),
             # Cleanup's "couldn't check inside these folders" notice (C26). The
             # count rides the details, which reach the debug report; the folder
             # names ride `cleanup_folders`, which doesn't.
@@ -2612,6 +3791,13 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # Empty folders (C27), and whether they could be looked for at all.
             'empty_folder_count': len(empty_folders),
             'empty_folders_unknown': empty_dirs is None,
+            # The library map's free space: two system calls, counts only.
+            'disk_space': disk_space(cfg.get('LOCAL_PATH', ''), cfg.get('MEDIA_PATH', '')),
+            # The Unmanaged stamp, and whether the arrs answered for it
+            # ('ok', 'none' with no arr configured, 'unreachable'). Last scan
+            # says so when they didn't.
+            'unmanaged_check': unmanaged_check,
+            'unmanaged_count': unmanaged_count,
         }
         # The history point is staged rather than written: it joins the publish
         # below, because the hourly/daily series accumulates and a point left
@@ -2620,8 +3806,24 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         dashboard_stats    = process_health_metrics(media_files_data, torrent_files_data, cfg,
                                                     extra_details=_extra_details,
                                                     history_sink=staged_history.append)
-        cross_seed_stats   = _compute_cross_seed_stats(media_files_data)
-        tracker_file_stats = _compute_tracker_file_stats(torrent_files_data)
+        # Announce hosts that are one tracker (`sources.TrackerTally`): folded
+        # out of every per-tracker number, kept in the file records.
+        tracker_aliases    = tracker_snapshot.get('_aliases') or {}
+        cross_seed_stats   = _compute_cross_seed_stats(media_files_data, tracker_aliases)
+        tracker_file_stats = _compute_tracker_file_stats(torrent_files_data, tracker_aliases)
+        # The source's per-tracker torrent counts and announce health, for the
+        # Trackers page's Torrents column and its health card.
+        for host, snap in tracker_snapshot.items():
+            if host.startswith('_') or not isinstance(snap, dict) or 'torrents' not in snap:
+                continue
+            fs = tracker_file_stats.get(host)
+            if fs is None:
+                continue
+            fs['torrent_count']      = snap.get('torrents', 0)
+            fs['not_working_count']  = snap.get('not_working', 0)
+            fs['unregistered_count'] = snap.get('unregistered', 0)
+            if snap.get('msg'):
+                fs['health_msg'] = snap['msg']
         not_imported_paths = _not_imported_paths(torrent_files_data)
         if cross_seed_stats:
             dashboard_stats['cross_seed_stats'] = cross_seed_stats
@@ -2631,6 +3833,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             "status":             "ok",
             "dashboard":          dashboard_stats,
             "tracker_file_stats": tracker_file_stats,
+            "tracker_aliases":    tracker_aliases,
             "not_imported_paths": not_imported_paths,
         }
         # The upload snapshot, augmented with per-tracker file health stats so
@@ -2643,6 +3846,11 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         upload_snapshot = None
         try:
             aug = {k: (dict(v) if isinstance(v, dict) else v) for k, v in tracker_snapshot.items()}
+            # The counts are history worth keeping; the tracker's message is the
+            # page's, and one per tracker per scan would only grow the table.
+            for v in aug.values():
+                if isinstance(v, dict):
+                    v.pop('msg', None)
             for tracker, fstats in tracker_file_stats.items():
                 if tracker not in aug:
                     aug[tracker] = {'uploaded': 0, 'seeding_size': 0}
@@ -2678,23 +3886,56 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # the previous scan's hash set, and the progress pass below needs the
         # same record to latch against.
         _ns_prev = db_get_meta('ns_progress')
+        # This scan's dead registrations, read by the shovel count and the
+        # progress pass both; worked out once (SCAN SC11).
+        dead_regs = None
         diff = None
         try:
-            prev_sigs = {
-                'media':    db_load_file_signatures('media'),
-                'torrents': db_load_file_signatures('torrents'),
-            }
+            # One tree's previous signatures at a time: each map is a string
+            # per file of the last scan, held beside this scan's records. The
+            # torrent tree goes first because the shovel count reads it too;
+            # the entries are still listed library first, as they always were.
+            prev_torrents = db_load_file_signatures('torrents')
+            dead_regs = dead_registration_hashes(torrent_files_data)
             ns_resolved = count_pile_resolved(
-                prev_sigs['torrents'], torrent_files_data,
-                prev_dead_regs=(_ns_prev or {}).get('last_dead_regs'))
-            if prev_sigs['media'] or prev_sigs['torrents']:
-                curr_snap = {
-                    "media_files": media_files_data, "torrent_files": torrent_files_data,
-                    "dashboard":   dashboard_stats,
-                }
+                prev_torrents, torrent_files_data,
+                prev_dead_regs=(_ns_prev or {}).get('last_dead_regs'), dead_regs=dead_regs)
+            had_torrents = bool(prev_torrents)
+            new_media = {'linked': 0, 'copies': 0, 'unseeded': 0, 'moved': 0}
+            torrent_root = _norm_abs(cfg.get('LOCAL_PATH', '')) if cfg.get('LOCAL_PATH') else None
+            diff_torrents = None
+            # The torrent files linked since the last scan, which the library's
+            # diff reads to tell a new link from a moved one. With no previous
+            # torrent scan it can't tell, and every link counts as new.
+            newly_linked = set() if had_torrents else None
+            if had_torrents:
+                diff_torrents = compute_diff_from_signatures(
+                    {'torrents': prev_torrents},
+                    {"torrent_files": torrent_files_data, "dashboard": dashboard_stats},
+                    newly_linked=newly_linked)
+            prev_torrents = None
+            prev_media = db_load_file_signatures('media')
+            had_media = bool(prev_media)
+            if had_media or had_torrents:
                 prev_score = (db_load_results().get('dashboard') or {}).get('score')
-                diff = compute_diff_from_signatures(prev_sigs, curr_snap, prev_score=prev_score)
-                del prev_sigs, curr_snap
+                diff_media = compute_diff_from_signatures(
+                    {'media': prev_media},
+                    {"media_files": media_files_data, "dashboard": dashboard_stats},
+                    prev_score=prev_score, new_media=new_media, torrent_root=torrent_root,
+                    # Read only if the library both gained and lost a path.
+                    prev_library_keys=db_load_library_keys, newly_linked=newly_linked)
+                prev_media = None
+                if not had_torrents:
+                    diff_torrents = compute_diff_from_signatures(
+                        {'torrents': {}},
+                        {"torrent_files": torrent_files_data, "dashboard": dashboard_stats})
+                diff = _merge_tab_diffs(diff_media, diff_torrents, prev_score, dashboard_stats)
+                # The New in the library card's series rides the upload snapshot,
+                # so the dashboard's range applies to it like every other series.
+                # Only a scan that compared its library against a previous one
+                # counts, so a gap reads as "not counted", never as zero.
+                if upload_snapshot is not None and had_media:
+                    upload_snapshot.setdefault('_library', {})['new_media'] = new_media
             else:
                 log.info("No previous file signatures stored — change log skipped this run, "
                          "resumes on the next audit.")
@@ -2721,7 +3962,8 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # rounds.history_from_runs.
             _ns_next = rounds.update_progress(
                 _ns_prev, cfg, _ns_det, state=_ns_state, resolved=ns_resolved,
-                dead_regs=dead_registration_hashes(torrent_files_data),
+                dead_regs=(dead_regs if dead_regs is not None
+                           else dead_registration_hashes(torrent_files_data)),
                 runs=_ns_runs)
         except Exception as e:
             log.warning(f"Could not compute Next steps progress: {e}")
@@ -2744,7 +3986,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
 
         # ── Compress, then publish (S04, decisions 1/2/4 — 2026-09-15) ────────
         # Everything above is computed; nothing above this line has been stored.
-        # The six blobs are built **outside** the transaction because
+        # The seven blobs are built **outside** the transaction because
         # compression is the expensive half and the write is the cheap one
         # (measured: 21 s against 0.1 s per tab at 650,000 files — see
         # db.PreparedFileResults), so the write lock is held for a fraction of a
@@ -2753,13 +3995,21 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # the extra peak is the compressed blobs alone, 46 MB measured at that size
         # against a record list already costing several GB.
         _enter_phase("post", "Saving file results...")
+        # The Triage subset once: its own row, and the library map's dead seeds.
+        triage_set = [f for f in torrent_files_data if _is_triage_relevant(f)]
+        # The library map's row, which the exclusion suggestions read too: its
+        # folders' sums, and the disc rips it passed on the way.
+        discs = {}
+        map_row = library_map_row(media_files_data, torrent_files_data,
+                                  dead=dead_seed_keys(triage_set), discs=discs)
+        suggestions = exclusion_suggestions(cfg, torrent_folders, map_row, discs)
+        del torrent_folders, discs
         staged = [
             ('media',    db_prepare_file_results(media_files_data)),
             ('torrents', db_prepare_file_results(torrent_files_data)),
             # Compact Triage working set (references, not copies) — lets the
             # Triage page skip deserializing the full torrent list.
-            ('triage',   db_prepare_file_results(
-                [f for f in torrent_files_data if _is_triage_relevant(f)])),
+            ('triage',   db_prepare_file_results(triage_set)),
             # Compact Cleanup working set, after the orphan stamps (C10): the
             # page and the delete script read this, never the full torrent list.
             # Orphans, then the leftover links riding their carriers (C17).
@@ -2773,12 +4023,23 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             # Compact Dedupe working set (R6, Phase 14): the page and the script
             # read this, never both full lists. References, keyed by tree.
             ('dedupe',   db_prepare_file_results(
-                dedupe_row(torrent_files_data, media_files_data))),
+                dedupe_lists)),
+            # The dashboard's library map: per-title byte sums by state, both
+            # trees. Names, so its own row, served by /api/library_map.
+            ('library_map', db_prepare_file_results(map_row)),
+            # Settings' exclusion suggestions, written every scan so one that
+            # no longer applies goes. Folder names, so never in the details.
+            ('exclusion_suggestions', db_prepare_file_results(suggestions)),
         ]
+        del map_row, suggestions
         staged_sigs = [
             ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),
             ('torrents', db_prepare_file_signatures(file_signatures(torrent_files_data))),
         ]
+        # The next scan's way to tell a moved library file from a new one,
+        # kept by the assemble.
+        staged_keys = unlinked_keys
+        del unlinked_keys
         _enter_phase("post", "Saving audit results...")
         # One transaction. Every piece of this scan lands, or none does — so a
         # reader can never join two generations and an interruption leaves the
@@ -2787,6 +4048,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # whether every stored piece came from one scan.
         try:
             with db_publish() as pub:
+                # Before the snapshot: the yield summary below reads the stored
+                # series through these, and so does every later range.
+                db_set_meta('tracker_aliases', tracker_aliases, conn=pub)
                 if upload_snapshot is not None:
                     db_save_upload_snapshot(upload_snapshot,
                                             source=cfg.get('TORRENT_SOURCE', 'qbit'), conn=pub)
@@ -2811,6 +4075,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                     db_save_file_results(tab, prepared, conn=pub, generation=ran_at)
                 for tab, prepared in staged_sigs:
                     db_save_file_signatures(tab, prepared, conn=pub)
+                db_save_library_keys(staged_keys, conn=pub)
                 for hist in staged_history:
                     db_save_history(hist, conn=pub)
                 db_save_results(result, conn=pub)
@@ -2849,7 +4114,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         except Exception as e:
             raise _PublishFailed(str(e)) from e
         finally:
-            del staged, staged_sigs
+            del staged, staged_sigs, staged_keys
         rss = process_rss_mb()
         log.info(f"Audit complete: {len(torrent_files_data)} torrent file(s), "
                  f"{len(media_files_data)} media file(s), {len(trackers)} tracker(s), "
@@ -2975,6 +4240,12 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         torrent_key_order = media_key_order = None
         torrent_files_data = media_files_data = None
         result = not_imported_paths = None
+        # SCAN SC3. The process's own thresholds come back here, whichever way
+        # the scan ended, and only here: after the names above are dropped and
+        # straight before the collection below. Put back any earlier, the full
+        # pass the scan held off would run at the next young collection, over
+        # structures that are still alive.
+        gc.set_threshold(*gc_thresholds)
         try:
             rss_before = process_rss_mb()
             gc.collect()

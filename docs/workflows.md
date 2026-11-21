@@ -128,6 +128,62 @@ the indexer pickers either.
 
 <p><img src="backfill-config.png" alt="Backfill workflow" width="100%" /></p>
 
+While a search runs and after it, the line under its heading lists the filters
+it used, for example *Filters: your file's quality or better · also seeding on*
+followed by the tracker you chose. Only what narrows the search is listed (a row left on *All* or *Any*
+isn't), and a search with no filters has no line. It's the search's own record,
+so it's right even for a search you come back to later or one started in
+another tab.
+
+**From the library map.** The Dashboard's library map draws every title not
+seeded in blue. Click one, or a title on the *Biggest gaps* card below it, and
+Backfill searches that title straight away: a movie is one search, a show one
+per season pack or unseeded episode, up to 10. The line under the results says
+what was searched, and if the title had more than 10, how many it has. Your
+**Indexer Strategy** applies as it does to every search, so if *Must also be
+seeding on* names a tracker, only releases also listed there are offered. It goes
+by the title's folder, not its name, so a show whose folder is named differently
+from its title in Sonarr is still found. A search started this way asks for
+releases at your file's quality or better, of any resolution, source or HDR,
+instead of the quality filters you last used, so a filter left on 2160p can't
+hide the 1080p release a 1080p show needs. To change any of that, click **New
+Search**: the settings open on the same title, with **Show everything** to go
+back to the whole library, and what you change there is for that search only;
+the filters and search depth you keep for the whole library stay as they were.
+If there's nothing to search, Backfill says so at the top of the page, under
+the title's name, and opens the settings: Sonarr and Radarr manage none of that
+folder's unseeded files, or they're excluded. If another search is still
+running, Backfill shows that one and says so, since only one runs at a time.
+
+Yellow, red and purple tiles open Cleanup, Triage and Dedupe the same way;
+Cleanup and Triage start with that release's folder in their search.
+
+**Unmanaged files aren't blue.** A library file that isn't seeded and that
+neither Sonarr nor Radarr holds is drawn in plain grey and named *Unmanaged*:
+an old copy of a movie in a folder of its own beside the one Radarr has, a show
+folder whose episodes Sonarr never imported, a film's extras. Backfill can only
+search for what an arr manages, so clicking one opens Media on that folder
+instead, where you can add it to Sonarr or Radarr or delete a spare copy.
+Subtitles, posters and other files no arr lists count as unmanaged only when no
+file beside them is in an arr. Each scan asks Sonarr and Radarr which files they
+hold while it reads your folders; if any of them doesn't answer, nothing is
+marked unmanaged on that scan, those files stay blue, and the Dashboard's *Last
+scan* card says so.
+
+**Subtitles and artwork aren't blue either.** A subtitle Bazarr wrote, or an
+`.nfo` or poster your media server keeps beside a video, isn't in any torrent,
+and Backfill can't search for it. The map draws it in its title like any other
+file with nothing to do, so a title whose video is linked counts as fully
+linked. *New in the library* counts only videos, so it doesn't count one
+either.
+
+**New in the library** counts the videos that arrived in your library each
+day, and how: hardlinked, as a copy of a torrent file (the link wasn't made,
+so the file takes its space twice), or not seeded. A video you moved or
+renamed within the library isn't new, so it isn't counted; the card says how
+many there were. Click a day to open the Changes page on that day's new
+library files, each marked with how it arrived.
+
 ### Season packs and single episodes
 
 A Sonarr season is searched as **one season pack only when every episode file
@@ -155,7 +211,11 @@ offered two-episode releases: Sonarr replaces the whole existing file when it
 imports, so a single-episode release would delete the other episode's file. And
 a release for the same episode number in another season (`S02E01`, or the
 special `S00E01`) isn't offered for `S01E01`, nor another season's pack for a
-season-pack row. A release Sonarr couldn't match to any episode is still shown.
+season-pack row. A release Sonarr matched to this show but not to an episode is
+still shown. A release Sonarr matched to another show in your library, or to no
+show at all, isn't: some indexers answer a search with their latest uploads,
+and grabbing one of those from this row would download the other show, or
+Sonarr would refuse it. Radarr's releases follow the same rule for movies.
 
 ### Ranking
 
@@ -172,9 +232,24 @@ turn into an upgrade. Either way, each release shows its size against your file
 Results can also be filtered by resolution (including **480p / SD**), source
 (including **DVD**) and HDR format. These filters go by the quality Sonarr/Radarr
 names each release with, so they mean the same on both — Radarr reports a DVD
-release with no resolution at all, and the SD option still finds it.
+release with no resolution at all, and the SD option still finds it. **Minimum:
+Your file** keeps only releases at each file's own quality or better (resolution
+first, then source), so one setting suits a library that's part 1080p and part
+2160p; for a season pack it's the lowest quality in the season. A release whose
+quality can't be read is kept.
+
+When a row comes back empty, it says why: how many releases the quality filter
+hid and which qualities they were, how many were below your file, or that none
+were on the indexers you chose. Hover the line for the whole count, including
+the releases Sonarr/Radarr listed for other titles.
 
 ### Grabbing and importing
+
+When a search finds several releases, the best one in the order you chose is
+picked to start with. Click another to pick it instead (the title opens the
+release's page on the tracker). **Grab this pack** or **Grab this release**
+grabs the picked one. Each title is grabbed once: after a grab, the pick stays
+on the release that was grabbed.
 
 Grabbing hands the release to Sonarr/Radarr, which downloads and imports it
 normally — the new torrent hardlinks into the library and the file stops being
@@ -205,10 +280,13 @@ the file unseeded (say it ran before the download imported), the candidate comes
 back, and grabbing it again is refused while the first download is in the queue.
 
 A grab that fails because the release has dropped out of the arr's cache is
-searched again and retried once. Any other failure is shown as it is — a
-timeout may be a grab that actually went through, and retrying it would
-download the release twice. For the same reason, a release already in the
-arr's queue isn't grabbed again unless you click **anyway**.
+searched again and retried once. Any other failure is shown under the title
+with Sonarr/Radarr's reason, and the button is there to try again (or pick
+another release first). auditorr never retries it by itself, because a timeout
+may be a grab that actually went through, and retrying it would download the
+release twice. For the same reason, when the arr's queue already has a
+download for those episodes or that movie, nothing is grabbed unless you click
+**Grab anyway**.
 
 ### Runs
 
@@ -432,6 +510,14 @@ because that bucket's files are the only copy you have, and "we couldn't ask" is
 not an answer. Positive matches are unaffected: a title that *did* resolve still
 reads *Superseded* or *Import pending* as normal.
 
+**From the library map.** The red tiles on the Dashboard's library map are
+Triage's. A torrent that isn't imported sits in the torrent folder. A dead seed
+is drawn on its title in the library, because its file is the library's file:
+the torrent seeding it is the only thing that's gone. Click either, or its row
+on the *Biggest gaps* card, and Triage opens with the search set to that
+torrent. Once you've removed a dead seed's torrent, the next scan shows the
+title as not seeded, ready for [Backfill](#backfill) to find a new one to seed.
+
 **Downloads that haven't finished are not listed.** A torrent at 0% has no
 library file, which is the literal definition of the Not Imported pile, so the
 newest thing in your client used to arrive here at its full final size with a
@@ -446,8 +532,8 @@ quietly vanished.
 Titles are matched against the **alternate titles** Sonarr and Radarr already
 store, not just the one they display. That matters for non-English content,
 which is almost always released under its original-language name: a season
-released as `No.tengo.miedo.S01…` resolves to the series Sonarr calls *I'm Not
-Afraid*, and reads as *Import pending* rather than *Not in library*. An exact
+released as `Nadie.duerme.S01…` resolves to the series Sonarr calls *Nobody
+Sleeps*, and reads as *Import pending* rather than *Not in library*. An exact
 title match always takes priority.
 
 **A torrent's extra files don't count once its video is in your library.**
@@ -719,6 +805,9 @@ in it), scene sample clips, and full-disc rip structures. Clicking one writes a
 real exclusion into
 [Config → Excluded Files](configuration.md#excluded-files--folders), where you
 can see and undo it. Subtitles and Extras are deliberately never suggested.
+Settings makes suggestions of its own after every scan, for whole folders and
+disc rips:
+see [Suggested from your last scan](configuration.md#suggested-from-your-last-scan).
 
 An exclusion applies everywhere, Cleanup included. A rule like `ext:txt` also
 hides a stray `.txt` that no torrent holds, which is exactly what Cleanup is
@@ -891,7 +980,9 @@ through it:
    panel at the bottom right, like a Backfill grab — and re-audits once it
    actually imports. Every step is reported: if the grab succeeds and the
    removal doesn't, you're told the replacement is on its way and the old
-   torrents are still in your client.
+   torrents are still in your client. **Trump another** under the result takes
+   you back to an empty PM box for the next one, while Import Jobs keeps
+   following the last grab.
 
 ### What the confirm step tells you
 

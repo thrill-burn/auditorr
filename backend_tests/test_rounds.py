@@ -520,21 +520,21 @@ def _tf(path, imported=False, status='Seeding', excluded=False, **over):
 
 
 def test_a_real_clearout_credits_only_what_was_on_the_pile():
-    """Field case, 2026-08-15: one Triage session removed eight torrent files.
+    """Field case: one Triage session removed eight torrent files.
 
     Three were excluded sidecars — a .sfv, a .nfo (via the media-server presets)
     and a Sample/ clip — which never counted toward not_imported_count in the
     first place. Five is the honest number.
     """
     before = [
-        _tf('The Lion King (1994) HONE.mkv'),
-        _tf('radarr/Obsession.2025.mkv'),
-        _tf('radarr/Spirited.Away.2001.mkv'),
-        _tf('radarr/Michael.2026.mkv'),
-        _tf('tv-sonarr/Furious.S01E05/ep.mkv'),
-        _tf('tv-sonarr/Furious.S01E05/ep.sfv',       excluded=True),
-        _tf('tv-sonarr/Furious.S01E05/ep.nfo',       excluded=True),
-        _tf('tv-sonarr/Furious.S01E05/Sample/s.mkv', excluded=True),
+        _tf('The Brass Lantern (1994) HONE.mkv'),
+        _tf('radarr/Fixation.2025.mkv'),
+        _tf('radarr/Hidden.Forest.2001.mkv'),
+        _tf('radarr/Marcus.2026.mkv'),
+        _tf('tv-sonarr/Restless.S01E05/ep.mkv'),
+        _tf('tv-sonarr/Restless.S01E05/ep.sfv',       excluded=True),
+        _tf('tv-sonarr/Restless.S01E05/ep.nfo',       excluded=True),
+        _tf('tv-sonarr/Restless.S01E05/Sample/s.mkv', excluded=True),
         _tf('radarr/Untouched.2024.mkv'),
     ]
     survivor = [_tf('radarr/Untouched.2024.mkv')]
@@ -543,8 +543,8 @@ def test_a_real_clearout_credits_only_what_was_on_the_pile():
 
 def test_an_import_clears_a_pile_item_too():
     """The other honest exit from the pile: an arr picked it up."""
-    before = [_tf('radarr/Dont.Say.Good.Luck.2026.mkv')]
-    after  = [_tf('radarr/Dont.Say.Good.Luck.2026.mkv', imported=True)]
+    before = [_tf('radarr/Mind.The.Step.2026.mkv')]
+    after  = [_tf('radarr/Mind.The.Step.2026.mkv', imported=True)]
     assert count_pile_resolved(file_signatures(before), after) == 1
 
 
@@ -563,7 +563,7 @@ def test_hiding_or_orphaning_a_pile_item_is_not_digging():
 
 def test_deleting_an_imported_file_is_not_digging():
     """It was never on the pile — and it just cost the library a hardlink."""
-    before = [_tf('radarr/Splitsville.2025.mkv', imported=True)]
+    before = [_tf('radarr/Partway.2025.mkv', imported=True)]
     assert count_pile_resolved(file_signatures(before), []) == 0
 
 

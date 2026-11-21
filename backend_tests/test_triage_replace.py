@@ -1,8 +1,8 @@
 """Triage T21 and T22: a pack's quality is every episode's, and *Replace with this pack*.
 
 T21. A row's quality comparison was its largest video's, while Force import
-posted every path on the row. A season Sonarr assembled episode by episode (the
-box's Small Prophets: E01 and E02 at 2160p, E03–E06 1080p BluRay) can hold a
+posted every path on the row. A season Sonarr assembled episode by episode (say,
+E01 and E02 at 2160p, E03–E06 1080p BluRay) can hold a
 pack at the same quality as one episode and below another, and Force import then
 wrote the 1080p file over the 2160p one.
 
@@ -21,7 +21,7 @@ replaced only when the confirm says `include_unseeded`.
 
 T26. The same plan and replace for a Radarr movie. Radarr refuses a lower
 release as "not an upgrade", and Triage's only way past that was Sonarr's. The
-box's case: Buddy (2026), WEBDL-2160p in the library and hardlinked to its own
+case: a movie at WEBDL-2160p in the library and hardlinked to its own
 torrent, a 1080p WEB-DL seeding on three trackers in the client.
 """
 import os
@@ -117,7 +117,7 @@ class TestSeasonPacks:
         return {i['hash']: i for i in _triage(records, media)}
 
     def test_two_packs_of_one_season_share_a_key_and_the_better_release_is_the_pick(self):
-        """The box's case. Quality first: it's what Sonarr ranks first, so the
+        """Quality first: it's what Sonarr ranks first, so the
         pick is the pack Sonarr keeps rather than one it would upgrade away."""
         items = self._two_packs()
         blu, web = items['BLU'], items['WEB']
@@ -278,7 +278,7 @@ class TestReplacePlan:
         assert plan['release'] == 'Show.S01.1080p.BluRay-SbR'
 
     def test_the_file_list_is_asked_for_with_the_torrents_save_path(self, box):
-        """T23 — the box's Small Prophets plan was six `unchecked`. qui roots each
+        """T23 — a six-episode plan was all `unchecked`. qui roots each
         file at the save path it's handed, and the plan handed it none."""
         status, plan = _plan(box)
         assert status == 200
@@ -421,18 +421,18 @@ class TestReplace:
 MOVIE_HASH = 'C' * 40
 MOVIES = {'id': 'movies', 'service': 'radarr', 'name': 'Radarr', 'base_url': 'http://radarr:7878',
           'api_key': 'k', 'remote_path': '', 'media_path': '', 'local_media_path': ''}
-RELEASE = 'Buddy.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-CHORTLE'
+RELEASE = 'Kestrel.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-CHORTLE'
 
 
 @pytest.fixture
 def movie_box(tmp_path):
-    """Buddy (2026) as the box holds it: the library's WEBDL-2160p file is a
+    """The movie: the library's WEBDL-2160p file is a
     hardlink of its own torrent's, and the client seeds a 1080p WEB-DL."""
     torrents, media = tmp_path / 'torrents', tmp_path / 'media'
     release = _touch(str(torrents / 'radarr' / f'{RELEASE}.mkv'), b'x' * 10)
-    lib = str(media / 'movies' / 'Buddy (2026)' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv')
+    lib = str(media / 'movies' / 'Kestrel (2026)' / 'Kestrel.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv')
     _touch(lib)
-    os.link(lib, str(torrents / 'radarr' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
+    os.link(lib, str(torrents / 'radarr' / 'Kestrel.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
     return {
         'cfg': {'LOCAL_PATH': str(torrents), 'REMOTE_PATH': ''},
         'listing': [release],
@@ -441,7 +441,7 @@ def movie_box(tmp_path):
                 'save_path': str(torrents / 'radarr'), 'content_path': release},
         'report': {'instances_failed': []},
         'index': [{'connection_id': 'movies', 'service': 'radarr', 'arr_id': 587, 'file_id': 900,
-                   'path': lib, 'file_quality_name': 'WEBDL-2160p', 'title': 'Buddy', 'year': 2026}],
+                   'path': lib, 'file_quality_name': 'WEBDL-2160p', 'title': 'Kestrel', 'year': 2026}],
         'file_id': 900, 'release': release, 'lib': lib, 'torrents': torrents,
     }
 
@@ -510,18 +510,18 @@ class TestMovieMatchFiles:
 class TestMoviePlan:
 
     def test_a_lower_release_over_a_linked_library_file_is_a_lossless_replace(self, movie_box):
-        """The box's Buddy: the 2160p bytes stay on disk in AOC's torrent."""
+        """The 2160p bytes stay on disk in AOC's torrent."""
         status, plan = _movie_plan(movie_box)
         assert status == 200
-        assert (plan['service'], plan['title'], plan['release']) == ('radarr', 'Buddy (2026)', RELEASE)
+        assert (plan['service'], plan['title'], plan['release']) == ('radarr', 'Kestrel (2026)', RELEASE)
         [entry] = plan['entries']
-        assert (entry['action'], entry['cmp'], entry['label']) == ('replace', 'lower', 'Buddy (2026)')
+        assert (entry['action'], entry['cmp'], entry['label']) == ('replace', 'lower', 'Kestrel (2026)')
         assert (entry['replaces']['linked'], entry['replaces']['quality'], entry['replaces']['group']) \
             == (True, 'WEBDL-2160p', 'AOC')
         assert plan['downgrades'] == 1
 
     def test_a_lower_release_over_the_only_copy_is_unseeded(self, movie_box):
-        os.remove(str(movie_box['torrents'] / 'radarr' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
+        os.remove(str(movie_box['torrents'] / 'radarr' / 'Kestrel.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
         status, plan = _movie_plan(movie_box)
         assert [e['action'] for e in plan['entries']] == ['unseeded']
         assert plan['downgrades'] == 0
@@ -545,7 +545,7 @@ class TestMoviePlan:
         and the import would file it under this movie's id."""
         folder, row = self._folder(movie_box)
         mine = _touch(str(folder / f'{RELEASE}.mkv'), b'x' * 20)
-        sequel = _touch(str(folder / 'Buddy.2.2028.1080p.AMZN.WEB-DL-CHORTLE.mkv'), b'x' * 90)
+        sequel = _touch(str(folder / 'Kestrel.2.2028.1080p.AMZN.WEB-DL-CHORTLE.mkv'), b'x' * 90)
         status, plan = _movie_plan(movie_box, listing=[mine, sequel], row=row)
         acts = {_base(e['path']): (e['action'], e.get('reason')) for e in plan['entries']}
         assert acts == {f'{RELEASE}.mkv': ('replace', None), _base(sequel): ('skip', 'extra')}
@@ -553,7 +553,7 @@ class TestMoviePlan:
     def test_several_videos_and_no_matched_files_plan_nothing(self, movie_box):
         folder, row = self._folder(movie_box)
         videos = [_touch(str(folder / f'{RELEASE}.mkv'), b'x' * 20),
-                  _touch(str(folder / 'Buddy.2.2028.1080p.AMZN.WEB-DL-CHORTLE.mkv'), b'x' * 90)]
+                  _touch(str(folder / 'Kestrel.2.2028.1080p.AMZN.WEB-DL-CHORTLE.mkv'), b'x' * 90)]
         status, plan = _movie_plan(movie_box, body={'files': []}, listing=videos, row=row)
         assert {(e['action'], e.get('reason')) for e in plan['entries']} == {('skip', 'unchecked')}
 
@@ -601,7 +601,7 @@ class TestMovieReplace:
         # The plan's read, the baseline, then the file id moving.
         status, body, reader, imp, nudge = self._replace(movie_box, [900, 900, 901])
         assert status == 200
-        assert (body['replaced'], body['pending'], body['dropped']) == (['Buddy (2026)'], [], [])
+        assert (body['replaced'], body['pending'], body['dropped']) == (['Kestrel (2026)'], [], [])
         args, kw = imp.call_args
         assert args[1:4] == ('radarr', 'movies', 587)
         assert kw['import_mode'] == 'Copy'
@@ -614,16 +614,16 @@ class TestMovieReplace:
         nudge.assert_called_once()
 
     def test_an_unseeded_movie_needs_the_switch(self, movie_box):
-        os.remove(str(movie_box['torrents'] / 'radarr' / 'Buddy.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
+        os.remove(str(movie_box['torrents'] / 'radarr' / 'Kestrel.2026.2160p.WEB-DL.DDP5.1.SDR.H265-AOC.mkv'))
         status, body, _, imp, _ = self._replace(movie_box, [900])
-        assert (status, body['code'], body['dropped']) == (409, 'nothing_to_replace', ['Buddy (2026)'])
+        assert (status, body['code'], body['dropped']) == (409, 'nothing_to_replace', ['Kestrel (2026)'])
         imp.assert_not_called()
         status, body, _, imp, _ = self._replace(movie_box, [900, 900, 901], extra={'include_unseeded': True})
-        assert (status, body['replaced']) == (200, ['Buddy (2026)'])
+        assert (status, body['replaced']) == (200, ['Kestrel (2026)'])
 
     def test_a_file_id_that_did_not_move_is_pending(self, movie_box):
         status, body, _, _, nudge = self._replace(movie_box, [900, 900, 900])
-        assert (body['replaced'], body['pending']) == ([], ['Buddy (2026)'])
+        assert (body['replaced'], body['pending']) == ([], ['Kestrel (2026)'])
         nudge.assert_not_called()
 
     def test_a_baseline_that_cannot_be_read_sends_nothing(self, movie_box):
