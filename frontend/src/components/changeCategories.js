@@ -1,3 +1,15 @@
+// How a new library video arrived (2026-11-20): `arrived` on a library
+// `new_files` entry, in the New in the library card's words and colours. A
+// moved or renamed file is not new, and the card doesn't count it. Entries from
+// before carry none, nor do the files the card doesn't count (anything but a
+// video, or excluded), and those read "New media".
+export const ARRIVALS = {
+  linked:   { label: 'New · linked',     color: 'var(--map-linked)' },
+  unseeded: { label: 'New · not seeded', color: 'var(--blue)' },
+  copies:   { label: 'New · copy',       color: 'var(--purple)' },
+  moved:    { label: 'Moved or renamed', color: 'var(--text-dim)' },
+}
+
 export const CHANGE_CATEGORIES = [
   {
     key: 'newly_orphaned',

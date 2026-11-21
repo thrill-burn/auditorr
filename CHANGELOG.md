@@ -10,10 +10,14 @@
   - full-disc rips, when the disc-rip preset is off.
 
   *Add rule* puts the rule in the list and *Not this* stops it coming back; nothing changes until you save. When there's something to look at, the Dashboard's Last scan card has an *Exclusions* line with a link to it. A category is suggested only when at least two of its torrents have finished downloading, none of its files is in your library and other categories' files are, and a library folder only when every Sonarr and Radarr answered.
+- **Click a day on *New in the library* to see its files.** It opens the Changes page on that day's new library files, and each one says how it arrived: linked, not seeded, a copy of a torrent file, or moved or renamed. The Changes page lists 50 of each kind of change per scan, and now says how many more there were.
 
 ### Fixes
 
-- **Subtitles and artwork drew a blue stripe on the library map.** A subtitle Bazarr writes beside a video, or a media server's `.nfo` and poster, isn't in any torrent, so the map drew it as not seeded, and small gaps are drawn larger so they show. With one subtitle per title, every title had a blue stripe, and they took the room the map keeps for real gaps. Clicking one opened Backfill with nothing to search. These files are now drawn as needing nothing, a title whose video is linked counts as fully linked, and *New in the library* no longer counts a new subtitle as a file that isn't seeded.
+- ***New in the library* counted moved files as new.** Renaming or moving a folder in your library made every file in it read as a new file that wasn't seeded. A moved or renamed file is now recognised and left out, and the card says how many there were. This starts from the second scan after upgrading.
+- ***New in the library* counts only videos.** Subtitles, artwork and `.nfo` files aren't counted, whether or not they're linked.
+- **The Changes page's dates.** Picking a day could leave out part of that day and show part of the day next to it instead, depending on your time zone.
+- **Subtitles and artwork drew a blue stripe on the library map.** A subtitle Bazarr writes beside a video, or a media server's `.nfo` and poster, isn't in any torrent, so the map drew it as not seeded, and small gaps are drawn larger so they show. With one subtitle per title, every title had a blue stripe, and they took the room the map keeps for real gaps. Clicking one opened Backfill with nothing to search. These files are now drawn as needing nothing, and a title whose video is linked counts as fully linked.
 
 ### Improvements
 

@@ -482,6 +482,10 @@ function AppInner() {
       search: action.search || null,
       // Settings opened at one card (Last scan's exclusion suggestions).
       section: action.section || null,
+      // Audit History on one day's changes of some kinds (a day's bar on the
+      // New in the library card, 2026-11-20).
+      day: action.day || null,
+      categories: action.categories || null,
     }
     setPendingNav(nav)
     setHashTab(action.tab)
@@ -498,7 +502,9 @@ function AppInner() {
     (pendingNav?.seedCount != null ? String(pendingNav.seedCount) : '') +
     (pendingNav?.oldTitle || '') +
     (pendingNav?.under || '') +
-    (pendingNav?.search || '')
+    (pendingNav?.search || '') +
+    (pendingNav?.day || '') +
+    (pendingNav?.categories || []).join(',')
 
   // Server is fail-closed: AUDITORR_REQUIRE_AUTH is set but no AUDITORR_SECRET
   // is configured. Nothing in the app can work, so take over the page with
@@ -631,7 +637,9 @@ function AppInner() {
               />
             )}
             {tab === 'changes' && (
-              <ChangeLog onNavigate={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }} />
+              <ChangeLog key={navKey}
+                initialDay={pendingNav?.day} initialCategories={pendingNav?.categories}
+                onNavigate={(path, revealTab) => { setRevealPath(path); setHashTab(revealTab); setTab(revealTab) }} />
             )}
             {tab === 'config' && (
               <Config

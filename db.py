@@ -3,6 +3,7 @@ import json
 import zlib
 import itertools
 import sqlite3
+from array import array
 import logging
 import threading
 from contextlib import contextmanager
@@ -785,6 +786,52 @@ def db_load_file_signatures(tab, conn=None):
         if isinstance(data, (bytes, bytearray)):
             return json.loads(zlib.decompress(data).decode())
         return json.loads(data)
+
+
+# The library's file identities, for telling a moved file from a new one (New
+# in the library, 2026-11-20). `audit.library_keys` is one signed 64-bit key per
+# library file; stored raw, because hashes don't compress, and never read as
+# JSON: `/api/files` serves only `media` and `torrents`.
+_LIBRARY_KEYS_TAB = 'media_keys'
+
+
+def db_save_library_keys(keys, conn=None):
+    """Persist `audit.library_keys`' array (or its bytes) for the next scan's
+    diff. The array is bound through its own buffer, never copied to bytes.
+
+    Written only when it differs from what's stored: a library's unlinked files
+    rarely change between scans (imports arrive linked), and reading the row to
+    compare costs a quarter of writing it (0.5 against 1.8 ms at 350,000 library
+    files). In the caller's transaction, so the comparison and the write are one."""
+    blob = keys if isinstance(keys, (bytes, bytearray)) else memoryview(keys).cast('B')
+    with _writing(conn) as c:
+        row = c.execute('SELECT files_json FROM file_results WHERE tab = ?',
+                        (_LIBRARY_KEYS_TAB,)).fetchone()
+        stored = row['files_json'] if row is not None else None
+        # Lengths first, then bytes against bytes: a memoryview compares item
+        # by item, 0.57 ms here against 0.02.
+        if (isinstance(stored, (bytes, bytearray)) and len(stored) == len(blob)
+                and stored == bytes(blob)):
+            return
+        c.execute('INSERT OR REPLACE INTO file_results (tab, files_json) VALUES (?, ?)',
+                  (_LIBRARY_KEYS_TAB, blob))
+
+
+def db_load_library_keys(conn=None):
+    """The previous scan's library keys as an `array('q')`, or `None` when there
+    are none to read (a database from before they were stored): could not ask,
+    so the caller counts as it did before."""
+    with _reading(conn) as c:
+        row = c.execute('SELECT files_json FROM file_results WHERE tab = ?',
+                        (_LIBRARY_KEYS_TAB,)).fetchone()
+        blob = row['files_json'] if row else None
+    if not isinstance(blob, (bytes, bytearray)):
+        return None
+    out = array('q')
+    if len(blob) % out.itemsize:
+        return None
+    out.frombytes(blob)
+    return out
 
 
 # ---------------------------------------------------------------------------

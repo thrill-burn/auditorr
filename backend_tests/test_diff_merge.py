@@ -58,19 +58,22 @@ def _mutate(rng, records, tab):
     return out
 
 
-def _two_calls(prev_m, prev_t, curr, prev_score, torrent_root):
+def _two_calls(prev_m, prev_t, curr, prev_score, torrent_root, load=None):
     """The scan's sequence: the torrent tree, then the library, then the merge."""
     new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
     if not prev_m and not prev_t:
         return None, new_media
     diff_t = None
+    newly_linked = set() if prev_t else None
     if prev_t:
         diff_t = compute_diff_from_signatures(
             {'torrents': prev_t},
-            {'torrent_files': curr['torrent_files'], 'dashboard': curr['dashboard']})
+            {'torrent_files': curr['torrent_files'], 'dashboard': curr['dashboard']},
+            newly_linked=newly_linked)
     diff_m = compute_diff_from_signatures(
         {'media': prev_m}, {'media_files': curr['media_files'], 'dashboard': curr['dashboard']},
-        prev_score=prev_score, new_media=new_media, torrent_root=torrent_root)
+        prev_score=prev_score, new_media=new_media, torrent_root=torrent_root,
+        prev_library_keys=load, newly_linked=newly_linked)
     if not prev_t:
         diff_t = compute_diff_from_signatures(
             {'torrents': {}},
@@ -78,13 +81,14 @@ def _two_calls(prev_m, prev_t, curr, prev_score, torrent_root):
     return _merge_tab_diffs(diff_m, diff_t, prev_score, curr['dashboard']), new_media
 
 
-def _one_call(prev_m, prev_t, curr, prev_score, torrent_root):
+def _one_call(prev_m, prev_t, curr, prev_score, torrent_root, load=None):
     new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
     if not prev_m and not prev_t:
         return None, new_media
     diff = compute_diff_from_signatures(
         {'media': prev_m, 'torrents': prev_t}, curr, prev_score=prev_score,
-        new_media=new_media, torrent_root=torrent_root)
+        new_media=new_media, torrent_root=torrent_root, prev_library_keys=load,
+        newly_linked=set())
     return diff, new_media
 
 
@@ -111,6 +115,40 @@ def test_the_merge_is_one_call_over_both_trees():
     assert cases == 8 * 4 * 4 * 3
 
 
+def _with_inodes(records, start):
+    return [dict(r, inode=start + i) for i, r in enumerate(records)]
+
+
+def test_the_merge_is_one_call_over_both_trees_with_moves():
+    """2026-11-20: the library's moves (a new path on a file the previous scan
+    held) are tagged and counted the same way in the two calls as in one."""
+    rng = random.Random(9)
+    moved_any = 0
+    for sizes in [(3, 3), (40, 40), (120, 4), (4, 120), (120, 120)]:
+        for had in [(True, True), (True, False)]:
+            for _ in range(4):
+                prev_media = _with_inodes(_records(rng, 'media', sizes[0]), 1)
+                prev_tor = _records(rng, 'torrents', sizes[1])
+                curr_media = _mutate(rng, prev_media, 'media')
+                curr_media = [dict(r, path=r['path'].replace('/p', '/moved/p'))
+                              if 'inode' in r and rng.random() < 0.3 else r for r in curr_media]
+                curr_media = [r if 'inode' in r else dict(r, inode=10_000 + i)
+                              for i, r in enumerate(curr_media)]
+                curr = {'media_files': curr_media,
+                        'torrent_files': _mutate(rng, prev_tor, 'torrents'),
+                        'dashboard': {'score': 70.0}}
+                keys = audit.library_keys(prev_media)
+                prev_m = file_signatures(prev_media)
+                prev_t = file_signatures(prev_tor) if had[1] else {}
+                args = (prev_m, prev_t, curr, 60.0, '/data/torrents')
+                want, want_new = _one_call(*args, load=lambda: keys)
+                got, got_new = _two_calls(*args, load=lambda: keys)
+                assert json.dumps(got) == json.dumps(want), (sizes, had)
+                assert got_new == want_new
+                moved_any += want_new.get('moved', 0)
+    assert moved_any, 'the cases moved something'
+
+
 def test_more_than_fifty_entries_keep_the_librarys_first():
     """The cap is shared: a library with 60 new files fills `new_files`, and the
     torrent tree's entries are what's cut, as in one call."""
@@ -126,6 +164,9 @@ def test_more_than_fifty_entries_keep_the_librarys_first():
     assert got['removed_files'] == [{'path': '/data/media/gone.mkv', 'tab': 'media'},
                                     {'path': '/data/torrents/gone.mkv', 'tab': 'torrents'}]
     assert got['score_delta'] == 1.0
+    # What the cap left out is still counted, for Audit History to say so.
+    assert got['totals']['new_files'] == {'media': 60, 'torrents': 60}
+    assert got['totals']['removed_files'] == {'media': 1, 'torrents': 1}
 
 
 def test_split_lists_take_the_torrent_trees_entries_after_the_librarys():
@@ -135,7 +176,7 @@ def test_split_lists_take_the_torrent_trees_entries_after_the_librarys():
     got, _ = _two_calls({'/m': 0}, {'/t': 0}, curr, None, None)
     assert [e['tab'] for e in got['new_files']] == ['media'] * 30 + ['torrents'] * 20
     assert got['score_delta'] is None
-    assert list(got) == list(audit._DIFF_LISTS) + ['score_delta']
+    assert list(got) == list(audit._DIFF_LISTS) + ['score_delta', 'totals']
 
 
 def test_nothing_changed_in_either_tree_is_no_entry():
@@ -191,16 +232,23 @@ def _watching():
         seen['curr']['dashboard'] = curr.get('dashboard')
         if 'torrent_root' in kw:
             seen['root'] = kw['torrent_root']
+        if 'prev_library_keys' in kw:
+            seen['load'] = kw['prev_library_keys']
+            # The library's call says whether the torrent tree could tell new
+            # links from old (a set) or not (None); one call over both trees
+            # starts its own set.
+            seen['links'] = kw.get('newly_linked') is not None
         return real_diff(prev, curr, *a, **kw)
 
     def merge(media, torrents, prev_score, dashboard):
-        new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
+        new_media = {'linked': 0, 'copies': 0, 'unseeded': 0, 'moved': 0}
         seen['want'] = real_diff(
             {'media': seen['maps'].get('media') or {}, 'torrents': seen['maps'].get('torrents') or {}},
             {'media_files': seen['curr']['media_files'],
              'torrent_files': seen['curr']['torrent_files'],
              'dashboard': dashboard},
-            prev_score=prev_score, new_media=new_media, torrent_root=seen.get('root'))
+            prev_score=prev_score, new_media=new_media, torrent_root=seen.get('root'),
+            prev_library_keys=seen.get('load'), newly_linked=set() if seen.get('links') else None)
         seen['want_new'] = new_media
         return real_merge(media, torrents, prev_score, dashboard)
 
@@ -305,7 +353,7 @@ def test_a_library_with_no_previous_scan_lists_its_files_as_new_and_counts_none(
     assert json.loads(log[0])['removed_files'] == []
     # *New in the library* reads "not counted", never zero.
     assert 'new_media' not in (snap.get('_library') or {})
-    assert seen['want_new'] == {'linked': 0, 'copies': 0, 'unseeded': 0}
+    assert seen['want_new'] == {'linked': 0, 'copies': 0, 'unseeded': 0, 'moved': 0}
 
 
 def test_neither_tree_with_a_previous_scan_stores_no_entry(tmp_path):

@@ -14,8 +14,11 @@ import { SECTION_LABEL, CARD, CAPTION, READOUT, fmtChartDate, HeroNumber, TrendP
 // **New in the library** is the leading indicator the Hardlinked % can't be:
 // that number moves slowly, so an import setup that stopped linking (an arr
 // whose two folders became separate mounts) shows only as a slow drift. This
-// counts each scan's new library files by how they arrived, and a copy of a
+// counts each scan's new library videos by how they arrived, and a copy of a
 // torrent file says the link wasn't made. It never says who made the copy.
+// A video moved or renamed within the library isn't new and isn't drawn
+// (2026-11-20: renaming a folder drew every file in it as "not seeded"); a
+// day's column opens the Changes page on its files.
 //
 // Their text is dashKit's two kinds: a line of figures (a run's time, trigger,
 // duration and memory; a chart's dates) is a READOUT in mono, and everything
@@ -196,9 +199,18 @@ function isoDay(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// A day's hover: what it counted, and its moves apart, since they're not new.
+function dayTitle(c, clickable) {
+  const parts = [`${c.linked} linked, ${c.unseeded} not seeded, ${c.copies} ${c.copies === 1 ? 'copy' : 'copies'}`]
+  if (c.moved) parts.push(`${plural(c.moved, 'video')} moved or renamed, not counted`)
+  return `${fmtChartDate(c.date)}: ${parts.join('; ')}${clickable ? '. Click to see them on the Changes page.' : ''}`
+}
+
 export function NewInLibraryCard({ uploadStats, timeRange, onNavigate }) {
   const series = uploadStats?.daily_new_media || []
-  const sum = { linked: 0, copies: 0, unseeded: 0 }
+  // `moved` (2026-11-20) isn't new: a video moved or renamed within the
+  // library. It's said under the chart and in a day's hover, never drawn.
+  const sum = { linked: 0, copies: 0, unseeded: 0, moved: 0 }
   for (const d of series) for (const k of Object.keys(sum)) sum[k] += d[k] || 0
   const total = sum.linked + sum.copies + sum.unseeded
   const firstCopy = series.find(d => d.copies > 0)
@@ -212,12 +224,18 @@ export function NewInLibraryCard({ uploadStats, timeRange, onNavigate }) {
     const end = new Date()
     for (let d = new Date(start); isoDay(d) <= isoDay(end); d.setDate(d.getDate() + 1)) {
       const k = isoDay(d)
-      cols.push(byDay[k] || { date: k, linked: 0, copies: 0, unseeded: 0 })
+      cols.push(byDay[k] || { date: k, linked: 0, copies: 0, unseeded: 0, moved: 0 })
     }
   }
   const max = Math.max(1, ...cols.map(c => c.linked + c.copies + c.unseeded))
   const rangeStart = timeRange ? (() => { const d = new Date(); d.setDate(d.getDate() - timeRange); return isoDay(d) })() : null
   const lateStart = series.length && rangeStart && series[0].date > rangeStart
+  // A day with anything to list opens Audit History on its new library files,
+  // each saying how it arrived (`changeCategories.ARRIVALS`). The card's day and
+  // Audit History's are both the server's, so they agree.
+  const hasFiles = c => c.linked + c.copies + c.unseeded + (c.moved || 0) > 0
+  const openDay = onNavigate ? c => onNavigate({ tab: 'changes', day: c.date, categories: ['new_media'] }) : null
+  const anyClickable = !!openDay && cols.some(hasFiles)
 
   return (
     <div style={{ ...CARD, padding: '18px 20px 16px' }}>
@@ -227,44 +245,57 @@ export function NewInLibraryCard({ uploadStats, timeRange, onNavigate }) {
       </div>
       {!series.length ? (
         <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', margin: 0, lineHeight: 1.6 }}>
-          Counting starts with the next scan: each one counts the library files that are new since the scan before it, and whether they arrived hardlinked.
+          Counting starts with the next scan: each one counts the videos that are new in the library since the scan before it, and whether they arrived hardlinked.
         </p>
       ) : (
         <>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
             <HeroNumber value={sum.linked.toLocaleString()} />
-            <span style={CAPTION}>of {total.toLocaleString()} new file{total !== 1 ? 's' : ''} hardlinked</span>
+            <span style={CAPTION}>of {total.toLocaleString()} new video{total !== 1 ? 's' : ''} hardlinked</span>
           </div>
           {/* The metric cards' trend pill, in its own words. */}
           <div style={{ minHeight: 21, marginTop: 10, display: 'flex' }}>
             {sum.copies > 0 ? (
               <TrendPill trend={{ sentiment: 'bad' }}
-                label={`${plural(sum.copies, 'copy', 'copies')} since ${fmtChartDate(firstCopy.date)}: new files aren't all being linked`} />
+                label={`${plural(sum.copies, 'copy', 'copies')} since ${fmtChartDate(firstCopy.date)}: new videos aren't all being linked`} />
             ) : total > 0 ? (
-              <TrendPill trend={{ sentiment: 'good' }} icon="✓" label="No copies: new files are being linked" />
+              <TrendPill trend={{ sentiment: 'good' }} icon="✓" label="No copies: new videos are being linked" />
             ) : (
               <span style={CAPTION}>Nothing new in this range</span>
             )}
           </div>
           <svg viewBox={`0 0 ${Math.max(cols.length, 1)} 50`} preserveAspectRatio="none" width="100%" height="50"
-            style={{ display: 'block', marginTop: 12, borderBottom: '1px solid var(--border)' }} aria-hidden="true">
+            role={anyClickable ? 'group' : undefined} aria-label={anyClickable ? 'New library videos by day' : undefined}
+            aria-hidden={anyClickable ? undefined : 'true'}
+            style={{ display: 'block', marginTop: 12, borderBottom: '1px solid var(--border)' }}>
             {cols.map((c, i) => {
               let y = 50
-              return KINDS.map(k => {
+              const bars = KINDS.map(k => {
                 const v = c[k.key] || 0
                 if (!v) return null
                 const h = v / max * 48
                 y -= h
-                return (
-                  <rect key={k.key + c.date} x={i + 0.15} y={y} width={0.7} height={h} fill={k.color}>
-                    <title>{`${fmtChartDate(c.date)}: ${c.linked} linked, ${c.unseeded} not seeded, ${c.copies} copies`}</title>
-                  </rect>
-                )
+                return <rect key={k.key} x={i + 0.15} y={y} width={0.7} height={h} fill={k.color} />
               })
+              if (!openDay || !hasFiles(c)) {
+                return <g key={c.date}><title>{dayTitle(c, false)}</title>{bars}</g>
+              }
+              // The whole column is the target, so a day of moves alone, which
+              // draws no bar, can still be opened.
+              return (
+                <g key={c.date} className="nil-day" role="button" tabIndex={0} aria-label={dayTitle(c, true)}
+                  onClick={() => openDay(c)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDay(c) } }}>
+                  <title>{dayTitle(c, true)}</title>
+                  <rect className="nil-hit" x={i} y={0} width={1} height={50} />
+                  {bars}
+                </g>
+              )
             })}
           </svg>
-          <div style={{ ...READOUT, display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
+          <div style={{ ...READOUT, display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
             <span>{cols.length ? fmtChartDate(cols[0].date) : ''}</span>
+            {anyClickable && <span style={{ ...CAPTION, textAlign: 'center' }}>Click a day to list its files</span>}
             <span>{cols.length ? fmtChartDate(cols[cols.length - 1].date) : ''}</span>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 8 }}>
@@ -276,6 +307,12 @@ export function NewInLibraryCard({ uploadStats, timeRange, onNavigate }) {
               </span>
             ))}
           </div>
+          {sum.moved > 0 && (
+            <div style={{ ...CAPTION, marginTop: 6 }}
+              title="A video that was already in the library, under a new folder or name. It keeps its inode through a move, which is how the scan tells.">
+              {plural(sum.moved, 'video')} moved or renamed, not counted as new.
+            </div>
+          )}
           {lateStart && (
             <div style={{ ...CAPTION, marginTop: 6 }}>Counted since {fmtChartDate(series[0].date)}.</div>
           )}

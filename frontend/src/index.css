@@ -345,6 +345,15 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .map-key:disabled { opacity: 0.55; cursor: default; }
 @media (prefers-reduced-motion: reduce) { .map-key { transition: none; } }
 
+/* New in the library (ScanCards.jsx, 2026-11-20): a day's column opens Audit
+   History on its files. The whole column is the target, washed on hover and
+   focus, since a narrow bar is a small thing to hit and a day of moves alone
+   draws none. */
+.nil-day { cursor: pointer; outline: none; }
+.nil-hit { fill: transparent; }
+.nil-day:hover .nil-hit { fill: color-mix(in srgb, var(--text) 6%, transparent); }
+.nil-day:focus-visible .nil-hit { fill: color-mix(in srgb, var(--accent) 18%, transparent); }
+
 /* PickRow (shared.jsx, 2026-11-12): one row of a pick-one list — Trumped's
    candidates and replacement releases, Backfill's releases, the season-pack
    dialog's. The picked row's tint and edge are inline (they take the page's

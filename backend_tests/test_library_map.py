@@ -403,18 +403,18 @@ class NewMediaTests(unittest.TestCase):
         # A copy of another *library* file isn't a failed link; it's unseeded.
         self.assertEqual(counts, {'linked': 1, 'copies': 1, 'unseeded': 2})
 
-    def test_a_sidecar_counts_only_when_it_was_linked_or_copied(self):
+    def test_only_videos_are_counted(self):
         """2026-11-20, the map's rule: Bazarr writes a subtitle beside every new
-        episode, so a healthy library read as half its new files not seeded. A
-        sidecar an arr hardlinked (Import Extra Files) still says the link was
-        made, and a copy that it wasn't."""
+        episode, so a healthy library read as half its new files not seeded. The
+        user's call the same day: videos only, linked or copied too, since the
+        card is about the library (`test_new_media_moves.py`)."""
         counts = self._count([
             _media('tv/Show/e1.mkv', linked=True),
             _media('tv/Show/e1.en.srt'),
             _media('tv/Show/e1.nfo', linked=True),
             _media('tv/Show/e2.nfo', dups=['/data/torrents/sonarr/Show/e2.nfo']),
         ])
-        self.assertEqual(counts, {'linked': 2, 'copies': 1, 'unseeded': 0})
+        self.assertEqual(counts, {'linked': 1, 'copies': 0, 'unseeded': 0})
 
     def test_counted_even_when_nothing_else_changed(self):
         """The diff returns None when nothing changed; the counters are an
@@ -447,7 +447,7 @@ class NewMediaTests(unittest.TestCase):
         with patch.object(audit, 'db_get_upload_snapshots', return_value=rows):
             stats = audit.compute_upload_stats(30)
         self.assertEqual(stats['daily_new_media'],
-                         [{'date': '2026-11-09', 'linked': 5, 'copies': 1, 'unseeded': 1}])
+                         [{'date': '2026-11-09', 'linked': 5, 'copies': 1, 'unseeded': 1, 'moved': 0}])
         self.assertEqual(stats['daily_library_stats'][-1], {'date': '2026-11-09', 'total_media_size': 2})
 
 

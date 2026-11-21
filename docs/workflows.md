@@ -174,8 +174,15 @@ scan* card says so.
 `.nfo` or poster your media server keeps beside a video, isn't in any torrent,
 and Backfill can't search for it. The map draws it in its title like any other
 file with nothing to do, so a title whose video is linked counts as fully
-linked. *New in the library* doesn't count one either, unless it arrived
-hardlinked or as a copy of a torrent file.
+linked. *New in the library* counts only videos, so it doesn't count one
+either.
+
+**New in the library** counts the videos that arrived in your library each
+day, and how: hardlinked, as a copy of a torrent file (the link wasn't made,
+so the file takes its space twice), or not seeded. A video you moved or
+renamed within the library isn't new, so it isn't counted; the card says how
+many there were. Click a day to open the Changes page on that day's new
+library files, each marked with how it arrived.
 
 ### Season packs and single episodes
 

@@ -9,6 +9,7 @@ import logging
 import posixpath
 import threading
 import unicodedata
+from array import array
 from datetime import datetime, timedelta
 
 import sources
@@ -26,6 +27,7 @@ from db import (
     db_save_change_log_entry,
     db_save_file_results, db_prepare_file_results,
     db_save_file_signatures, db_load_file_signatures, db_prepare_file_signatures,
+    db_save_library_keys, db_load_library_keys,
     db_get_meta, db_set_meta, db_update_meta, db_delete_meta,
     db_publish, EXCLUSION_PATTERN_MAX_CHARS,
 )
@@ -755,14 +757,18 @@ def _dedupe_paths(tree_paths):
 
 def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map,
                       compiled_exclusions=None, unverified=None, unmanaged=None, counts=None,
-                      torrent_folders=None):
+                      torrent_folders=None, unlinked_keys=None):
     """`unmanaged`: `unmanaged_test`'s answer for one library path, when the arrs
     gave a whole one. Each unseeded library record it says no arr holds is
     stamped `unmanaged`, here, in the loop that builds the records, so the
     stamp costs no pass of its own; `counts['unmanaged']` says how many.
 
     `torrent_folders`, when a dict, is filled by `_mark_whole_torrents` with
-    each top-level torrent folder's registrations, for `exclusion_suggestions`."""
+    each top-level torrent folder's registrations, for `exclusion_suggestions`.
+
+    `unlinked_keys`, when an `array('q')`, gets `library_keys`' key for each
+    library record no torrent file is linked to, in record order, here in the
+    branches that already run only for those, so it costs no pass of its own."""
     if unverified:
         # Normalised once here as well as in `unverified_spec`: every comparison
         # below is against `_match_key` paths, and a root spelled any other way
@@ -842,6 +848,10 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         info['torrent_record'] = record
         torrent_files_data.append(record)
     media_files_data = []
+    # The keys cost a hash per unlinked record. What pays for them, in this
+    # loop: `duplicate_map` is looked up once a record, not twice (a tuple key
+    # hashes again on every lookup), and `torrent_paths` once, not twice.
+    add_key = (unlinked_keys if unlinked_keys is not None else array('q')).append
     for file_key in media_key_order:
         info    = inode_map[file_key]
         if 'media_done' in info:
@@ -850,25 +860,31 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         # A linked inode's torrent record holds an equal `file_id` and
         # `trackers`: the library record takes the same objects (SCAN SC9).
         twin = info.get('torrent_record')
+        linked = info['torrent_paths']
+        size = info['size']
+        dups = duplicate_map.get(file_key)
         record = {
-            "path": info['media_rel_path'], "size": info['size'], "inode": file_key[1],
+            "path": info['media_rel_path'], "size": size, "inode": file_key[1],
             "file_id": twin['file_id'] if twin else f"{file_key[0]}:{file_key[1]}",
             "status": info['status'], "imported": True,
             "trackers": twin['trackers'] if twin else (list(info['trackers']) or ["None"]),
-            "linked_paths": info['torrent_paths'],
-            "duplicate_paths": duplicate_map.get(file_key, []),
+            "linked_paths": linked,
+            "duplicate_paths": dups if dups is not None else [],
             "excluded": info['media_excluded'],
         }
-        if file_key in duplicate_map:
+        if dups is not None:
             extra = _dedupe_paths(info['media_paths'])
             if extra:
                 record["dedupe_paths"] = extra
+            if not linked:
+                add_key(hash((file_key[1], size)))
         # Unseeded as the map reads it (`_map_state_media`); a linked file,
         # most of a library, leaves at the first test.
-        elif (unmanaged is not None and not info['torrent_paths'] and not record['excluded']
-              and unmanaged(record['path'])):
-            record['unmanaged'] = True
-            counts['unmanaged'] += 1
+        elif not linked:
+            add_key(hash((file_key[1], size)))
+            if unmanaged is not None and not record['excluded'] and unmanaged(record['path']):
+                record['unmanaged'] = True
+                counts['unmanaged'] += 1
         media_files_data.append(record)
     # Before the whole-torrent stamps, which read it.
     _mark_sidecars(torrent_files_data, sidecar_candidates)
@@ -2278,7 +2294,9 @@ def compute_upload_stats(days=30, from_date=None, to_date=None, conn=None):
         if isinstance(lib, dict):
             nm = lib.get('new_media')
             if isinstance(nm, dict):
-                day = daily_new_media.setdefault(date_str, {'linked': 0, 'copies': 0, 'unseeded': 0})
+                # `moved` isn't new (2026-11-20): the card says it, apart from
+                # the bars. Snapshots from before it was counted have none.
+                day = daily_new_media.setdefault(date_str, {'linked': 0, 'copies': 0, 'unseeded': 0, 'moved': 0})
                 for k in day:
                     day[k] += int(nm.get(k) or 0)
             daily_library_by_date[date_str] = {k: v for k, v in lib.items() if k != 'new_media'}
@@ -2405,31 +2423,126 @@ def new_media_class(f, torrent_root):
     rip, a Usenet grab, a copy of another library file). Says nothing about who
     made a copy — the first copy the box served was a hand copy (DEDUPE).
 
-    `None` for a sidecar that's neither (2026-11-20), which isn't counted: the
-    map's rule (`_map_video`). Bazarr writes a subtitle beside every new
-    episode, so a healthy library read as half its new files not seeded."""
+    **Videos only** (`_map_video`, the map's rule), so `None` for anything else,
+    linked or not (2026-11-20, the user's call: the card is about the library).
+    Bazarr writes a subtitle beside every new episode, so a healthy library read
+    as half its new files not seeded, and a hardlinked `.nfo` counted twice for
+    one episode."""
+    if not _map_video(f.get('path') or ''):
+        return None
     if f.get('linked_paths'):
         return 'linked'
     for p in f.get('duplicate_paths') or ():
         if not torrent_root or _path_under(_norm_abs(p), torrent_root):
             return 'copies'
-    return 'unseeded' if _map_video(f.get('path') or '') else None
+    return 'unseeded'
+
+
+# A moved or renamed library file is not a new one (2026-11-20). The diff knows
+# a library file by its path, so renaming a folder read as every file in it
+# arriving unseeded. A file keeps its inode through a move, and the scan tells
+# a move two ways, neither of them a pass of its own:
+#
+# - **A linked file by its torrent file.** The torrent tree's signatures already
+#   say whether each torrent file was linked last scan (`SIG_IMPORTED`). A new
+#   library path on a torrent file that was linked before is the same bytes
+#   under a new name; only a newly linked torrent file (`newly_linked`, filled
+#   by the torrent diff where it already finds `newly_imported`) is an arrival.
+# - **An unlinked file by its key**, `hash((inode, size))`, which
+#   `_assemble_records` keeps for every unlinked library record (`library_keys`
+#   is the same rule over records) and the publish stores as `media_keys`. A new
+#   unlinked path whose key the previous scan held is `moved`.
+#
+# The size keeps a reused inode from passing for a move: an upgrade by copy
+# frees the old file's inode and can be given it straight back. The device
+# isn't in it, because a remount can renumber it. A hash of a tuple of ints is
+# the same in every process (only str and bytes are salted), and since 3.8 in
+# every Python; if that ever changed, one scan would count its moves as new, as
+# every scan did before.
+_ARRIVALS = ('linked', 'copies', 'unseeded', 'moved')
+_ARRIVAL_CODE = {name: i for i, name in enumerate(_ARRIVALS)}
+_LINKED = _ARRIVAL_CODE['linked']
+_MOVED = _ARRIVAL_CODE['moved']
+_NO_KEY = -1           # what no tuple hashes to (CPython turns -1 into -2)
+_MOVE_CHUNK = 65536    # new paths checked against the previous keys at a time
+
+
+def _file_key(f):
+    ino = f.get('inode')
+    return hash((ino, f['size'])) if ino is not None else _NO_KEY
+
+
+def library_keys(media_files):
+    """`hash((inode, size))` of each library record no torrent file is linked
+    to, as an `array('q')`, 8 bytes a file. The rule `_assemble_records` keeps
+    `unlinked_keys` by, over the records it built (tests, and the parity test
+    that holds the two equal); a record without an inode is left out."""
+    return array('q', (hash((f['inode'], f['size'])) for f in media_files
+                       if not f.get('linked_paths') and f.get('inode') is not None))
+
+
+def _mark_moves(codes, keys, load_prev):
+    """Re-mark as `moved` each counted new unlinked path whose key the previous
+    scan's library held. A chunk of the new paths' keys at a time against one
+    pass over the previous array, so a whole library renamed holds a chunk's
+    set, never one the size of the library. Linked paths are `newly_linked`'s
+    to decide."""
+    prev = load_prev()
+    if prev is None or not len(prev):
+        return
+    for start in range(0, len(keys), _MOVE_CHUNK):
+        chunk = keys[start:start + _MOVE_CHUNK]
+        hits = set(chunk)
+        hits.discard(_NO_KEY)
+        if not hits:
+            continue
+        hits.intersection_update(prev)
+        if hits:
+            for i, k in enumerate(chunk, start):
+                if k in hits and codes[i] != _LINKED:
+                    codes[i] = _MOVED
+
+
+def _ordered_totals(totals):
+    """`totals` in one order whatever order its changes were met in: lists as
+    `_DIFF_LISTS`, the library before the torrent tree."""
+    return {k: {t: totals[k][t] for t in ('media', 'torrents') if t in totals[k]}
+            for k in _DIFF_LISTS if k in totals}
 
 
 def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
-                                 new_media=None, torrent_root=None):
+                                 new_media=None, torrent_root=None, prev_library_keys=None,
+                                 newly_linked=None):
     """Diff the current snapshot against compact signatures of the previous scan.
 
     prev_sigs_by_tab: {'media': {path: bitmask}, 'torrents': {path: bitmask}}
     Lists are capped at 50 entries during collection (not after) so a mass
-    rename/move can't transiently allocate one diff entry per file.
+    rename/move can't transiently allocate one diff entry per file. `totals`
+    counts each list's changes by tree, uncapped, so Audit History can say how
+    many a capped list left out.
 
     `new_media`, when a dict of counters (`linked`, `copies`, `unseeded`), is
     filled in place with every new library path's `new_media_class`, uncapped
     and whether or not anything else changed: an out-parameter like the walk's
     `walk_report`, so the return value every caller reads is unchanged. Counted
     here because this loop already visits every library file against the
-    previous scan's paths. `torrent_root` is `_norm_abs`'d.
+    previous scan's paths. `torrent_root` is `_norm_abs`'d. Each library
+    `new_files` entry the list keeps says how its file arrived (`arrived`), when
+    it was counted.
+
+    A moved or renamed file counts as `moved` (added to `new_media` only when
+    there are any), not as an arrival, decided after both trees (the scan diffs
+    them in two calls, the torrent tree's first):
+
+    - `newly_linked`, a set, is filled by the torrent tree's diff with the key
+      (`_file_key`) of each torrent file linked now and not last scan, and read
+      for the library's: a new linked path whose key isn't in it was linked
+      before. `None`, or a torrent tree diffed here with no previous scan of
+      it (could not ask), counts every linked path as an arrival.
+    - `prev_library_keys`, a callable returning the previous scan's unlinked
+      keys (`library_keys`; `None`: could not ask), is called only when the
+      library has a counted new unlinked path and a removed one, since a move
+      leaves both.
     """
     if not prev_sigs_by_tab or not curr_snap:
         return None
@@ -2445,6 +2558,7 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
     }
     CAP = 50
     has_changes = False
+    totals = {}
 
     cs = (curr_snap.get('dashboard') or {}).get('score')
     if prev_score is not None and cs is not None:
@@ -2453,8 +2567,22 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
     def add(key, entry):
         nonlocal has_changes
         has_changes = True
+        by_tab = totals.setdefault(key, {})
+        by_tab[entry['tab']] = by_tab.get(entry['tab'], 0) + 1
         if len(changes[key]) < CAP:
             changes[key].append(entry)
+            return True
+        return False
+
+    # The library's counted new paths, resolved once the torrent tree has said
+    # which links are new: how each arrived and its key, a byte and 8 bytes (a
+    # whole library renamed is millions of them), the entries the capped list
+    # kept by index, and how many library paths went.
+    codes, keys, listed, lib_removed = bytearray(), array('q'), [], 0
+    # A torrent tree diffed here with no previous scan of it can't say which
+    # links are new, as the caller's `None` says when it diffs the trees apart.
+    links_known = newly_linked is not None and not (
+        'torrent_files' in curr_snap and not prev_sigs_by_tab.get('torrents'))
 
     for tab, key in [('media', 'media_files'), ('torrents', 'torrent_files')]:
         prev = prev_sigs_by_tab.get(tab) or {}
@@ -2462,32 +2590,63 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
         # A tree with no previous signatures is a first scan of it, where every
         # path is "new" and none of them arrived.
         count_new = new_media is not None and tab == 'media' and bool(prev)
+        links = newly_linked if tab == 'torrents' else None
 
         for f in curr_snap.get(key, []):
             path = f['path']
             curr_paths.add(path)
             if path not in prev:
-                add('new_files', {'path': path, 'size': f['size'], 'tab': tab})
+                entry = {'path': path, 'size': f['size'], 'tab': tab}
+                kept = add('new_files', entry)
                 if count_new and not f.get('excluded'):
                     how = new_media_class(f, torrent_root)
                     if how:
-                        new_media[how] += 1
+                        if kept:
+                            listed.append((len(codes), entry))
+                        codes.append(_ARRIVAL_CODE[how])
+                        keys.append(_file_key(f))
+                elif links is not None and f.get('imported'):
+                    links.add(_file_key(f))
             else:
                 sig = prev[path]
                 if not (sig & SIG_ORPHANED) and f.get('status') == 'Orphaned':
                     add('newly_orphaned', {'path': path, 'size': f['size'], 'tab': tab})
                 if tab == 'torrents' and not (sig & SIG_IMPORTED) and f.get('imported'):
                     add('newly_imported', {'path': path, 'size': f['size'], 'tab': tab})
+                    if links is not None:
+                        links.add(_file_key(f))
                 if not (sig & SIG_HAS_DUPS) and f.get('duplicate_paths'):
                     add('new_duplicates', {'path': path, 'size': f['size'], 'tab': tab})
                 if (sig & SIG_HAS_DUPS) and not f.get('duplicate_paths'):
                     add('resolved_duplicates', {'path': path, 'size': f['size'], 'tab': tab})
 
+        removed = 0
         for path in prev:
             if path not in curr_paths:
+                removed += 1
                 add('removed_files', {'path': path, 'tab': tab})
+        if tab == 'media':
+            lib_removed = removed
 
-    return changes if has_changes else None
+    if codes:
+        if links_known:
+            for i, code in enumerate(codes):
+                if code == _LINKED and keys[i] != _NO_KEY and keys[i] not in newly_linked:
+                    codes[i] = _MOVED
+        if (lib_removed and prev_library_keys is not None
+                and (codes.count(_ARRIVAL_CODE['unseeded']) or codes.count(_ARRIVAL_CODE['copies']))):
+            _mark_moves(codes, keys, prev_library_keys)
+        for code, name in enumerate(_ARRIVALS):
+            n = codes.count(code)
+            if n:
+                new_media[name] = new_media.get(name, 0) + n
+        for i, entry in listed:
+            entry['arrived'] = _ARRIVALS[codes[i]]
+
+    if not has_changes:
+        return None
+    changes['totals'] = _ordered_totals(totals)
+    return changes
 
 
 _DIFF_LISTS = ('newly_orphaned', 'newly_imported', 'new_duplicates', 'resolved_duplicates',
@@ -2497,14 +2656,21 @@ _DIFF_LISTS = ('newly_orphaned', 'newly_imported', 'new_duplicates', 'resolved_d
 def _merge_tab_diffs(media, torrents, prev_score, dashboard):
     """One change-log entry from the two trees' diffs, as one call over both
     gives it: each list the library's entries then the torrent tree's, 50 in
-    all, and nothing when neither tree changed."""
+    all, the two trees' `totals` together, and nothing when neither tree
+    changed."""
     if media is None and torrents is None:
         return None
     out = {k: ((media or {}).get(k) or []) + ((torrents or {}).get(k) or []) for k in _DIFF_LISTS}
     out = {k: v[:50] for k, v in out.items()}
     cs = (dashboard or {}).get('score')
     out['score_delta'] = round(cs - prev_score, 1) if prev_score is not None and cs is not None else None
-    return {k: out[k] for k in _DIFF_LISTS + ('score_delta',)}
+    totals = {}
+    for d in (media, torrents):
+        for k, by_tab in ((d or {}).get('totals') or {}).items():
+            for t, n in by_tab.items():
+                totals.setdefault(k, {})[t] = totals.get(k, {}).get(t, 0) + n
+    out['totals'] = _ordered_totals(totals)
+    return {k: out[k] for k in _DIFF_LISTS + ('score_delta', 'totals')}
 
 
 def compute_diff(prev_snap, curr_snap):
@@ -3576,13 +3742,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         # Each top-level torrent folder's registrations, for the exclusion
         # suggestions; filled by the whole-torrent pass, which reads them anyway.
         torrent_folders = {}
+        # Each unlinked library file's key, for the next scan to tell one that
+        # moved from one that's new (New in the library); stored in the publish.
+        unlinked_keys = array('q')
         _enter_phase("post", "Assembling file records...")
         _unverified = unverified_spec(source_report, unresolved_roots)
         torrent_files_data, media_files_data = _assemble_records(
             torrent_key_order, media_key_order, inode_map, duplicate_map,
             compiled_exclusions=compiled_excl, unverified=_unverified,
             unmanaged=unmanaged_test(managed, cfg.get('MEDIA_PATH', '')) if managed is not None else None,
-            counts=stamp_counts, torrent_folders=torrent_folders)
+            counts=stamp_counts, torrent_folders=torrent_folders, unlinked_keys=unlinked_keys)
         del managed
         unmanaged_count = stamp_counts['unmanaged']
         del torrent_key_order, media_key_order, inode_map, duplicate_map
@@ -3732,13 +3901,18 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 prev_torrents, torrent_files_data,
                 prev_dead_regs=(_ns_prev or {}).get('last_dead_regs'), dead_regs=dead_regs)
             had_torrents = bool(prev_torrents)
-            new_media = {'linked': 0, 'copies': 0, 'unseeded': 0}
+            new_media = {'linked': 0, 'copies': 0, 'unseeded': 0, 'moved': 0}
             torrent_root = _norm_abs(cfg.get('LOCAL_PATH', '')) if cfg.get('LOCAL_PATH') else None
             diff_torrents = None
+            # The torrent files linked since the last scan, which the library's
+            # diff reads to tell a new link from a moved one. With no previous
+            # torrent scan it can't tell, and every link counts as new.
+            newly_linked = set() if had_torrents else None
             if had_torrents:
                 diff_torrents = compute_diff_from_signatures(
                     {'torrents': prev_torrents},
-                    {"torrent_files": torrent_files_data, "dashboard": dashboard_stats})
+                    {"torrent_files": torrent_files_data, "dashboard": dashboard_stats},
+                    newly_linked=newly_linked)
             prev_torrents = None
             prev_media = db_load_file_signatures('media')
             had_media = bool(prev_media)
@@ -3747,7 +3921,9 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 diff_media = compute_diff_from_signatures(
                     {'media': prev_media},
                     {"media_files": media_files_data, "dashboard": dashboard_stats},
-                    prev_score=prev_score, new_media=new_media, torrent_root=torrent_root)
+                    prev_score=prev_score, new_media=new_media, torrent_root=torrent_root,
+                    # Read only if the library both gained and lost a path.
+                    prev_library_keys=db_load_library_keys, newly_linked=newly_linked)
                 prev_media = None
                 if not had_torrents:
                     diff_torrents = compute_diff_from_signatures(
@@ -3860,6 +4036,10 @@ def run_audit_process(trigger=None, persist_source_errors=True):
             ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),
             ('torrents', db_prepare_file_signatures(file_signatures(torrent_files_data))),
         ]
+        # The next scan's way to tell a moved library file from a new one,
+        # kept by the assemble.
+        staged_keys = unlinked_keys
+        del unlinked_keys
         _enter_phase("post", "Saving audit results...")
         # One transaction. Every piece of this scan lands, or none does — so a
         # reader can never join two generations and an interruption leaves the
@@ -3895,6 +4075,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                     db_save_file_results(tab, prepared, conn=pub, generation=ran_at)
                 for tab, prepared in staged_sigs:
                     db_save_file_signatures(tab, prepared, conn=pub)
+                db_save_library_keys(staged_keys, conn=pub)
                 for hist in staged_history:
                     db_save_history(hist, conn=pub)
                 db_save_results(result, conn=pub)
@@ -3933,7 +4114,7 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         except Exception as e:
             raise _PublishFailed(str(e)) from e
         finally:
-            del staged, staged_sigs
+            del staged, staged_sigs, staged_keys
         rss = process_rss_mb()
         log.info(f"Audit complete: {len(torrent_files_data)} torrent file(s), "
                  f"{len(media_files_data)} media file(s), {len(trackers)} tracker(s), "
