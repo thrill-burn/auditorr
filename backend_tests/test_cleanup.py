@@ -722,12 +722,12 @@ class TestFolderRules:
         assert g['no_folder_rule'] == 'live_torrent'
 
     def test_a_one_segment_release_folder_is_offered_a_folder_rule(self, trees):
-        """Phase 5 §7 item 6 — the depth rule refused these on the reference box."""
+        """Phase 5 §7 item 6 — the depth rule refused these (no category folder)."""
         torrents, media = trees
-        folder = 'Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]'
+        folder = 'Night Train (2024) S01 (2160p WEBRip)[cTurtle]'
         _write(torrents / folder / 'S01E03.mkv')
         _write(torrents / folder / 'S01E06.mkv')
-        _write(media / 'tv' / 'Dark Matter (2024)' / 'Season 01' / 'ep.mkv')
+        _write(media / 'tv' / 'Night Train (2024)' / 'Season 01' / 'ep.mkv')
         torrent_files, _ = _audit(torrents, media)
         g = _group(_cleanup(torrent_files).get_json(), folder)
         assert g['excl_folder'] == folder
@@ -839,7 +839,7 @@ class TestScriptContract:
 
         With no category folder a release folder is one segment deep, so the
         anchor the guard used, its parent, is the torrent folder itself, and no
-        guard was emitted. That is the reference box's layout. A live torrent
+        guard was emitted. That layout is common. A live torrent
         beside it is there before the run and after it, so the guard names that.
         """
         torrents = tmp_path / 'torrents'
@@ -1074,7 +1074,7 @@ class TestPartFiles:
 # missing it. Both spellings are real file names on NTFS and ext4 alike, which
 # is the case that matters: there, only the disk's spelling can be opened.
 
-_NFC = unicodedata.normalize('NFC', 'Amélie (2001)')
+_NFC = unicodedata.normalize('NFC', 'Hélène (2001)')
 _NFD = unicodedata.normalize('NFD', _NFC)
 assert _NFC != _NFD
 

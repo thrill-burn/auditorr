@@ -1145,8 +1145,8 @@ class TestClassification:
     def test_a_fuse_mount_is_recorded_and_changes_nothing(self, tmp_path):
         """§5.3 / F4 (their half: essentrix83). SHFS and mergerfs report one
         `st_dev` for every branch, so a device comparison says nothing there. It
-        used to make a group `unverifiable` (`pooled_mount`); then the box showed
-        shfs making every cross-disk link it was asked for, and the script finds
+        used to make a group `unverifiable` (`pooled_mount`); then an Unraid install
+        showed shfs making every cross-disk link it was asked for, and the script finds
         out about a refused one when it runs. On the commonest install that
         status put "could not check" on every group, so it was removed
         (2026-09-15, the user's call): the fstype is recorded and nothing else."""

@@ -532,8 +532,8 @@ quietly vanished.
 Titles are matched against the **alternate titles** Sonarr and Radarr already
 store, not just the one they display. That matters for non-English content,
 which is almost always released under its original-language name: a season
-released as `No.tengo.miedo.S01…` resolves to the series Sonarr calls *I'm Not
-Afraid*, and reads as *Import pending* rather than *Not in library*. An exact
+released as `Nadie.duerme.S01…` resolves to the series Sonarr calls *Nobody
+Sleeps*, and reads as *Import pending* rather than *Not in library*. An exact
 title match always takes priority.
 
 **A torrent's extra files don't count once its video is in your library.**
@@ -805,6 +805,9 @@ in it), scene sample clips, and full-disc rip structures. Clicking one writes a
 real exclusion into
 [Config → Excluded Files](configuration.md#excluded-files--folders), where you
 can see and undo it. Subtitles and Extras are deliberately never suggested.
+Settings makes suggestions of its own after every scan, for whole folders and
+disc rips:
+see [Suggested from your last scan](configuration.md#suggested-from-your-last-scan).
 
 An exclusion applies everywhere, Cleanup included. A rule like `ext:txt` also
 hides a stray `.txt` that no torrent holds, which is exactly what Cleanup is

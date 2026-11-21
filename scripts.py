@@ -364,7 +364,7 @@ def _classify(group, mounts):
 
     The mount type is recorded and changes nothing. A pooled filesystem
     (`fuse.shfs`, `fuse.mergerfs`) reports one `st_dev` for every drive (F4),
-    and this used to read `unverifiable` (`pooled_mount`). The reference box
+    and this used to read `unverifiable` (`pooled_mount`). An Unraid install
     then showed shfs making every cross-disk link it was asked for, and the
     script reports a refused link when it runs — so on the commonest install
     that status put a caution on every group for normal operation, and it was

@@ -4,7 +4,7 @@ The Dashboard's library map draws every tile at its bytes, with one exception
 (`libraryMapRules.js`, "Sizing"): a gap, a title's bytes in a state a workflow
 acts on, that would be too small to see is drawn at the smallest size that
 shows. It exists because by bytes alone a well-linked library's torrent folder
-was a sliver: on the box three not-imported episodes, 23 GB beside 18.8 TB,
+was a sliver: three not-imported episodes beside a library of many terabytes
 were a 1-3px strip the layout dropped, so Triage had rows the map never drew.
 
 It replaced Attention (2026-11-10), which weighted each state by the health
@@ -26,7 +26,7 @@ pile: no folder holding a gap is dropped or a sliver, no title holding one is,
 every gap is drawn and clickable, and what rule 4 adds goes to gaps alone.
 
 The rules are React-free JavaScript, so this runs them under node on a made-up
-library shaped like the box's. It is one of five tests that read frontend files,
+library. It is one of five tests that read frontend files,
 beside test_type_scale.py, test_tint_idiom.py, test_module_names.py and
 test_library_map.py's state-rule parity test. Node is on GitHub's runners; a
 machine without it skips, and CI without it fails.
@@ -50,7 +50,7 @@ const close = (a, b) => Math.abs(a - b) <= Math.max(1, Math.abs(b)) * 1e-9
 const sum = a => a.reduce((x, y) => x + y, 0)
 const isGap = s => R.PROBLEM.includes(s)
 
-// A library like the box's: 700 titles in four folders split as the box's are
+// A made-up library: 700 titles in four folders, split
 // (41%, 41%, 12%, 5% of titles: a box among folders that coarse is what
 // squarify alone made a strip of), most linked, one in
 // nine with a not-seeded part (some a sliver, like a subtitle), a few with
@@ -59,7 +59,7 @@ const isGap = s => R.PROBLEM.includes(s)
 let seed = 7
 const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647
 const GB = 1e9, MB = 1e6
-const folders = [['library', 'movies'], ['library', 'television'], ['library', 'kids_movies'],
+const folders = [['library', 'movies'], ['library', 'television'], ['library', 'family_movies'],
                  ['library', 'kids_television'], ['torrents', 'tv-sonarr'], ['torrents', 'radarr']]
 const folderOf = i => (i % 100 < 41 ? 0 : i % 100 < 82 ? 1 : i % 100 < 94 ? 2 : 3)
 const library = []

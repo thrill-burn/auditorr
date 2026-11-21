@@ -163,11 +163,11 @@ class LinkedMoveTests(unittest.TestCase):
     def test_a_torrent_linked_for_the_first_time_is_new(self):
         """A force import of a torrent that sat not imported: its path is old,
         its link is new."""
-        before_t = [_torrent('radarr/Buddy.2026.mkv', inode=3, imported=False)]
-        after_t = [_torrent('radarr/Buddy.2026.mkv', inode=3)]
+        before_t = [_torrent('radarr/Kestrel.2026.mkv', inode=3, imported=False)]
+        after_t = [_torrent('radarr/Kestrel.2026.mkv', inode=3)]
         counts, _, lib, _ = _diff([_media('movies/Other/o.mkv', inode=9)],
                                   [_media('movies/Other/o.mkv', inode=9),
-                                   _media('movies/Buddy (2026)/Buddy.mkv', inode=3, linked=True)],
+                                   _media('movies/Kestrel (2026)/Kestrel.mkv', inode=3, linked=True)],
                                   before_t, after_t)
         self.assertEqual(counts, {'linked': 1, 'copies': 0, 'unseeded': 0})
 

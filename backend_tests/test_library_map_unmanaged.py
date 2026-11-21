@@ -1,9 +1,9 @@
 """The library map's Unmanaged state (2026-11-14).
 
 A library file that isn't seeded and that no arr holds. It was drawn Not
-seeded, and a click opened Backfill on nothing: on the box, a 720p copy of The
-Gruffalo's Child beside Radarr's own folder, a Sonarr folder whose 72 episodes
-Sonarr tracks none of, a film's extras. The scan stamps it (`unmanaged`), the
+seeded, and a click opened Backfill on nothing: a second copy of a movie
+beside Radarr's own folder, a show folder whose episodes Sonarr tracks none
+of, a film's extras. The scan stamps it (`unmanaged`), the
 row carries it as an eighth sum (version 3), and the stamp is Backfill's own
 path test, so a video drawn Not seeded is always one Backfill can search.
 """
@@ -35,9 +35,9 @@ def _managed(*rels):
 # ── The stamp ────────────────────────────────────────────────────────────────
 
 def test_an_unseeded_video_no_arr_holds_is_stamped():
-    media = [_media("kids_movies/The Gruffalo's Child (2011)/Gruffalo.1080p.mkv"),
-             _media('kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA/the.gruffalos.child.720p.mkv')]
-    n = audit.stamp_unmanaged(media, ROOT, _managed("kids_movies/The Gruffalo's Child (2011)/Gruffalo.1080p.mkv"))
+    media = [_media("family_movies/The Owl's Promise (2011)/Owl.1080p.mkv"),
+             _media('family_movies/The.Owls.Promise.720p.HDTV.x264-BiA/the.owls.promise.720p.mkv')]
+    n = audit.stamp_unmanaged(media, ROOT, _managed("family_movies/The Owl's Promise (2011)/Owl.1080p.mkv"))
     assert n == 1
     assert 'unmanaged' not in media[0]
     assert media[1]['unmanaged'] is True
@@ -56,17 +56,17 @@ def test_a_sidecar_follows_the_folder_it_sits_in():
     """No arr lists a subtitle or a poster. Matched alone, every sidecar of a
     Radarr movie would have read as in no arr; it's unmanaged only beside no
     file an arr holds."""
-    media = [_media('movies/Up (2009)/Up.en.srt', size=1000), _media('movies/Up (2009)/poster.jpg', size=1000),
+    media = [_media('movies/Wren (2009)/Wren.en.srt', size=1000), _media('movies/Wren (2009)/poster.jpg', size=1000),
              _media('movies/Stray/Stray.en.srt', size=1000), _media('movies/Stray/Stray.mkv')]
-    audit.stamp_unmanaged(media, ROOT, _managed('movies/Up (2009)/Up.mkv'))
+    audit.stamp_unmanaged(media, ROOT, _managed('movies/Wren (2009)/Wren.mkv'))
     assert [bool(f.get('unmanaged')) for f in media] == [False, False, True, True]
 
 
 def test_an_extra_video_in_an_arr_folder_is_unmanaged():
-    """The box's Star Wars: Radarr holds the film, not the featurettes beside it."""
-    media = [_media('movies/Star Wars (1977)/Star.Wars.mkv'),
-             _media('movies/Star Wars (1977)/Featurettes/Making.Of.mkv')]
-    audit.stamp_unmanaged(media, ROOT, _managed('movies/Star Wars (1977)/Star.Wars.mkv'))
+    """Radarr holds the film, not the featurettes beside it."""
+    media = [_media('movies/Comet Run (1977)/Comet.Run.mkv'),
+             _media('movies/Comet Run (1977)/Featurettes/Making.Of.mkv')]
+    audit.stamp_unmanaged(media, ROOT, _managed('movies/Comet Run (1977)/Comet.Run.mkv'))
     assert [bool(f.get('unmanaged')) for f in media] == [False, True]
 
 
@@ -198,14 +198,14 @@ def test_an_unseeded_video_is_unmanaged_exactly_when_backfill_cannot_search_it()
 # ── The map row ──────────────────────────────────────────────────────────────
 
 def test_the_row_carries_unmanaged_as_its_eighth_sum():
-    media = [_media('movies/Star Wars (1977)/Star.Wars.mkv', size=30 * GB, linked=True),
-             dict(_media('movies/Star Wars (1977)/Featurettes/Making.Of.mkv', size=2 * GB), unmanaged=True),
-             _media('movies/Up (2009)/Up.mkv', size=3 * GB)]
+    media = [_media('movies/Comet Run (1977)/Comet.Run.mkv', size=30 * GB, linked=True),
+             dict(_media('movies/Comet Run (1977)/Featurettes/Making.Of.mkv', size=2 * GB), unmanaged=True),
+             _media('movies/Wren (2009)/Wren.mkv', size=3 * GB)]
     row = audit.library_map_row(media, [])
     assert row['version'] == 3
     by = {t[1]: t[2:] for t in row['titles']}
-    assert by['Star Wars (1977)'] == [2, 30 * GB, 0, 0, 0, 0, 0, 0, 2 * GB]
-    assert by['Up (2009)'] == [1, 0, 3 * GB, 0, 0, 0, 0, 0, 0]
+    assert by['Comet Run (1977)'] == [2, 30 * GB, 0, 0, 0, 0, 0, 0, 2 * GB]
+    assert by['Wren (2009)'] == [1, 0, 3 * GB, 0, 0, 0, 0, 0, 0]
 
 
 def test_a_stamp_never_outranks_a_link_or_a_copy():

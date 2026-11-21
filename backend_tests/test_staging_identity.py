@@ -59,7 +59,7 @@ CORPUS = [
     {'torrents': [], 'media': []},
     {'version': 3, 'folders': [['library', 'tv']], 'titles': [[0, 'A', 1, 2]], 'folded': []},
     # Non-ASCII, lone surrogates (a name off disk that isn't UTF-8), every escape.
-    [{'path': 'tv/Amélie (2001)/Amélie.mkv', 'size': 1, 'trackers': ['None'], 'linked_paths': []}],
+    [{'path': 'tv/Hélène (2001)/Hélène.mkv', 'size': 1, 'trackers': ['None'], 'linked_paths': []}],
     [{'path': 'bad\udcff\udc80name.mkv', 'q': '"\\/\b\f\n\r\t\x00\x1f '}],
     # Tuples, keys that aren't strings, inf and nan.
     {'k': (1, 2, (3, [4]))}, [(1, 2), (3,)],

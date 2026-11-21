@@ -16,8 +16,8 @@ import { SeasonPackModal } from './SeasonPack'
 // file is, which answers for all of it (one series or movie folder holds every
 // file of a candidate). `app._backfill_under` is the same test, applied to the
 // run; this one counts the page. By path, never by title: the library map's
-// tiles are folders, and a folder's name isn't the arr's (`Pluribus` is
-// Sonarr's `PLUR1BUS`, and a movie folder carries its year).
+// tiles are folders, and a folder's name isn't the arr's (`Glasshouse` can be
+// Sonarr's `GL4SSHOUSE`, and a movie folder carries its year).
 export function underFolder(group, under) {
   const path = String(group.path || '').replace(/\\/g, '/')
   const u = String(under || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
@@ -122,8 +122,8 @@ function matchedFilesLine(matched, total) {
 // mapping breaks every file on an instance, so it is the likely explanation only
 // when matches are rare. Where most of the library matched, the unmatched videos
 // are files the arr does not track at those paths. The first cut blamed a path
-// mapping either way, and the reference box answered it: 797 files matched, and
-// the unmatched videos sat together in one folder.
+// mapping either way, and a real library answered it: nearly every file
+// matched, and the unmatched videos sat together in one folder.
 function unmatchedFilesLine(matched, total, video) {
   if (video == null || total - matched <= 0) return ''
   const other = total - matched - video
@@ -192,7 +192,7 @@ const MAP_DEPTH = 10
 // ── Why a row is empty (B16) ──────────────────────────────────────────────────
 // From the run's own counts (`app._backfill_empty`). The row said "No releases
 // found" whatever happened, so a Resolution chip left on 2160p read the same as
-// a tracker with nothing: on the box, one tracker had both 1080p packs of a season.
+// a tracker with nothing, when a tracker had both 1080p packs of a season.
 function plural(n, word) {
   return `${n.toLocaleString()} ${word}${n !== 1 ? 's' : ''}`
 }

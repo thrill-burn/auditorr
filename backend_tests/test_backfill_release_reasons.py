@@ -1,16 +1,16 @@
 """Backfill says why a row is empty, can ask for "your file or better", and never
 offers another title's release (BACKFILL B16, 2026-11-11).
 
-The report: searching *Miss Fisher's Murder Mysteries* gave nothing, though
-Arvel had both 1080p packs of every season. Measured on the box:
+The report: a season search gave nothing, though Arvel had both 1080p packs
+of every season. Measured on a real library:
 
 * **The Resolution chip was left on 2160p** from an earlier run, so both packs
   were filtered out, and the row said "No releases found", exactly what an empty
   tracker says. A run from the library map used those stored chips too.
-* **Sonarr listed 100 releases of other shows above them.** sorrel answers a
+* **Sonarr listed a page of other shows' releases above them.** sorrel answers a
   season search with its latest uploads, and Sonarr maps each one it can to a
-  series in the library (*Stick S02E03* for a Miss Fisher S02 search). A grab
-  posts only the guid, so grabbing that row downloads Stick.
+  series in the library (*Racket S02E03* for a Lady Marlowe S02 search). A grab
+  posts only the guid, so grabbing that row downloads Racket.
 
 These drive the real endpoints with only the arr's HTTP layer mocked, except
 where a helper is the thing under test.
@@ -95,14 +95,14 @@ def test_a_release_the_arr_mapped_to_another_movie_is_dropped():
 
 
 def test_a_release_the_arr_mapped_to_another_series_is_dropped():
-    """The box's case: *Stick S02E03* in a Miss Fisher season search."""
+    """The report's case: another series' episode in a season search."""
     guids, report = _matrix('sonarr', 6, [
-        _release('fisher', title="Miss Fisher's Murder Mysteries S01 1080p BluRay", mappedSeriesId=6,
+        _release('marlowe', title="Lady Marlowe Investigates S01 1080p BluRay", mappedSeriesId=6,
                  downloadAllowed=True, fullSeason=True, mappedSeasonNumber=1),
-        _release('stick', title='Stick.S02E03.2160p.ATVP.WEB-DL', mappedSeriesId=41,
+        _release('racket', title='Racket.S02E03.2160p.ATVP.WEB-DL', mappedSeriesId=41,
                  downloadAllowed=True, mappedSeasonNumber=1),
     ])
-    assert guids == ['fisher']
+    assert guids == ['marlowe']
     assert report['other_title'] == 1
 
 
@@ -111,17 +111,17 @@ def test_a_release_the_arr_could_not_identify_is_dropped():
     (Sonarr: "Unable to find matching series and episodes, will need to be
     manually provided"), and it's a release of a show nobody has."""
     guids, report = _matrix('sonarr', 6, [
-        _release('fisher', mappedSeriesId=6, downloadAllowed=True),
+        _release('marlowe', mappedSeriesId=6, downloadAllowed=True),
         _release('the-body', title='The.Body.2026.S01E08.2160p', downloadAllowed=False),
     ])
-    assert guids == ['fisher']
+    assert guids == ['marlowe']
     assert report['unidentified'] == 1 and report['other_title'] == 0
 
 
 def test_this_series_with_episodes_sonarr_could_not_place_is_kept():
     """Mapped to this series, episodes unknown: the grab looks them up again."""
-    guids, _ = _matrix('sonarr', 6, [_release('fisher', mappedSeriesId=6, downloadAllowed=False)])
-    assert guids == ['fisher']
+    guids, _ = _matrix('sonarr', 6, [_release('marlowe', mappedSeriesId=6, downloadAllowed=False)])
+    assert guids == ['marlowe']
 
 
 def test_a_release_without_either_field_is_kept():

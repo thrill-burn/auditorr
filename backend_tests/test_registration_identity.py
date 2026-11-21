@@ -177,7 +177,7 @@ def route(sess, path, body):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def test_a_single_instance_install_answers_exactly_what_it_answered():
-    """The box runs one qui instance, and nothing about it may move (T2's
+    """One qui instance is the common install, and nothing about it may move (T2's
     precedent). Every value here was read off `132849c` before Phase 13; a new
     field (`reg`, the two new report counters) is an addition and is stripped
     before comparing, never a change to what was already there."""

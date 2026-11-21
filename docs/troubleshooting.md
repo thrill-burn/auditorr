@@ -209,7 +209,7 @@ fix keep their wrong figure until you remove the scan that caused it:
    ```bash
    curl -X POST http://<your-host>:8677/api/upload_snapshots/delete \
      -H 'Content-Type: application/json' \
-     -d '{"from": "2026-10-11T12:58:22.679645", "to": "2026-10-11T12:58:22.679645"}'
+     -d '{"from": "2026-03-14T12:30:00.000000", "to": "2026-03-14T12:30:00.000000"}'
    ```
 
    If you set `AUDITORR_SECRET`, add `-H 'X-Auditorr-Secret: <your key>'`.
@@ -393,7 +393,7 @@ silently present it as current.
 
 Almost always a **title in another language**. Non-English content is released
 under its original-language name while your arr stores the English one, so
-`No.tengo.miedo.S01E01…` and *I'm Not Afraid* look like two unrelated titles.
+`Nadie.duerme.S01E01…` and *Nobody Sleeps* look like two unrelated titles.
 
 auditorr matches against the **alternate titles** Sonarr and Radarr already hold
 for every item, which is where translated and AKA names live, so this should

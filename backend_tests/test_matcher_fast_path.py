@@ -1,7 +1,7 @@
 """The exclusion matcher's short way for the walk's own paths (SCAN SC2).
 
-`CompiledExclusions.match` runs once per file on disk. Under the reference
-box's rules (five media-server presets) it was most of the two walks: 32.4 s at
+`CompiledExclusions.match` runs once per file on disk. With all five
+media-server presets on it was most of the two walks: 32.4 s at
 650,000 files, 16.0 s with this.
 
 Two things changed, and neither may change an answer:
@@ -52,7 +52,7 @@ RULESETS = {
     'plex preset': {'MEDIA_SERVER_EXCLUSION_PRESETS': ['plex']},
     'every preset': {'MEDIA_SERVER_EXCLUSION_PRESETS': list(MEDIA_SERVER_EXCLUSION_PRESETS),
                      'DISC_RIP_EXCLUSION_PRESETS': list(DISC_RIP_EXCLUSION_PRESETS)},
-    'the box': {'MEDIA_SERVER_EXCLUSION_PRESETS': ['ums', 'kodi', 'emby', 'jellyfin', 'plex'],
+    'all five presets': {'MEDIA_SERVER_EXCLUSION_PRESETS': ['ums', 'kodi', 'emby', 'jellyfin', 'plex'],
                 'EXCLUSION_PATTERNS': ['contains:sample', '*.srr', '*.sfv', '*.srt', '*.txt',
                                        'movies/Some Film (2020)/Some.Film.avi',
                                        'tv/Show/Show.S01E01.mkv']},
@@ -368,7 +368,7 @@ def test_a_mid_star_glob_is_skipped_only_for_a_name_it_cant_match():
 def test_the_box_s_art_globs_are_skipped_for_a_video():
     """Under the presets every glob the regex answers has a tail, so a video,
     a subtitle and a folder's name never reach it, and an image still does."""
-    matcher = compile_exclusions(expand_exclusion_patterns(RULESETS['the box']))
+    matcher = compile_exclusions(expand_exclusion_patterns(RULESETS['all five presets']))
     assert matcher._glob_rest_rx is not None and matcher._glob_rest_tails is not None
 
     class _Watched:

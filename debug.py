@@ -218,7 +218,7 @@ def sanitize_text(text):
     s = _IP_RE.sub('<ip>', s)
     s = _TOKEN_RE.sub('<token>', s)
     # Quoted spans first — quotes are the only reliable delimiter for paths and
-    # filenames containing spaces ("The Lion King (1994) ... .mkv")
+    # filenames containing spaces ("The Brass Lantern (1994) ... .mkv")
     s = _QUOTED_RE.sub(_sanitize_quoted, s)
     s = _NIX_PATH_RE.sub(lambda m: sanitize_path(m.group(0)), s)
     s = _WIN_PATH_RE.sub(lambda m: sanitize_path(m.group(0)), s)

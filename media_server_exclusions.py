@@ -105,8 +105,8 @@ def _normalize_presets(values, allowed):
 # **The file has already been deleted. What is left is the filesystem's record
 # of a delete it has not finished.**
 #
-# Observed on the reference box, and it reached every workflow that offers an
-# action. Unraid's mover copied a 3.5 GB episode from cache to array and could
+# Observed on an Unraid install, where it reached every workflow that offers an
+# action. Unraid's mover copied an episode from cache to array and could
 # not unlink the source because qBittorrent held it open, so one file mid-move
 # appeared as two:
 #

@@ -1,7 +1,7 @@
 """A scan stores the kernel's peak, not a sample (SCAN SC7).
 
 `audit_runs.peak_rss_mb` was the highest of the memory sampler's readings, one
-every 20 s, so a scan under 20 s (every scan on the reference box) stored its
+every 20 s, so a scan under 20 s (every scan on a small library) stored its
 RSS at save time, and a longer one whichever reading landed nearest its peak:
 five scans whose kernel peak was 2,942 MB stored between 1,000 and 1,191.
 

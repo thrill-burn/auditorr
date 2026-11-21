@@ -1355,8 +1355,8 @@ def _cleanup_landmarks(rows, remote, local):
 
     The script's working-directory guard needs names a finished run leaves in
     place, and the selection supplies them only where something sits above a
-    release folder. With no category folder, which is the reference box's
-    layout, a release folder is one segment deep and its parent is the torrent
+    release folder. With no category folder (a common
+    layout), a release folder is one segment deep and its parent is the torrent
     folder itself, so no guard was emitted at all (CODE_REVIEW_2026-09-27 CR5).
 
     A complete torrent's payload is on disk under its `save_path/name`, and the
@@ -2736,7 +2736,7 @@ def _client_season_packs(rows, series, season):
     pack). Complete packs come first, then the better release.
 
     A pack's name has no `SxxEyy` for the title parse to stop at, so its parsed
-    title runs on through the season (`Small Prophets S01`, and a language tag
+    title runs on through the season (`Quiet Harbour S01`, and a language tag
     after it). The title is the part before the season token.
     """
     keys = set()
@@ -3147,7 +3147,7 @@ def _trump_find_arr_item(cfg, parsed, titles=None, name=''):
     in the first place (TRIAGE T15, same primitives) — then a **soft fallback**
     ranked by shared title core, because a trump's new-release name often
     carries a stray season token or extra scene tokens the exact key match can't
-    fold ('… Rides Again S01' vs the series 'The Magic School Bus Rides Again')
+    fold ('… Rides Again S01' vs the series 'The Paper Kite Rides Again')
     and a graded title match beats a hard 404.
 
     **Content type is a gate, not a sort key**, at every tier — TRIAGE T1's fix
@@ -3476,8 +3476,8 @@ def _trump_link_state(cfg, group):
     """Does anything outside this group still hold each member's bytes? (TR3)
 
     The confirm screen's whole safety argument for `delete_files=True` was
-    "your library hardlinks survive", and nothing checked it; M1 measured 3.5%
-    of the reference box's torrent-tree files at `st_nlink == 1`. Every distinct
+    "your library hardlinks survive", and nothing checked it; M1 measured a few
+    percent of one library's torrent-tree files at `st_nlink == 1`. Every distinct
     path in the **whole group** is stat'ed and grouped by `(st_dev, st_ino)`:
     *own* is how many distinct group paths sit on an inode, *outside* is
     `st_nlink − own`. A file is True when outside > 0, False when it is 0 — this
@@ -4899,7 +4899,7 @@ def workflows_triage():
         type. A *gate*, not a tiebreak: this used to end `... or lib_rows`, which
         fell back to the wrong-type rows whenever the right type had none, so a
         TV episode of a same-titled series absent from Sonarr matched the film in
-        Radarr (Fargo, Hannibal, Dune, Shōgun — the collisions are not exotic).
+        Radarr (Fargo, Hannibal, Westworld, Shōgun — the collisions are not exotic).
         That produced quality_cmp 'same', which is exactly what renders the Force
         import button, and force_import_files then posts replaceExistingFiles
         against the movie's id: one episode deliberately written over a library
@@ -6357,7 +6357,7 @@ def _backfill_under(group, under):
     (BACKFILL B15: the dashboard's library map opens Backfill on one title).
 
     By path, never by title: the map's tiles are folders, and a folder's name
-    isn't the arr's title (`Pluribus` is Sonarr's `PLUR1BUS` on the box, and a
+    isn't the arr's title (`Glasshouse` can be Sonarr's `GL4SSHOUSE`, and a
     movie folder carries its year). Every file of a candidate is in one series
     or movie folder, so its representative path answers for all of them.
     """

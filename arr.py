@@ -591,15 +591,15 @@ def _release_other_title(release, service, arr_id):
 
     An interactive search for one series or movie returns every result the
     indexers sent back, and an indexer that ignores the query sends its latest
-    uploads instead. On the box, one indexer answered a *Miss Fisher's Murder
-    Mysteries* season search with 100 releases of other shows, ranked above the
-    show's own packs. The arr lists those as rejected, but it lists them.
+    uploads instead: one indexer answered a season search with a page of other
+    shows' releases, ranked above the show's own packs. The arr lists those as
+    rejected, but it lists them.
 
     * **`other`: the arr mapped it to another item in the library.** Sonarr's
       `ReleaseResource.MappedSeriesId = remoteEpisode.Series?.Id`, Radarr's
       `MappedMovieId = remoteMovie.Movie?.Id`. A grab posts only the guid and
-      indexer, so the arr grabs it **as that other item**: *Stick S02E03* from a
-      Miss Fisher row downloads Stick.
+      indexer, so the arr grabs it **as that other item**: *Other Show S02E03*
+      from this show's row downloads Other Show.
     * **`unidentified`: the arr mapped it to nothing.** `DownloadAllowed` is a
       plain bool that both arrs set only once a release has matched a title (a
       series with episodes, a movie), so it's `false` for an unknown one, and
@@ -850,7 +850,7 @@ def _release_group_tag(name):
 
     **A leading `[Group]` is read first** — the anime convention, and how an
     indexer often lists a release the PM names scene-style: the PM's
-    `…x264-Kametsu` arrives in Radarr as `[Kametsu] Only Yesterday (BD 1080p…)`.
+    `…x264-Kametsu` arrives in Radarr as `[Kametsu] Late Summer (BD 1080p…)`.
     Read only from the tail, `kametsu` stayed in the title core as a title word,
     and a trailing `[Dual-Audio]` parsed as group `audio`.
     """
@@ -941,7 +941,7 @@ def _norm_release_name(name):
     dropped, dots/underscores to spaces, collapse whitespace, lowercase.
 
     The extension, because an indexer lists a single-file release under its
-    file name: Radarr offered `Mulan.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv`
+    file name: Radarr offered `Peony.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv`
     for a PM naming `… x265-NCmt`, every field agreed, and it was still "no
     exact match" — so the one release the PM named was never pre-selected.
     """
@@ -984,7 +984,7 @@ def match_trump_release(releases, new_title, indexer=''):
 # title must actually overlap and the year (±1) / episode must agree; only then
 # do resolution/source/group/audio/HDR refine the ranking. Quality agreement alone
 # never makes a match — otherwise two unrelated 1080p WEB-DLs look like siblings
-# (the "Flow 2019" shown for "Obsession 2026" bug). When the real torrent isn't
+# (the "Current 2019" shown for "Fixation 2026" bug). When the real torrent isn't
 # in the client the list comes back empty, which the picker reports honestly,
 # rather than offering a confident wrong answer.
 
@@ -1027,7 +1027,7 @@ _QUALITY_NOISE = {
 }
 
 # Articles carry no discriminating power and cause spurious title overlap ("The
-# Matrix" vs "The Thing" share 'the'); dropped from the title core.
+# Jade Fox" vs "The Iron Gate" share 'the'); dropped from the title core.
 _TITLE_STOPWORDS = {'the', 'of', 'a', 'an', 'and'}
 
 # Tokens that are noise regardless of any trailing digits (fused channel layout,
@@ -1060,19 +1060,19 @@ def _title_core_tokens(norm, group=''):
     that carries a symbol ("HDR10+", "DD+") would otherwise miss the noise set
     and land in the title core, where it reads as *shared title words* between
     two unrelated releases. One such token is enough to clear the similarity
-    gate — that was the "Weapons 2025 offered for The Drama 2026" bug, where
+    gate — that was the "Shutters 2025 offered for The Quarrel 2026" bug, where
     both names contributed 'hdr10+' and nothing else overlapped. \\W (not
     [^a-z0-9]) so accented title words survive intact.
 
     The noise has to be complete for the *query's* sake as much as the
     candidate's: every junk word left in the PM's core is a word no candidate
-    can share, and the gate is a ratio. `Only Yesterday AKA Omoide Poro Poro
+    can share, and the gate is a ratio. `Late Summer AKA Natsu Hiro Hiro
     1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu` kept `aka`,
-    `dual`, `audio` and `hi10p`, so Radarr's `Only Yesterday 1991 …-Kametsu`
+    `dual`, `audio` and `hi10p`, so Radarr's `Late Summer 1991 …-Kametsu`
     shared 2 of 8 words and failed the gate outright. `aka` is dropped only
     beside other title words, so a film called "AKA" still has a core. The
     candidate's side has its own junk: Radarr's listing of that release,
-    `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv`,
+    `[Kametsu] Late Summer (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv`,
     carried a checksum and `flacx2` as title words.
     """
     out = set()
@@ -1091,9 +1091,9 @@ def _title_core_tokens(norm, group=''):
 def _aka_cores(norm, group=''):
     """The title core of each side of an `AKA`, or () when there is none.
 
-    `Spirited Away AKA Sen to Chihiro no Kamikakushi` is two titles, and an
+    `Hidden Forest AKA Mori to Kaze no Utagoe` is two titles, and an
     indexer lists the release under either one. Pooled into one core, the
-    English half shares 2 of 7 words with `Spirited Away 2001 …` and fails a
+    English half shares 2 of 7 words with `Hidden Forest 2001 …` and fails a
     gate the same film should pass on its own.
     """
     parts = _AKA_RE.split(norm)
@@ -1202,8 +1202,8 @@ def _score_match_features(q, c):
 
     # Year gate — a declared year off by more than one is a different release
     # (remake). Exactly one year of drift is the same film: premiere year vs
-    # wide-release year renders one movie under either ("Snow White and the
-    # Seven Dwarfs" is 1937 or 1938 depending on who typed it), so PMs, torrent
+    # wide-release year renders one movie under either ("Rose Red and the
+    # Seven Ravens" is 1937 or 1938 depending on who typed it), so PMs, torrent
     # names, and indexer records routinely disagree by one. Same ±1 tolerance
     # `arr_year_ok` applies to Radarr; flagged 'partial' so the user sees the
     # drift. (Both sides here are *release names*, so this is symmetric — unlike
@@ -1381,8 +1381,8 @@ def rank_trump_replacements(releases, new_title, indexer='', old_titles=()):
 
     Nothing is dropped and nothing is cut to a top N. The list used to be the
     eight best scores that cleared the title gate, and a tracker renders names
-    its own way — `[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2)
-    [079DB0B4].mkv` for a PM's `Only Yesterday … x264-Kametsu` — so the one
+    its own way — `[Kametsu] Late Summer (1991) (BD 1080p Hi10 FLACx2)
+    [079DB0B4].mkv` for a PM's `Late Summer … x264-Kametsu` — so the one
     release the user had come for
     could be ranked out of sight or gated out entirely, with Radarr listing it.
     A gated-out release has `match_score: None`.
@@ -2395,7 +2395,7 @@ def _parse_year_from_name(name):
 
     Takes the LAST plausible year token so titles that are themselves years
     survive ("2012 2009 1080p" → 2009). Tokens outside 1900..now+2 are
-    ignored, which also skips title numbers like "Blade Runner 2049".
+    ignored, which also skips title numbers like "Orbit Station 2049".
     """
     cutoff = time.gmtime().tm_year + 2
     years = [int(y) for y in re.findall(r'\b((?:19|20)\d{2})\b', name)
@@ -2635,8 +2635,8 @@ def _parse_title_from_filename(filename):
     # For TV shows: strip everything from SxxExx onwards
     name = re.split(r'[Ss]\d{1,2}[Ee]\d{1,2}', name)[0]
     # For movies: strip the release year and everything after — but only a
-    # plausible year (1900..now+2, so "Blade Runner 2049" keeps its number)
-    # and never the leading token (year-titled films like "1917" or "2046")
+    # plausible year (1900..now+2, so "Orbit Station 2049" keeps its number)
+    # and never the leading token (year-titled films like "1917" or "2067")
     cutoff = time.gmtime().tm_year + 2
     for m in re.finditer(r'\b((?:19|20)\d{2})\b', name):
         if m.start() > 0 and 1900 <= int(m.group(1)) <= cutoff:
@@ -2653,7 +2653,7 @@ def _parse_title_from_filename(filename):
         '', name, flags=re.IGNORECASE,
     )
     # Collapse multiple spaces and strip, then drop dangling separators left
-    # by the year/episode splits — "The Lion King (1994)" splits to "The Lion King ("
+    # by the year/episode splits — "The Brass Lantern (1994)" splits to "The Brass Lantern ("
     name = re.sub(r'\s+', ' ', name).strip()
     name = re.sub(r'[\s(\[\-–—]+$', '', name)
     return name
@@ -2668,7 +2668,7 @@ def _normalize_title(title):
 
 
 def _ascii_fold(title):
-    """Strip diacritics so 'Žižek' matches the ASCII 'Zizek' a release name uses."""
+    """Strip diacritics so 'Šárka' matches the ASCII 'Sarka' a release name uses."""
     return unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode()
 
 
@@ -2676,10 +2676,10 @@ def title_match_keys(title):
     """All normalized lookup keys a title should match under.
 
     Scene names handle apostrophes two ways — replaced by a separator
-    (Widow.s.Bay) or dropped entirely (Widows.Bay) — so "Widow's Bay" must
-    index/look up as both 'widow s bay' and 'widows bay'. Diacritics get the
-    same treatment: arr titles keep them ("Žižek!") while release names are
-    ASCII ("zizek"), so an ASCII-folded variant of every key is added too.
+    (Smuggler.s.Cove) or dropped entirely (Smugglers.Cove) — so "Smuggler's Cove"
+    must index/look up as both 'smuggler s cove' and 'smugglers cove'. Diacritics get the
+    same treatment: arr titles keep them ("Šárka!") while release names are
+    ASCII ("sarka"), so an ASCII-folded variant of every key is added too.
     """
     if not title:
         return set()
@@ -2715,8 +2715,8 @@ def title_alias_keys(all_titles):
     Sonarr and Radarr both carry `alternateTitles` — the AKA and translated
     names TheTVDB/TMDB hold for an item — and for non-English content the scene
     release is named in the **original language** while the arr stores the
-    English title. `No.tengo.miedo.S01E01…` against a series Sonarr calls
-    "I'm Not Afraid" matches on nothing, so Triage returned `not_in_library`
+    English title. `Nadie.duerme.S01E01…` against a series Sonarr calls
+    "Nobody Sleeps" matches on nothing, so Triage returned `not_in_library`
     ("no arr has ever heard of this — junk can be deleted") for a series Sonarr
     was actively managing and had already grabbed. That copy invited a delete
     on the only copy of the data.
@@ -2765,13 +2765,13 @@ def arr_year_ok(parsed, row):
 
     Three rules, and each of the three is load-bearing:
 
-    * **A title that *is* a year is not a release year.** "1923", "1883",
-      "1899", "2012" parse their own name as the year, while the arr stores the
-      year the show or film actually came out (1923 → 2022). Skipping the check
+    * **A title that *is* a year is not a release year.** "1917" and
+      "2012" parse their own name as the year, while the arr stores the
+      year the show or film actually came out (2012 → 2009). Skipping the check
       when the token sits inside the parsed title is what stops the gate
       disqualifying the one title it was handed.
     * **Radarr: ±1.** A premiere-vs-wide-release year renders one film either
-      way (Snow White 1937/1938) — the same tolerance `rank_release_matches`
+      way (Rose Red 1937/1938) — the same tolerance `rank_release_matches`
       already applies.
     * **Sonarr: one-sided, and deliberately not ±1.** The arr stores a series'
       *first air* year while a TV release name usually carries the episode's
@@ -3056,10 +3056,10 @@ def _poster_path(item):
 def arr_title_for_folder(cfg, rel):
     """The series or movie a library-map title is: `(row, errors)` (2026-11-10).
 
-    `rel` is a folder relative to the library root (`television/Pluribus`),
+    `rel` is a folder relative to the library root (`television/Glasshouse`),
     which is what a map tile is. Matched by folder, like `arr_search` and B15,
-    never by name: a folder's name isn't the arr's title (`Pluribus` is Sonarr's
-    `PLUR1BUS`). The item whose own folder it is; else the deepest one above it;
+    never by name: a folder's name isn't the arr's title (`Glasshouse` can be Sonarr's
+    `GL4SSHOUSE`). The item whose own folder it is; else the deepest one above it;
     else the only one below it (a folder of several, say a letter folder, is
     none). `rel` is only ever compared, never opened.
 

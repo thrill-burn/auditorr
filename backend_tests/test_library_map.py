@@ -76,21 +76,21 @@ class LibraryMapRowTests(unittest.TestCase):
         self.assertEqual(list(_titles(row)), [('library', 'tv', 'Show')])
 
     def test_a_dead_seed_is_drawn_on_its_library_file_with_its_torrent_to_search(self):
-        """The box's Jackie Brown: a library file linked to a torrent Arvel has
+        """A library file linked to a torrent Arvel has
         deleted. Its bytes are the library file's, so the dead seed is a library
         state, joined by inode; the title carries the dead torrent's own folder,
         which is what Triage's search matches."""
-        lib = dict(_media('movies/Jackie Brown (1997)/Jackie.Brown.mkv', size=21 * GB, linked=True), file_id='1:7')
-        tor = _torrent('radarr/Jackie.Brown.1997.1080p.BluRay-SA89/Jackie.Brown.mkv', size=21 * GB,
+        lib = dict(_media('movies/Brass Monkey (1997)/Brass.Monkey.mkv', size=21 * GB, linked=True), file_id='1:7')
+        tor = _torrent('radarr/Brass.Monkey.1997.1080p.BluRay-SA89/Brass.Monkey.mkv', size=21 * GB,
                        imported=True, linked=True, file_id='1:7', tracker_health='unregistered',
                        tracker_msg='Torrent has been deleted.')
         row = audit.library_map_row([lib], [tor])
         self.assertEqual(row['version'], 3)
         [entry] = row['titles']
         self.assertEqual(entry[2:11], [1, 0, 0, 0, 0, 0, 0, 21 * GB, 0])
-        self.assertEqual(entry[11], 'radarr/Jackie.Brown.1997.1080p.BluRay-SA89')
+        self.assertEqual(entry[11], 'radarr/Brass.Monkey.1997.1080p.BluRay-SA89')
         # Its torrent side is still the same inode, drawn once, in the library.
-        self.assertEqual(list(_titles(row)), [('library', 'movies', 'Jackie Brown (1997)')])
+        self.assertEqual(list(_titles(row)), [('library', 'movies', 'Brass Monkey (1997)')])
 
     def test_only_a_dead_seed_is_one(self):
         """A working torrent, an excluded dead one and a dead orphan aren't
@@ -258,23 +258,23 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
             if os.environ.get('CI'):
                 self.fail('node is needed to run the library map rules and is on GitHub runners')
             self.skipTest('node is not installed')
-        media = [dict(_media('movies/Jackie Brown (1997)/Jackie.Brown.mkv', size=21 * GB, linked=True), file_id='1:7'),
-                 dict(_media('movies/Up (2009)/up.mkv', size=3 * GB, linked=True), file_id='1:8'),
-                 dict(_media('movies/Up (2009)/up.en.srt', size=1000), file_id='1:9'),
+        media = [dict(_media('movies/Brass Monkey (1997)/Brass.Monkey.mkv', size=21 * GB, linked=True), file_id='1:7'),
+                 dict(_media('movies/Wren (2009)/wren.mkv', size=3 * GB, linked=True), file_id='1:8'),
+                 dict(_media('movies/Wren (2009)/wren.en.srt', size=1000), file_id='1:9'),
                  dict(_media('tv/Show/e1.mkv', size=2 * GB, linked=True), file_id='1:10'),
-                 dict(_media('kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA/g.mkv', size=682 * 10 ** 6),
+                 dict(_media('family_movies/The.Owls.Promise.720p.HDTV.x264-BiA/g.mkv', size=682 * 10 ** 6),
                       file_id='1:11', unmanaged=True),
                  # An unmanaged folder's subtitle stays Unmanaged (the stamp
                  # judges a sidecar by its folder), and a folder of artwork
                  # alone is Other, linking nothing.
-                 dict(_media('kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA/g.srt', size=2000),
+                 dict(_media('family_movies/The.Owls.Promise.720p.HDTV.x264-BiA/g.srt', size=2000),
                       file_id='1:12', unmanaged=True),
                  dict(_media('tv/Coming Soon/poster.jpg', size=300_000), file_id='1:13'),
                  dict(_media('tv/Coming Soon/.plexmatch', size=100), file_id='1:14')]
         torrents = [
-            _torrent('radarr/Jackie.Brown.1997.1080p-SA89/Jackie.Brown.mkv', size=21 * GB, imported=True, linked=True,
+            _torrent('radarr/Brass.Monkey.1997.1080p-SA89/Brass.Monkey.mkv', size=21 * GB, imported=True, linked=True,
                      file_id='1:7', tracker_health='unregistered', tracker_msg='Torrent has been deleted.'),
-            _torrent('radarr/Up.2009.1080p-GRP/up.mkv', size=3 * GB, imported=True, linked=True,
+            _torrent('radarr/Wren.2009.1080p-GRP/wren.mkv', size=3 * GB, imported=True, linked=True,
                      file_id='1:8', tracker_health='working'),
             _torrent('sonarr/Show.S01-GRP/e1.mkv', size=2 * GB, imported=True, linked=True,
                      file_id='1:10', tracker_health='unregistered', excluded=True),
@@ -286,18 +286,18 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
         self.assertEqual(out.returncode, 0, out.stderr)
         got = json.loads(out.stdout.strip().splitlines()[-1])
         self.assertEqual(got['files'], got['row'])
-        jackie = got['row']['library|movies/Jackie Brown (1997)|']
-        self.assertEqual(jackie['by'], [0, 0, 0, 0, 0, 0, 21 * GB, 0])
-        self.assertEqual(jackie['search'], 'radarr/Jackie.Brown.1997.1080p-SA89')
-        self.assertEqual(jackie['nav'], {'tab': 'triage', 'search': 'radarr/Jackie.Brown.1997.1080p-SA89'})
+        monkey = got['row']['library|movies/Brass Monkey (1997)|']
+        self.assertEqual(monkey['by'], [0, 0, 0, 0, 0, 0, 21 * GB, 0])
+        self.assertEqual(monkey['search'], 'radarr/Brass.Monkey.1997.1080p-SA89')
+        self.assertEqual(monkey['nav'], {'tab': 'triage', 'search': 'radarr/Brass.Monkey.1997.1080p-SA89'})
         # An excluded dead torrent isn't a dead seed: its library file is Linked.
         self.assertEqual(got['row']['library|tv/Show|']['by'][0], 2 * GB)
-        # A dead seed is still linked: Jackie Brown counts as fully linked. So
-        # is Up: its subtitle is Other (2026-11-20), which has no say.
+        # A dead seed is still linked: Brass Monkey counts as fully linked. So
+        # is Wren: its subtitle is Other (2026-11-20), which has no say.
         self.assertEqual((got['totals']['full'], got['totals']['partly']), (3, 0))
-        up = got['row']['library|movies/Up (2009)|']
-        self.assertEqual(up['by'], [3 * GB, 0, 0, 0, 0, 1000, 0, 0])
-        self.assertEqual(up['nav'], None)
+        wren = got['row']['library|movies/Wren (2009)|']
+        self.assertEqual(wren['by'], [3 * GB, 0, 0, 0, 0, 1000, 0, 0])
+        self.assertEqual(wren['nav'], None)
         self.assertEqual(got['row']['library|tv/Coming Soon|']['by'], [0, 0, 0, 0, 0, 300_100, 0, 0])
         # The two languages' video lists and tests are one.
         self.assertEqual(got['videos'], sorted(audit.VIDEO_EXTENSIONS))
@@ -309,12 +309,12 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
         # A version 1 row still reads, its six sums in place and the rest 0.
         self.assertEqual(got['v1']['library|m/Old|']['by'], [5, 0, 0, 0, 0, 0, 0, 0])
         # An unmanaged file: its own state, and a click opens Media on its folder.
-        stray = got['row']['library|kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA|']
+        stray = got['row']['library|family_movies/The.Owls.Promise.720p.HDTV.x264-BiA|']
         self.assertEqual(stray['by'], [0, 0, 0, 0, 0, 0, 0, 682 * 10 ** 6 + 2000])
-        self.assertEqual(stray['unmanaged_nav'], {'tab': 'media', 'search': 'kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA'})
+        self.assertEqual(stray['unmanaged_nav'], {'tab': 'media', 'search': 'family_movies/The.Owls.Promise.720p.HDTV.x264-BiA'})
         # It isn't linked, so its title isn't fully linked, and neither is the
         # artwork folder; neither is a workflow's gap, so the titles with one
-        # are Jackie Brown and the waiting torrent. Up's subtitle was the third
+        # are Brass Monkey and the waiting torrent. Wren's subtitle was the third
         # until 2026-11-20, a 1,000-byte gap raised to a visible stripe.
         self.assertEqual(got['totals']['none'], 2)
         self.assertEqual(got['totals']['problemTitles'], 2)
@@ -326,14 +326,13 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
 class BiggestGapsTests(unittest.TestCase):
     """The Biggest gaps card: every workflow's biggest is on it, which by size
     alone a library's Backfill titles crowded out (2026-11-10), and it reads
-    by size, which leading with each workflow's biggest didn't (2026-11-12:
-    132.9, 48.4, 46.4, 9.3, 7.2, then 108.8 GB)."""
+    by size, which leading with each workflow's biggest didn't (2026-11-12)."""
     SCRIPT = r"""
 const R = await import(process.argv[1])
 const GB = 1e9
 const by = (s, b) => { const a = [0, 0, 0, 0, 0, 0, 0]; a[s] = b; return a }
 const titles = [[0, 'Big show', 10, ...by(1, 133 * GB)], [0, 'Pottery', 10, ...by(1, 109 * GB)],
-  [0, 'Another', 10, ...by(1, 100 * GB)], [0, 'Oldboy', 1, ...by(6, 48 * GB)], [1, 'GoodFellas', 1, ...by(4, 46 * GB)],
+  [0, 'Another', 10, ...by(1, 100 * GB)], [0, 'Oldtown', 1, ...by(6, 48 * GB)], [1, 'GoodNeighbours', 1, ...by(4, 46 * GB)],
   [2, 'The.Conversation', 3, ...by(2, 9 * GB)], [2, 'Slow.Horses.S04E01', 1, ...by(3, 7 * GB)]]
 const m = R.modelFromRow({ version: 2, folders: [['library', 'television'], ['library', 'movies'], ['torrents', 'radarr']], titles, folded: [] })
 console.log(JSON.stringify(R.biggestGaps(m, 6).map(g => [R.shortName(g.t), g.state, g.bytes])))
@@ -357,12 +356,12 @@ console.log(JSON.stringify(R.biggestGaps(m, 6).map(g => [R.shortName(g.t), g.sta
         # dead seed, copies); the third Backfill title isn't, though it's bigger
         # than four of them.
         self.assertEqual({s for _, s, _ in got}, {1, 2, 3, 4, 6})
-        self.assertEqual([n for n, _, _ in got], ['Big show', 'Pottery', 'Oldboy', 'GoodFellas', 'The.Conversation', 'Slow.Horses.S04E01'])
+        self.assertEqual([n for n, _, _ in got], ['Big show', 'Pottery', 'Oldtown', 'GoodNeighbours', 'The.Conversation', 'Slow.Horses.S04E01'])
 
 
 class SharedSizeTests(unittest.TestCase):
     def test_a_library_file_whose_torrent_twin_is_excluded_is_not_held_twice(self):
-        """The box: one disc rip linked into the library and excluded on the
+        """One disc rip linked into the library and excluded on the
         torrent side made `hardlinked_media_size` 23 GB larger than the torrent
         folder, so "on disk" would have come out smaller than the library."""
         media = [_media('m/A/a.mkv', size=10 * GB, linked=True), _media('m/B/b.m2ts', size=3 * GB, linked=True)]
@@ -501,27 +500,27 @@ class ScanReportTests(unittest.TestCase):
 class BackfillUnderTests(unittest.TestCase):
     """B15: the map's tiles are folders, and a folder's name isn't the arr's title."""
     GROUPS = [
-        {'key': 'a', 'folder': '/data/media/television', 'arr_title': 'PLUR1BUS',
-         'path': 'television/Pluribus/Season 1/Pluribus.S01E01.mkv'},
-        {'key': 'b', 'folder': '/data/media/television', 'arr_title': 'The Pitt',
-         'path': 'television/The Pitt/Season 2/The.Pitt.S02E01.mkv'},
-        {'key': 'c', 'folder': '/data/media/television', 'arr_title': 'The Pittsburgh Diaries',
-         'path': 'television/The Pittsburgh Diaries/S01E01.mkv'},
-        {'key': 'd', 'folder': '/data/media/movies', 'arr_title': 'Ran',
-         'path': 'movies/Ran.1985.mkv'},
+        {'key': 'a', 'folder': '/data/media/television', 'arr_title': 'GL4SSHOUSE',
+         'path': 'television/Glasshouse/Season 1/Glasshouse.S01E01.mkv'},
+        {'key': 'b', 'folder': '/data/media/television', 'arr_title': 'The Pier',
+         'path': 'television/The Pier/Season 2/The.Pier.S02E01.mkv'},
+        {'key': 'c', 'folder': '/data/media/television', 'arr_title': 'The Pierside Diaries',
+         'path': 'television/The Pierside Diaries/S01E01.mkv'},
+        {'key': 'd', 'folder': '/data/media/movies', 'arr_title': 'Ilo',
+         'path': 'movies/Ilo.1985.mkv'},
     ]
 
     def _keys(self, under):
         return [g['key'] for g in app._narrow_backfill(list(self.GROUPS), under=under)]
 
     def test_a_folder_finds_its_title_whatever_the_arr_calls_it(self):
-        self.assertEqual(self._keys('television/Pluribus'), ['a'])
+        self.assertEqual(self._keys('television/Glasshouse'), ['a'])
 
     def test_a_folder_never_matches_a_sibling_that_starts_the_same(self):
-        self.assertEqual(self._keys('television/The Pitt'), ['b'])
+        self.assertEqual(self._keys('television/The Pier'), ['b'])
 
     def test_a_file_directly_in_a_folder_is_its_own_scope(self):
-        self.assertEqual(self._keys('movies/Ran.1985.mkv'), ['d'])
+        self.assertEqual(self._keys('movies/Ilo.1985.mkv'), ['d'])
 
     def test_no_scope_narrows_nothing(self):
         self.assertEqual(self._keys(None), ['a', 'b', 'c', 'd'])

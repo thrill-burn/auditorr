@@ -714,8 +714,8 @@ def _read_save_scope(sess, base, inst, remote_path, local_path, save_scope):
     read, makes the scope `unknown`: the scan then offers no empty folder rather
     than one qBittorrent may save into (R1). The instance itself still counts as
     answered; its torrents did. **Every way to `unknown` logs**: the shape check
-    used to return quietly, so on the box no scan offered an empty folder for a
-    month and nothing said why.
+    used to return quietly, so an install could go a month with no scan
+    offering an empty folder and nothing saying why.
     """
     try:
         prefs = sess.get(f"{base}/api/instances/{inst['id']}/preferences", timeout=15)

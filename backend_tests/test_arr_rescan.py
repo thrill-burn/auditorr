@@ -38,8 +38,8 @@ def _no_import_probe(monkeypatch):
 
 @patch('arr._arr_command')
 def test_single_file_torrent_scans_the_file_not_the_category_dir(mock_cmd):
-    arr_rescan(_cfg(), 'radarr', ['radarr/Disclosure.Day.2026.2160p.WEB-DL.mkv'])
-    assert mock_cmd.call_args[0][3] == '/data/torrents/radarr/Disclosure.Day.2026.2160p.WEB-DL.mkv'
+    arr_rescan(_cfg(), 'radarr', ['radarr/Signal.Fire.2026.2160p.WEB-DL.mkv'])
+    assert mock_cmd.call_args[0][3] == '/data/torrents/radarr/Signal.Fire.2026.2160p.WEB-DL.mkv'
 
 
 @patch('arr._arr_command')

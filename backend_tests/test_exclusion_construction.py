@@ -141,18 +141,18 @@ class WholeTorrentMarkingTests(unittest.TestCase):
 
         The passes that build `whole` and `safe` key by registration (Phase 13),
         while the stamping loop read the bare hash, so a qui record, whose key
-        is `<instance>:<hash>`, was never stamped. The reference box runs qui
-        with no category directory, so this brought back the 200-character
+        is `<instance>:<hash>`, was never stamped. On qui with no category
+        directory, this brought back the 200-character
         dead end `test_a_release_folder_one_segment_deep_is_offered` is about.
         """
-        specs = (('Dark Matter (2024) S01 [cTurtle]/S01E03.mkv', 'AAA', False),
-                 ('Dark Matter (2024) S01 [cTurtle]/S01E06.mkv', 'AAA', False))
-        media = ['tv/Dark Matter (2024)/Season 01/ep.mkv']
+        specs = (('Night Train (2024) S01 [cTurtle]/S01E03.mkv', 'AAA', False),
+                 ('Night Train (2024) S01 [cTurtle]/S01E06.mkv', 'AAA', False))
+        media = ['tv/Night Train (2024)/Season 01/ep.mkv']
         qbit = self._records(*specs, media=media)
         qui = self._records(*specs, media=media, instance_id=1)
         for q, r in zip(qbit, qui):
             self.assertTrue(r.get('whole_torrent'))
-            self.assertEqual(r.get('excl_folder'), 'Dark Matter (2024) S01 [cTurtle]')
+            self.assertEqual(r.get('excl_folder'), 'Night Train (2024) S01 [cTurtle]')
             self.assertEqual({k: v for k, v in r.items() if k != 'instance_id'}, q)
 
     def test_a_partially_imported_torrent_is_not_marked(self):
@@ -173,7 +173,7 @@ class WholeTorrentMarkingTests(unittest.TestCase):
     # -- what replaced the "at least two segments" rule --------------------
 
     def test_a_release_folder_one_segment_deep_is_offered(self):
-        """The regression the probe found on the reference box.
+        """The regression a probe of a real install found.
 
         A torrent saved with no category directory has its release folder one
         segment down. The old depth rule refused it and emitted a per-file rule
@@ -182,11 +182,11 @@ class WholeTorrentMarkingTests(unittest.TestCase):
         the rule had just declined to use.
         """
         recs = self._records(
-            ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/S01E03.mkv', 'AAA', False),
-            ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/S01E06.mkv', 'AAA', False),
-            media=['tv/Dark Matter (2024)/Season 01/ep.mkv'])
+            ('Night Train (2024) S01 (2160p WEBRip)[cTurtle]/S01E03.mkv', 'AAA', False),
+            ('Night Train (2024) S01 (2160p WEBRip)[cTurtle]/S01E06.mkv', 'AAA', False),
+            media=['tv/Night Train (2024)/Season 01/ep.mkv'])
         self.assertEqual(recs[0]['excl_folder'],
-                         'Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]')
+                         'Night Train (2024) S01 (2160p WEBRip)[cTurtle]')
 
     def test_a_folder_holding_another_torrent_is_refused(self):
         """Exclusivity — what actually stopped `movies/` being offered."""
@@ -306,13 +306,13 @@ class TriageExclusionPatternTests(unittest.TestCase):
     def test_a_one_segment_release_folder_stays_under_the_cap(self):
         """The arithmetic behind the fix, as a test rather than a claim.
 
-        The reference box's row: a ~95-character release folder holding episodes
+        A real row's shape: a ~95-character release folder holding episodes
         with ~95-character names. Per file that is ~205 characters and the config
         cap refuses it; as one folder rule it is ~104 and fits.
         """
-        folder = ('Dark Matter (2024) S01 Season 1 '
+        folder = ('Night Train (2024) S01 Season 1 '
                   '(2160p WEBRip DV+HDR10P HYB x265 q14 12M V94 DDPA 5.1)[cTurtle]')
-        paths = [f'{folder}/Dark Matter (2024) S01E0{n} The Box '
+        paths = [f'{folder}/Night Train (2024) S01E0{n} The Map '
                  f'(2160p WEBRip DV+HDR10P HYB x265 q14 12M V94 DDPA 5.1)[cTurtle].mkv'
                  for n in (3, 6)]
         self.assertTrue(all(len(f'literal:{p}') > EXCLUSION_PATTERN_MAX_CHARS
@@ -472,16 +472,16 @@ class ConstructedPatternsAreAlwaysSaveableTests(unittest.TestCase):
 
 # ── Filesystem tombstones ─────────────────────────────────────────────────────
 
-_TOMB = ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/'
+_TOMB = ('Night Train (2024) S01 (2160p WEBRip)[cTurtle]/'
          '.fuse_hidden00314807000c8ea2')
-_LIVE = ('Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]/'
-         'Dark Matter (2024) S01E01 Are You Happy (2160p WEBRip)[cTurtle].mkv')
+_LIVE = ('Night Train (2024) S01 (2160p WEBRip)[cTurtle]/'
+         'Night Train (2024) S01E01 Who Goes Home (2160p WEBRip)[cTurtle].mkv')
 
 
 class TombstoneTests(unittest.TestCase):
     """`.fuse_hidden*` / `.nfs*` — a delete the filesystem has not finished.
 
-    Reproduced from the reference box, where Unraid's mover copied a 3.5 GB
+    Reproduced from an Unraid install, where the mover copied an
     episode cache→array and could not unlink the source because qBittorrent held
     it open. One file mid-move showed up as two, and reached every workflow that
     offers an action.
@@ -527,7 +527,7 @@ class TombstoneTests(unittest.TestCase):
         ]
         _mark_whole_torrents(recs, [])
         self.assertEqual(recs[0]['excl_folder'],
-                         'Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]')
+                         'Night Train (2024) S01 (2160p WEBRip)[cTurtle]')
 
         # An unclaimed file that is NOT a tombstone still blocks it.
         recs[2]['excluded'] = False
@@ -585,7 +585,7 @@ class TombstoneTests(unittest.TestCase):
 
 # ── C24 — OS and NAS clutter, always excluded ─────────────────────────────────
 
-_RELEASE = 'Dark Matter (2024) S01 (2160p WEBRip)[cTurtle]'
+_RELEASE = 'Night Train (2024) S01 (2160p WEBRip)[cTurtle]'
 
 # One of each kind the list covers, as it would sit in a torrent folder.
 _CLUTTER = [

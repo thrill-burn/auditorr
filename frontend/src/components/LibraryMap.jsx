@@ -150,8 +150,8 @@ function fit(ctx, s, max) {
 }
 // A title's name is drawn whole, or cut where at least this many characters
 // fit (2026-11-10; it was any tile 64px wide). Fewer reads as noise. A cut
-// drops an unclosed bracket and what follows it, so "Halloween (19…" reads
-// "Halloween…": half a year says nothing, and the tile is one of several.
+// drops an unclosed bracket and what follows it, so "Harvest Moon (19…" reads
+// "Harvest Moon…": half a year says nothing, and the tile is one of several.
 const MIN_NAME_CHARS = 6
 function nameFit(ctx, s, max) {
   const f = fit(ctx, s, max)
@@ -438,7 +438,7 @@ function draw(canvas, model, W, H, detail, highlight = null) {
     // A label is inked for the leaf it's on. One that runs across two leaves
     // wanting different inks (black on the dark theme's blue, white on its
     // grey) takes each one's ink, clipped to it: inked for the first leaf
-    // alone, "The Handmaid's Tale" ran black onto dark grey (2026-11-10).
+    // alone, a long title ran black onto dark grey (2026-11-10).
     const x0 = t.x + 5, x1 = x0 + width, y0 = t.y + 4, y1 = t.y + (size ? 32 : 17)
     const byInk = new Map()
     for (const l of leavesOf.get(t) || []) {

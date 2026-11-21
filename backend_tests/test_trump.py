@@ -15,8 +15,8 @@ class TrumpReplacementRankingTests(unittest.TestCase):
     — first, and pre-selected — with another tracker's copy the cross-seed edge
     case. Asked for by the user, 2026-09-13. Fixtures from a real PM (QA-5)."""
 
-    NEW = "Apocalypse Now 1979 Theatrical REPACK 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
-    OLD = "Apocalypse Now 1979 Theatrical 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
+    NEW = "Monsoon Front 1979 Theatrical REPACK 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
+    OLD = "Monsoon Front 1979 Theatrical 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER"
     PM  = "Arvel (API) (Prowlarr)"
 
     def test_the_exact_release_on_the_pm_tracker_leads_whatever_the_seeders(self):
@@ -71,11 +71,11 @@ class TrumpReleaseBrowseTests(unittest.TestCase):
     first. Fixtures from two of the user's PMs (2026-09-28): an anime film the
     PM's tracker lists group-first, and a REPACK Radarr lists by file name."""
 
-    NEW = 'Only Yesterday AKA Omoide Poro Poro 1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu'
-    OLD = 'Only Yesterday AKA Omoide Poro Poro 1991 1080p BluRay Dual-Audio Opus 2.0 AV1-TiZU'
+    NEW = 'Late Summer AKA Natsu Hiro Hiro 1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu'
+    OLD = 'Late Summer AKA Natsu Hiro Hiro 1991 1080p BluRay Dual-Audio Opus 2.0 AV1-TiZU'
     PM  = 'Arvel (API) (Prowlarr)'
     # What Radarr's search listed for NEW, pasted by the user.
-    REAL = '[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv'
+    REAL = '[Kametsu] Late Summer (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv'
 
     def test_radarrs_listing_of_the_replacement_is_the_same_title_and_group(self):
         score, brk = score_release_match(self.NEW, self.REAL)
@@ -86,7 +86,7 @@ class TrumpReleaseBrowseTests(unittest.TestCase):
     def test_a_checksum_and_a_track_count_are_not_title_words(self):
         """`[079DB0B4]` is the file's CRC32 and `FLACx2` two FLAC tracks; as
         title words they held the listing at a partial title match."""
-        self.assertEqual(_release_match_features(self.REAL)['core'], {'only', 'yesterday'})
+        self.assertEqual(_release_match_features(self.REAL)['core'], {'late', 'summer'})
         self.assertEqual(_title_core_tokens(_norm_release_name('[GRP] Show 01 (BD 1080p AACx2) [ABCDEF12]'), 'grp'),
                          {'show'})
         self.assertIn('deadbeef', _title_core_tokens('deadbeef 2020 1080p'),
@@ -94,25 +94,25 @@ class TrumpReleaseBrowseTests(unittest.TestCase):
 
     def test_a_plain_rendering_of_the_title_clears_the_gate(self):
         """`aka`, `dual`, `audio` and `hi10p` were title words, so Radarr's
-        plain `Only Yesterday 1991 …` shared 2 of the PM's 8 and was dropped."""
-        for name in ('Only Yesterday 1991 1080p BluRay FLAC 2.0 x264-Kametsu',
-                     'Omoide Poro Poro 1991 1080p BluRay FLAC2.0 x264-Kametsu'):
+        plain `Late Summer 1991 …` shared 2 of the PM's 8 and was dropped."""
+        for name in ('Late Summer 1991 1080p BluRay FLAC 2.0 x264-Kametsu',
+                     'Natsu Hiro Hiro 1991 1080p BluRay FLAC2.0 x264-Kametsu'):
             score, brk = score_release_match(self.NEW, name)
             self.assertGreater(score, 0.9, name)
             self.assertEqual(brk['title'], 'same', name)
 
     def test_a_leading_bracket_group_is_the_group(self):
-        self.assertEqual(_release_group_tag('[Kametsu] Only Yesterday (BD 1080p Hi10 FLAC)'), 'kametsu')
-        self.assertEqual(_release_group_tag('[Kametsu] Only Yesterday (BD 1080p Hi10 FLAC) [Dual-Audio]'), 'kametsu')
+        self.assertEqual(_release_group_tag('[Kametsu] Late Summer (BD 1080p Hi10 FLAC)'), 'kametsu')
+        self.assertEqual(_release_group_tag('[Kametsu] Late Summer (BD 1080p Hi10 FLAC) [Dual-Audio]'), 'kametsu')
         self.assertEqual(_release_group_tag('Movie 2020 1080p BluRay x264 [Dual-Audio]'), '')
         self.assertEqual(_release_group_tag('[1080p] Movie 2020'), '')
-        _, brk = score_release_match(self.NEW, '[Kametsu] Only Yesterday (Omoide Poro Poro) (BD 1080p Hi10 FLAC)')
+        _, brk = score_release_match(self.NEW, '[Kametsu] Late Summer (Natsu Hiro Hiro) (BD 1080p Hi10 FLAC)')
         self.assertEqual(brk['group'], 'same')
 
     def test_each_side_of_an_aka_is_a_title(self):
-        new = 'Spirited Away AKA Sen to Chihiro no Kamikakushi 2001 1080p BluRay FLAC x264-GRP'
-        for name in ('Spirited.Away.2001.1080p.BluRay.x264-GRP',
-                     'Sen to Chihiro no Kamikakushi 2001 1080p BluRay'):
+        new = 'Hidden Forest AKA Mori to Kaze no Utagoe 2001 1080p BluRay FLAC x264-GRP'
+        for name in ('Hidden.Forest.2001.1080p.BluRay.x264-GRP',
+                     'Mori to Kaze no Utagoe 2001 1080p BluRay'):
             score, brk = score_release_match(new, name)
             self.assertGreater(score, 0.9, name)
             self.assertEqual(brk['title'], 'same', name)
@@ -126,15 +126,15 @@ class TrumpReleaseBrowseTests(unittest.TestCase):
     def test_a_file_name_listing_is_the_exact_release(self):
         """Radarr listed `….x265-NCmt.mkv` for a PM naming `… x265-NCmt`, every
         field agreeing, and said no exact match."""
-        new = 'Mulan 1998 REPACK 1080p UHD BluRay Opus 7.1 HDR x265-NCmt'
-        rels = [{'guid': 'a', 'title': 'Mulan.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv',
+        new = 'Peony 1998 REPACK 1080p UHD BluRay Opus 7.1 HDR x265-NCmt'
+        rels = [{'guid': 'a', 'title': 'Peony.1998.REPACK.1080p.UHD.BluRay.Opus.7.1.HDR.x265-NCmt.mkv',
                  'indexer': 'Arvel (API) (Prowlarr)', 'seeders': 36}]
         release, cands = rank_trump_replacements(rels, new, self.PM)
         self.assertEqual(release['guid'], 'a')
         self.assertTrue(cands[0]['exact'])
 
     def test_every_release_is_returned_with_the_pm_tracker_first(self):
-        rels = [{'guid': f'x{i}', 'title': f'Only.Yesterday.1991.1080p.BluRay.x264-G{i}',
+        rels = [{'guid': f'x{i}', 'title': f'Late.Summer.1991.1080p.BluRay.x264-G{i}',
                  'indexer': 'Bramble', 'seeders': 100 + i} for i in range(12)]
         rels += [{'guid': 'kam', 'title': self.REAL, 'indexer': 'Arvel', 'seeders': 1},
                  {'guid': 'junk', 'title': 'Something Else Entirely 2004 DVDRip', 'indexer': 'Bramble', 'seeders': 0},
@@ -177,8 +177,8 @@ class TrumpedCandidatesTests(unittest.TestCase):
     the PM's tracker first, and never the replacement pre-selected for deletion.
     Asked for by the user, 2026-09-28: "PMs tracker should always lead"."""
 
-    OLD = 'FROM S04E01 The Arrival 2160p AMZN WEB-DL DDP5.1 H.265-Kitsune'
-    NEW = 'FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DDP5.1 H.265-Kitsune'
+    OLD = 'HALCYON S04E01 The Landing 2160p AMZN WEB-DL DDP5.1 H.265-Kitsune'
+    NEW = 'HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DDP5.1 H.265-Kitsune'
     PM  = 'Arvel (API) (Prowlarr)'
 
     @staticmethod
@@ -187,7 +187,7 @@ class TrumpedCandidatesTests(unittest.TestCase):
 
     def test_the_pm_trackers_torrents_lead_whatever_another_scored(self):
         rows = [self._row('b', self.OLD.replace(' ', '.'), 'bramble.test'),
-                self._row('a', 'FROM S04E01 1080p WEB h264-OTHER', 'arvel.test')]
+                self._row('a', 'HALCYON S04E01 1080p WEB h264-OTHER', 'arvel.test')]
         auto, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertGreater(cands[1]['match_score'], cands[0]['match_score'])
         self.assertEqual([c['hash'] for c in cands], ['a', 'b'])
@@ -195,7 +195,7 @@ class TrumpedCandidatesTests(unittest.TestCase):
         self.assertEqual(auto['hash'], 'b', 'the confident name elsewhere, not the guess')
 
     def test_nothing_that_clears_the_gate_is_cut(self):
-        rows = [self._row(str(i), f'FROM.S04E01.2160p.WEB.h265-G{i}', 'x.org') for i in range(12)]
+        rows = [self._row(str(i), f'HALCYON.S04E01.2160p.WEB.h265-G{i}', 'x.org') for i in range(12)]
         rows.append(self._row('z', 'Unrelated S04E01 2160p WEB h265-G1', 'x.org'))
         _, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertEqual(len(cands), 12)
@@ -217,7 +217,7 @@ class TrumpedCandidatesTests(unittest.TestCase):
         """Only the REPACK holds every word of the PM's old name, so the matcher's
         subset tier alone would pick it."""
         rows = [self._row('r', self.NEW.replace(' ', '.'), 'arvel.test'),
-                self._row('o', 'FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DD+.5.1.H.265-Kitsune', 'arvel.test')]
+                self._row('o', 'HALCYON.S04E01.The.Landing.2160p.AMZN.WEB-DL.DD+.5.1.H.265-Kitsune', 'arvel.test')]
         self.assertEqual(match_trumped_torrent(rows, self.OLD)['hash'], 'r')
         auto, cands = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertEqual(auto['hash'], 'o')
@@ -230,39 +230,39 @@ class TrumpedCandidatesTests(unittest.TestCase):
         self.assertTrue(cands[0]['exact'])
 
     def test_with_nothing_confident_the_pm_trackers_best_is_offered(self):
-        rows = [self._row('b', 'FROM S04E01 720p HDTV x264-B', 'bramble.test'),
-                self._row('a', 'FROM S04E01 1080p WEB h264-A', 'arvel.test')]
+        rows = [self._row('b', 'HALCYON S04E01 720p HDTV x264-B', 'bramble.test'),
+                self._row('a', 'HALCYON S04E01 1080p WEB h264-A', 'arvel.test')]
         auto, _ = rank_trumped_candidates(rows, self.OLD, self.PM, self.NEW)
         self.assertEqual(auto['hash'], 'a')
 
-    OY_OLD = 'Only Yesterday AKA Omoide Poro Poro 1991 1080p BluRay Dual-Audio Opus 2.0 AV1-TiZU'
-    OY_NEW = 'Only Yesterday AKA Omoide Poro Poro 1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu'
+    LS_OLD = 'Late Summer AKA Natsu Hiro Hiro 1991 1080p BluRay Dual-Audio Opus 2.0 AV1-TiZU'
+    LS_NEW = 'Late Summer AKA Natsu Hiro Hiro 1991 1080p BluRay Dual-Audio FLAC 2.0 Hi10P x264-Kametsu'
 
     def test_the_pm_trackers_own_spelling_is_preselected_over_the_exact_name_elsewhere(self):
-        rows = [self._row('s', self.OY_OLD.replace(' ', '.'), 'sorrel.test'),
-                self._row('a', '[TiZU] Only Yesterday (1991) (BD 1080p AV1 Opus)', 'arvel.test')]
-        self.assertIsNone(match_trumped_torrent(rows[1:], self.OY_OLD), 'not a confident match')
-        auto, cands = rank_trumped_candidates(rows, self.OY_OLD, self.PM, self.OY_NEW)
+        rows = [self._row('s', self.LS_OLD.replace(' ', '.'), 'sorrel.test'),
+                self._row('a', '[TiZU] Late Summer (1991) (BD 1080p AV1 Opus)', 'arvel.test')]
+        self.assertIsNone(match_trumped_torrent(rows[1:], self.LS_OLD), 'not a confident match')
+        auto, cands = rank_trumped_candidates(rows, self.LS_OLD, self.PM, self.LS_NEW)
         self.assertEqual(auto['hash'], 'a')
         self.assertEqual([c['hash'] for c in cands], ['a', 's'])
 
     def test_another_group_on_the_pm_tracker_is_not_preselected_past_the_exact_name(self):
         """It scores 1.0 too — title, year, resolution and source outweigh the
         group — so the old equal-score swap to the PM's tracker picked it."""
-        rows = [self._row('s', self.OY_OLD.replace(' ', '.'), 'sorrel.test'),
-                self._row('h', 'Only.Yesterday.1991.1080p.BluRay.x264-HANDJOB', 'arvel.test')]
-        self.assertEqual(score_release_match(self.OY_OLD, rows[1]['name'])[0], 1.0)
-        auto, cands = rank_trumped_candidates(rows, self.OY_OLD, self.PM, self.OY_NEW)
+        rows = [self._row('s', self.LS_OLD.replace(' ', '.'), 'sorrel.test'),
+                self._row('h', 'Late.Summer.1991.1080p.BluRay.x264-HANDJOB', 'arvel.test')]
+        self.assertEqual(score_release_match(self.LS_OLD, rows[1]['name'])[0], 1.0)
+        auto, cands = rank_trumped_candidates(rows, self.LS_OLD, self.PM, self.LS_NEW)
         self.assertEqual(auto['hash'], 's')
         self.assertEqual(cands[0]['hash'], 'h', 'still listed first')
 
     def test_a_third_groups_release_is_not_named_like_the_replacement(self):
         """HANDJOB shares `x264` with the new name and not the old, which on raw
         words alone put it beside the replacement."""
-        rows = [self._row('k', '[Kametsu] Only Yesterday (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv', 'arvel.test'),
-                self._row('h', 'Only.Yesterday.1991.1080p.BluRay.x264-HANDJOB', 'tovey.org'),
-                self._row('t', self.OY_OLD, 'arvel.test')]
-        _, cands = rank_trumped_candidates(rows, self.OY_OLD, self.PM, self.OY_NEW)
+        rows = [self._row('k', '[Kametsu] Late Summer (1991) (BD 1080p Hi10 FLACx2) [079DB0B4].mkv', 'arvel.test'),
+                self._row('h', 'Late.Summer.1991.1080p.BluRay.x264-HANDJOB', 'tovey.org'),
+                self._row('t', self.LS_OLD, 'arvel.test')]
+        _, cands = rank_trumped_candidates(rows, self.LS_OLD, self.PM, self.LS_NEW)
         self.assertEqual({c['hash']: c['replacement'] for c in cands}, {'k': True, 'h': False, 't': False})
 
     def test_without_a_new_title_or_an_indexer_nothing_is_flagged(self):
@@ -285,7 +285,7 @@ class ReleaseMatchCacheTests(unittest.TestCase):
     in the process, silently. No caller mutates today; this keeps it that way.
     """
 
-    NAME = "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX"
+    NAME = "Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX"
 
     def test_the_same_name_is_parsed_once(self):
         self.assertIs(_release_match_features(self.NAME), _release_match_features(self.NAME))
@@ -301,14 +301,14 @@ class TrumpPMParseTests(unittest.TestCase):
     def test_standard_pm(self):
         pm = (
             "The following torrent(s) have been trumped\n\n"
-            "    Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX\n\n"
+            "    Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX\n\n"
             "and will be replaced by\n"
-            "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes.\n\n"
+            "Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes.\n\n"
             "Reason: DV/HDR replacing HDR"
         )
         old, new = parse_trump_pm(pm)
-        self.assertEqual(old, ["Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX"])
-        self.assertEqual(new, "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes")
+        self.assertEqual(old, ["Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos HDR x265-HQMUX"])
+        self.assertEqual(new, "Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes")
 
     def test_dotted_names_without_and_or_reason(self):
         pm = (
@@ -324,20 +324,20 @@ class TrumpPMParseTests(unittest.TestCase):
         # N episodes trumped by one season pack — all N old titles must be kept.
         pm = (
             "The following torrent(s) have been trumped\n\n"
-            "    FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune\n"
-            "    FROM S04E02 Fray 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune\n"
-            "    FROM S04E03 Episode 3 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune\n\n\n"
+            "    HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune\n"
+            "    HALCYON S04E02 Drift 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune\n"
+            "    HALCYON S04E03 Episode 3 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune\n\n\n"
             "and will be replaced by\n"
-            "FROM S04 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune.\n\n"
+            "HALCYON S04 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune.\n\n"
             "Reason:\nSeason Pack"
         )
         old, new = parse_trump_pm(pm)
         self.assertEqual(old, [
-            "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
-            "FROM S04E02 Fray 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
-            "FROM S04E03 Episode 3 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
+            "HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
+            "HALCYON S04E02 Drift 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
+            "HALCYON S04E03 Episode 3 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
         ])
-        self.assertEqual(new, "FROM S04 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
+        self.assertEqual(new, "HALCYON S04 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
 
     def test_no_delimiter_returns_empty(self):
         self.assertEqual(parse_trump_pm("just some random text"), ([], ""))
@@ -373,14 +373,14 @@ def _field_pm(old, new, reason):
 
 
 FIELD_PMS = [
-    ("Alone S12 1080p AMZN WEB-DL DD+ 5.1 H.264-RAWR",
-     "Alone S12 1080p AMZN WEB-DL DD+ 5.1 H.264-Kitsune",
+    ("Outpost S12 1080p AMZN WEB-DL DD+ 5.1 H.264-RAWR",
+     "Outpost S12 1080p AMZN WEB-DL DD+ 5.1 H.264-Kitsune",
      "Reason:\nInternal\n\n"),
-    ("Apocalypse Now 1979 Theatrical 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER",
-     "Apocalypse Now 1979 Theatrical REPACK 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER",
+    ("Monsoon Front 1979 Theatrical 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER",
+     "Monsoon Front 1979 Theatrical REPACK 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-ATELiER",
      "Reason:\nRepack: Removed Commentary which is intended for Redux Cut\n\n"),
-    ("Finding Nemo 2003 2160p UHD BluRay DD+ 5.1 HDR AV1-TiZU",
-     "Finding Nemo 2003 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-W4NK3R",
+    ("Reef Story 2003 2160p UHD BluRay DD+ 5.1 HDR AV1-TiZU",
+     "Reef Story 2003 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-W4NK3R",
      "Reason:\nNo slot for AV1\n\n"),
 ]
 
@@ -433,75 +433,75 @@ class TrumpedTorrentMatchTests(unittest.TestCase):
         return [{"name": n, "hash": n, "size": 1} for n in names]
 
     def test_exact_normalized_match(self):
-        rows = self._rows("FROM.S04E01.The.Arrival.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
-        m = match_trumped_torrent(rows, "FROM.S04E01.The.Arrival.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        rows = self._rows("HALCYON.S04E01.The.Landing.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        m = match_trumped_torrent(rows, "HALCYON.S04E01.The.Landing.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
         self.assertIsNotNone(m)
 
     def test_strong_overlap_tolerates_audio_rendering(self):
         # PM prints "DD+ 5.1"; the actual torrent says "DDP5.1" — neither exact
         # nor subset, but the overlap fallback finds it.
-        rows = self._rows("FROM.S04E01.The.Arrival.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
-        m = match_trumped_torrent(rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
+        rows = self._rows("HALCYON.S04E01.The.Landing.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        m = match_trumped_torrent(rows, "HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
         self.assertIsNotNone(m)
 
     def test_never_crosses_to_a_different_episode(self):
-        rows = self._rows("FROM.S04E02.Fray.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
-        m = match_trumped_torrent(rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
+        rows = self._rows("HALCYON.S04E02.Drift.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        m = match_trumped_torrent(rows, "HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
         self.assertIsNone(m)
 
     def test_never_crosses_to_a_different_group(self):
         # Same episode, different encode group — distinct payload, must not match.
-        rows = self._rows("FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DDP5.1.H.265-NTb")
-        m = match_trumped_torrent(rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
+        rows = self._rows("HALCYON.S04E01.The.Landing.2160p.AMZN.WEB-DL.DDP5.1.H.265-NTb")
+        m = match_trumped_torrent(rows, "HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
         self.assertIsNone(m)
 
     def test_episode_does_not_match_season_pack(self):
-        rows = self._rows("FROM.S04.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
-        m = match_trumped_torrent(rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
+        rows = self._rows("HALCYON.S04.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        m = match_trumped_torrent(rows, "HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune")
         self.assertIsNone(m)
 
     def test_no_match_returns_none(self):
         rows = self._rows("Completely.Different.Show.S01E01.1080p-XYZ")
-        self.assertIsNone(match_trumped_torrent(rows, "FROM S04E01 The Arrival 2160p-Kitsune"))
+        self.assertIsNone(match_trumped_torrent(rows, "HALCYON S04E01 The Landing 2160p-Kitsune"))
         self.assertIsNone(match_trumped_torrent(rows, ""))
 
     def test_never_crosses_to_a_different_title(self):
         # Field report: two unrelated movies, same group and identical quality
         # tags. Quality tokens alone cleared the 0.6 overlap bar, so the wizard
         # offered a stranger's film for deletion. The title must gate.
-        rows = self._rows("Weapons.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
+        rows = self._rows("Shutters.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
         m = match_trumped_torrent(
-            rows, "The Drama 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD")
+            rows, "The Quarrel 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD")
         self.assertIsNone(m)
 
     def test_never_crosses_to_a_remake_from_the_same_group(self):
         # Same title and group, years far apart — a different film.
-        rows = self._rows("Dune.1984.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265-GRP")
+        rows = self._rows("Tidewater.1984.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265-GRP")
         self.assertIsNone(match_trumped_torrent(
-            rows, "Dune 2021 2160p UHD BluRay TrueHD 7.1 Atmos x265-GRP"))
+            rows, "Tidewater 2021 2160p UHD BluRay TrueHD 7.1 Atmos x265-GRP"))
 
     def test_year_drift_of_one_still_matches(self):
         # Premiere vs wide-release rendering — same film, must still resolve.
-        rows = self._rows("Snow.White.1937.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265-GRP")
+        rows = self._rows("Rose.Red.1937.2160p.UHD.BluRay.TrueHD.7.1.Atmos.x265-GRP")
         self.assertIsNotNone(match_trumped_torrent(
-            rows, "Snow White 1938 2160p UHD BluRay TrueHD 7.1 Atmos x265-GRP"))
+            rows, "Rose Red 1938 2160p UHD BluRay TrueHD 7.1 Atmos x265-GRP"))
 
     def test_a_named_group_does_not_disqualify_a_groupless_copy(self):
         # The PM names its group; the client's copy of the same payload is named
         # without one and ends in WEB-DL. That used to parse as group 'dl', and
         # a mismatched group is a hard `continue` in the overlap tier — so the
         # correct torrent was disqualified outright and the pre-selection lost.
-        rows = self._rows("FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL")
+        rows = self._rows("HALCYON.S04E01.The.Landing.2160p.AMZN.WEB-DL")
         m = match_trumped_torrent(
-            rows, "FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+            rows, "HALCYON.S04E01.The.Landing.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
         self.assertIsNotNone(m)
 
     def test_two_groupless_names_are_not_a_group_agreement(self):
         # The quieter inverse: both sides reduce to 'ray', which scores as a
         # group *match* neither release ever declared. Different titles, so the
         # title gate must still be what decides — not a manufactured agreement.
-        rows = self._rows("Weapons 2025 2160p Blu-Ray")
-        self.assertIsNone(match_trumped_torrent(rows, "The Drama 2026 2160p Blu-Ray"))
+        rows = self._rows("Shutters 2025 2160p Blu-Ray")
+        self.assertIsNone(match_trumped_torrent(rows, "The Quarrel 2026 2160p Blu-Ray"))
 
 
 class ReleaseGroupTagTests(unittest.TestCase):
@@ -514,35 +514,35 @@ class ReleaseGroupTagTests(unittest.TestCase):
     def test_real_groups_survive(self):
         self.assertEqual(_release_group_tag("A.Movie.2020-GRP"), "grp")
         self.assertEqual(
-            _release_group_tag("FROM.S04E01.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune"),
+            _release_group_tag("HALCYON.S04E01.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune"),
             "kitsune")
 
 
 class TrumpReleaseMatchTests(unittest.TestCase):
     def setUp(self):
         self.releases = [
-            {"title": "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
+            {"title": "Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
              "indexer": "Arvel", "seeders": 12},
-            {"title": "Jumanji.1995.2160p.UHD.BluRay.x265-OTHER",
+            {"title": "Rattlewood.1995.2160p.UHD.BluRay.x265-OTHER",
              "indexer": "Arvel", "seeders": 50},
         ]
 
     def test_exact_title_wins_over_seeders(self):
         # The near-match has far more seeders but the exact normalized title wins
         m = match_trump_release(
-            self.releases, "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes")
+            self.releases, "Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes")
         self.assertIsNotNone(m)
         self.assertTrue(m["title"].endswith("RandomBytes"))
 
     def test_dots_vs_spaces_equivalent(self):
         m = match_trump_release(
-            self.releases, "Jumanji.1995.2160p.UHD.BluRay.TrueHD.7.1.Atmos.DV.HDR.x265-RandomBytes")
+            self.releases, "Rattlewood.1995.2160p.UHD.BluRay.TrueHD.7.1.Atmos.DV.HDR.x265-RandomBytes")
         self.assertIsNotNone(m)
         self.assertTrue(m["title"].endswith("RandomBytes"))
 
     def test_indexer_filter(self):
         m = match_trump_release(
-            self.releases, "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
+            self.releases, "Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
             indexer="OtherTracker")
         self.assertIsNone(m)
 
@@ -551,7 +551,7 @@ class TrumpReleaseMatchTests(unittest.TestCase):
         arrive as "Arvel (API) (Prowlarr)" and "Arvel". Exact lowercase
         equality fell through to the any-indexer retry."""
         m = match_trump_release(
-            self.releases, "Jumanji 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
+            self.releases, "Rattlewood 1995 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR x265-RandomBytes",
             indexer="Arvel (API) (Prowlarr)")
         self.assertIsNotNone(m)
 
@@ -606,19 +606,19 @@ class RankReleaseMatchesTests(unittest.TestCase):
 
     def test_exact_match_scores_top(self):
         rows = self._rows(
-            "FROM.S04E01.The.Arrival.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
+            "HALCYON.S04E01.The.Landing.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
             "Completely.Different.Show.S01E01.1080p-XYZ",
         )
         ranked = rank_release_matches(
-            rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune", "name")
-        self.assertTrue(ranked[0]["name"].startswith("FROM.S04E01"))
+            rows, "HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune", "name")
+        self.assertTrue(ranked[0]["name"].startswith("HALCYON.S04E01"))
         self.assertEqual(ranked[0]["match_score"], 1.0)
 
     def test_audio_rendering_does_not_break_the_top_match(self):
         # PM prints "DD+ 5.1"; torrent says "DDP5.1" — still the #1 candidate.
-        rows = self._rows("FROM.S04E01.The.Arrival.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
+        rows = self._rows("HALCYON.S04E01.The.Landing.REPACK.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune")
         ranked = rank_release_matches(
-            rows, "FROM S04E01 The Arrival REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune", "name")
+            rows, "HALCYON S04E01 The Landing REPACK 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune", "name")
         self.assertEqual(ranked[0]["match"]["audio"], "same")
         self.assertEqual(ranked[0]["match"]["anchor"], "same")
 
@@ -630,67 +630,67 @@ class RankReleaseMatchesTests(unittest.TestCase):
 
     def test_different_episode_is_kept_out_of_the_top(self):
         rows = self._rows(
-            "FROM.S04E01.The.Arrival.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
-            "FROM.S04E02.Fray.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
+            "HALCYON.S04E01.The.Landing.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
+            "HALCYON.S04E02.Drift.2160p.AMZN.WEB-DL.DDP5.1.H.265-Kitsune",
         )
         ranked = rank_release_matches(
-            rows, "FROM S04E01 The Arrival 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
+            rows, "HALCYON S04E01 The Landing 2160p AMZN WEB-DL DD+ 5.1 H.265-Kitsune",
             "name", min_score=0.2)
-        self.assertTrue(ranked[0]["name"].startswith("FROM.S04E01"))
+        self.assertTrue(ranked[0]["name"].startswith("HALCYON.S04E01"))
         self.assertTrue(all("S04E02" not in r["name"] for r in ranked))
 
     def test_symbol_quality_token_is_not_a_title_word(self):
         # 'HDR10+' kept its '+', missed the quality-noise set, and became a
         # shared *title* token — one junk word was enough to clear the gate.
         score, brk = score_release_match(
-            "The Drama 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD",
-            "Weapons.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
+            "The Quarrel 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD",
+            "Shutters.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
         self.assertEqual(score, 0.0)
         self.assertEqual(brk["title"], "diff")
 
     def test_unrelated_title_is_dropped_from_the_candidate_list(self):
-        rows = self._rows("Weapons.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
+        rows = self._rows("Shutters.2025.2160p.UHD.BluRay.HDR10+.DoVi.TrueHD 7.1.Atmos.x265-SPHD.mkv")
         ranked = rank_release_matches(
-            rows, "The Drama 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD", "name")
+            rows, "The Quarrel 2026 2160p UHD BluRay TrueHD 7.1 Atmos DV HDR10+ x265-SPHD", "name")
         self.assertEqual(ranked, [])
 
     def test_same_title_other_quality_still_surfaces(self):
         # Same movie/year, different encode — a genuine title match, so it shows
         # (ranked lower via the quality diffs), letting the user vet it.
-        rows = self._rows("Jumanji.1995.1080p.BluRay.DTS.x264-GRP")
+        rows = self._rows("Rattlewood.1995.1080p.BluRay.DTS.x264-GRP")
         ranked = rank_release_matches(
-            rows, "Jumanji 1995 2160p UHD BluRay TrueHD Atmos DV HDR x265-RandomBytes", "name")
+            rows, "Rattlewood 1995 2160p UHD BluRay TrueHD Atmos DV HDR x265-RandomBytes", "name")
         self.assertEqual(len(ranked), 1)
 
     def test_unrelated_titles_drop_out(self):
         rows = self._rows("Totally.Unrelated.Movie.2001.1080p-ABC")
-        ranked = rank_release_matches(rows, "Jumanji 1995 2160p BluRay x265-XYZ", "name")
+        ranked = rank_release_matches(rows, "Rattlewood 1995 2160p BluRay x265-XYZ", "name")
         self.assertEqual(ranked, [])
 
     def test_unrelated_title_with_matching_quality_is_excluded(self):
         # The screenshot bug: quality (1080p WEB-DL) agrees but the titles have
         # nothing in common — must NOT be offered as a match.
         rows = self._rows(
-            "Flow.2019.1080p.WEB-DL.ARTE.AAC.H264.AYAKO.mkv",
-            "Superworm.2021.1080p.iP.WEB-DL.H264.AAC2.0.SNAKE.mkv",
+            "Current.2019.1080p.WEB-DL.ARTE.AAC.H264.AYAKO.mkv",
+            "Glowworm.2021.1080p.iP.WEB-DL.H264.AAC2.0.SNAKE.mkv",
         )
         ranked = rank_release_matches(
-            rows, "Obsession 2026 Director's Cut 1080p AMZN WEB-DL DD+ 5.1 H.264-KyoGo", "name")
+            rows, "Fixation 2026 Director's Cut 1080p AMZN WEB-DL DD+ 5.1 H.264-KyoGo", "name")
         self.assertEqual(ranked, [])
 
     def test_real_title_matches_despite_edition_and_audio_rendering(self):
         # Same title/year; PM has "Director's Cut" + "DD+", torrent has neither
         # spelled the same — still the match.
-        rows = self._rows("Obsession.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-KyoGo")
+        rows = self._rows("Fixation.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-KyoGo")
         ranked = rank_release_matches(
-            rows, "Obsession 2026 Director's Cut 1080p AMZN WEB-DL DD+ 5.1 H.264-KyoGo", "name")
+            rows, "Fixation 2026 Director's Cut 1080p AMZN WEB-DL DD+ 5.1 H.264-KyoGo", "name")
         self.assertEqual(len(ranked), 1)
         self.assertEqual(ranked[0]["match"]["title"], "same")
 
     def test_year_gate_blocks_remakes(self):
-        rows = self._rows("Obsession.1976.1080p.BluRay.x264-OLD")
+        rows = self._rows("Fixation.1976.1080p.BluRay.x264-OLD")
         ranked = rank_release_matches(
-            rows, "Obsession 2026 1080p WEB-DL DD+ 5.1 H.264-KyoGo", "name")
+            rows, "Fixation 2026 1080p WEB-DL DD+ 5.1 H.264-KyoGo", "name")
         self.assertEqual(ranked, [])
 
     def test_year_off_by_one_is_the_same_film(self):
@@ -698,11 +698,11 @@ class RankReleaseMatchesTests(unittest.TestCase):
         # 1937 (premiere vs wide-release year) plus a .mkv file-name suffix.
         # Must rank first — flagged 'partial' on year, not disqualified.
         rows = self._rows(
-            "Snow.White.and.the.Seven.Dwarfs.1937.Hybrid.2160p.BluRay.DD.1.0.DV.HDR10.x265-Softboat.mkv",
-            "Snow White and the Seven Dwarfs 1938 2160p BluRay HDR10 DDP 7 1 x265-edge2020",
+            "Rose.Red.and.the.Seven.Ravens.1937.Hybrid.2160p.BluRay.DD.1.0.DV.HDR10.x265-Softboat.mkv",
+            "Rose Red and the Seven Ravens 1938 2160p BluRay HDR10 DDP 7 1 x265-edge2020",
         )
         ranked = rank_release_matches(
-            rows, "Snow White and the Seven Dwarfs 1938 Hybrid 2160p UHD BluRay DD 1.0 DV HDR x265-Softboat",
+            rows, "Rose Red and the Seven Ravens 1938 Hybrid 2160p UHD BluRay DD 1.0 DV HDR x265-Softboat",
             "name")
         self.assertTrue(ranked[0]["name"].endswith("Softboat.mkv"))
         self.assertEqual(ranked[0]["match"]["year"], "partial")
@@ -726,11 +726,11 @@ class TitleSoftMatchTests(unittest.TestCase):
     def test_stray_season_token_still_matches_series(self):
         # The step-4 bug: parsed new title keeps "S01"; the series has none.
         self.assertEqual(
-            title_soft_match("The Magic School Bus Rides Again S01",
-                             "The Magic School Bus Rides Again"), 1.0)
+            title_soft_match("The Paper Kite Rides Again S01",
+                             "The Paper Kite Rides Again"), 1.0)
 
     def test_unrelated_titles_score_zero(self):
-        self.assertEqual(title_soft_match("Obsession", "The Magic School Bus"), 0.0)
+        self.assertEqual(title_soft_match("Fixation", "The Paper Kite"), 0.0)
 
     def test_empty_is_safe(self):
         self.assertEqual(title_soft_match("", "Anything"), 0.0)
@@ -739,8 +739,8 @@ class TitleSoftMatchTests(unittest.TestCase):
     def test_hdr_difference_is_reported(self):
         # The classic trump: same encode chain, HDR → DV. Breakdown must flag it.
         score, brk = score_release_match(
-            "Jumanji 1995 2160p UHD BluRay TrueHD Atmos HDR x265-HQMUX",
-            "Jumanji 1995 2160p UHD BluRay TrueHD Atmos DV HDR x265-RandomBytes")
+            "Rattlewood 1995 2160p UHD BluRay TrueHD Atmos HDR x265-HQMUX",
+            "Rattlewood 1995 2160p UHD BluRay TrueHD Atmos DV HDR x265-RandomBytes")
         self.assertEqual(brk["hdr"], "diff")
         self.assertEqual(brk["group"], "diff")
         self.assertEqual(brk["title"], "same")

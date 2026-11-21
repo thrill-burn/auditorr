@@ -26,9 +26,9 @@ def _conn(cid='sonarr-main', service='sonarr', **kw):
 
 
 def _row(folder, **kw):
-    r = {'service': 'sonarr', 'connection_id': 'sonarr-main', 'arr_id': 7, 'title': 'PLUR1BUS',
-         'title_slug': 'plur1bus', 'year': 2025, 'has_file': True, 'alt_titles': [],
-         'folder': folder, 'status': 'continuing', 'network': 'Apple TV+', 'season_count': 1,
+    r = {'service': 'sonarr', 'connection_id': 'sonarr-main', 'arr_id': 7, 'title': 'GL4SSHOUSE',
+         'title_slug': 'gl4sshouse', 'year': 2025, 'has_file': True, 'alt_titles': [],
+         'folder': folder, 'status': 'continuing', 'network': 'Example TV', 'season_count': 1,
          'runtime': 50, 'poster': '/MediaCover/7/poster.jpg?lastWrite=1'}
     r.update(kw)
     return r
@@ -47,8 +47,8 @@ class SnapshotRowsTests(unittest.TestCase):
         arr._arr_titles_cache['snapshot'] = None
 
     def test_a_series_row_has_its_mapped_folder_and_detail(self):
-        series = [{'id': 7, 'title': 'PLUR1BUS', 'titleSlug': 'plur1bus', 'year': 2025,
-                   'path': '/tv/Pluribus', 'status': 'continuing', 'network': 'Apple TV+',
+        series = [{'id': 7, 'title': 'GL4SSHOUSE', 'titleSlug': 'gl4sshouse', 'year': 2025,
+                   'path': '/tv/Glasshouse', 'status': 'continuing', 'network': 'Example TV',
                    'runtime': 50, 'statistics': {'episodeFileCount': 9, 'seasonCount': 1},
                    'images': [{'coverType': 'banner', 'url': '/MediaCover/7/banner.jpg'},
                               {'coverType': 'poster', 'url': '/MediaCover/7/poster.jpg?lastWrite=1'}]}]
@@ -57,21 +57,21 @@ class SnapshotRowsTests(unittest.TestCase):
             rows, errors = arr.fetch_arr_all_titles_result(CFG)
         self.assertEqual(errors, [])
         r = rows[0]
-        self.assertEqual(r['folder'], '/data/media/television/Pluribus')
-        self.assertEqual((r['network'], r['season_count'], r['status']), ('Apple TV+', 1, 'continuing'))
+        self.assertEqual(r['folder'], '/data/media/television/Glasshouse')
+        self.assertEqual((r['network'], r['season_count'], r['status']), ('Example TV', 1, 'continuing'))
         self.assertEqual(r['poster'], '/MediaCover/7/poster.jpg?lastWrite=1')
 
     def test_a_movie_row_carries_its_studio(self):
-        movies = [{'id': 3, 'title': 'Dune', 'titleSlug': 'dune', 'year': 2021, 'hasFile': True,
-                   'path': '/movies/Dune (2021)', 'status': 'released', 'studio': 'Legendary',
+        movies = [{'id': 3, 'title': 'Tidewater', 'titleSlug': 'tidewater', 'year': 2021, 'hasFile': True,
+                   'path': '/movies/Tidewater (2021)', 'status': 'released', 'studio': 'Example Studios',
                    'runtime': 155, 'images': []}]
         conn = _conn('radarr-main', 'radarr', name='Radarr', media_path='/movies',
                      local_media_path='/data/media/movies')
         with patch.object(arr, 'normalize_arr_connections', return_value=[conn]), \
              patch.object(arr, '_arr_get', return_value=movies):
             rows, _ = arr.fetch_arr_all_titles_result(CFG)
-        self.assertEqual(rows[0]['folder'], '/data/media/movies/Dune (2021)')
-        self.assertEqual(rows[0]['studio'], 'Legendary')
+        self.assertEqual(rows[0]['folder'], '/data/media/movies/Tidewater (2021)')
+        self.assertEqual(rows[0]['studio'], 'Example Studios')
         self.assertEqual(rows[0]['poster'], '')
 
 
@@ -81,8 +81,8 @@ class FolderMatchTests(unittest.TestCase):
             return arr.arr_title_for_folder(CFG, rel)
 
     def test_the_items_own_folder_wins_whatever_the_name(self):
-        row, _ = self._find('television/Pluribus', [_row('/data/media/television/Pluribus')])
-        self.assertEqual(row['title'], 'PLUR1BUS')
+        row, _ = self._find('television/Glasshouse', [_row('/data/media/television/Glasshouse')])
+        self.assertEqual(row['title'], 'GL4SSHOUSE')
 
     def test_the_deepest_folder_above_it(self):
         rows = [_row('/data/media/television', arr_id=1), _row('/data/media/television/Show', arr_id=2)]
@@ -90,11 +90,11 @@ class FolderMatchTests(unittest.TestCase):
         self.assertEqual(row['arr_id'], 2)
 
     def test_the_only_one_below_it(self):
-        row, _ = self._find('movies/A', [_row('/data/media/movies/A/Avatar (2009)', arr_id=4)])
+        row, _ = self._find('movies/A', [_row('/data/media/movies/A/Amber (2009)', arr_id=4)])
         self.assertEqual(row['arr_id'], 4)
 
     def test_a_folder_of_several_is_none(self):
-        rows = [_row('/data/media/movies/A/Avatar (2009)', arr_id=4), _row('/data/media/movies/A/Alien (1979)', arr_id=5)]
+        rows = [_row('/data/media/movies/A/Amber (2009)', arr_id=4), _row('/data/media/movies/A/Aster (1979)', arr_id=5)]
         row, _ = self._find('movies/A', rows)
         self.assertIsNone(row)
 
@@ -103,12 +103,12 @@ class FolderMatchTests(unittest.TestCase):
         self.assertIsNone(row)
 
     def test_a_decomposed_name_matches_its_composed_folder(self):
-        row, _ = self._find('movies/Amélie (2001)', [_row('/data/media/movies/Amélie (2001)')])
+        row, _ = self._find('movies/Hélène (2001)', [_row('/data/media/movies/Hélène (2001)')])
         self.assertIsNotNone(row)
 
     def test_errors_come_back_with_a_miss(self):
         err = [{'connection_id': 'r', 'name': 'Radarr', 'service': 'radarr', 'partial': False, 'message': 'x'}]
-        row, errors = self._find('movies/Nope', [], err)
+        row, errors = self._find('movies/Nowhere', [], err)
         self.assertIsNone(row)
         self.assertEqual(errors, err)
 
@@ -179,37 +179,37 @@ class RouteTests(unittest.TestCase):
             return app.app.test_client().get(path)
 
     def test_found(self):
-        resp = self._get('/api/library_map/title?folder=television/Pluribus', [_row('/data/media/television/Pluribus')])
+        resp = self._get('/api/library_map/title?folder=television/Glasshouse', [_row('/data/media/television/Glasshouse')])
         body = resp.get_json()
         self.assertEqual(resp.status_code, 200)
         self.assertEqual((body['found'], body['service'], body['title'], body['network'], body['poster']),
-                         (True, 'sonarr', 'PLUR1BUS', 'Apple TV+', True))
+                         (True, 'sonarr', 'GL4SSHOUSE', 'Example TV', True))
 
     def test_not_there_when_every_instance_answered(self):
-        self.assertEqual(self._get('/api/library_map/title?folder=movies/Nope').get_json(), {'found': False})
+        self.assertEqual(self._get('/api/library_map/title?folder=movies/Nowhere').get_json(), {'found': False})
 
     def test_could_not_ask_is_not_not_there(self):
         err = [{'connection_id': 'r', 'name': 'Radarr', 'service': 'radarr', 'partial': False, 'message': 'x'}]
-        body = self._get('/api/library_map/title?folder=movies/Nope', errors=err).get_json()
+        body = self._get('/api/library_map/title?folder=movies/Nowhere', errors=err).get_json()
         self.assertEqual(body, {'found': None, 'unreachable': ['Radarr']})
 
     def test_no_arr_configured(self):
-        body = self._get('/api/library_map/title?folder=movies/Nope', conns=()).get_json()
+        body = self._get('/api/library_map/title?folder=movies/Nowhere', conns=()).get_json()
         self.assertEqual(body, {'found': False, 'configured': False})
 
     def test_a_folder_is_required(self):
         self.assertEqual(self._get('/api/library_map/title').status_code, 400)
 
     def test_the_poster_is_streamed_and_cached_by_the_browser(self):
-        resp = self._get('/api/library_map/poster?folder=television/Pluribus',
-                         [_row('/data/media/television/Pluribus')], poster=(b'JPEG', 'image/jpeg'))
+        resp = self._get('/api/library_map/poster?folder=television/Glasshouse',
+                         [_row('/data/media/television/Glasshouse')], poster=(b'JPEG', 'image/jpeg'))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data, b'JPEG')
         self.assertEqual(resp.mimetype, 'image/jpeg')
         self.assertIn('max-age=86400', resp.headers['Cache-Control'])
 
     def test_no_poster_is_a_404(self):
-        resp = self._get('/api/library_map/poster?folder=movies/Nope')
+        resp = self._get('/api/library_map/poster?folder=movies/Nowhere')
         self.assertEqual(resp.status_code, 404)
 
 

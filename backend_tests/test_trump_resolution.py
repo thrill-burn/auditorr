@@ -774,7 +774,7 @@ class TestArrItemFromPaths:
         assert (body['arr_id'], body['resolved_by'], body['library_file_ids']) == (7, 'title', [])
 
     def test_two_instances_holding_the_payload_are_flagged(self, tree):
-        """4b's UI half is unreachable on the reference box (M4), so it is built
+        """4b's UI half is unreachable with one instance per service (M4), so it is built
         as a payload flag and tested by fixture."""
         index = [_index_row(tree.library, arr_id=7, conn='r1'),
                  _index_row(tree.library, arr_id=3, conn='r4k')]

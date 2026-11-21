@@ -922,7 +922,7 @@ def _mark_cleanup_folders(torrent_files_data, media_files_data, extra_paths=(), 
     than orphans lived under the folder. So one stray orphan inside a live
     torrent's release folder — a sample a repack dropped — made a one-file group
     whose rule hid the live torrent (C16, TRIAGE T6's bug on the side Phase 5 did
-    not fix). Depth also refused the reference box's one-segment release
+    not fix). Depth also refused one-segment release
     folders, torrents saved with no category directory.
 
     **The field name is Triage's, deliberately: `excl_folder`** — one name, one
@@ -1461,9 +1461,9 @@ SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
 #
 # **Unmanaged is a library state** (2026-11-14): a library file that isn't
 # seeded and that no arr holds (`stamp_unmanaged`, the scan's stamp). It was
-# drawn Not seeded, and a click opened Backfill on nothing: on the box a 720p
-# copy of The Gruffalo's Child beside Radarr's own folder, a Sonarr folder whose
-# 72 episodes Sonarr tracks none of, a film's extras. No workflow acts on it,
+# drawn Not seeded, and a click opened Backfill on nothing: a second copy
+# of a movie in a release-named folder beside Radarr's own, a show folder
+# whose episodes Sonarr tracks none of, a film's extras. No workflow acts on it,
 # so it's in no workflow's colour and no gap total. Appended last, so a
 # version 2 row's seven sums keep their places.
 #
@@ -1955,8 +1955,8 @@ def process_health_metrics(media_files, torrent_files, cfg, update_history=True,
     # The bytes both trees hold, counted once: the library map's "saved by
     # hardlinks", and what turns the two totals into bytes on disk.
     # `hardlinked_media_size` can't stand in for it: a library file whose torrent
-    # twin is excluded counts there but not in the torrent total (on the box, one
-    # disc rip's 23 GB made it larger than the whole torrent folder). The smaller
+    # twin is excluded counts there but not in the torrent total (one linked
+    # disc rip can make it larger than the whole torrent folder). The smaller
     # of the two sides is what is held twice.
     shared_size = min(sum(f['size'] for f in scoring_torrents if f.get('linked_paths')),
                       hardlinked_media_size)
@@ -2421,7 +2421,7 @@ def new_media_class(f, torrent_root):
     the library card): `linked` to a torrent file, a `copies` of one (identical
     bytes, its own inode, so the link wasn't made), or `unseeded` (neither: a
     rip, a Usenet grab, a copy of another library file). Says nothing about who
-    made a copy — the first copy the box served was a hand copy (DEDUPE).
+    made a copy — the first real copy Dedupe found was made by hand (DEDUPE).
 
     **Videos only** (`_map_video`, the map's rule), so `None` for anything else,
     linked or not (2026-11-20, the user's call: the card is about the library).
@@ -3547,8 +3547,8 @@ _ARR_PATHS_WAIT = 60
 def _ask_arrs_meanwhile(cfg):
     """Start `arr.fetch_arr_managed_paths` on a thread; return `(answer, still_asking)`.
 
-    The scan asks while it walks the disk: on the box the arrs answer in 0.6 s
-    and a scan takes 3, so the stamp costs it no time unless the arrs are
+    The scan asks while it walks the disk: the arrs usually answer well inside
+    the walks, so the stamp costs it no time unless the arrs are
     slower than both walks. `answer()` waits up to `_ARR_PATHS_WAIT` and is
     `(None, 'unreachable')` past it or on any failure.
 
@@ -3557,7 +3557,7 @@ def _ask_arrs_meanwhile(cfg):
     asking when the scan gave up), `files` in the answer (None without one),
     `check`, `waited_secs` the scan waited for it, and `timed_out`. Sonarr is a
     request per series, so a library of thousands of series can near the
-    cap, and the box's arrs answer too fast to show it.
+    cap, which a small library's arrs answer too fast to show.
     """
     box = {}
 

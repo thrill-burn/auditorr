@@ -159,9 +159,9 @@ def mark_trackers_unanswered(snapshot, report, torrent_total, label):
     A torrent whose tracker list could not be fetched has its cumulative upload
     filed under `Unknown`, so its tracker's total dips for this scan and comes
     back on the next. `compute_upload_stats` skips a negative delta as a counter
-    reset and then counts the return in full: on 2026-10-11 a startup scan with
-    776 files' worth of failed tracker calls read as 3.9 TB uploaded in one
-    afternoon, where 94 GB was real. The key tells it to leave the snapshot out.
+    reset and then counts the return in full: a startup scan with a few hundred
+    failed tracker calls read as terabytes uploaded in one afternoon, where
+    under a hundred GB was real. The key tells it to leave the snapshot out.
 
     Sparse: written only when something failed, so a healthy scan's snapshot is
     unchanged. A count, never a hash (the report reaches /api/debug/report).
@@ -370,8 +370,8 @@ def content_rooted_paths(content_path, torrent_name, file_names):
 
     **`content_path` is sometimes a file and sometimes a directory** — qBittorrent
     defines it as the absolute file path for a single-file torrent and the root
-    folder for a multi-file one. On the reference box 192 of 200 completed
-    torrents have `content_path == save_path/name`; all 8 that differ are
+    folder for a multi-file one. Most completed torrents have
+    `content_path == save_path/name`; the ones that differ are
     single-file torrents inside a release folder, where it descends one level
     past it (ROADMAP §0.4). Treating it as a directory unconditionally returns
     nothing for every one of them.

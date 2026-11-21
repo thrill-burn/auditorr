@@ -264,10 +264,10 @@ export function modelTotals(model) {
 
 // The titles with the most bytes for a workflow — "Biggest gaps". The biggest
 // of each workflow is always on it (2026-11-10): by size alone a library's
-// Backfill titles filled the list, and on the box the first Triage row was
-// 43rd. The rest fill it by size, and the list is shown by size (2026-11-12):
-// leading with each workflow's biggest read 132.9, 48.4, 46.4, 9.3, 7.2, 108.8
-// GB, which looked unsorted.
+// Backfill titles filled the list, and a library's first Triage row could be
+// dozens down. The rest fill it by size, and the list is shown by size
+// (2026-11-12): leading with each workflow's biggest put a bigger row after
+// smaller ones, which looked unsorted.
 export function biggestGaps(model, n = 6) {
   const out = []
   for (const r of model.roots) for (const f of r.folders) for (const t of f.titles) {
@@ -351,8 +351,8 @@ export function squarify(items, x, y, w, h, key = 'v', ordered = false) {
 
 // Titles are laid out wide, not square (2026-11-10). A name is one line of
 // text, so a tile 2:1 wide holds one at half the area a square needs: at the
-// default size on the user's portrait screen, the box's map named 18 of its
-// 729 titles (22% of the bytes) square, and 108 (49%) wide, with the label
+// default size on a portrait screen, a library's map named six times as
+// many titles wide as square (49% of the bytes against 22%), with the label
 // rule in LibraryMap.jsx. Squarified in a space twice as tall, then squashed:
 // its squares there are 2:1 here. Roots, folders and the leaves inside a
 // title stay square; only titles carry names.
@@ -367,8 +367,8 @@ export const ROOT_GAP = 6, GAP = 3, ROOT_HEAD = 22, HEAD = 18
 // Every tile's area is its bytes, with one exception: a gap (a title's bytes in
 // a state a workflow acts on, PROBLEM) that would be too small to see is drawn
 // at the smallest size that shows. By bytes alone a well-linked library's
-// torrent folder is a sliver: on the box, three not-imported episodes (23 GB
-// beside 18.8 TB) were a strip 1–3px wide, which the layout dropped, so Triage
+// torrent folder is a sliver: three not-imported episodes beside a library
+// of many terabytes were a strip 1–3px wide, which the layout dropped, so Triage
 // had rows the map never drew.
 //
 // It replaced Attention (2026-11-10), which drew each state as much larger as
@@ -407,7 +407,7 @@ export const ROOT_GAP = 6, GAP = 3, ROOT_HEAD = 22, HEAD = 18
 //    gets the room it lacks from its gaps alone, shared equally, and is laid
 //    out again (fitShapes, below). Not counted in the budget, since a whole
 //    workflow's block is what it saves; it took at most 1.2% of the map in
-//    the cases measured, and 0.3% on the box (its two test folders).
+//    the cases measured, and 0.3% on a real library.
 //
 // Only a gap is raised, so every tile that needs nothing is drawn at one scale,
 // its bytes'. What the raises take comes from all of them in proportion, so
@@ -609,8 +609,8 @@ export function layoutMap(model, W, H, detail) {
 
 // The host's folders with the nested root in a corner. Squarify alone can't
 // make a small item square among a few big folders: it gets whatever is left
-// once they're placed, which on the box's landscape map was a 37×264 column
-// (its folders are 41%, 41%, 12%, 5% and two slivers). So the box shares a
+// once they're placed, which on one landscape map was a 37×264 column
+// (among folders of 41%, 41%, 12%, 5% and two slivers). So the box shares a
 // column down the long side's end with the host's k smallest folders, the box
 // at its foot, and the rest are squarified beside it: every area exact. k is
 // the one that draws the box nearest the titles' 2:1, a folder beside it
@@ -703,8 +703,8 @@ export function leafAt(layout, x, y) {
 // ── Zoom (2026-11-10) ────────────────────────────────────────────────────────
 // A heading zooms: a folder's fills the map with that folder, and a root's with
 // that root. However the map is laid out, an overview of a big library can only
-// name its biggest titles (729 titles on the box at the portrait default are
-// ~930px² each); one folder on the whole map is how the rest get room. A zoom
+// name its biggest titles (700 titles at the portrait default are about
+// 930px² each); one folder on the whole map is how the rest get room. A zoom
 // is `{root}` or `{root, folder}`, and `null` is the whole map. It holds keys,
 // not objects, so it survives a rescan and the Titles/Files switch.
 

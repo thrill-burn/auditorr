@@ -4,8 +4,8 @@ Tovey's torrents announce to two hosts, `tracker.tovey.test` and
 `tracker.talwin.test`, and every per-tracker number counted each host as a
 tracker: two rows on the Trackers page, two lines on its chart, its upload twice
 in the library total, and every Tovey-only file "cross-seeded" on itself.
-On the reference box that was 134.4 GB counted twice over 122 days, and the
-seed multiplier read 1.703 where it is 1.698. A host stored with its port
+On a real library that counted months of one tracker's upload twice, and
+the seed multiplier read higher than it is. A host stored with its port
 (`xandor.test:2710`) was a second spelling of the same kind.
 
 The fold is statistics-only: a file record keeps every host, because the
