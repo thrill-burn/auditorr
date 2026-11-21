@@ -5,7 +5,7 @@ import ChangesPanel from './ChangesPanel'
 import { RangePresets } from './FilterBar'
 import { api } from '../api'
 import { useToast } from './Toast'
-import { Button } from './workflows/shared'
+import { Button, useAuditComplete } from './workflows/shared'
 import { SECTION_LABEL, fmtChartDate, splitValueUnit, HeroNumber, TrendPill } from './dashKit'
 import LibraryMap, { BiggestGapsCard, useLibraryMapRow } from './LibraryMap'
 import { modelFromRow } from './libraryMapRules'
@@ -433,6 +433,14 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
   const mapRow = useLibraryMapRow()
   const mapModel = useMemo(() => (mapRow ? modelFromRow(mapRow) : null), [mapRow])
   const [mapFocus, setMapFocus] = useState(null)
+  // How many exclusion suggestions are waiting in Settings, for Last scan's
+  // row: the server's count, less what's dismissed or already in the config.
+  const [suggestionCount, setSuggestionCount] = useState(null)
+  const loadSuggestionCount = () => {
+    api.exclusionSuggestions().then(r => setSuggestionCount((r.suggestions || []).length)).catch(() => setSuggestionCount(null))
+  }
+  useEffect(() => { loadSuggestionCount() }, [])
+  useAuditComplete(loadSuggestionCount)
 
   // A fixed window, not the chart's range: the range selector sits on the
   // Score history card, so it owns only that card and the dial's delta beside it.
@@ -689,7 +697,9 @@ export default function Dashboard({ data, changes, onNavigate, isRefreshing, onS
       {/* Row 4: the biggest gaps, the last scan, and what's new in the library */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
         <BiggestGapsCard row={mapRow} model={mapModel} onNavigate={onNavigate} onHighlight={setMapFocus} />
-        <LastScanCard id="last-scan-card" scanReport={scanReport} details={det} savedAt={current.timestamp} onScan={onScan} />
+        <LastScanCard id="last-scan-card" scanReport={scanReport} details={det} savedAt={current.timestamp} onScan={onScan}
+          suggestionCount={suggestionCount}
+          onReviewSuggestions={() => onNavigate({ tab: 'config', section: 'exclusions' })} />
         <NewInLibraryCard uploadStats={uploadStats} timeRange={TREND_DAYS} onNavigate={onNavigate} />
       </div>
     </div>

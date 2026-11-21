@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
     'DISC_RIP_EXCLUSION_PRESETS':  [],
     'MEDIA_SERVER_EXCLUSION_PRESETS': [],
     'EXCLUSION_HIDE_FROM_EXPLORER': False,
+    # Exclusion suggestions the user said "Not this" to, by id
+    # (`audit.exclusion_suggestions`), so they don't come back.
+    'EXCLUSION_SUGGESTIONS_DISMISSED': [],
     'SONARR_URL':         '',
     'SONARR_API_KEY':     '',
     'RADARR_URL':         '',
@@ -908,6 +911,10 @@ def db_save_config(conf):
 # these numbers rather than a second copy of them.
 EXCLUSION_PATTERNS_MAX = 100
 EXCLUSION_PATTERN_MAX_CHARS = 200
+# Dismissed exclusion suggestions: an id is a kind and a folder name, so the
+# cap is generous; it only stops a runaway client growing the config row.
+EXCLUSION_SUGGESTIONS_DISMISSED_MAX = 500
+EXCLUSION_SUGGESTION_ID_MAX_CHARS = 300
 
 
 def validate_config(data):
@@ -985,6 +992,17 @@ def validate_config(data):
                 elif len(p) > EXCLUSION_PATTERN_MAX_CHARS:
                     errors.append(f"EXCLUSION_PATTERNS[{i}] must not exceed "
                                   f"{EXCLUSION_PATTERN_MAX_CHARS} characters")
+
+    dismissed = data.get('EXCLUSION_SUGGESTIONS_DISMISSED')
+    if dismissed is not None:
+        if not isinstance(dismissed, list):
+            errors.append("EXCLUSION_SUGGESTIONS_DISMISSED must be a list")
+        elif len(dismissed) > EXCLUSION_SUGGESTIONS_DISMISSED_MAX:
+            errors.append(f"EXCLUSION_SUGGESTIONS_DISMISSED must not exceed "
+                          f"{EXCLUSION_SUGGESTIONS_DISMISSED_MAX} entries")
+        elif any(not isinstance(s, str) or len(s) > EXCLUSION_SUGGESTION_ID_MAX_CHARS for s in dismissed):
+            errors.append(f"EXCLUSION_SUGGESTIONS_DISMISSED entries must be strings of at most "
+                          f"{EXCLUSION_SUGGESTION_ID_MAX_CHARS} characters")
 
     presets = data.get('MEDIA_SERVER_EXCLUSION_PRESETS')
     if presets is not None:

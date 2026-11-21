@@ -113,6 +113,90 @@ class LibraryMapRowTests(unittest.TestCase):
         row = audit.library_map_row([_media('tv/Show/e1.nfo', excluded=True)], [])
         self.assertEqual(row['titles'], [])
 
+    def test_a_library_sidecar_is_other_never_not_seeded(self):
+        """2026-11-20. A Bazarr subtitle beside a linked episode was Not seeded,
+        a gap the sizing rules raised to a stripe on every title that had one,
+        and its click opened Backfill on nothing. It's the Unmanaged stamp's own
+        test: a video by its extension, anything else Other unless the stamp
+        (by folder) says no arr is there."""
+        row = audit.library_map_row([
+            _media('tv/Show/e1.mkv', linked=True),
+            _media('tv/Show/e1.en.srt', size=50_000),
+            _media('tv/Show/tvshow.nfo', size=4_000),
+            _media('tv/Show/.plexmatch', size=100),
+            _media('tv/Show/e2.MKV', size=2 * GB),                     # a video, any case
+            dict(_media('home/Clips/clip.srt', size=7_000), unmanaged=True),
+        ], [])
+        t = _titles(row)
+        self.assertEqual(t[('library', 'tv', 'Show')], [5, GB, 2 * GB, 0, 0, 0, 54_100, 0, 0])
+        self.assertEqual(t[('library', 'home', 'Clips')], [1, 0, 0, 0, 0, 0, 0, 0, 7_000])
+        for f in [_media('a/b.srt'), _media('a/b.mkv'), _media('a/.mkv'), dict(_media('a/c.nfo'), unmanaged=True)]:
+            self.assertEqual(audit._map_state_media(f),
+                             {'a/b.srt': audit.MAP_OTHER, 'a/b.mkv': audit.MAP_UNSEEDED,
+                              'a/.mkv': audit.MAP_OTHER, 'a/c.nfo': audit.MAP_UNMANAGED}[f['path']])
+
+    def test_the_row_is_the_per_file_rule_in_any_order(self):
+        """`library_map_row` tries the last title's key first (2026-11-20), which
+        is faster in walk order and must give the same row in any order: here,
+        each file's state by `_map_state_media` / `_map_state_torrent`, summed
+        by `_map_key`, against the row over the walk order and shuffled."""
+        import random
+        rnd = random.Random(3)
+        media, torrents = [], []
+        for t in range(60):
+            folder = rnd.choice(['tv', 'movies', 'kids'])
+            for e in range(rnd.randrange(1, 6)):
+                ext = rnd.choice(['mkv', 'MKV', 'srt', 'nfo', 'jpg', 'm2ts'])
+                f = _media(f'{folder}/T{t}/Season 1/e{e}.{ext}', size=rnd.randrange(1, 10 ** 6),
+                           linked=rnd.random() < 0.6, excluded=rnd.random() < 0.05,
+                           dups=['/data/torrents/c'] if rnd.random() < 0.05 else ())
+                if rnd.random() < 0.1:
+                    f['unmanaged'] = True
+                media.append(f)
+            media.append(_media(f'{folder}/T{t}.mkv'))                     # a file at the title's depth
+            torrents.append(_torrent(f'{folder}/Rel{t}/{t}.mkv', status=rnd.choice(['Seeding', 'Orphaned']),
+                                     linked=rnd.random() < 0.5))
+        media.append(_media('loose.mkv'))
+        media.append(_media('tv\\Win\\e1.srt'))
+
+        def reference():
+            want = {}
+            for root, files, state in (('library', media, audit._map_state_media),
+                                       ('torrents', torrents, audit._map_state_torrent)):
+                for f in files:
+                    if f.get('excluded') or (root == 'torrents' and f.get('linked_paths')):
+                        continue
+                    key = audit._map_key(f['path'])
+                    row = want.setdefault((root, *audit._map_title(key)), [0] * 9)
+                    row[0] += 1
+                    row[1 + state(f)] += f['size']
+            return want
+
+        want = reference()
+        self.assertEqual(_titles(audit.library_map_row(media, torrents)), want)
+        for _ in range(5):
+            rnd.shuffle(media)
+            rnd.shuffle(torrents)
+            self.assertEqual(_titles(audit.library_map_row(media, torrents)), want)
+
+    def test_disc_rips_are_counted_once_a_disc_off_unlinked_files(self):
+        """For the exclusion suggestions: one per disc folder (BDMV/BACKUP holds
+        a second index.bdmv, which isn't a second disc), off files that aren't
+        linked or excluded, in either tree."""
+        discs = {}
+        audit.library_map_row(
+            [_media('movies/Rip (2001)/BDMV/index.bdmv', size=200),
+             _media('movies/Rip (2001)/BDMV/BACKUP/index.bdmv', size=200),
+             _media('movies/Rip (2001)/BDMV/MovieObject.bdmv', size=200),
+             _media('movies/Kept (2002)/BDMV/index.bdmv', size=200, linked=True),
+             _media('movies/Hidden (2003)/BDMV/index.bdmv', size=200, excluded=True)],
+            [_torrent('radarr/Old.DVD/VIDEO_TS/VIDEO_TS.IFO', size=10_000),
+             _torrent('radarr/Old.DVD/VIDEO_TS/VTS_01_0.IFO', size=10_000),
+             _torrent('radarr/Two.Disc/D1/BDMV/INDEX.BDMV', size=200),
+             _torrent('radarr/Loose/VIDEO_TS.IFO', size=10_000)],          # not in a VIDEO_TS folder
+            discs=discs)
+        self.assertEqual(discs, {'bluray': {'library': 1, 'torrents': 1}, 'dvd': {'library': 0, 'torrents': 1}})
+
     def test_a_file_directly_in_a_folder_is_its_own_title(self):
         row = audit.library_map_row([_media('movies/Film.2020.mkv'), _media('loose.mkv')], [])
         self.assertEqual(set(_titles(row)), {('library', 'movies', 'Film.2020.mkv'),
@@ -158,6 +242,8 @@ const dump = m => {
 }
 const fm = R.modelFromFiles(media, torrents), rm = R.modelFromRow(row)
 console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTotals(rm),
+  videos: [...R.VIDEO_EXTENSIONS].sort(),
+  isVideo: ['a/b.MKV', 'a/.mkv', 'a/b.srt', 'a/b', 'a.b/c', 'a\\b.ts'].map(R.isVideo),
   legend: R.LEGEND.map(x => R.STATES[x].name), v1: dump(R.modelFromRow({ version: 1, folders: [['library', 'm']],
   titles: [[0, 'Old', 1, 5, 0, 0, 0, 0, 0]], folded: [] })),
   v2: dump(R.modelFromRow({ version: 2, folders: [['library', 'm']],
@@ -177,7 +263,14 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
                  dict(_media('movies/Up (2009)/up.en.srt', size=1000), file_id='1:9'),
                  dict(_media('tv/Show/e1.mkv', size=2 * GB, linked=True), file_id='1:10'),
                  dict(_media('kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA/g.mkv', size=682 * 10 ** 6),
-                      file_id='1:11', unmanaged=True)]
+                      file_id='1:11', unmanaged=True),
+                 # An unmanaged folder's subtitle stays Unmanaged (the stamp
+                 # judges a sidecar by its folder), and a folder of artwork
+                 # alone is Other, linking nothing.
+                 dict(_media('kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA/g.srt', size=2000),
+                      file_id='1:12', unmanaged=True),
+                 dict(_media('tv/Coming Soon/poster.jpg', size=300_000), file_id='1:13'),
+                 dict(_media('tv/Coming Soon/.plexmatch', size=100), file_id='1:14')]
         torrents = [
             _torrent('radarr/Jackie.Brown.1997.1080p-SA89/Jackie.Brown.mkv', size=21 * GB, imported=True, linked=True,
                      file_id='1:7', tracker_health='unregistered', tracker_msg='Torrent has been deleted.'),
@@ -199,22 +292,33 @@ console.log(JSON.stringify({ files: dump(fm), row: dump(rm), totals: R.modelTota
         self.assertEqual(jackie['nav'], {'tab': 'triage', 'search': 'radarr/Jackie.Brown.1997.1080p-SA89'})
         # An excluded dead torrent isn't a dead seed: its library file is Linked.
         self.assertEqual(got['row']['library|tv/Show|']['by'][0], 2 * GB)
-        # A dead seed is still linked: Jackie Brown counts as fully linked.
-        self.assertEqual((got['totals']['full'], got['totals']['partly']), (2, 1))
+        # A dead seed is still linked: Jackie Brown counts as fully linked. So
+        # is Up: its subtitle is Other (2026-11-20), which has no say.
+        self.assertEqual((got['totals']['full'], got['totals']['partly']), (3, 0))
+        up = got['row']['library|movies/Up (2009)|']
+        self.assertEqual(up['by'], [3 * GB, 0, 0, 0, 0, 1000, 0, 0])
+        self.assertEqual(up['nav'], None)
+        self.assertEqual(got['row']['library|tv/Coming Soon|']['by'], [0, 0, 0, 0, 0, 300_100, 0, 0])
+        # The two languages' video lists and tests are one.
+        self.assertEqual(got['videos'], sorted(audit.VIDEO_EXTENSIONS))
+        self.assertEqual(got['isVideo'], [audit._map_video(p) for p in
+                                          ['a/b.MKV', 'a/.mkv', 'a/b.srt', 'a/b', 'a.b/c', 'a\\b.ts']])
+        self.assertEqual(got['isVideo'], [True, False, False, False, False, True])
         self.assertEqual(got['legend'], ['Linked', 'Not seeded', 'Orphaned', 'Not imported', 'Dead seed', 'Copies',
                                          'Unmanaged'])
         # A version 1 row still reads, its six sums in place and the rest 0.
         self.assertEqual(got['v1']['library|m/Old|']['by'], [5, 0, 0, 0, 0, 0, 0, 0])
         # An unmanaged file: its own state, and a click opens Media on its folder.
         stray = got['row']['library|kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA|']
-        self.assertEqual(stray['by'], [0, 0, 0, 0, 0, 0, 0, 682 * 10 ** 6])
+        self.assertEqual(stray['by'], [0, 0, 0, 0, 0, 0, 0, 682 * 10 ** 6 + 2000])
         self.assertEqual(stray['unmanaged_nav'], {'tab': 'media', 'search': 'kids_movies/The.Gruffalos.Child.720p.HDTV.x264-BiA'})
-        # It isn't linked, so its title isn't fully linked; it isn't a workflow's
-        # gap, so the titles with one are still Jackie Brown, Up's subtitle and
-        # the waiting torrent, and its bytes are in no gap total.
-        self.assertEqual(got['totals']['none'], 1)
-        self.assertEqual(got['totals']['problemTitles'], 3)
-        self.assertEqual(got['totals']['problem'], 21 * GB + 1000 + GB)
+        # It isn't linked, so its title isn't fully linked, and neither is the
+        # artwork folder; neither is a workflow's gap, so the titles with one
+        # are Jackie Brown and the waiting torrent. Up's subtitle was the third
+        # until 2026-11-20, a 1,000-byte gap raised to a visible stripe.
+        self.assertEqual(got['totals']['none'], 2)
+        self.assertEqual(got['totals']['problemTitles'], 2)
+        self.assertEqual(got['totals']['problem'], 21 * GB + GB)
         # A version 2 row still reads, its seven sums in place and Unmanaged 0.
         self.assertEqual(got['v2']['library|m/Old|']['by'], [5, 0, 0, 0, 0, 0, 3, 0])
 
@@ -298,6 +402,19 @@ class NewMediaTests(unittest.TestCase):
         ])
         # A copy of another *library* file isn't a failed link; it's unseeded.
         self.assertEqual(counts, {'linked': 1, 'copies': 1, 'unseeded': 2})
+
+    def test_a_sidecar_counts_only_when_it_was_linked_or_copied(self):
+        """2026-11-20, the map's rule: Bazarr writes a subtitle beside every new
+        episode, so a healthy library read as half its new files not seeded. A
+        sidecar an arr hardlinked (Import Extra Files) still says the link was
+        made, and a copy that it wasn't."""
+        counts = self._count([
+            _media('tv/Show/e1.mkv', linked=True),
+            _media('tv/Show/e1.en.srt'),
+            _media('tv/Show/e1.nfo', linked=True),
+            _media('tv/Show/e2.nfo', dups=['/data/torrents/sonarr/Show/e2.nfo']),
+        ])
+        self.assertEqual(counts, {'linked': 2, 'copies': 1, 'unseeded': 0})
 
     def test_counted_even_when_nothing_else_changed(self):
         """The diff returns None when nothing changed; the counters are an

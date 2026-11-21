@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Settings suggests what to exclude.** A new install ignores operating-system and NAS clutter and nothing else, and everything else was yours to find and type in. Each scan now looks for what you'd most likely want left out, and lists it at the top of Settings → Excluded Files & Folders, with what it found and the rule it would add:
+  - a torrent category nothing reaches your library from, such as games or software, whose files all count as not imported;
+  - a library folder neither Sonarr nor Radarr manages, such as home videos, which counts against Hardlinked;
+  - full-disc rips, when the disc-rip preset is off.
+
+  *Add rule* puts the rule in the list and *Not this* stops it coming back; nothing changes until you save. When there's something to look at, the Dashboard's Last scan card has an *Exclusions* line with a link to it. A category is suggested only when at least two of its torrents have finished downloading, none of its files is in your library and other categories' files are, and a library folder only when every Sonarr and Radarr answered.
+
+### Fixes
+
+- **Subtitles and artwork drew a blue stripe on the library map.** A subtitle Bazarr writes beside a video, or a media server's `.nfo` and poster, isn't in any torrent, so the map drew it as not seeded, and small gaps are drawn larger so they show. With one subtitle per title, every title had a blue stripe, and they took the room the map keeps for real gaps. Clicking one opened Backfill with nothing to search. These files are now drawn as needing nothing, a title whose video is linked counts as fully linked, and *New in the library* no longer counts a new subtitle as a file that isn't seeded.
+
+### Improvements
+
+- **Building the library map is faster**, by about a sixth at 650,000 files, and the part of a scan that checks whole torrents uses less memory.
+
 ## v1.9.0 — 2026-11-17
 
 Upgrading needs no configuration changes. The library map and *New in the library* fill in from the first scan after upgrading.

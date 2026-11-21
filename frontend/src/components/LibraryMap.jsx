@@ -273,7 +273,9 @@ function paneEdges(ctx, panes, P) {
 }
 
 function pctLinked(by) {
-  const v = by.reduce((a, b) => a + b, 0)
+  // Of what could be linked: a sidecar (Other) can't, so a film and its
+  // subtitle are 100% linked, as Fully linked counts them.
+  const v = by.reduce((a, b) => a + b, 0) - (by[OTHER] || 0)
   // A dead seed is linked; only its torrent is gone.
   const p = v ? (by[LINKED] + (by[DEAD_SEED] || 0)) / v * 100 : 0
   return p >= 99.95 ? '100' : p.toFixed(p < 10 ? 1 : 0)

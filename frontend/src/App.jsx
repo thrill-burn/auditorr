@@ -480,6 +480,8 @@ function AppInner() {
       // folder (BACKFILL B15), and Triage or Cleanup with its search filled in.
       under: action.under || null,
       search: action.search || null,
+      // Settings opened at one card (Last scan's exclusion suggestions).
+      section: action.section || null,
     }
     setPendingNav(nav)
     setHashTab(action.tab)
@@ -641,6 +643,7 @@ function AppInner() {
                 onThemeChange={setTheme}
                 pageWidth={pageWidth}
                 onPageWidthChange={changePageWidth}
+                initialSection={pendingNav?.section}
               />
             )}
             {tab === 'backfill' && (

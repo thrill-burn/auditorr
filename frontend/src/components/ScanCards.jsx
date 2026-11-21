@@ -92,7 +92,7 @@ function runsLine(counts) {
   return `${plural(total, 'scan')} in the last 30 days · ${parts.length ? parts.join(', ') : 'all saved'}`
 }
 
-export function LastScanCard({ id, scanReport, details, savedAt, onScan }) {
+export function LastScanCard({ id, scanReport, details, savedAt, onScan, suggestionCount, onReviewSuggestions }) {
   const sr = scanReport
   const st = scanState(sr)
   const run = sr?.last_run
@@ -117,6 +117,12 @@ export function LastScanCard({ id, scanReport, details, savedAt, onScan }) {
       ? `${plural(d.unmanaged_count || 0, 'file')} not in Sonarr or Radarr`
       : <span title="Sonarr or Radarr didn't answer, so the library map shows the files they don't hold as Not seeded rather than guess."><Warn>not looked for</Warn></span>]] : []),
     ...(d.cleanup_unchecked_count > 0 ? [['Unchecked', <Warn>{plural(d.cleanup_unchecked_count, 'folder')} whose file list didn't load</Warn>]] : []),
+    // Settings' exclusion suggestions (2026-11-20), while any is waiting to be
+    // added or dismissed. No row when there's none.
+    ...(suggestionCount > 0 && onReviewSuggestions ? [['Exclusions', <>
+      {suggestionCount.toLocaleString()} suggested
+      <Button size="chip" variant="subtle" onClick={onReviewSuggestions} style={{ marginLeft: 8, verticalAlign: 1 }}>Review ↗</Button>
+    </>]] : []),
   ] : []
   const runs = runsLine(sr?.runs_30d)
 

@@ -58,12 +58,32 @@ const N_STATES = STATES.length
 // The torrent root's blocks, in the cards' order.
 const TORRENT_GROUPS = [ORPHANED, NOT_IMPORTED, COPY, OTHER]
 
+// `arr.VIDEO_EXTENSIONS`, which test_library_map.py holds this to.
+export const VIDEO_EXTENSIONS = new Set([
+  '.mkv', '.mk3d', '.mp4', '.m4v', '.avi', '.mov', '.qt', '.wmv', '.asf',
+  '.mpg', '.mpeg', '.m2v', '.ts', '.m2ts', '.mts', '.wtv', '.vob', '.iso',
+  '.webm', '.flv', '.ogm', '.ogv', '.divx', '.xvid', '.rm', '.rmvb', '.3gp',
+  '.dvr-ms',
+])
+
+// `audit._map_video`: a video by the text from the name's last dot, a dot
+// that opens the name not counting (the Unmanaged stamp's own test).
+export function isVideo(path) {
+  const p = String(path || '')
+  const dot = p.lastIndexOf('.')
+  return dot > Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1 && VIDEO_EXTENSIONS.has(p.slice(dot).toLowerCase())
+}
+
 // `dead`: the file_ids of dead seeds' torrent records (`deadSeeds`), as
-// `audit.library_map_row` joins them, by device and inode.
+// `audit.library_map_row` joins them, by device and inode. An unseeded file
+// that isn't a video (a subtitle, an .nfo, artwork) is Other (2026-11-20): no
+// workflow can search for it, and drawn Not seeded it was a raised stripe on
+// every title that had one.
 export function stateOfMedia(f, dead) {
   if (f.linked_paths?.length) return dead && dead.has(f.file_id) ? DEAD_SEED : LINKED
   if (f.duplicate_paths?.length) return COPY
-  return f.unmanaged ? UNMANAGED : UNSEEDED
+  if (f.unmanaged) return UNMANAGED
+  return isVideo(f.path) ? UNSEEDED : OTHER
 }
 
 // `audit._is_dead_seed_torrent`: imported, not orphaned, and its tracker has
@@ -230,9 +250,11 @@ export function modelTotals(model) {
       if (r.name !== 'library') continue
       titles += 1
       // A dead seed is still linked: what Fully/Partly/Not linked count. An
-      // unmanaged file isn't.
-      if (!(t.by[UNSEEDED] > 0) && !(t.by[COPY] > 0) && !(t.by[UNMANAGED] > 0)) full += 1
-      else if (t.by[LINKED] > 0 || t.by[DEAD_SEED] > 0) partly += 1
+      // unmanaged file isn't. A sidecar (Other) has no say either way, so a
+      // folder of artwork alone links nothing and isn't fully linked.
+      const linked = t.by[LINKED] > 0 || t.by[DEAD_SEED] > 0
+      if (linked && !(t.by[UNSEEDED] > 0) && !(t.by[COPY] > 0) && !(t.by[UNMANAGED] > 0)) full += 1
+      else if (linked) partly += 1
       else none += 1
     }
   }

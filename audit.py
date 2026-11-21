@@ -27,7 +27,7 @@ from db import (
     db_save_file_results, db_prepare_file_results,
     db_save_file_signatures, db_load_file_signatures, db_prepare_file_signatures,
     db_get_meta, db_set_meta, db_update_meta, db_delete_meta,
-    db_publish,
+    db_publish, EXCLUSION_PATTERN_MAX_CHARS,
 )
 import rounds
 from state import get_state, set_state, update_progress
@@ -754,11 +754,15 @@ def _dedupe_paths(tree_paths):
 
 
 def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_map,
-                      compiled_exclusions=None, unverified=None, unmanaged=None, counts=None):
+                      compiled_exclusions=None, unverified=None, unmanaged=None, counts=None,
+                      torrent_folders=None):
     """`unmanaged`: `unmanaged_test`'s answer for one library path, when the arrs
     gave a whole one. Each unseeded library record it says no arr holds is
     stamped `unmanaged`, here, in the loop that builds the records, so the
-    stamp costs no pass of its own; `counts['unmanaged']` says how many."""
+    stamp costs no pass of its own; `counts['unmanaged']` says how many.
+
+    `torrent_folders`, when a dict, is filled by `_mark_whole_torrents` with
+    each top-level torrent folder's registrations, for `exclusion_suggestions`."""
     if unverified:
         # Normalised once here as well as in `unverified_spec`: every comparison
         # below is against `_match_key` paths, and a root spelled any other way
@@ -868,7 +872,7 @@ def _assemble_records(torrent_key_order, media_key_order, inode_map, duplicate_m
         media_files_data.append(record)
     # Before the whole-torrent stamps, which read it.
     _mark_sidecars(torrent_files_data, sidecar_candidates)
-    _mark_whole_torrents(torrent_files_data, media_files_data)
+    _mark_whole_torrents(torrent_files_data, media_files_data, folders=torrent_folders)
     _mark_cleanup_folders(torrent_files_data, media_files_data,
                           extra_paths=_extra_torrent_paths(inode_map),
                           leftovers=[r['leftover'] for r in torrent_files_data if r.get('leftover')])
@@ -1150,8 +1154,60 @@ def _mark_sidecars(torrent_files_data, candidates=None):
             r['sidecar'] = True
 
 
-def _mark_whole_torrents(torrent_files_data, media_files_data):
+# A registration's imported states in `_mark_whole_torrents`' pass 1, as bits.
+# _REG_UNFINISHED is the suggestions' own: the registration's first record is
+# excluded or not known to be complete, so it's no evidence about its folder.
+_REG_IMPORTED, _REG_NOT_IMPORTED, _REG_UNFINISHED = 1, 2, 4
+_REG_STATES = _REG_IMPORTED | _REG_NOT_IMPORTED
+# A folder's not-imported copies kept for the library test, at most: one in
+# the library is enough to refuse the folder.
+_FOLDER_COPIES_MAX = 50
+
+
+def _top_and_category(r):
+    """`(top-level torrent folder, client category)` of a torrent record; the
+    folder is '' for a file at the torrent root."""
+    path = r.get('path') or ''
+    i = path.find('/')
+    j = path.find('\\')
+    if j >= 0 and (i < 0 or j < i):
+        i = j
+    return (path[:i] if i > 0 else '', r.get('category') or '')
+
+
+def _tally_torrent_folders(folders, reg_where, states, copies):
+    """Fill `folders` with `{top: {torrents, finished, imported, categories,
+    copies}}` from pass 1's registrations: how many own records under the
+    folder, how many of those are finished and have nothing in the library, how
+    many have something in it, the client categories they use (at most four),
+    and the duplicate paths of their not-imported files (`_FOLDER_COPIES_MAX`).
+    Per registration, never per file."""
+    for h, (top, cat) in reg_where.items():
+        t = folders.get(top)
+        if t is None:
+            t = folders[top] = {'torrents': 0, 'finished': 0, 'imported': 0,
+                                'categories': set(), 'copies': []}
+        b = states[h]
+        t['torrents'] += 1
+        if b & _REG_IMPORTED:
+            t['imported'] += 1
+        elif not b & _REG_UNFINISHED:
+            t['finished'] += 1
+        if cat and len(t['categories']) < 4:
+            t['categories'].add(cat)
+    for h, dups in copies:
+        t = folders[reg_where[h][0]]
+        if len(t['copies']) < _FOLDER_COPIES_MAX:
+            t['copies'].append(dups)
+
+
+def _mark_whole_torrents(torrent_files_data, media_files_data, folders=None):
     """Stamp the two facts Triage needs to build a folder exclusion safely (T6).
+
+    `folders`, when a dict, is filled with each top-level torrent folder's
+    registrations for the exclusion suggestions (`torrent_folder_tally`): pass 1
+    already visits every record by registration, so the tally costs one lookup
+    a registration, not a pass of its own.
 
     `whole_torrent` — the torrent is *homogeneous*, every file in the same
     imported state, so the Triage row covers all of it. A partially-imported
@@ -1203,18 +1259,39 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
     """
     # Pass 1 — homogeneity, which hashes Triage can act on at all, and how many
     # files each torrent has against how many its Triage row will show.
+    #
+    # A registration's imported states are bits, not a set: _REG_IMPORTED for
+    # a file in the library, _REG_NOT_IMPORTED for one that isn't and isn't a
+    # sidecar (which has no say), so homogeneous is exactly one of the two. A
+    # set was 216 bytes a registration at the scan's peak (2026-11-20).
     imported_states, relevant = {}, set()
     files_of, row_records = {}, []
+    # The exclusion suggestions' half: a registration's folder and category off
+    # its first record, one shared tuple per pair, so the dict holds no string
+    # of its own; and a not-imported file's copies, which the tally reads.
+    reg_where = {} if folders is not None else None
+    pairs, copies = {}, []
     # Keyed by registration (`torrent_record_key`, S05), which is the hash
     # wherever a torrent is registered once.
     for r in torrent_files_data:
         h = torrent_record_key(r)
         if not h:
             continue
-        states = imported_states.setdefault(h, set())
-        imported = bool(r.get('imported'))
-        if imported or not r.get('sidecar'):
-            states.add(imported)
+        b = imported_states.get(h)
+        if b is None:
+            b = 0
+            if reg_where is not None:
+                where = _top_and_category(r)
+                reg_where[h] = pairs.setdefault(where, where)
+                if r.get('excluded') or r.get('incomplete') or r.get('completion_unknown'):
+                    b = _REG_UNFINISHED
+        if r.get('imported'):
+            b |= _REG_IMPORTED
+        elif not r.get('sidecar'):
+            b |= _REG_NOT_IMPORTED
+            if reg_where is not None and r.get('duplicate_paths'):
+                copies.append((h, r['duplicate_paths']))
+        imported_states[h] = b
         files_of[h] = files_of.get(h, 0) + 1
         if _is_triage_relevant(r):
             relevant.add(h)
@@ -1222,7 +1299,10 @@ def _mark_whole_torrents(torrent_files_data, media_files_data):
                 row_records.append(r)
     _stamp_torrent_files(row_records, files_of)
     del row_records, files_of
-    whole = {h for h in relevant if len(imported_states[h]) == 1}
+    if reg_where is not None:
+        _tally_torrent_folders(folders, reg_where, imported_states, copies)
+        del reg_where, pairs, copies
+    whole = {h for h in relevant if (imported_states[h] & _REG_STATES) in (_REG_IMPORTED, _REG_NOT_IMPORTED)}
     if not whole:
         return
 
@@ -1370,6 +1450,15 @@ SCAN_ONLY_DETAILS = ('seed_byte_secs', 'max_seed_secs', 'oldest_media_age_days',
 # 72 episodes Sonarr tracks none of, a film's extras. No workflow acts on it,
 # so it's in no workflow's colour and no gap total. Appended last, so a
 # version 2 row's seven sums keep their places.
+#
+# **A library sidecar is Other** (2026-11-20): an unseeded library file that
+# isn't a video (a Bazarr subtitle, a media server's .nfo or artwork) and that
+# an arr holds a file beside. Backfill can't search one (B9), so drawn Not
+# seeded it was a gap the sizing rules raised to a visible stripe on every title
+# that had one: one 60 KB subtitle per title took the whole floor budget. It's
+# the Unmanaged stamp's own test (`unmanaged_test`: a video by its extension,
+# anything else by its folder), so the two can't disagree, and an unmanaged
+# folder's sidecars stay Unmanaged. Same row format, so still version 3.
 MAP_LINKED, MAP_UNSEEDED, MAP_ORPHANED, MAP_NOT_IMPORTED, MAP_COPY, MAP_OTHER, MAP_DEAD_SEED, MAP_UNMANAGED = range(8)
 MAP_STATES = 8
 # Titles kept by name, largest first. The rest fold into one tile per folder:
@@ -1378,13 +1467,23 @@ MAP_STATES = 8
 LIBRARY_MAP_TITLES_MAX = 2000
 
 
+def _map_video(path):
+    """Whether a library path is a video by its extension, as `unmanaged_test`
+    reads one: the text from the name's last dot, a dot that opens the name not
+    counting. `libraryMapRules.js`' `isVideo` is the same rule."""
+    dot = path.rfind('.')
+    return dot > max(path.rfind('/'), path.rfind('\\')) + 1 and path[dot:].lower() in VIDEO_EXTENSIONS
+
+
 def _map_state_media(f, dead=None):
     """`dead`: the `file_id`s of dead seeds' torrent records, as `library_map_row` reads them."""
     if f.get('linked_paths'):
         return MAP_DEAD_SEED if dead and f.get('file_id') in dead else MAP_LINKED
     if f.get('duplicate_paths'):
         return MAP_COPY
-    return MAP_UNMANAGED if f.get('unmanaged') else MAP_UNSEEDED
+    if f.get('unmanaged'):
+        return MAP_UNMANAGED
+    return MAP_UNSEEDED if _map_video(f.get('path') or '') else MAP_OTHER
 
 
 def stamp_unmanaged(media_files, media_root, managed):
@@ -1484,8 +1583,34 @@ def dead_seed_keys(torrent_files):
             and _is_dead_seed_torrent(f)}
 
 
-def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MAX, dead=None):
+# A full-disc rip's index file, in the folder the disc-rip preset excludes
+# (`BDMV`, `VIDEO_TS`), which is one per disc: BDMV/BACKUP holds a second
+# index.bdmv, and VIDEO_TS.BUP is the backup's. `_DISC_TAILS` is the one test
+# every unlinked torrent file pays, a C-level `endswith`.
+_DISC_TAILS = ('.bdmv', '.BDMV', '.ifo', '.IFO')
+_DISC_INDEX = (('/bdmv/index.bdmv', 'bluray'), ('/video_ts/video_ts.ifo', 'dvd'))
+
+
+def _count_disc(discs, root, path):
+    p = '/' + path.lower()
+    for tail, kind in _DISC_INDEX:
+        if p.endswith(tail):
+            per = discs.get(kind)
+            if per is None:
+                per = discs[kind] = {'library': 0, 'torrents': 0}
+            per[root] += 1
+            return
+
+
+def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MAX, dead=None,
+                    discs=None):
     """The library map's compact row: `{version, folders, titles, folded}`.
+
+    `discs`, when a dict, is filled with the full-disc rips the map passed on
+    the way (`{'bluray' | 'dvd': {'library': n, 'torrents': n}}`, one per disc
+    folder) for the exclusion suggestions: an out-parameter like the walk's
+    `walk_report`, read only off files that aren't linked or excluded, which is
+    where a rip the preset would hide sits, so a linked file pays nothing.
 
     * `folders` — `[root, name]`, root `library` or `torrents`.
     * `titles`  — `[folder index, name, files, b0 … b7]`, one byte sum per state
@@ -1520,24 +1645,54 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
     # (Linux, .internal/dash_bench/deadseed.py).
     if dead is None:
         dead = dead_seed_keys(torrent_files)
+    #
+    # A title's files arrive together (the walk lists a folder at a time), so
+    # each loop tries the last title first: a path under its key and a slash is
+    # that title, one `startswith` in place of two finds, a slice and a lookup.
+    # Any other path works its key out as before. That's what pays for reading
+    # an unseeded library file's extension (2026-11-20, dash_bench/suggestions.py).
     lib, tor, search = {}, {}, {}
+    prefix, row = None, None
     for f in media_files:
         if f.get('excluded'):
             continue
         path = f.get('path') or ''
         if '\\' in path:
             path = path.replace('\\', '/')
-        i = path.find('/')
-        j = path.find('/', i + 1) if i >= 0 else -1
-        key = path[:j] if j > 0 else path
-        row = lib.get(key)
-        if row is None:
-            row = lib[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]   # files, then MAP_STATES sums
+        if prefix is None or not path.startswith(prefix):
+            i = path.find('/')
+            j = path.find('/', i + 1) if i >= 0 else -1
+            key = path[:j] if j > 0 else path
+            row = lib.get(key)
+            if row is None:
+                row = lib[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]   # files, then MAP_STATES sums
+            prefix = key + '/'
         row[0] += 1
-        # 1 + MAP_LINKED / MAP_COPY / MAP_UNMANAGED / MAP_UNSEEDED, as
-        # `_map_state_media`. The stamp is read only on an unseeded file.
-        row[1 if f.get('linked_paths') else (5 if f.get('duplicate_paths')
-                                             else (8 if f.get('unmanaged') else 2))] += f.get('size') or 0
+        # 1 + MAP_LINKED / MAP_COPY / MAP_UNMANAGED / MAP_UNSEEDED / MAP_OTHER,
+        # as `_map_state_media`. The stamp is read only on an unseeded file, and
+        # the extension (`_map_video`, inline) only on one the stamp left.
+        if f.get('linked_paths'):
+            row[1] += f.get('size') or 0
+        elif f.get('duplicate_paths'):
+            row[5] += f.get('size') or 0
+        elif f.get('unmanaged'):
+            row[8] += f.get('size') or 0
+        else:
+            # An extension as written, nearly always lower case, is one lookup;
+            # anything else takes `_map_video`'s whole test (any case, and a
+            # dot that opens the name, or none at all, is no extension).
+            dot = path.rfind('.')
+            ext = path[dot:]
+            if ext in VIDEO_EXTENSIONS and dot > 0 and path[dot - 1] != '/':
+                row[2] += f.get('size') or 0
+            else:
+                ext = ext.lower() if dot > path.rfind('/') + 1 else ''
+                if ext in VIDEO_EXTENSIONS:
+                    row[2] += f.get('size') or 0
+                else:
+                    row[6] += f.get('size') or 0
+                    if discs is not None and (ext == '.bdmv' or ext == '.ifo'):
+                        _count_disc(discs, 'library', path)
     if dead:
         # One membership test a record, in a comprehension; the rest runs on
         # the few it finds.
@@ -1552,20 +1707,25 @@ def library_map_row(media_files, torrent_files, titles_max=LIBRARY_MAP_TITLES_MA
             row[1 + MAP_DEAD_SEED] += size
             if key not in search:
                 search[key] = q
+    prefix = None
     for f in torrent_files:
         if f.get('linked_paths') or f.get('excluded'):
             continue
         path = f.get('path') or ''
         if '\\' in path:
             path = path.replace('\\', '/')
-        i = path.find('/')
-        j = path.find('/', i + 1) if i >= 0 else -1
-        key = path[:j] if j > 0 else path
-        row = tor.get(key)
-        if row is None:
-            row = tor[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+        if prefix is None or not path.startswith(prefix):
+            i = path.find('/')
+            j = path.find('/', i + 1) if i >= 0 else -1
+            key = path[:j] if j > 0 else path
+            row = tor.get(key)
+            if row is None:
+                row = tor[key] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+            prefix = key + '/'
         row[0] += 1
         row[1 + _map_state_torrent(f)] += f.get('size') or 0
+        if discs is not None and path.endswith(_DISC_TAILS):
+            _count_disc(discs, 'torrents', path)
     # Sorted in place, largest first, without a second copy of either dict.
     items = [('library', key, row) for key, row in lib.items()]
     del lib
@@ -1615,6 +1775,143 @@ def disk_space(local_path, media_path):
     if not out:
         return None
     out['same'] = len(devs) == 2 and devs['torrents'] == devs['media']
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Exclusion suggestions (2026-11-20)
+# ---------------------------------------------------------------------------
+#
+# A new install has the always-on rules and nothing else, and what's left for a
+# user to exclude is their own: a torrent category nothing reaches the library
+# from (games, software, books), a library folder no arr manages (home videos),
+# full-disc rips. No fixed list can name the first two, so the scan does, from
+# evidence it already has, and Settings shows each with its figures and the
+# rule it would add. Nothing is written until the user adds one and saves.
+#
+# Three kinds, each refused where the evidence could mean something else:
+#
+# * **A torrent folder** (top level, `literal:` + its full container path): at
+#   least two finished registrations under it, none with a file in the library
+#   or a copy there, while some registration elsewhere has one. Nothing linked
+#   anywhere is a wrong path in Settings, not a category to hide; a download
+#   still running is no evidence (T4); one torrent alone could be an import
+#   that hasn't happened yet.
+# * **A library folder** (top level): every byte Unmanaged, while another folder
+#   holds something an arr manages or a link. Unmanaged exists only where every
+#   arr answered in full (R1), so a scan they didn't answer suggests none.
+# * **A disc-rip preset**: a BDMV or VIDEO_TS folder found with its preset off.
+#
+# **The rule is the folder's full container path**: the usual layout names both
+# trees' folders alike (torrents/music, media/music), and a relative rule
+# matches both. `literal:` is what the Exclude buttons write (R4), so a bracket
+# in a folder's name can't make it a pattern. It holds names, so it's its own
+# file_results row, never in the details or the debug report. What the user
+# dismissed and what's already in the config are filtered when it's read
+# (`app.exclusion_suggestions`), not here, so a dismissal applies at once.
+EXCLUSION_SUGGESTIONS_MAX = 10      # of each kind, largest first
+
+
+def _map_folder_sums(row):
+    """`{(root, top-level folder): [files, b0 … b7]}` from a `library_map_row`
+    row, its folded titles included."""
+    sums = {}
+    folders = row.get('folders') or []
+    for entries in (row.get('titles') or (), row.get('folded') or ()):
+        for e in entries:
+            key = tuple(folders[e[0]])
+            s = sums.get(key)
+            if s is None:
+                s = sums[key] = [0] * (1 + MAP_STATES)
+            s[0] += e[2]
+            for i in range(MAP_STATES):
+                s[1 + i] += e[3 + i]
+    return sums
+
+
+def _folder_rule(root, folder):
+    return 'literal:' + root.rstrip('/\\') + '/' + folder + '/'
+
+
+def exclusion_suggestions(cfg, torrent_folders, map_row, discs):
+    """The scan's exclusion suggestions, largest first within each kind.
+
+    `torrent_folders` is `_mark_whole_torrents`' tally, `map_row` this scan's
+    `library_map_row` and `discs` what that filled in. Each suggestion has an
+    `id` (`torrents:<folder>`, `library:<folder>`, `preset:<name>`) that a
+    dismissal is stored under, its `kind`, and its figures; a folder's carries
+    the `rule` it would add, a preset's the `preset` it would turn on.
+    """
+    sums = _map_folder_sums(map_row or {})
+    out = []
+
+    local = cfg.get('LOCAL_PATH') or ''
+    media = cfg.get('MEDIA_PATH') or ''
+    tf = torrent_folders or {}
+    if local and any(t['imported'] for t in tf.values()):
+        media_key = _norm_abs(media) if media else None
+        found = []
+        for top, t in tf.items():
+            if not top or t['imported'] or t['finished'] < 2:
+                continue
+            if media_key and any(_path_under(_norm_abs(p), media_key)
+                                 for dups in t['copies'] for p in dups):
+                continue
+            s = sums.get(('torrents', top))
+            size = sum(s[1:]) if s else 0
+            rule = _folder_rule(local, top)
+            if not size or len(rule) > EXCLUSION_PATTERN_MAX_CHARS:
+                continue
+            cats = sorted(t['categories'])
+            found.append({'id': 'torrents:' + top, 'kind': 'torrents', 'folder': top, 'rule': rule,
+                          'category': cats[0] if len(cats) == 1 else None,
+                          'torrents': t['torrents'], 'files': s[0], 'size': size,
+                          'orphaned_size': s[1 + MAP_ORPHANED]})
+        found.sort(key=lambda x: -x['size'])
+        out.extend(found[:EXCLUSION_SUGGESTIONS_MAX])
+
+    if media:
+        lib = {folder: s for (root, folder), s in sums.items() if root == 'library'}
+        unmanaged = 1 + MAP_UNMANAGED
+        found = []
+        for folder, s in lib.items():
+            if not folder or not s[unmanaged] or sum(s[1:]) != s[unmanaged]:
+                continue
+            # Another folder holds something an arr manages, or a link: the
+            # arrs' answer covers this library, and this folder is outside it.
+            if not any(sum(o[1:]) > o[unmanaged] for f2, o in lib.items() if f2 != folder):
+                continue
+            rule = _folder_rule(media, folder)
+            if len(rule) > EXCLUSION_PATTERN_MAX_CHARS:
+                continue
+            found.append({'id': 'library:' + folder, 'kind': 'library', 'folder': folder, 'rule': rule,
+                          'files': s[0], 'size': s[unmanaged]})
+        found.sort(key=lambda x: -x['size'])
+        out.extend(found[:EXCLUSION_SUGGESTIONS_MAX])
+
+    on = set(cfg.get('DISC_RIP_EXCLUSION_PRESETS') or [])
+    for kind in ('bluray', 'dvd'):
+        d = (discs or {}).get(kind)
+        if d and kind not in on and (d['library'] or d['torrents']):
+            out.append({'id': 'preset:' + kind, 'kind': 'preset', 'preset': kind,
+                        'discs': {'library': d['library'], 'torrents': d['torrents']}})
+    return out
+
+
+def pending_exclusion_suggestions(suggestions, cfg):
+    """The stored suggestions less what the config already answers: one the
+    user dismissed, a rule already in the list, a preset already on. Read at
+    request time, so a save takes a suggestion off before the next scan."""
+    dismissed = set(s for s in (cfg.get('EXCLUSION_SUGGESTIONS_DISMISSED') or []) if isinstance(s, str))
+    rules = set(p.strip() for p in (cfg.get('EXCLUSION_PATTERNS') or []) if isinstance(p, str))
+    presets = set(cfg.get('DISC_RIP_EXCLUSION_PRESETS') or [])
+    out = []
+    for s in suggestions or []:
+        if not isinstance(s, dict) or s.get('id') in dismissed:
+            continue
+        if s.get('rule') in rules or s.get('preset') in presets:
+            continue
+        out.append(s)
     return out
 
 
@@ -2106,13 +2403,17 @@ def new_media_class(f, torrent_root):
     the library card): `linked` to a torrent file, a `copies` of one (identical
     bytes, its own inode, so the link wasn't made), or `unseeded` (neither: a
     rip, a Usenet grab, a copy of another library file). Says nothing about who
-    made a copy — the first copy the box served was a hand copy (DEDUPE)."""
+    made a copy — the first copy the box served was a hand copy (DEDUPE).
+
+    `None` for a sidecar that's neither (2026-11-20), which isn't counted: the
+    map's rule (`_map_video`). Bazarr writes a subtitle beside every new
+    episode, so a healthy library read as half its new files not seeded."""
     if f.get('linked_paths'):
         return 'linked'
     for p in f.get('duplicate_paths') or ():
         if not torrent_root or _path_under(_norm_abs(p), torrent_root):
             return 'copies'
-    return 'unseeded'
+    return 'unseeded' if _map_video(f.get('path') or '') else None
 
 
 def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
@@ -2168,7 +2469,9 @@ def compute_diff_from_signatures(prev_sigs_by_tab, curr_snap, prev_score=None,
             if path not in prev:
                 add('new_files', {'path': path, 'size': f['size'], 'tab': tab})
                 if count_new and not f.get('excluded'):
-                    new_media[new_media_class(f, torrent_root)] += 1
+                    how = new_media_class(f, torrent_root)
+                    if how:
+                        new_media[how] += 1
             else:
                 sig = prev[path]
                 if not (sig & SIG_ORPHANED) and f.get('status') == 'Orphaned':
@@ -3270,13 +3573,16 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         if unmanaged_check == 'unreachable':
             log.info("Audit: Sonarr/Radarr didn't all answer, so no library file is marked unmanaged this scan")
         stamp_counts = {'unmanaged': 0}
+        # Each top-level torrent folder's registrations, for the exclusion
+        # suggestions; filled by the whole-torrent pass, which reads them anyway.
+        torrent_folders = {}
         _enter_phase("post", "Assembling file records...")
         _unverified = unverified_spec(source_report, unresolved_roots)
         torrent_files_data, media_files_data = _assemble_records(
             torrent_key_order, media_key_order, inode_map, duplicate_map,
             compiled_exclusions=compiled_excl, unverified=_unverified,
             unmanaged=unmanaged_test(managed, cfg.get('MEDIA_PATH', '')) if managed is not None else None,
-            counts=stamp_counts)
+            counts=stamp_counts, torrent_folders=torrent_folders)
         del managed
         unmanaged_count = stamp_counts['unmanaged']
         del torrent_key_order, media_key_order, inode_map, duplicate_map
@@ -3515,6 +3821,13 @@ def run_audit_process(trigger=None, persist_source_errors=True):
         _enter_phase("post", "Saving file results...")
         # The Triage subset once: its own row, and the library map's dead seeds.
         triage_set = [f for f in torrent_files_data if _is_triage_relevant(f)]
+        # The library map's row, which the exclusion suggestions read too: its
+        # folders' sums, and the disc rips it passed on the way.
+        discs = {}
+        map_row = library_map_row(media_files_data, torrent_files_data,
+                                  dead=dead_seed_keys(triage_set), discs=discs)
+        suggestions = exclusion_suggestions(cfg, torrent_folders, map_row, discs)
+        del torrent_folders, discs
         staged = [
             ('media',    db_prepare_file_results(media_files_data)),
             ('torrents', db_prepare_file_results(torrent_files_data)),
@@ -3537,10 +3850,12 @@ def run_audit_process(trigger=None, persist_source_errors=True):
                 dedupe_lists)),
             # The dashboard's library map: per-title byte sums by state, both
             # trees. Names, so its own row, served by /api/library_map.
-            ('library_map', db_prepare_file_results(
-                library_map_row(media_files_data, torrent_files_data,
-                                dead=dead_seed_keys(triage_set)))),
+            ('library_map', db_prepare_file_results(map_row)),
+            # Settings' exclusion suggestions, written every scan so one that
+            # no longer applies goes. Folder names, so never in the details.
+            ('exclusion_suggestions', db_prepare_file_results(suggestions)),
         ]
+        del map_row, suggestions
         staged_sigs = [
             ('media',    db_prepare_file_signatures(file_signatures(media_files_data))),
             ('torrents', db_prepare_file_signatures(file_signatures(torrent_files_data))),

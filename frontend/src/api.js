@@ -134,6 +134,7 @@ export const api = {
   retagUploadSnapshots:  (from, to, source) => req('/upload_snapshots/retag',  { method: 'POST', body: JSON.stringify({ from, to: to || undefined, source }) }),
   deleteUploadSnapshots: (from, to)         => req('/upload_snapshots/delete', { method: 'POST', body: JSON.stringify({ from, to: to || undefined }) }),
   libraryMap: ()          => req('/library_map'),
+  exclusionSuggestions: () => req('/exclusion_suggestions'),
   libraryMapTitle:  (folder) => reqQuiet('/library_map/title?folder=' + encodeURIComponent(folder)),
   libraryMapPoster: (folder) => reqQuiet('/library_map/poster?folder=' + encodeURIComponent(folder), 'image'),
   acquireCandidates: ()   => req('/workflows/acquire_candidates'),

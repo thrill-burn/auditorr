@@ -153,7 +153,10 @@ you fixed a mount, start a scan yourself rather than waiting for it.
 
 The **Last scan** card on the Dashboard shows the last saved scan's report: how
 many instances answered, whether every torrent's file list was read, how many
-files each folder held and whether any couldn't be listed. The debug report's
+files each folder held and whether any couldn't be listed. When the scan found
+folders you may want to exclude, an *Exclusions* line says how many, and
+*Review* opens them in Settings (see
+[Suggested from your last scan](configuration.md#suggested-from-your-last-scan)). The debug report's
 `source_health` section carries the same report, the reference counts and the
 last refusal.
 

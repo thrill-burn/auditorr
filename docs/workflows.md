@@ -170,6 +170,13 @@ hold while it reads your folders; if any of them doesn't answer, nothing is
 marked unmanaged on that scan, those files stay blue, and the Dashboard's *Last
 scan* card says so.
 
+**Subtitles and artwork aren't blue either.** A subtitle Bazarr wrote, or an
+`.nfo` or poster your media server keeps beside a video, isn't in any torrent,
+and Backfill can't search for it. The map draws it in its title like any other
+file with nothing to do, so a title whose video is linked counts as fully
+linked. *New in the library* doesn't count one either, unless it arrived
+hardlinked or as a copy of a torrent file.
+
 ### Season packs and single episodes
 
 A Sonarr season is searched as **one season pack only when every episode file

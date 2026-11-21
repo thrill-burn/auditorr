@@ -43,7 +43,7 @@ from state import (
     get_state, set_state, try_start_scanning,
     note_workflow_request_start, note_workflow_request_end, workflow_active,
 )
-from audit import run_audit_process, process_health_metrics, compute_upload_stats, compute_previous_upload, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path
+from audit import run_audit_process, process_health_metrics, compute_upload_stats, compute_previous_upload, _is_not_imported_torrent, cleanup_working_set, _compute_cross_seed_stats, torrent_record_key, SCAN_ONLY_DETAILS, _is_sample_path, pending_exclusion_suggestions
 from arr import _test_arr_connection, arr_rescan, arr_search, arr_title_for_folder, fetch_arr_poster, fetch_arr_media_index_result, fetch_arr_media_index_with_roots, media_path_key, VIDEO_EXTENSIONS, queue_records_for_item, arr_year_ok, rank_arr_candidates, test_arr_connections, fetch_arr_indexers, fetch_release_matrix, season_episodes_from_name, sonarr_episodes_by_file, grab_release, normalize_arr_connections, link_base, poll_queue_until_clear, force_manual_import_by_id, force_import_files, get_arr_file_id, read_arr_file_id, parse_release_info_for_path, fetch_arr_all_titles, fetch_arr_all_titles_result, title_match_keys, title_alias_keys, with_title_aliases, compare_release_quality, parse_quality_name, parse_trump_pm, title_soft_match, release_match_cache_clear, _arr_candidate_score, rank_trump_replacements, rank_trumped_candidates, release_quality_rank, sonarr_series_episodes, arr_import_target, _release_group_tag, parse_release_info, tracker_matches_indexer
 from scripts import (build_cleanup_script, build_dedupe_report, build_dedupe_script,
                      dedupe_script_units, dedupe_group_count)
@@ -549,6 +549,19 @@ def get_library_map():
     return app.response_class(db_stream_file_results('library_map'), mimetype='application/json')
 
 
+@app.route('/api/exclusion_suggestions')
+@require_auth
+def get_exclusion_suggestions():
+    """Settings' exclusion suggestions from the last scan (`audit.exclusion_suggestions`),
+    less what the config already answers (`pending_exclusion_suggestions`): a
+    dismissed one, a rule already in the list, a preset already on. A small row,
+    so it's loaded and filtered rather than streamed. `[]` before the first scan
+    that writes it."""
+    rows = db_load_file_results('exclusion_suggestions')
+    return jsonify({'status': 'success',
+                    'suggestions': pending_exclusion_suggestions(rows, db_load_config())})
+
+
 def _map_folder_arg():
     """The `folder` a library-map detail asks about: library-relative, only ever compared."""
     rel = (request.args.get('folder') or '').strip()
@@ -786,6 +799,12 @@ def handle_config():
                     data.get('MEDIA_SERVER_EXCLUSION_PRESETS', [])
                 ),
                 'EXCLUSION_HIDE_FROM_EXPLORER': bool(data.get('EXCLUSION_HIDE_FROM_EXPLORER', False)),
+                # Falls back to the stored list, like the link addresses above:
+                # a save from a bundle that predates it keeps every dismissal.
+                'EXCLUSION_SUGGESTIONS_DISMISSED': [
+                    s for s in data.get('EXCLUSION_SUGGESTIONS_DISMISSED',
+                                        existing.get('EXCLUSION_SUGGESTIONS_DISMISSED', []))
+                    if isinstance(s, str)],
                 'SONARR_URL':         str(data.get('SONARR_URL', '')),
                 'SONARR_API_KEY':     str(data['SONARR_API_KEY']) if data.get('SONARR_API_KEY') else existing.get('SONARR_API_KEY', ''),
                 'RADARR_URL':         str(data.get('RADARR_URL', '')),

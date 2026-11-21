@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { FixedSizeList } from 'react-window'
 import { api } from '../api'
 import { tint } from '../utils'
-import { Button, Segmented, Disclosure, placeholderClass } from './workflows/shared'
+import { Button, Segmented, Disclosure, placeholderClass, useAuditComplete } from './workflows/shared'
+import ExclusionSuggestions from './ExclusionSuggestions'
 
 const AUDIT_ROW_H = 36
 const AUDIT_COLS = '2fr 1fr 1fr 0.8fr 0.8fr 1fr'
@@ -326,16 +327,16 @@ function WeightDonut({ points, hovered }) {
   )
 }
 
-function Card({ title, children }) {
+function Card({ id, title, children }) {
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 24, marginBottom: 16 }}>
+    <div id={id} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', padding: 24, marginBottom: 16, scrollMarginTop: 16 }}>
       <div style={{ fontFamily: 'var(--sans)', fontSize: 'var(--font-md)', fontWeight: 600, letterSpacing: 0, textTransform: 'none', textAlign: 'left', color: 'var(--text)', paddingBottom: 14, marginBottom: 18, borderBottom: '1px solid var(--border)' }}>{title}</div>
       {children}
     </div>
   )
 }
 
-export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, pageWidth, onPageWidthChange, onScan }) {
+export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme, onThemeChange, pageWidth, onPageWidthChange, onScan, initialSection }) {
   const [conf,        setConf]        = useState(null)
   const [testStatus,        setTestStatus]        = useState(null)
   const [sonarrTestStatus,  setSonarrTestStatus]  = useState(null)
@@ -367,6 +368,10 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
   const [discRipPresets,           setDiscRipPresets]           = useState([])
   const [mediaServerPresets,       setMediaServerPresets]       = useState([])
   const [exclusionHideFromExplorer, setExclusionHideFromExplorer] = useState(false)
+  // The last scan's exclusion suggestions, and the ones dismissed (saved with
+  // the rest of the form, like everything else on this page).
+  const [exclusionSuggestions,     setExclusionSuggestions]     = useState(null)
+  const [suggestionsDismissed,     setSuggestionsDismissed]     = useState([])
   const [arrConnections,           setArrConnections]           = useState([])
   const [arrTestStatus,            setArrTestStatus]            = useState(null)
   const [watchdogEnabled, setWatchdogEnabled] = useState(true)
@@ -391,6 +396,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setDiscRipPresets(Array.isArray(c.DISC_RIP_EXCLUSION_PRESETS) ? c.DISC_RIP_EXCLUSION_PRESETS : [])
       setMediaServerPresets(Array.isArray(c.MEDIA_SERVER_EXCLUSION_PRESETS) ? c.MEDIA_SERVER_EXCLUSION_PRESETS : [])
       setExclusionHideFromExplorer(!!c.EXCLUSION_HIDE_FROM_EXPLORER)
+      setSuggestionsDismissed(Array.isArray(c.EXCLUSION_SUGGESTIONS_DISMISSED) ? c.EXCLUSION_SUGGESTIONS_DISMISSED : [])
       setArrConnections((c.ARR_CONNECTIONS || []).map(conn => ({
         id: conn.id || '',
         _original_id: conn.id || '',
@@ -411,10 +417,24 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     })
   }
 
+  const loadSuggestions = () => {
+    api.exclusionSuggestions().then(r => setExclusionSuggestions(r.suggestions || [])).catch(() => setExclusionSuggestions([]))
+  }
+
   useEffect(() => {
     loadConfig()
+    loadSuggestions()
     api.auditHistory().then(data => setAuditRuns(data.runs || [])).catch(() => setAuditRuns([]))
   }, [])
+  // A scan that finishes while the page is open writes new suggestions.
+  useAuditComplete(loadSuggestions)
+
+  // The Dashboard's Last scan card opens this page at the Excluded card.
+  useEffect(() => {
+    if (initialSection === 'exclusions' && conf) {
+      document.getElementById('settings-exclusions')?.scrollIntoView({ block: 'start' })
+    }
+  }, [initialSection, !!conf])
 
   const dedupedRuns = useMemo(() => {
     if (!auditRuns) return []
@@ -570,6 +590,7 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       DISC_RIP_EXCLUSION_PRESETS:   discRipPresets,
       MEDIA_SERVER_EXCLUSION_PRESETS: mediaServerPresets,
       EXCLUSION_HIDE_FROM_EXPLORER: exclusionHideFromExplorer,
+      EXCLUSION_SUGGESTIONS_DISMISSED: suggestionsDismissed,
       ARR_CONNECTIONS:              cleanArrConnections(),
       WATCHDOG_ENABLED:             watchdogEnabled,
     }
@@ -583,10 +604,35 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
       setTimeout(() => setSaveStatus(null), 5000)
       // Re-fetch config so form shows server-confirmed values
       loadConfig()
+      // The server leaves out what the saved config now answers.
+      loadSuggestions()
       // Refresh dashboard so threshold changes are reflected immediately
       if (onConfigSaved) onConfigSaved()
       if (sourceChanged && onScan) onScan()
     } catch (e) { setSaveStatus({ ok: false, msg: e.message }) }
+  }
+
+  // The exclusion suggestions act on the form, never the server: a rule goes
+  // into the list, a preset lights, a dismissal joins the saved list, and Save
+  // writes them with everything else. Undo takes back what the button did.
+  const ruleLines = exclusionPatterns.split('\n').map(p => p.trim()).filter(Boolean)
+  const addSuggestion = s => {
+    if (s.rule) {
+      if (!ruleLines.includes(s.rule)) setExclusionPatterns(p => (p.trim() ? p.replace(/\s+$/, '') + '\n' : '') + s.rule)
+    } else if (s.preset && !discRipPresets.includes(s.preset)) {
+      setDiscRipPresets(v => [...v, s.preset])
+    }
+    setIsDirty(true)
+  }
+  const dismissSuggestion = s => {
+    setSuggestionsDismissed(d => d.includes(s.id) ? d : [...d, s.id])
+    setIsDirty(true)
+  }
+  const undoSuggestion = (s, added) => {
+    if (!added) setSuggestionsDismissed(d => d.filter(x => x !== s.id))
+    else if (s.rule) setExclusionPatterns(p => p.split('\n').filter(l => l.trim() !== s.rule).join('\n'))
+    else setDiscRipPresets(v => v.filter(x => x !== s.preset))
+    setIsDirty(true)
   }
 
   // Every category at zero leaves nothing to score — the backend rejects it,
@@ -1111,7 +1157,17 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
         </div>
       </Card>
 
-      <Card title="Excluded Files & Folders">
+      <Card id="settings-exclusions" title="Excluded Files & Folders">
+        <ExclusionSuggestions
+          suggestions={exclusionSuggestions}
+          ruleLines={ruleLines}
+          discPresets={discRipPresets}
+          dismissed={suggestionsDismissed}
+          lastAuditTime={lastAuditTime}
+          onAdd={addSuggestion}
+          onDismiss={dismissSuggestion}
+          onUndo={undoSuggestion}
+        />
         <label style={{ fontSize: 'var(--font-base)', fontWeight: 600, color: 'var(--text)', display: 'block', marginBottom: 5 }}>Paths or patterns to ignore</label>
         <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.45, display: 'block', marginBottom: 8 }}>
           One rule per line. Use this for torrent categories you do not manage with Sonarr/Radarr, such as books, music, games, or other non-library downloads. Excluded items are ignored for scoring and Not Imported reporting.
