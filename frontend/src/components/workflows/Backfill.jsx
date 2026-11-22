@@ -720,10 +720,11 @@ function ResultItem({ item }) {
 
       {/* Multi-release picker: Trumped's list, in Backfill's blue. Each name
           whole and wrapped, its readouts under it; the name's link is still
-          its own click. */}
+          its own click. It scrolls only past the window's height (PickList's
+          default). */}
       {found && multi && (
         <div style={{ padding: '0 16px 12px 42px' }}>
-          <PickList label={`Releases of ${item.arr_title}`} maxHeight="min(60vh, 420px)">
+          <PickList label={`Releases of ${item.arr_title}`}>
             {releases.map((r, i) => {
               const key = releaseKey(r)
               return (

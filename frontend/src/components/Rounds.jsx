@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { api } from '../api'
-import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot, CloseButton } from './workflows/shared'
+import { LoadingRow, WorkflowError, useAuditComplete, Button, Disclosure, Dot, CloseButton, PICK_LIST_MAX } from './workflows/shared'
 
 // Rounds — "this is your prioritized (and rewarded) workflows page."
 //
@@ -665,12 +665,14 @@ function Timeline({ data }) {
       </div>
 
       {/* Scrolls in place once expanded rather than growing the page by twenty
-          thousand pixels. Not paginated and not virtualized: the list is
+          thousand pixels, but only past the window's height less its heading
+          and toggle (the pick lists' cap, 2026-11-22; it was 60% of the
+          window). Not paginated and not virtualized: the list is
           bounded at every rung of every ladder plus every feat — under 800,
           ever — so there is nothing here for either to solve. */}
       <div style={{
         display: 'flex', flexDirection: 'column',
-        ...(showAll ? { maxHeight: '60vh', overflowY: 'auto' } : null),
+        ...(showAll ? { maxHeight: PICK_LIST_MAX, overflowY: 'auto' } : null),
       }}>
         {shown.map((e, i) => {
           const day = fmtDay(e.at)

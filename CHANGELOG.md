@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Backfill showed six or seven of a title's releases, however many it found.** The list scrolled inside a short box, so a title with 25 releases looked like it had a handful. The list now grows to the height of your window and scrolls only when the releases don't fit in it. Trumped's lists of torrents and releases do the same; they stopped at 60% of the window. So does the Rounds page's record once you open *Show all*.
+- **The Dashboard's *Changes since last scan* counted at most 50 of each kind.** Each scan lists 50 changes of each kind, and the panel counted only those, so a scan that brought in 400 episodes read *New media (50)*. It counts every change now, says how many are listed (*50 of 412 listed*), and has an *Open in Changes* link to that day's changes on the Changes page.
+
 ## v1.9.0 — 2026-11-21
 
 Upgrading needs no configuration changes. The library map, *New in the library* and Settings' exclusion suggestions fill in from the first scan after upgrading.

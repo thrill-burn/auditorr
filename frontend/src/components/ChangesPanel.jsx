@@ -1,11 +1,23 @@
 import React, { useState } from 'react'
 import { formatBytes } from '../utils'
 import { CHANGE_CATEGORIES } from './changeCategories'
-import { Segmented, IconButton, CloseButton, Dot } from './workflows/shared'
+import { Segmented, IconButton, CloseButton, Dot, Button } from './workflows/shared'
 
 const ROW_HEIGHT = 36
 
-export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }) {
+// A scan's change-log entry lists at most 50 of each kind, and `totals` (since
+// 2026-11-20) is how many there were. The panel used to count the listed rows,
+// so a scan that brought in 400 episodes read "New media (50)" with nothing to
+// say there were more. Counts are the totals; an entry from before has none and
+// counts what it lists, as it always did.
+function totalOf(changes, cat, listed) {
+  const byTab = changes.totals?.[cat.diffKey]
+  if (!byTab) return listed
+  const total = cat.tab ? (byTab[cat.tab] || 0) : Object.values(byTab).reduce((a, b) => a + b, 0)
+  return Math.max(total, listed)
+}
+
+export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal, onNavigate }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('auditorr_changes_collapsed') === '1')
   const [activeFilter, setActiveFilter] = useState(null)
   const dismissKey = currRanAt ? 'auditorr_changes_dismissed_' + currRanAt : null
@@ -38,12 +50,23 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
   if (!hasItems && changes.score_delta == null) return null
 
   const rows = activeFilter ? allRows.filter(r => r.cat.key === activeFilter) : allRows
+  const listedBy = {}
   const counts = {}
   for (const cat of CHANGE_CATEGORIES) {
-    counts[cat.key] = (changes[cat.diffKey] || []).filter(item =>
+    listedBy[cat.key] = (changes[cat.diffKey] || []).filter(item =>
       cat.tab == null || item.tab === cat.tab
     ).length
+    counts[cat.key] = totalOf(changes, cat, listedBy[cat.key])
   }
+  const allCount = Object.values(counts).reduce((a, b) => a + b, 0)
+  const shownCount = activeFilter ? counts[activeFilter] : allCount
+  const unlisted = shownCount - rows.length
+  // The Changes page opened on this scan's day (and kind): the same rows, in a
+  // list as tall as the window, with a path search. Its day is `ran_at`'s own
+  // date, as the page compares it.
+  const openChanges = onNavigate && currRanAt
+    ? () => onNavigate({ tab: 'changes', day: String(currRanAt).slice(0, 10), categories: activeFilter ? [activeFilter] : null })
+    : null
 
   const scoreDelta = changes.score_delta
   const fmtDate = dt => dt ? new Date(dt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
@@ -78,7 +101,7 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
           )}
           {hasItems && (
             <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
-              {allRows.length} {allRows.length === 1 ? 'change' : 'changes'}
+              {allCount.toLocaleString()} {allCount === 1 ? 'change' : 'changes'}
             </span>
           )}
         </div>
@@ -104,11 +127,11 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
           }}>
             <Segmented label="Change category" value={activeFilter} onChange={setActiveFilter}
               options={[
-                { value: null, label: `All (${allRows.length})` },
+                { value: null, label: `All (${allCount.toLocaleString()})` },
                 ...CHANGE_CATEGORIES.filter(cat => counts[cat.key]).map(cat => ({
                   value: cat.key,
                   icon: <Dot color={cat.color} size={6} />,
-                  label: `${cat.label} (${counts[cat.key]})`,
+                  label: `${cat.label} (${counts[cat.key].toLocaleString()})`,
                 })),
               ]} />
           </div>
@@ -189,6 +212,27 @@ export default function ChangesPanel({ changes, prevRanAt, currRanAt, onReveal }
               </div>
             ))}
           </div>
+
+          {/* Outside the scroll, so it's in view however far the list goes:
+              what the cap left out, and the way to the page with room. */}
+          {(unlisted > 0 || openChanges) && (
+            <div style={{
+              display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px',
+              padding: '8px 16px', borderTop: '1px solid var(--border)',
+              fontFamily: 'var(--sans)', fontSize: 'var(--font-sm)', color: 'var(--text-dim)',
+            }}>
+              {unlisted > 0 && (
+                <span>
+                  {rows.length.toLocaleString()} of {shownCount.toLocaleString()} listed: each scan lists 50 of each kind.
+                </span>
+              )}
+              {openChanges && (
+                <Button size="sm" variant="ghost" onClick={openChanges} style={{ marginLeft: 'auto' }}>
+                  Open in Changes →
+                </Button>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

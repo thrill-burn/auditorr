@@ -743,8 +743,13 @@ export function PickRow({ on, onPick, color = 'var(--accent)', disabled = false,
   )
 }
 
-// The list's frame: a bordered box whose rows scroll inside it.
-export function PickList({ label, maxHeight = '60vh', footer, children }) {
+// The list's frame: a bordered box whose rows scroll inside it, only past the
+// window's height less room for what heads the list, so the heading and the
+// whole list fit on one screen. Backfill's releases and Trumped's steps 3 and 4
+// take this; capped at 420px Backfill showed six or seven of 25 releases and
+// read as the whole answer. A list inside a dialog that scrolls passes 'none'.
+export const PICK_LIST_MAX = 'max(320px, calc(100vh - 120px))'
+export function PickList({ label, maxHeight = PICK_LIST_MAX, footer, children }) {
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
       <div role="radiogroup" aria-label={label} style={{ maxHeight, overflowY: 'auto' }}>
