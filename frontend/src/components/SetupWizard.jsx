@@ -91,13 +91,6 @@ function StepIndicator({ current }) {
   )
 }
 
-const fmtSize = b => {
-  if (!b) return '0 B'
-  if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB'
-  if (b >= 1e9)  return (b / 1e9).toFixed(1)  + ' GB'
-  return (b / 1e6).toFixed(0) + ' MB'
-}
-
 // ── Step 1: Torrent Source ────────────────────────────────────────────────────
 function Step1({ data, onChange, onNext, onSkip }) {
   const [testStatus, setTestStatus] = useState(null)

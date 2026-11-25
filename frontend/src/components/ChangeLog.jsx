@@ -5,7 +5,7 @@ import AutoSizer from 'react-virtualized-auto-sizer'
 import { api } from '../api'
 import { formatBytes, tint } from '../utils'
 import { CHANGE_CATEGORIES, ARRIVALS } from './changeCategories'
-import { Button, Segmented, SearchInput, Dot } from './workflows/shared'
+import { Button, Segmented, SearchInput, Dot, LIST_MIN_HEIGHT } from './workflows/shared'
 
 function useDebounce(value, delay) {
   const [debounced, setDebounced] = useState(value)
@@ -263,7 +263,9 @@ export default function ChangeLog({ onNavigate, initialDay = null, initialCatego
   const itemData = useMemo(() => ({ rows, onNavigate }), [rows, onNavigate])
 
   return (
-    <div className="fade-in page-frame" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+    // At least the window's height, so the table fills what the bars leave; more
+    // when the table's minimum doesn't fit, and then the page scrolls.
+    <div className="fade-in page-frame" style={{ padding: '0 24px 24px', minHeight: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
 
       {/* Summary cards — mirror the file-browser stat boxes */}
       <div style={{ padding: '16px 0 14px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, flexShrink: 0 }}>
@@ -346,7 +348,8 @@ export default function ChangeLog({ onNavigate, initialDay = null, initialCatego
         <div style={{
           background: 'var(--surface)', border: '1px solid var(--border)',
           borderRadius: 'var(--rl)', boxShadow: 'var(--elev-1)', overflow: 'hidden',
-          flex: 1, minHeight: 0,
+          flex: 1, minHeight: LIST_MIN_HEIGHT,
+          display: 'flex', flexDirection: 'column',
         }}>
           {entries == null ? (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--sans)', fontSize: 'var(--font-base)' }}>
@@ -383,8 +386,10 @@ export default function ChangeLog({ onNavigate, initialDay = null, initialCatego
                   }}>{col}</span>
                 ))}
               </div>
-              {/* Virtual rows */}
-              <div style={{ height: `calc(100% - ${COL_HEADER_HEIGHT}px)` }}>
+              {/* Virtual rows: the rest of the box. A flex share, not a
+                  percentage: the page's height is a minimum now, which leaves a
+                  percentage nothing to resolve against. */}
+              <div style={{ flex: 1, minHeight: 0 }}>
                 <AutoSizer>
                   {({ height, width }) => (
                     <FixedSizeList

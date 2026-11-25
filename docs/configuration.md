@@ -22,8 +22,8 @@ auditorr reads your torrents from one of two backends.
 | **Workflow torrent deletion** | Opt-in. Off by default — see below. |
 
 Use **Test Connection** after filling these in. On success auditorr reports the
-client version, torrent count, and total seeding size, which is the quickest
-confirmation that it's talking to the right instance.
+client's version and, for qui, how many instances it found and how many it can
+scan, which is the quickest confirmation that it's talking to the right instance.
 
 Stored credentials are never returned by the API — they read back as
 `__stored__` and are only overwritten when you type a new value.

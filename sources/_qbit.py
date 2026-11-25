@@ -20,7 +20,7 @@ from sources import (
     SourceConnectionError, classify_tracker_entries, HEALTH_RANK as _HEALTH_RANK,
     new_source_report, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key, content_root,
-    client_save_dirs, announce_hosts, TrackerTally,
+    client_save_dirs, announce_hosts, TrackerTally, torrent_status, retry_tracker_lists,
 )
 
 log = logging.getLogger(__name__)
@@ -117,12 +117,15 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # under `Unknown` below, but counted, because its upload has left its own
     # tracker's total for this one scan and the next scan puts it back. Read as
     # a delta, that return was a day of several terabytes nobody uploaded.
+    def _ask_trackers(torrent_hash):
+        """`(hosts, (health, msg))`, or raises. The second ask calls it too."""
+        entries = [{'url': t.url, 'status': t.status, 'msg': t.msg}
+                   for t in _get_thread_client().torrents_trackers(torrent_hash=torrent_hash)]
+        return announce_hosts(e['url'] for e in entries), classify_tracker_entries(entries)
+
     def _fetch_torrent_data(torrent):
         try:
-            entries = [{'url': t.url, 'status': t.status, 'msg': t.msg}
-                       for t in _get_thread_client().torrents_trackers(torrent_hash=torrent.hash)]
-            hosts = announce_hosts(e['url'] for e in entries)
-            health, msg = classify_tracker_entries(entries)
+            hosts, (health, msg) = _ask_trackers(torrent.hash)
         except Exception as e:
             log.debug('qbit: tracker listing failed for %s: %s', torrent.hash, e)
             hosts = None
@@ -150,6 +153,7 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
     # every file of every torrent and grow files_json, the known RAM hotspot.
     seed_byte_secs = 0
     max_seed_secs  = 0
+    unanswered     = []
     with ThreadPoolExecutor(max_workers=16) as executor:
         futures = {executor.submit(_fetch_torrent_data, t): t for t in torrents}
         for future in as_completed(futures):
@@ -157,8 +161,20 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
             tracker_map[torrent_hash] = hosts
             health_map[torrent_hash]  = health
             files_map[torrent_hash]   = files
+            if hosts is None:
+                unanswered.append(torrent_hash)
             if not files_ok:
                 failed_listings.add(torrent_hash)
+
+    # The tracker lists that failed, asked for once more now the client isn't
+    # busy with the pass above (`retry_tracker_lists`).
+    if unanswered:
+        again = retry_tracker_lists(unanswered, _ask_trackers, 16)
+        for torrent_hash, (hosts, health) in again.items():
+            tracker_map[torrent_hash] = hosts
+            health_map[torrent_hash]  = health
+        log.info('qbit: asked again for %d tracker list(s) that failed; %d answered',
+                 len(unanswered), len(again))
 
     if save_scope is not None:
         _read_save_scope(qbt, cfg.get('REMOTE_PATH', ''), cfg.get('LOCAL_PATH', ''), save_scope)
@@ -182,28 +198,24 @@ def _fetch_inner(cfg, unresolved_roots=None, fallback_roots=None, save_scope=Non
         if seed_secs > 0:
             seed_byte_secs += (torrent.size or 0) * seed_secs
             max_seed_secs   = max(max_seed_secs, seed_secs)
+        progress      = getattr(torrent, 'progress', None)
+        completion_on = getattr(torrent, 'completion_on', None)
+        status = torrent_status(torrent.state, progress, completion_on)
         for h in hosts:
             trackers_set.add(h)
             tracker_upload[h] = tracker_upload.get(h, 0) + torrent.uploaded
-            if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
+            if status == 'Seeding':
                 tracker_seeding_size[h] = tracker_seeding_size.get(h, 0) + torrent.size
         save_path    = remap_path(torrent.save_path, remote_path, local_path)
         content_path = remap_path(
             getattr(torrent, 'content_path', '') or '', remote_path, local_path)
         if save_scope is not None and save_path:
             save_scope['dirs'].add(save_path)     # a few distinct strings, not one per torrent
-        if torrent.state in ('uploading', 'stalledUP', 'forcedUP'):
-            status = 'Seeding'
-        elif torrent.state in ('downloading', 'stalledDL'):
-            status = 'Downloading'
-        else:
-            status = 'Paused'
         # Completion is its own question. `status` above is derived from the
         # state string, where a paused incomplete and a paused complete are the
         # same word — which is the root cause behind DEDUPE F6, TRIAGE T4 and
         # CLEANUP C4 all at once.
-        complete = torrent_complete(getattr(torrent, 'progress', None),
-                                    getattr(torrent, 'completion_on', None))
+        complete = torrent_complete(progress, completion_on)
         if complete is False:
             report['incomplete_torrents'] += 1
         elif complete is None:
@@ -610,7 +622,9 @@ def fetch_save_path_hint(payload):
         client.auth_log_in()
         torrents = list(client.torrents_info(limit=50))
         version  = client.app.version
-        seeding_size = sum(t.size for t in torrents if t.state in ('uploading', 'stalledUP', 'forcedUP'))
+        seeding_size = sum(t.size for t in torrents
+                           if torrent_status(t.state, getattr(t, 'progress', None),
+                                             getattr(t, 'completion_on', None)) == 'Seeding')
         paths = [t.save_path.rstrip('/') for t in torrents if t.save_path]
         if not paths:
             save_path = None

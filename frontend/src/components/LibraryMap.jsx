@@ -487,9 +487,9 @@ const LIVE_DRAW_MS = 30
 // step: at --font-md, Geist Mono read larger and heavier than the card's title.
 const FIGURE = { fontFamily: 'var(--mono)', color: 'var(--text)', fontWeight: 500 }
 
-function Stat({ label, value }) {
+function Stat({ label, value, title }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div title={title} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <span style={CAPTION}>{label}</span>
       <span style={{ ...FIGURE, fontSize: 'var(--font-base)', whiteSpace: 'nowrap' }}>{value}</span>
     </div>
@@ -501,17 +501,23 @@ function Stat({ label, value }) {
 // and the Hardlinked Media card's, so it went; what's on disk and what's free
 // are said nowhere else. One free figure when both roots are one filesystem,
 // which hardlinks need; two when they aren't. A scan before disk_space has none.
+//
+// These are the figures read beside a NAS's own (2026-11-23), and every size in
+// auditorr is 1,024-based, labelled TB as Windows labels it. Unraid counts
+// 1,000, so its figure for the same space is about 10% larger; the hover says so.
+const UNITS_NOTE = 'auditorr counts 1 TB as 1,024 GB, as Windows and torrent clients do. Unraid and drive makers count 1,000 GB to the TB, so the same space reads about 10% larger there.'
 function diskStats(d) {
   const shared = d.shared_size ?? d.hardlinked_media_size ?? 0
   const both = (d.total_media_size || 0) + (d.total_torrents_size || 0)
-  const out = [['On disk', formatBytes(both - shared)]]
+  const out = [['On disk', formatBytes(both - shared), UNITS_NOTE]]
   const ds = d.disk_space
   const free = x => (x.total ? `${formatBytes(x.free)} of ${formatBytes(x.total)}` : formatBytes(x.free))
   if (ds && (ds.same || !ds.media || !ds.torrents)) {
     const one = ds.torrents || ds.media
-    if (one) out.push(['Free', free(one)])
+    if (one) out.push(['Free', free(one), UNITS_NOTE])
   } else if (ds) {
-    out.push(['Free for torrents', free(ds.torrents)], ['Free for the library', free(ds.media)])
+    out.push(['Free for torrents', free(ds.torrents), UNITS_NOTE],
+             ['Free for the library', free(ds.media), UNITS_NOTE])
   }
   return out
 }
@@ -971,7 +977,7 @@ export default function LibraryMap({ details, onNavigate, row, rowModel, focus, 
 
       {stats.length > 0 && (
         <div style={{ display: 'flex', gap: '12px 28px', flexWrap: 'wrap', marginBottom: 14 }}>
-          {stats.map(([label, value]) => <Stat key={label} label={label} value={value} />)}
+          {stats.map(([label, value, title]) => <Stat key={label} label={label} value={value} title={title} />)}
         </div>
       )}
 

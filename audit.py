@@ -2869,23 +2869,33 @@ def _compute_tracker_file_stats(torrent_files, aliases=None):
 
     Summed by each record's tracker tuple, then spread to the trackers once per
     distinct tuple (see `_compute_cross_seed_stats`), with `aliases` folded there.
+
+    **Seeding is every file a seeding torrent holds on disk, excluded or not**
+    (2026-11-23). An exclusion says a file is no workflow's business, not that
+    nobody seeds it, and since the disc-rip suggestions it can take a whole
+    category of full-disc torrents out of a tracker's figure. Orphaned and not
+    imported are the workflows' counts and still leave excluded files out.
     """
     combos = {}
     for f in torrent_files:
-        if f.get('excluded'):
+        status = f['status']
+        excluded = f.get('excluded')
+        if excluded and status != 'Seeding':
             continue
         key = tuple(f.get('trackers') or ())
         s = combos.get(key)
         if s is None:
             s = combos[key] = [0, 0, 0, 0, 0, 0]
-        status = f['status']
         if status == 'Seeding':
             s[0] += 1
             s[1] += f['size']
+            if excluded:
+                continue
         elif status == 'Orphaned':
             s[2] += 1
             s[3] += f['size']
-        if not f.get('imported') and status != 'Orphaned' and not f.get('sidecar'):
+            continue
+        if not f.get('imported') and not f.get('sidecar'):
             s[4] += 1
             s[5] += f['size']
     stats = {}

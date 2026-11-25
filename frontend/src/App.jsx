@@ -242,6 +242,7 @@ function AppInner() {
   const [changes,      setChanges]      = useState(null)
   const [mediaFiles,   setMediaFiles]   = useState(null)   // null = not yet loaded
   const [torrentFiles, setTorrentFiles] = useState(null)
+  const [filesError,   setFilesError]   = useState({})     // tab → why its list didn't load
   const [scanState,  setScanState]  = useState({
     is_scanning: false, progress: 0, last_audit_time: 'Never',
     trigger: 'idle', next_scan_in: null, status_message: '',
@@ -314,13 +315,26 @@ function AppInner() {
     filesFetchingRef.current[fileTab] = true
     const setter = fileTab === 'media' ? setMediaFiles : setTorrentFiles
     try {
-      setter(await api.files(fileTab))
+      const list = await api.files(fileTab)
+      setFilesError(prev => (prev[fileTab] ? { ...prev, [fileTab]: null } : prev))
+      setter(list)
     } catch (e) {
       console.error('Failed to load files for tab:', fileTab, e)
+      // Still [] for what only draws from the list (the library map's Files
+      // view), but File Explorer says it couldn't load: an empty list there
+      // was a skeleton that shimmered for good.
+      setFilesError(prev => ({ ...prev, [fileTab]: e?.message || 'request failed' }))
       setter([])
     } finally {
       filesFetchingRef.current[fileTab] = false
     }
+  }, [])
+
+  // Back to "not loaded", which the effect below fetches again.
+  const retryFiles = useCallback(fileTab => {
+    setFilesError(prev => ({ ...prev, [fileTab]: null }))
+    if (fileTab === 'media') setMediaFiles(null)
+    else setTorrentFiles(null)
   }, [])
 
   const fetchResults = useCallback(async (fromScan = false) => {
@@ -330,6 +344,7 @@ function AppInner() {
       // Invalidate file caches so the next tab visit re-fetches fresh data
       setMediaFiles(null)
       setTorrentFiles(null)
+      setFilesError({})
     }
     try {
       const data = await api.results()
@@ -616,6 +631,8 @@ function AppInner() {
               <FileExplorer
                 key={navKey}
                 files={tab === 'media' ? mediaFiles : torrentFiles}
+                loadError={filesError[tab]}
+                onRetry={() => retryFiles(tab)}
                 trackers={results?.trackers || []}
                 trackerAliases={results?.tracker_aliases}
                 tab={tab}
@@ -632,6 +649,7 @@ function AppInner() {
               <Trackers
                 trackerFileStats={results?.tracker_file_stats || {}}
                 crossSeedStats={results?.dashboard?.cross_seed_stats || null}
+                scanReport={results?.scan_report || null}
                 onNavigate={handleNavigate}
                 allTrackers={allTrackers}
               />

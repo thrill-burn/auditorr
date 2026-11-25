@@ -119,6 +119,7 @@ const count = v => (v ? v.toLocaleString() : '0')
 // The table's columns. `metric` ties one to the chart metric it shades.
 const COLUMNS = [
   { key: 'seeding', label: 'Seeding size', metric: 'seeding', color: 'var(--green)',
+    title: 'Files on disk that this tracker’s torrents are seeding, each file once. Queued and checking torrents count; stopped ones don’t. The tracker adds up every torrent’s full size, so its own figure can be higher.',
     value: s => s.seeding_size || 0, display: s => formatBytes(s.seeding_size || 0),
     nav: t => ({ tab: 'torrents', tracker: t, status: 'Seeding' }), navTitle: t => `View ${t} seeding in Torrents` },
   { key: 'only', label: 'Seeded only here', title: 'Library this tracker seeds and no other tracker does',
@@ -193,7 +194,10 @@ function Readout({ metric, view, uploadStats, statsMap, visible, history }) {
 
 // Opens on the last 30 days. It used to open on the Dashboard's range, which is
 // now Score history's own control.
-export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers, onNavigate }) {
+export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers, scanReport, onNavigate }) {
+  // Torrents whose tracker list didn't load in the last scan, even asked twice:
+  // they're under Unknown until the next scan, so their trackers read low.
+  const unanswered = scanReport?.report?.tracker_failures || 0
   const [uploadStats, setUploadStats] = useState(null)
   const [trackerDetail, setTrackerDetail] = useState(null)
   const [dateFrom,    setDateFrom]    = useState(() => initialDateFrom(30))
@@ -348,6 +352,15 @@ export default function Trackers({ trackerFileStats, crossSeedStats, allTrackers
           )}
         </div>
       </div>
+
+      {unanswered > 0 && (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--text-dim)', lineHeight: 1.5 }}>
+          <span className="ui-status-dot" style={{ background: 'var(--yellow)', flexShrink: 0, alignSelf: 'center' }} />
+          <span>
+            {unanswered.toLocaleString()} torrent{unanswered === 1 ? '’s' : 's’'} trackers didn&rsquo;t answer in the last scan, so {unanswered === 1 ? 'it’s' : 'they’re'} counted under Unknown and {unanswered === 1 ? 'its tracker reads' : 'their trackers read'} low until the next scan.
+          </span>
+        </div>
+      )}
 
       {/* Comparison table (legend + selector) */}
       <CompareTable

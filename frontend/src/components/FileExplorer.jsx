@@ -4,7 +4,7 @@ import AutoSizer from 'react-virtualized-auto-sizer'
 import { formatBytes, copyText, tint } from '../utils'
 import { api } from '../api'
 import { useToast } from './Toast'
-import { Button, Segmented, FlagToggle, CloseButton, IconButton, SearchInput, Dot } from './workflows/shared'
+import { Button, Segmented, FlagToggle, CloseButton, IconButton, SearchInput, Dot, LIST_MIN_HEIGHT } from './workflows/shared'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -343,6 +343,24 @@ function ExplorerSkeleton() {
             <div className="skeleton" style={{ width: 100, height: 11 }} />
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// The list didn't load. Said, with a way to ask again, rather than the skeleton
+// shimmering for good: couldn't ask isn't "no files".
+function ExplorerLoadError({ message, onRetry }) {
+  return (
+    <div className="page-frame" style={{ padding: '16px 24px 48px' }}>
+      <div style={{
+        padding: '10px 14px', borderRadius: 'var(--r)', background: tint('var(--red)', 6),
+        border: `1px solid ${tint('var(--red)', 19)}`, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+      }}>
+        <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--sans)', fontSize: 'var(--font-base)', color: 'var(--red)', lineHeight: 1.5 }}>
+          Couldn't load the file list: {message}
+        </div>
+        <Button size="sm" onClick={onRetry}>Retry</Button>
       </div>
     </div>
   )
@@ -704,7 +722,7 @@ const STATUS_FILTERS = [
   { id: 'Orphaned', label: 'Orphaned', color: 'var(--yellow)' },
 ]
 
-export default function FileExplorer({ files, trackers, trackerAliases, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, initialQuery, revealPath }) {
+export default function FileExplorer({ files, loadError, onRetry, trackers, trackerAliases, tab, initialStatus, initialImportFilter, initialTracker, initialSeedCount, initialQuery, revealPath }) {
   const aliases = trackerAliases && Object.keys(trackerAliases).length ? trackerAliases : null
   trackers = trackers || []
 
@@ -877,6 +895,7 @@ export default function FileExplorer({ files, trackers, trackerAliases, tab, ini
     a.click()
   }
 
+  if (loadError) return <ExplorerLoadError message={loadError} onRetry={onRetry} />
   if (!files || !files.length) return <ExplorerSkeleton />
 
   const activeTrackerCount = trackerInc.length + trackerExc.length
@@ -905,7 +924,9 @@ export default function FileExplorer({ files, trackers, trackerAliases, tab, ini
   )
 
   return (
-    <div className="page-frame" style={{ padding: '0 24px 24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+    // At least the window's height, so the list fills what the bars leave; more
+    // when the list's minimum doesn't fit, and then the page scrolls.
+    <div className="page-frame" style={{ padding: '0 24px 24px', minHeight: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
 
       {/* ── Summary cards ── */}
       <div style={{ padding: '16px 0 14px', display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, flexShrink: 0 }}>
@@ -1054,7 +1075,7 @@ export default function FileExplorer({ files, trackers, trackerAliases, tab, ini
       <div style={{
         background:'var(--surface)', border:'1px solid var(--border)',
         borderRadius:'var(--rl)', boxShadow:'var(--elev-1)', overflow:'hidden',
-        flex: 1, minHeight: 0,
+        flex: 1, minHeight: LIST_MIN_HEIGHT,
       }}>
         {isFlat ? (
           sortedFiltered.length === 0 ? emptyMsg : (

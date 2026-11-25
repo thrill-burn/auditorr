@@ -50,12 +50,10 @@ from sources import (
     new_source_report, report_instance_failure, report_note, mark_trackers_unanswered,
     torrent_complete, torrent_claimed_paths, remap_path, registration_key,
     is_part_file_name, content_root, client_save_dirs, announce_hosts, TrackerTally,
+    torrent_status, retry_tracker_lists,
 )
 
 log = logging.getLogger(__name__)
-
-_SEEDING_STATES    = {'uploading', 'stalledUP', 'forcedUP', 'forcedUploadingUP'}
-_DOWNLOADING_STATES = {'downloading', 'stalledDL', 'forcedDL', 'forcedDownloadingDL'}
 
 
 # ---------------------------------------------------------------------------
@@ -180,14 +178,6 @@ def _norm_file(f):
 
 def _tracker_hosts(raw_trackers):
     return announce_hosts(t.get('url') or t.get('announce') or '' for t in raw_trackers)
-
-
-def _torrent_status(state):
-    if state in _SEEDING_STATES:
-        return 'Seeding'
-    if state in _DOWNLOADING_STATES:
-        return 'Downloading'
-    return 'Paused'
 
 
 def _unwrap(response_json):
@@ -323,6 +313,25 @@ def _fetch_all_torrents(session, base, inst_id):
     return all_torrents
 
 
+def _fetch_trackers(session, base, inst_id, torrent_hash):
+    """`(hosts, (health, msg))` for one torrent, or raises. The second ask
+    (`retry_tracker_lists`) calls it too."""
+    tr_resp = session.get(
+        f'{base}/api/instances/{inst_id}/torrents/{torrent_hash}/trackers',
+        timeout=8,
+    )
+    tr_resp.raise_for_status()
+    raw_trackers = _unwrap(tr_resp.json())
+    return _tracker_hosts(raw_trackers), classify_tracker_entries([
+        {
+            'url':    t.get('url') or t.get('announce') or '',
+            'status': t.get('status'),
+            'msg':    t.get('msg') or t.get('message') or '',
+        }
+        for t in raw_trackers
+    ])
+
+
 def _fetch_torrent_data(session, base, inst_id, torrent_hash):
     """Fetch files + trackers for a single torrent.
 
@@ -334,21 +343,7 @@ def _fetch_torrent_data(session, base, inst_id, torrent_hash):
     from a torrent with no tracker URL (`['Unknown']`); see `_qbit.py`.
     """
     try:
-        tr_resp = session.get(
-            f'{base}/api/instances/{inst_id}/torrents/{torrent_hash}/trackers',
-            timeout=8,
-        )
-        tr_resp.raise_for_status()
-        raw_trackers = _unwrap(tr_resp.json())
-        hosts = _tracker_hosts(raw_trackers)
-        health = classify_tracker_entries([
-            {
-                'url':    t.get('url') or t.get('announce') or '',
-                'status': t.get('status'),
-                'msg':    t.get('msg') or t.get('message') or '',
-            }
-            for t in raw_trackers
-        ])
+        hosts, health = _fetch_trackers(session, base, inst_id, torrent_hash)
     except Exception:
         hosts  = None
         health = ('unknown', '')
@@ -410,6 +405,7 @@ def _process_instance(session, base, inst, remote_path, local_path,
     health_map  = {}
     files_map   = {}
     failed_listings = set()
+    unanswered  = []     # hashes whose tracker list failed, for the second ask
 
     def _fetch(t):
         th = _norm_torrent(t)['hash']
@@ -434,6 +430,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
                     tracker_map[th] = hosts
                     health_map[th]  = health
                     files_map[th]   = files
+                    if hosts is None:
+                        unanswered.append(th)
                     if not files_ok:
                         failed_listings.add(th)
         except FuturesTimeout:
@@ -448,7 +446,9 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 if not f.done():
                     th = _norm_torrent(t)['hash']
                     if th:
-                        tracker_map.setdefault(th, None)
+                        if th not in tracker_map:
+                            tracker_map[th] = None
+                            unanswered.append(th)
                         health_map.setdefault(th, ('unknown', ''))
                         files_map.setdefault(th, ([], []))
                         failed_listings.add(th)
@@ -461,6 +461,17 @@ def _process_instance(session, base, inst, remote_path, local_path,
                 report_note(report,
                             f"{inst_name}: per-torrent fetch hit the {_PER_INSTANCE_TIMEOUT}s "
                             f"ceiling with {timed_out} of {len(torrents)} torrents unanswered")
+
+    # The tracker lists that failed, asked for once more now the instance isn't
+    # busy with the pass above (`retry_tracker_lists`).
+    if unanswered:
+        again = retry_tracker_lists(
+            unanswered, lambda h: _fetch_trackers(session, base, inst_id, h), 8)
+        for h, (hosts, health) in again.items():
+            tracker_map[h] = hosts
+            health_map[h]  = health
+        log.info('qui: asked instance %s again for %d tracker list(s) that failed; %d answered',
+                 inst_id, len(unanswered), len(again))
 
     empty_file_count    = 0
     nonempty_file_count = 0
@@ -526,8 +537,8 @@ def _process_instance(session, base, inst, remote_path, local_path,
             if report is not None:
                 report['tracker_failures'] += 1
             hosts = ['Unknown']
-        status = _torrent_status(nt['state'])
-        # Completion is its own question: `_torrent_status` reads the state
+        status = torrent_status(nt['state'], nt['progress'], nt['completion_on'])
+        # Completion is its own question: `torrent_status` reads the state
         # string, where a paused incomplete and a paused complete are the same
         # word (R2, the root cause behind DEDUPE F6, TRIAGE T4 and CLEANUP C4).
         complete = torrent_complete(nt['progress'], nt['completion_on'])
@@ -1519,7 +1530,7 @@ def fetch_save_path_hint(payload):
         nt = _norm_torrent(t)
         if nt['save_path']:
             paths.append(nt['save_path'])
-        if _torrent_status(nt['state']) == 'Seeding':
+        if torrent_status(nt['state'], nt['progress'], nt['completion_on']) == 'Seeding':
             seeding_size += nt['size']
 
     save_path = None

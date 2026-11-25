@@ -749,6 +749,15 @@ export function PickRow({ on, onPick, color = 'var(--accent)', disabled = false,
 // take this; capped at 420px Backfill showed six or seven of 25 releases and
 // read as the whole answer. A list inside a dialog that scrolls passes 'none'.
 export const PICK_LIST_MAX = 'max(320px, calc(100vh - 120px))'
+
+// The least a page's virtualized list (File Explorer, Audit History) is given.
+// The list takes what's left of the window under the page's cards and filter
+// bars, and a short or narrow window (page zoom, iPad Split View, a long
+// tracker panel) used to leave it nothing: the bars, then a hairline, no rows.
+// Past this the page scrolls instead. Capped by the window so the list still
+// fits on one screen once scrolled to.
+export const LIST_MIN_HEIGHT = 'min(320px, 75vh)'
+
 export function PickList({ label, maxHeight = PICK_LIST_MAX, footer, children }) {
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>

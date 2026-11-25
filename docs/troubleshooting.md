@@ -219,6 +219,27 @@ upload figures are removed.
 
 ---
 
+## Sizes don't match Unraid, or Seeding size doesn't match your tracker
+
+**Symptom:** the library map's *On disk* or *Free* reads lower than Unraid's
+Main tab, or a tracker's *Seeding size* on the Trackers page reads lower than
+the tracker's own site.
+
+**Units.** auditorr counts 1 TB as 1,024 GB, as Windows, qBittorrent and most
+tracker sites do (qBittorrent and many trackers label it TiB). Unraid and drive
+makers count 1,000 GB to the TB, so the same space reads about 10% larger in
+Unraid. Neither figure is wrong. Hover *On disk* or *Free* on the library map
+for the same note.
+
+**What Seeding size counts.** It's the files on disk that a tracker's torrents
+are seeding, each file counted once, including torrents queued to seed or being
+checked. A tracker adds up every torrent's full size, so it reads higher when
+two of your torrents on it share files (a season pack and its episodes, say),
+and it counts torrents saved outside your torrent folder, which auditorr
+doesn't scan. Stopped torrents aren't counted.
+
+---
+
 ## A torrent is registered on more than one qui instance
 
 **Symptom:** removing a torrent in Triage, or confirming a group in Trumped, says

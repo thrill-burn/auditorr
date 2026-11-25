@@ -691,13 +691,6 @@ export default function Config({ lastAuditTime, isScanning, onConfigSaved, theme
     } catch (e) { setClearStatus({ ok: false, msg: e.message }) }
   }
 
-  const fmtSize = b => {
-    if (!b) return '0 B'
-    if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB'
-    if (b >= 1e9)  return (b / 1e9).toFixed(1)  + ' GB'
-    return (b / 1e6).toFixed(0) + ' MB'
-  }
-
   // The point figure follows the weighting above, so the hint stays truthful
   // when a category is reweighted — and says so plainly when it is switched off.
   const thresholdHint = (label, key) => {

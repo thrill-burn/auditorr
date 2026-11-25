@@ -40,6 +40,7 @@ import os
 import re
 import posixpath
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +96,8 @@ def new_source_report(source):
 
     And one for the other per-torrent call:
 
-      tracker_failures    torrents whose tracker list could not be fetched.
+      tracker_failures    torrents whose tracker list could not be fetched,
+                          asked for twice (`retry_tracker_lists`).
                           Their upload is filed under `Unknown`, which is also
                           the real answer for a torrent with no tracker URL, so
                           the upload snapshot carries the count as
@@ -174,6 +176,46 @@ def mark_trackers_unanswered(snapshot, report, torrent_total, label):
                 'of the upload stats', label, failed, torrent_total)
     report_note(report, f"tracker list failed for {failed} of {torrent_total} torrents; "
                         f"this scan is left out of the upload stats")
+
+
+# The most the second ask for failed tracker lists may add to a scan, in
+# seconds. A call still running then stays failed, and one not yet started is
+# never made.
+TRACKER_RETRY_SECS = 60
+
+
+def retry_tracker_lists(keys, ask, workers):
+    """`{key: answer}` for the failed tracker lists that answer when asked again.
+
+    A failed tracker call files its torrent under `Unknown` for the scan, so its
+    tracker's figures on the Trackers page read low until the next scan
+    (2026-11-23). A failure is nearly always a timeout while the client was busy,
+    and the first pass's calls are what kept it busy, so each backend asks once
+    more for the failed ones after that pass ends. Not inside it: a client that's
+    down would wait out every call's timeout twice. The second pass is held to
+    `TRACKER_RETRY_SECS` in all.
+
+    `ask(key)` returns the backend's own answer and raises when the call fails.
+    A key that fails again, or doesn't answer in time, is left out, and the
+    backend counts it in `tracker_failures` as before.
+    """
+    keys = list(keys)
+    if not keys:
+        return {}
+    answered = {}
+    pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(keys))))
+    futures = {pool.submit(ask, k): k for k in keys}
+    try:
+        for future in as_completed(futures, timeout=TRACKER_RETRY_SECS):
+            try:
+                answered[futures[future]] = future.result()
+            except Exception:
+                pass
+    except FuturesTimeout:
+        pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return answered
 
 
 def report_instance_failure(report, name, reason):
@@ -358,6 +400,55 @@ def torrent_complete(progress, completion_on):
         except (TypeError, ValueError):
             return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Status — what the client is doing with a torrent
+# ---------------------------------------------------------------------------
+
+# qBittorrent's state strings, which qui passes on as they are.
+# `forcedUploadingUP` and `forcedDownloadingDL` are spellings qui has used.
+#
+# **A queued or checking seed is seeding** (2026-11-23). Only `uploading`,
+# `stalledUP` and `forcedUP` used to count, so a client that queues its seeds
+# read low on the Trackers page all the time, and a scan that landed while the
+# client was starting up or rechecking read low until the next scan. A
+# stopped, errored or missing-files torrent still isn't seeding.
+SEEDING_STATES = frozenset({
+    'uploading', 'stalledUP', 'forcedUP', 'forcedUploadingUP', 'queuedUP', 'checkingUP'})
+DOWNLOADING_STATES = frozenset({
+    'downloading', 'stalledDL', 'forcedDL', 'forcedDownloadingDL'})
+
+
+def torrent_status(state, progress=None, completion_on=None):
+    """'Seeding' | 'Downloading' | 'Paused': the word a file record carries.
+
+    One rule for both backends; they had a copy each, and qbit's read a forced
+    download as Paused. `status` is what the client is *doing*, and whether the
+    bytes are whole is `torrent_complete`'s question (R2), which this answer
+    never stands in for.
+
+    Two states don't say which side a torrent is on: `moving` (to a new save
+    path) and `checkingResumeData` (the client starting up). Either is seeding
+    once it has finished downloading. For `moving` that's `torrent_complete`.
+    While a torrent is being checked, qBittorrent reports the check's own
+    progress (`TorrentImpl::progress` returns libtorrent's figure while
+    `isChecking()`), so for `checkingResumeData` only `completion_on` says it
+    finished. A torrent that finished once and was rechecked to partial reads
+    Seeding until its startup check ends, which costs one scan's figure on the
+    Trackers page and nothing else: its `incomplete` flag is unaffected.
+    """
+    if state in SEEDING_STATES:
+        return 'Seeding'
+    if state in DOWNLOADING_STATES:
+        return 'Downloading'
+    if state == 'moving':
+        finished = torrent_complete(progress, completion_on)
+    elif state == 'checkingResumeData':
+        finished = torrent_complete(None, completion_on)
+    else:
+        return 'Paused'
+    return 'Seeding' if finished else 'Paused'
 
 
 def content_rooted_paths(content_path, torrent_name, file_names):
